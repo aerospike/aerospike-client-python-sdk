@@ -28,6 +28,7 @@ Coverage:
 import asyncio
 
 import pytest
+import pytest_asyncio
 
 from aerospike_async import Key
 from aerospike_async.exceptions import ResultCode
@@ -40,7 +41,7 @@ NS = "test"
 SET = "query_bin_ops"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     """Setup SDK client, seed test data, yield the client."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:

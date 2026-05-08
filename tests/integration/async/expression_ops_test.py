@@ -45,7 +45,7 @@ KEY_B = "exp_B"
 
 @pytest.fixture
 async def client(aerospike_host, client_policy):
-    """Setup SDK client, seed test data, yield the client, cleanup."""
+    """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
         session = c.create_session()
         # Clean slate

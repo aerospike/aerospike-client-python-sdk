@@ -200,11 +200,13 @@ class TestApplyToWritePolicy:
     def test_fills_unset_fields(self):
         s = Settings(
             send_key=True,
+            durable_delete=True,
             commit_level=CommitLevel.COMMIT_ALL,
         )
         p = WritePolicy()
         result = apply_to_write_policy(s, p)
         assert result.send_key is True
+        assert result.durable_delete is True
         assert result.commit_level == CommitLevel.COMMIT_ALL
 
     def test_does_not_overwrite_timeout(self):

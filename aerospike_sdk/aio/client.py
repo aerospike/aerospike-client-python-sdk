@@ -17,9 +17,10 @@
 
 from __future__ import annotations
 
+import logging
 import types
 import typing
-from typing import List, Optional, Union, overload
+from typing import Awaitable, Callable, Dict, List, Optional, Union, overload
 
 from aerospike_async import (
     AdminPolicy,
@@ -37,10 +38,13 @@ from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
 
 if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
     from aerospike_sdk.aio.transactional_session import TransactionalSession
+
+log = logging.getLogger(__name__)
 
 
 class Client:
@@ -111,6 +115,9 @@ class Client:
         self._client: Optional[AsyncClient] = None
         self._connected = False
         self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
+        # Shared by all Session instances from this client; avoids repeated
+        # namespace/<ns> info probes when callers use multiple sessions.
+        self._namespace_mode_cache: Dict[str, Mode] = {}
 
     async def connect(self) -> None:
         """Open a connection to the cluster using the configured seeds and policy.
@@ -131,8 +138,25 @@ class Client:
         if self._connected and self._client is not None:
             return
 
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
+        if log.isEnabledFor(logging.DEBUG):
+            try:
+                build_by_node = await self._client.info("build")
+                log.debug(
+                    "Connected seeds=%r; build info by node=%s",
+                    self._seeds,
+                    build_by_node,
+                )
+            except Exception as exc:
+                log.debug(
+                    "Connected seeds=%r but build probe failed: %s",
+                    self._seeds,
+                    exc,
+                    exc_info=True,
+                )
         await self._indexes_monitor.start(self._client)
 
     async def close(self) -> None:
@@ -148,6 +172,7 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
+        self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:
         """Async context manager entry."""
@@ -216,6 +241,7 @@ class Client:
         *,
         dataset: DataSet,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """Create a query builder from a DataSet."""
         ...
@@ -226,6 +252,7 @@ class Client:
         *,
         key: Key,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """Create a query builder for a single Key (point read)."""
         ...
@@ -236,6 +263,7 @@ class Client:
         *,
         keys: List[Key],
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """Create a query builder for multiple Keys (batch read)."""
         ...
@@ -245,6 +273,7 @@ class Client:
         self,
         *keys: Key,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """Create a query builder for multiple Keys (varargs)."""
         ...
@@ -256,6 +285,7 @@ class Client:
         set_name: str,
         *,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """Create a query builder with explicit namespace/set."""
         ...
@@ -270,6 +300,7 @@ class Client:
         key: Optional[Key] = None,
         keys: Optional[List[Key]] = None,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
     ) -> QueryBuilder:
         """
         Create a query builder.
@@ -367,6 +398,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                namespace_mode_resolver=namespace_mode_resolver,
             )
             builder._single_key = key
             return builder
@@ -383,6 +415,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                namespace_mode_resolver=namespace_mode_resolver,
             )
             builder._keys = keys
             return builder
@@ -409,6 +442,7 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
+            namespace_mode_resolver=namespace_mode_resolver,
         )
 
     @overload

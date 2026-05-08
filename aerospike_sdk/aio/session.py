@@ -18,7 +18,17 @@
 from __future__ import annotations
 
 import typing
-from typing import Any, Awaitable, Dict, List, Optional, overload, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Awaitable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    overload,
+    TYPE_CHECKING,
+    Union,
+)
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.transactional_session import TransactionalSession
@@ -39,7 +49,40 @@ from aerospike_sdk.aio.operations.query import (
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
+from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
+
+
+class NamespaceScStatus(NamedTuple):
+    """Result of :meth:`Session.namespace_sc_status`."""
+
+    is_sc: bool
+    """True when the namespace exists and ``strong-consistency`` is enabled."""
+    detail: str
+    """Empty when ``is_sc`` is true; otherwise a short explanation for logging or skips."""
+
+
+def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
+    """Parse one ``namespace/<name>`` info response fragment.
+
+    Returns:
+        ``(exists, sc_opt)``. ``exists`` is false when ``type=unknown``.
+        ``sc_opt`` is set when a ``strong-consistency`` key is present.
+    """
+    exists = True
+    sc_opt: Optional[bool] = None
+    for pair in body.split(";"):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key == "type" and value == "unknown":
+            exists = False
+        if key in ("strong-consistency", "strong_consistency"):
+            sc_opt = value.lower() in ("true", "1", "yes")
+    return exists, sc_opt
 
 
 class Session:
@@ -91,6 +134,15 @@ class Session:
         # TransactionalSession overrides this to yield its active Txn so every
         # builder spawned from the session auto-participates.
         self._txn: Optional[Txn] = None
+
+    async def _resolve_namespace_mode(self, namespace: str) -> Mode:
+        """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
+        cache = self._client._namespace_mode_cache
+        if namespace in cache:
+            return cache[namespace]
+        mode = Mode.SC if await self.is_namespace_sc(namespace) else Mode.AP
+        cache[namespace] = mode
+        return mode
 
     def _bind_txn(self, builder):
         """Stamp the session's current txn onto a builder if one is active.
@@ -275,7 +327,10 @@ class Session:
             raise RuntimeError("Client is not connected")
 
         return BatchOperationBuilder(
-            self._client._client, self._behavior, txn=self._txn,
+            self._client._client,
+            self._behavior,
+            txn=self._txn,
+            namespace_mode_resolver=self._resolve_namespace_mode,
         )
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -361,6 +416,7 @@ class Session:
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
+            namespace_mode_resolver=self._resolve_namespace_mode,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -437,6 +493,7 @@ class Session:
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
+            namespace_mode_resolver=self._resolve_namespace_mode,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -451,6 +508,7 @@ class Session:
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
             txn=self._txn,
+            namespace_mode_resolver=self._resolve_namespace_mode,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -568,7 +626,10 @@ class Session:
         if arg1 is not None:
             if isinstance(arg1, DataSet):
                 return self._bind_txn(
-                    self._client.query(dataset=arg1, behavior=b))
+                    self._client.query(
+                        dataset=arg1, behavior=b,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
+                    ))
             elif isinstance(arg1, Key):
                 all_keys = [arg1]
                 if isinstance(arg2, Key):
@@ -589,21 +650,31 @@ class Session:
                         cached_read_policy=self._cached_read_policy,
                         cached_write_policy=self._cached_write_policy,
                         txn=self._txn,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
                     )
                     builder._single_key = arg1
                     return builder
                 return self._bind_txn(
-                    self._client.query(keys=all_keys, behavior=b))
+                    self._client.query(
+                        keys=all_keys, behavior=b,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
+                    ))
             elif isinstance(arg1, list):
                 if len(arg1) == 0:
                     raise ValueError("keys list cannot be empty")
                 if not isinstance(arg1[0], Key):
                     raise TypeError(f"Expected List[Key], but first element is {type(arg1[0])}")
                 return self._bind_txn(
-                    self._client.query(keys=arg1, behavior=b))
+                    self._client.query(
+                        keys=arg1, behavior=b,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
+                    ))
             elif isinstance(arg1, str) and arg2 is not None:
                 return self._bind_txn(
-                    self._client.query(namespace=arg1, set_name=arg2, behavior=b))
+                    self._client.query(
+                        namespace=arg1, set_name=arg2, behavior=b,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
+                    ))
 
         if keys:
             keys_list = list(keys)
@@ -612,7 +683,10 @@ class Session:
             if arg2 is not None and isinstance(arg2, Key):
                 keys_list.insert(1 if arg1 is not None and isinstance(arg1, Key) else 0, arg2)
             return self._bind_txn(
-                self._client.query(keys=keys_list, behavior=b))
+                self._client.query(
+                    keys=keys_list, behavior=b,
+                    namespace_mode_resolver=self._resolve_namespace_mode,
+                ))
 
         return self._bind_txn(self._client.query(  # type: ignore[call-overload]
             namespace=namespace,
@@ -621,6 +695,7 @@ class Session:
             key=key,
             keys=keys_list,
             behavior=b,
+            namespace_mode_resolver=self._resolve_namespace_mode,
         ))
 
     @typing.overload
@@ -774,6 +849,65 @@ class Session:
             return self._client._async_client.info(command)
         return InfoCommands(self)
 
+    async def namespace_sc_status(self, namespace: str) -> NamespaceScStatus:
+        """Describe whether a namespace is configured for strong consistency (SC).
+
+        Uses the ``namespace/<name>`` info command. Prefer this over
+        :meth:`is_namespace_sc` when you need a human-readable reason for
+        why a namespace is treated as non-SC (missing namespace vs AP mode).
+
+        Args:
+            namespace: Namespace name to inspect.
+
+        Returns:
+            :class:`NamespaceScStatus` with ``is_sc`` and ``detail``.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            ValueError: If the info command fails.
+        """
+        if self._client._client is None:
+            raise RuntimeError("Client is not connected")
+
+        try:
+            result = await self._pac_client.info(f"namespace/{namespace}")
+        except Exception as e:
+            raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
+
+        missing = False
+        sc_val: Optional[bool] = None
+        for node_result in result.values():
+            if not node_result:
+                continue
+            exists, sc_opt = _parse_namespace_info_body(node_result)
+            if not exists:
+                missing = True
+                break
+            if sc_opt is not None:
+                sc_val = sc_opt
+
+        if missing:
+            return NamespaceScStatus(
+                False,
+                f"Namespace {namespace!r} is not defined on this cluster "
+                "(info reports type=unknown). Create it or set "
+                "AEROSPIKE_SC_NAMESPACE to an existing SC namespace.",
+            )
+        if sc_val is True:
+            return NamespaceScStatus(True, "")
+        if sc_val is False:
+            return NamespaceScStatus(
+                False,
+                f"Namespace {namespace!r} exists but strong-consistency is false "
+                "(AP mode). Point AEROSPIKE_SC_NAMESPACE at a namespace with "
+                "strong-consistency enabled.",
+            )
+        return NamespaceScStatus(
+            False,
+            f"Namespace {namespace!r} info did not report strong-consistency; "
+            "treating as non-SC.",
+        )
+
     async def is_namespace_sc(self, namespace: str) -> bool:
         """
         Check if a namespace is in strong consistency (SC) mode.
@@ -788,7 +922,8 @@ class Session:
             True if the namespace is in strong consistency mode, False otherwise.
 
         Raises:
-            ValueError: If the namespace is unknown or the info command fails.
+            RuntimeError: If the client is not connected.
+            ValueError: If the info command fails.
 
         Example::
 
@@ -796,28 +931,11 @@ class Session:
                     print("Namespace 'test' is in strong consistency mode")
                 else:
                     print("Namespace 'test' is in AP (availability) mode")
+
+        See Also:
+            :meth:`namespace_sc_status`: Same check with a ``detail`` message when false.
         """
-        if self._client._client is None:
-            raise RuntimeError("Client is not connected")
-
-        try:
-            # Query namespace configuration via info command
-            result = await self._client._client.info(f"namespace/{namespace}")
-
-            # Parse the result - it's a dict with node addresses as keys
-            for node_result in result.values():
-                # Parse semicolon-separated key=value pairs
-                for pair in node_result.split(";"):
-                    if "=" in pair:
-                        key, value = pair.split("=", 1)
-                        if key == "strong-consistency":
-                            return value.lower() == "true"
-
-            # If we didn't find the strong-consistency key, default to False (AP mode)
-            return False
-
-        except Exception as e:
-            raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
+        return (await self.namespace_sc_status(namespace)).is_sc
 
     async def do_in_transaction(
         self,

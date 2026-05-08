@@ -93,6 +93,11 @@ class SyncBackgroundOperationBuilder:
         self._inner.where(expression)
         return self
 
+    def index_filters(self, *filters: Any) -> SyncBackgroundOperationBuilder:
+        """Restrict the job using secondary-index ``Filter`` objects (sync)."""
+        self._inner.index_filters(*filters)
+        return self
+
     def bin(self, name: str) -> SyncBackgroundWriteBinBuilder:
         return SyncBackgroundWriteBinBuilder(
             self._inner.bin(name), self._loop_manager)

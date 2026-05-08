@@ -23,7 +23,9 @@ path for the critical MRT behaviors (commit, abort, conflict,
 outside-txn block, batch).
 
 All tests skip cleanly when the configured namespace is not strong-
-consistency, matching the async suite's gate.
+consistency, matching the async suite's gate. Namespace selection follows
+``integration.sc_namespace_resolve`` (auto-pick the sole SC namespace when env is unset).
+Optional ``AEROSPIKE_HOST_SC`` targets an SC cluster while ``AEROSPIKE_HOST`` may point elsewhere.
 
 Provenance (per repo rules):
     reference: client/src/test/java/com/aerospike/client/sdk/TxnTest.java
@@ -31,7 +33,6 @@ Provenance (per repo rules):
 
 from __future__ import annotations
 
-import os
 import pytest
 
 from aerospike_async import ResultCode
@@ -39,30 +40,58 @@ from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.sync import SyncClient
 
+from integration.sc_namespace_resolve import (
+    MultipleScNamespacesError,
+    NoStrongConsistencyNamespace,
+    pinned_namespace_env_hint,
+    resolve_sc_namespace_sync,
+    skip_reason_no_sc_namespace,
+)
+
 
 BIN_NAME = "bin"
-DEFAULT_SC_NAMESPACE = "test_sc"
+
+
+def _namespaces_on_cluster_hint_sync(session) -> str:
+    try:
+        names = sorted(session.info().namespaces())
+    except Exception:
+        return ""
+    if not names:
+        return ""
+    return f" Namespaces on this cluster: {', '.join(names)}."
 
 
 @pytest.fixture(scope="module")
-def sc_namespace() -> str:
-    """Namespace name to run MRT tests against (env-tunable)."""
-    return os.environ.get("AEROSPIKE_SC_NAMESPACE", DEFAULT_SC_NAMESPACE)
-
-
-@pytest.fixture
-def sync_client(aerospike_host, client_policy):
-    """SyncClient sharing the conftest-built authed :class:`ClientPolicy`.
-
-    Uses :class:`SyncClient` rather than :class:`ClusterDefinition` so the
-    authenticated policy from ``conftest.py`` (driven by ``AEROSPIKE_*``
-    env vars) is honored — required for the SC cluster.
-    """
-    client = SyncClient(seeds=aerospike_host, policy=client_policy)
+def sc_namespace(aerospike_host_sc, client_policy_sc):
+    client = SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc)
     try:
         client.connect()
     except Exception as exc:
-        pytest.skip(f"SC cluster unreachable at {aerospike_host!r}: {exc}")
+        pytest.skip(f"cluster unreachable at {aerospike_host_sc!r}: {exc}")
+    try:
+        sess = client.create_session()
+        try:
+            return resolve_sc_namespace_sync(sess)
+        except MultipleScNamespacesError as e:
+            pytest.skip(
+                "Several namespaces have strong-consistency enabled; set "
+                f"AEROSPIKE_SC_NAMESPACE to one of: {', '.join(sorted(e.names))}",
+            )
+        except NoStrongConsistencyNamespace as e:
+            pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def sync_client(aerospike_host_sc, client_policy_sc):
+    """SyncClient against the SC test seed (``AEROSPIKE_HOST_SC`` or ``AEROSPIKE_HOST``)."""
+    client = SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc)
+    try:
+        client.connect()
+    except Exception as exc:
+        pytest.skip(f"SC cluster unreachable at {aerospike_host_sc!r}: {exc}")
     try:
         yield client
     finally:
@@ -76,17 +105,16 @@ def session(sync_client, sc_namespace):
     """
     sess = sync_client.create_session()
     try:
-        is_sc = sess.is_namespace_sc(sc_namespace)
+        status = sess.namespace_sc_status(sc_namespace)
     except Exception as exc:
         pytest.skip(
             f"SC namespace {sc_namespace!r} unreachable "
-            f"({exc}); set AEROSPIKE_HOST / AEROSPIKE_SC_NAMESPACE to an SC cluster"
+            f"({exc}); set AEROSPIKE_HOST_SC / AEROSPIKE_HOST / AEROSPIKE_SC_NAMESPACE to an SC cluster"
         )
-    if not is_sc:
-        pytest.skip(
-            f"Namespace {sc_namespace!r} is not strong-consistency; "
-            "MRT tests require SC"
-        )
+    if not status.is_sc:
+        ns_hint = _namespaces_on_cluster_hint_sync(sess)
+        pin = pinned_namespace_env_hint()
+        pytest.skip(f"{status.detail}{ns_hint}{pin} MRT tests require SC.")
     return sess
 
 

@@ -22,7 +22,7 @@ from aerospike_sdk.aio.info import InfoCommands
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.aio.transactional_session import TransactionalSession
-from aerospike_sdk.aio.session import Session
+from aerospike_sdk.aio.session import NamespaceScStatus, Session
 
 __all__ = [
     "Cluster",
@@ -30,6 +30,7 @@ __all__ = [
     "Client",
     "Host",
     "InfoCommands",
+    "NamespaceScStatus",
     "IndexBuilder",
     "QueryBuilder",
     "Session",

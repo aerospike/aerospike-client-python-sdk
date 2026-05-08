@@ -20,15 +20,8 @@ import os
 
 import pytest
 from aerospike_async import CTX, CollectionIndexType, Filter
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError
-
-
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    """Setup SDK client for index tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
 
 
 async def test_client_policy_use_services_alternate_from_env(client_policy, aerospike_host):

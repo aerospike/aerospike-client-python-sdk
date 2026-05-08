@@ -40,7 +40,7 @@ if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotat
 log = logging.getLogger("aerospike_sdk.index_monitor")
 
 _DEFAULT_REFRESH_INTERVAL: float = 5.0
-_INITIAL_FETCH_TIMEOUT: float = 1.0
+_DEFAULT_READY_TIMEOUT: float = 30.0
 
 _SINDEX_TYPE_MAP: Dict[str, IndexTypeEnum] = {
     "numeric": IndexTypeEnum.NUMERIC,
@@ -110,27 +110,37 @@ def _parse_entries_per_bval(raw_response: Dict[str, str]) -> Optional[float]:
     return None
 
 
+async def _stat_entries_per_bval(
+    client: "Client", ns: str, indexname: str,
+) -> Optional[float]:
+    try:
+        stat_resp = await client.info(
+            f"sindex-stat:namespace={ns};indexname={indexname}",
+        )
+        return _parse_entries_per_bval(stat_resp)
+    except PacError:
+        log.debug(
+            "Failed to fetch sindex-stat for %s.%s",
+            ns, indexname, exc_info=True,
+        )
+        return None
+
+
 async def _fetch_indexes(client: "Client") -> Dict[str, IndexContext]:
     """Fetch all secondary indexes and return per-namespace ``IndexContext`` caches."""
     raw = await client.info_on_all_nodes("sindex-list")
     entries = _parse_sindex_list(raw)
 
+    bvals = await asyncio.gather(
+        *(_stat_entries_per_bval(client, e["ns"], e["indexname"]) for e in entries),
+    )
+
     indexes_by_ns: Dict[str, List[Index]] = {}
-    for entry in entries:
+    for entry, bval in zip(entries, bvals):
         ns = entry["ns"]
         idx_type = _SINDEX_TYPE_MAP.get(
             entry.get("type", "").lower(), IndexTypeEnum.NUMERIC,
         )
-        bval: Optional[float] = None
-        try:
-            stat_resp = await client.info(
-                f"sindex-stat:namespace={ns};indexname={entry['indexname']}",
-            )
-            bval = _parse_entries_per_bval(stat_resp)
-        except PacError:
-            log.debug("Failed to fetch sindex-stat for %s.%s",
-                      ns, entry["indexname"], exc_info=True)
-
         index = Index(
             bin=entry["bin"],
             index_type=idx_type,
@@ -152,12 +162,13 @@ class IndexesMonitor:
     Retrieve cached data with :meth:`get_index_context`. Stop via
     :meth:`stop` (called by ``Client.close``).
 
-    Example::
+        Example::
 
-        monitor = IndexesMonitor()
-        await monitor.start(client)
-        ctx = monitor.get_index_context("test")
-        await monitor.stop()
+            monitor = IndexesMonitor()
+            await monitor.start(client)
+            await monitor.wait_until_ready()
+            ctx = monitor.get_index_context("test")
+            await monitor.stop()
 
     Args:
         refresh_interval: Seconds between cache refreshes (default 5.0).
@@ -170,21 +181,36 @@ class IndexesMonitor:
         self._initial_ready = asyncio.Event()
 
     async def start(self, client: "Client") -> None:
-        """Begin background refresh.  Waits up to 1 s for the first fetch."""
+        """Begin background refresh without blocking :meth:`Client.connect`.
+
+        The first metadata fetch runs asynchronously. Callers that need index
+        metadata immediately (for example AEL ``where()`` filter generation on
+        a dataset query) should ``await`` :meth:`wait_until_ready` before
+        relying on :meth:`get_index_context`.
+        """
         if self._task is not None:
             return
         self._initial_ready.clear()
         self._task = asyncio.create_task(self._run(client))
-        try:
-            await asyncio.wait_for(
-                self._initial_ready.wait(), timeout=_INITIAL_FETCH_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            log.warning(
-                "Initial index fetch did not complete within %.1f s; "
-                "monitoring continues in background",
-                _INITIAL_FETCH_TIMEOUT,
-            )
+
+    async def wait_until_ready(self, timeout: Optional[float] = None) -> None:
+        """Block until the first index refresh attempt has finished.
+
+        After this returns, :meth:`get_index_context` reflects the latest fetch
+        (possibly empty if the cluster reports no secondary indexes).
+
+        Args:
+            timeout: Seconds to wait; ``None`` uses
+                ``_DEFAULT_READY_TIMEOUT``.
+
+        Raises:
+            RuntimeError: If :meth:`start` was not called.
+            asyncio.TimeoutError: If the first refresh does not complete in time.
+        """
+        if self._task is None:
+            raise RuntimeError("IndexesMonitor.start must be called first")
+        limit = _DEFAULT_READY_TIMEOUT if timeout is None else timeout
+        await asyncio.wait_for(self._initial_ready.wait(), timeout=limit)
 
     async def stop(self) -> None:
         """Cancel the background refresh task."""

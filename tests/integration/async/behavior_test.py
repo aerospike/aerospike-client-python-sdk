@@ -21,14 +21,8 @@ from datetime import timedelta
 
 import pytest
 
-from aerospike_sdk import Behavior, DataSet, Client
+from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
-
-
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
 
 
 @pytest.fixture

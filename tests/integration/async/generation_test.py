@@ -22,13 +22,6 @@ from aerospike_sdk.exceptions import GenerationError
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
-    """Setup SDK client for testing."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
-
-
-@pytest.fixture
 def test_set():
     """DataSet fixture for generation tests."""
     return DataSet.of("test", "generation_test")

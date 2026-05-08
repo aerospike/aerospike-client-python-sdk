@@ -130,6 +130,7 @@ class TestIndexesMonitorLifecycle:
     async def test_start_populates_cache(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
@@ -144,6 +145,7 @@ class TestIndexesMonitorLifecycle:
     async def test_different_namespaces(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             test_ctx = monitor.get_index_context("test")
             prod_ctx = monitor.get_index_context("prod")
@@ -159,6 +161,7 @@ class TestIndexesMonitorLifecycle:
     async def test_nonexistent_namespace_returns_none(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             assert monitor.get_index_context("nonexistent") is None
         finally:
@@ -168,6 +171,7 @@ class TestIndexesMonitorLifecycle:
     async def test_stop_cancels_task(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         assert monitor._task is not None
         await monitor.stop()
         assert monitor._task is None
@@ -176,6 +180,7 @@ class TestIndexesMonitorLifecycle:
     async def test_start_is_idempotent(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         task1 = monitor._task
         await monitor.start(mock_client)
         assert monitor._task is task1
@@ -185,6 +190,7 @@ class TestIndexesMonitorLifecycle:
     async def test_index_type_mapping(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
@@ -198,6 +204,7 @@ class TestIndexesMonitorLifecycle:
     async def test_bin_values_ratio_populated(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
@@ -210,6 +217,7 @@ class TestIndexesMonitorLifecycle:
     async def test_cache_refreshes_on_interval(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=0.1)
         await monitor.start(mock_client)
+        await monitor.wait_until_ready()
         try:
             initial_count = mock_client.info_on_all_nodes.call_count
             await asyncio.sleep(0.35)
@@ -241,6 +249,7 @@ class TestIndexesMonitorLifecycle:
 
         monitor = IndexesMonitor(refresh_interval=0.1)
         await monitor.start(client)
+        await monitor.wait_until_ready()
         try:
             await asyncio.sleep(0.35)
             ctx = monitor.get_index_context("test")

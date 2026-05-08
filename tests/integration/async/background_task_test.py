@@ -16,6 +16,7 @@
 """Integration tests for session.background_task() (async)."""
 
 import pytest
+import pytest_asyncio
 from aerospike_async import Operation, UDFLang
 
 from aerospike_sdk import DataSet, Client
@@ -59,7 +60,7 @@ end
 """
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
         session = c.create_session()

@@ -26,12 +26,6 @@ NS = "test"
 SET = "cdt_wopt"
 
 
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        yield c
-
-
 def _key(suffix: str) -> Key:
     return Key(NS, SET, f"cdt_wopt_{suffix}")
 

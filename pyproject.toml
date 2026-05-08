@@ -59,6 +59,12 @@ include = ["aerospike_sdk*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Module-scoped fixtures (e.g. the IndexesMonitor task on the SDK Client) must
+# share a single event loop with the tests that use them; otherwise the
+# monitor's background ``asyncio.sleep`` is starved while a function-scoped
+# test loop runs and the cache never refreshes.
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
 addopts = "-s"
 testpaths = ["tests"]
 python_files = ["*_test.py"]

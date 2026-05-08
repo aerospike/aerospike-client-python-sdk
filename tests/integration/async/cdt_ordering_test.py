@@ -16,6 +16,7 @@
 """Tests proving K-ordered map key ordering is preserved through native Python dict."""
 
 import pytest
+import pytest_asyncio
 from aerospike_async import (
     MapOperation, MapOrder, MapPolicy, MapReturnType,
     WritePolicy,
@@ -29,7 +30,7 @@ BIN = "mapbin"
 DS = DataSet.of(NS, SET)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
         session = c.create_session()

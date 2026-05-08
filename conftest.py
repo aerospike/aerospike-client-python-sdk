@@ -46,8 +46,13 @@ def pytest_configure(config):
     root = Path(__file__).parent
     env_local = root / "aerospike.env"
     env_example = root / "aerospike.env.example"
+    # aerospike.env uses override=True so local hosts/auth win; preserve an
+    # explicit invoking-shell AEROSPIKE_LOG_LEVEL (e.g. DEBUG for connect traces).
+    log_level_before_env_file = os.environ.get("AEROSPIKE_LOG_LEVEL")
     if env_local.exists():
         load_env_file(env_local, override=True)
+        if log_level_before_env_file:
+            os.environ["AEROSPIKE_LOG_LEVEL"] = log_level_before_env_file
         print(f"Loaded environment variables from {env_local}\n")
     else:
         # Defaults only for unset keys so CI and explicit exports keep precedence.
@@ -56,6 +61,9 @@ def pytest_configure(config):
     
     # Configure logging from AEROSPIKE_LOG_LEVEL / AEROSPIKE_LOG_FILE
     log_level = os.environ.get("AEROSPIKE_LOG_LEVEL", "").upper()
+    # pyproject defaults log_cli_level to WARNING; allow SDK DEBUG lines through.
+    if log_level == "DEBUG":
+        setattr(config.option, "log_cli_level", "DEBUG")
     if log_level:
         numeric = getattr(logging, log_level, None)
         if numeric is None:
@@ -81,6 +89,15 @@ def pytest_configure(config):
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
 
+    host = os.environ.get("AEROSPIKE_HOST", "localhost:3000").strip()
+    sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
+    if sc and host == sc:
+        print(
+            f"\nIntegration routing: AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
+            f"{host!r}, so general tests hit the same seed as SC suites. Point "
+            "AEROSPIKE_HOST at your AP/default cluster and AEROSPIKE_HOST_SC at SC only.\n",
+        )
+
 
 _AUTH_MODES = {
     "INTERNAL": AuthMode.INTERNAL,
@@ -94,16 +111,15 @@ def _use_services_alternate_from_env() -> bool:
     return v in ('true', '1', 'yes')
 
 
-@pytest.fixture(scope="session")
-def client_policy():
-    """Fixture providing ClientPolicy from AEROSPIKE_* env vars.
+def _apply_auth_from_env(policy: ClientPolicy) -> None:
+    """Apply ``AEROSPIKE_AUTH_*`` env vars to *policy*, if any are set.
 
-    Reads AEROSPIKE_USE_SERVICES_ALTERNATE, AEROSPIKE_AUTH_MODE,
-    AEROSPIKE_AUTH_USER, and AEROSPIKE_AUTH_PASSWORD.
+    Used by seed-specific policy fixtures whose target cluster requires
+    authentication (SC, SEC). The default :func:`client_policy` does not
+    call this — sending credentials to a cluster that does not require
+    them can cost ~1s per ``new_client`` due to the auth handshake on
+    some configurations.
     """
-    policy = ClientPolicy()
-    policy.use_services_alternate = _use_services_alternate_from_env()
-
     mode_str = os.environ.get('AEROSPIKE_AUTH_MODE', '').strip().upper()
     if mode_str and mode_str in _AUTH_MODES:
         mode = _AUTH_MODES[mode_str]
@@ -114,13 +130,69 @@ def client_policy():
         else:
             policy.set_auth_mode(mode, user=user, password=password)
 
+
+@pytest.fixture(scope="session")
+def client_policy():
+    """Default ClientPolicy for the AP test seed (``AEROSPIKE_HOST``).
+
+    Reads only ``AEROSPIKE_USE_SERVICES_ALTERNATE``. Does **not** apply
+    ``AEROSPIKE_AUTH_*`` env vars; the AP/default cluster is expected
+    to allow unauthenticated access. SC / SEC fixtures use their own
+    auth-aware policies instead.
+    """
+    policy = ClientPolicy()
+    policy.use_services_alternate = _use_services_alternate_from_env()
+    return policy
+
+
+@pytest.fixture(scope="session")
+def client_policy_sc():
+    """ClientPolicy for the SC test seed (``AEROSPIKE_HOST_SC``).
+
+    Reads ``AEROSPIKE_USE_SERVICES_ALTERNATE`` and applies
+    ``AEROSPIKE_AUTH_*`` env vars when set, since SC clusters in the
+    standard local test rig run with security enabled.
+    """
+    policy = ClientPolicy()
+    policy.use_services_alternate = _use_services_alternate_from_env()
+    _apply_auth_from_env(policy)
+    return policy
+
+
+@pytest.fixture(scope="session")
+def client_policy_sec():
+    """ClientPolicy for the security-enabled seed (``AEROSPIKE_HOST_SEC``).
+
+    Reads ``AEROSPIKE_USE_SERVICES_ALTERNATE`` and applies
+    ``AEROSPIKE_AUTH_*`` env vars when set.
+    """
+    policy = ClientPolicy()
+    policy.use_services_alternate = _use_services_alternate_from_env()
+    _apply_auth_from_env(policy)
     return policy
 
 
 @pytest.fixture(scope="session")
 def aerospike_host():
-    """Fixture providing the Aerospike host for tests"""
-    return os.environ.get('AEROSPIKE_HOST', 'localhost:3000')
+    """Fixture providing the Aerospike seed for general integration tests.
+
+    Reads ``AEROSPIKE_HOST`` (default ``localhost:3000``). SC-only suites use
+    :func:`aerospike_host_sc` instead.
+    """
+    return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+
+
+@pytest.fixture(scope="session")
+def aerospike_host_sc():
+    """Seed for SC / MRT / durable-delete integration tests.
+
+    Uses ``AEROSPIKE_HOST_SC`` when set; otherwise the same seed as :func:`aerospike_host`
+    (CI and single-cluster setups).
+    """
+    sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
+    if sc:
+        return sc
+    return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -134,9 +206,23 @@ async def enterprise(aerospike_host, client_policy):
         await client.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def enterprise_sc(aerospike_host_sc, client_policy_sc):
+    """True when the SC test seed (``AEROSPIKE_HOST_SC`` or ``AEROSPIKE_HOST``) is Enterprise."""
+    client = await new_client(client_policy_sc, aerospike_host_sc)
+    try:
+        result = await client.info("edition")
+        return any("Enterprise" in v for v in result.values())
+    finally:
+        await client.close()
+
+
+@pytest.fixture(scope="session")
 def wait_for_index():
-    """Fixture returning an async helper that retries until a secondary index is queryable.
+    """Return an async helper that retries until a secondary index is queryable.
+
+    Session-scoped so module-scoped integration clients may depend on it without
+    a pytest scope mismatch.
 
     Usage::
 

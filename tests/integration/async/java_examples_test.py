@@ -47,14 +47,35 @@ async def session(cluster):
     return cluster.create_session(Behavior.DEFAULT)
 
 
+_ORPHAN_CUSTOMER_INDEXES = ("age_idx", "tags_idx")
+
+
+async def _drop_orphan_customer_indexes(session, customers):
+    """Best-effort drop of indexes left over from prior runs.
+
+    AEL ``where()`` consults ``IndexesMonitor``; an orphaned ``age_idx``
+    on the cluster makes :func:`test_java_example_query_with_where` send
+    a sindex filter that the server may have already dropped, raising
+    ``IndexNotFound``.
+    """
+    for name in _ORPHAN_CUSTOMER_INDEXES:
+        try:
+            await session.index(customers).named(name).drop()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 async def customer_dataset(session):
     """Setup test data for customer dataset.
 
     This fixture ensures test data is in a known state before each test.
-    It deletes and recreates keys 1, 2, 3 to ensure clean state.
+    It deletes and recreates keys 1, 2, 3 to ensure clean state, and
+    sweeps any leftover Customers-set indexes from prior runs so AEL's
+    auto-index path stays consistent.
     """
     customers = DataSet.of("test", "Customers")
+    await _drop_orphan_customer_indexes(session, customers)
 
     # Always reset test data to known state before each test
     # Delete first to ensure clean state, then insert fresh data
@@ -609,23 +630,25 @@ async def test_java_example_index_operations(session, customer_dataset):
     """
     from aerospike_async import CollectionIndexType
 
-    # Create numeric index
     try:
-        await session.index(customer_dataset).on_bin("age").named("age_idx").numeric().create()
-    except Exception:
-        pass  # Index may already exist
+        try:
+            await session.index(customer_dataset).on_bin("age").named("age_idx").numeric().create()
+        except Exception:
+            pass  # Index may already exist
 
-    # Create collection index (using a bin that might exist)
-    try:
-        await session.index(customer_dataset).on_bin("tags").named("tags_idx").collection(CollectionIndexType.LIST).create()
-    except Exception:
-        pass  # Index may already exist or bin may not exist
+        try:
+            await session.index(customer_dataset).on_bin("tags").named("tags_idx").collection(CollectionIndexType.LIST).create()
+        except Exception:
+            pass  # Index may already exist or bin may not exist
 
-    # Drop index
-    try:
-        await session.index(customer_dataset).named("age_idx").drop()
-    except Exception:
-        pass  # Index may not exist
+        try:
+            await session.index(customer_dataset).named("age_idx").drop()
+        except Exception:
+            pass  # Index may not exist
+    finally:
+        # Drop both indexes so later tests (and reruns) don't see orphans
+        # that mislead AEL's secondary-index auto-routing.
+        await _drop_orphan_customer_indexes(session, customer_dataset)
 
 
 async def test_java_example_put_and_query_pattern(session, customer_dataset):

@@ -19,6 +19,7 @@ import asyncio
 import time
 
 import pytest
+import pytest_asyncio
 from aerospike_async import Filter, PartitionFilter, QueryPolicy
 from aerospike_sdk import DataSet, Exp, Client
 
@@ -54,7 +55,7 @@ async def _wait_for_set_count(
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     """Setup SDK client and test data for query tests."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
