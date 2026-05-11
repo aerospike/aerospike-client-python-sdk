@@ -19,6 +19,20 @@ $.name
 $.settings
 ```
 
+Bin names accept a wider character set than plain identifiers:
+
+```
+$.name@host         # @ is permitted in bin names
+$.@attr             # leading or trailing @
+$."my-bin"          # quoting allows otherwise-illegal characters (-, space, $, ...)
+$.'my bin'          # single quotes work too
+$.true              # reserved keywords are valid bin names
+$.when              # so are keywords like 'when', 'and', 'or', 'let', etc.
+```
+
+The substring `null` (case-insensitive) is reserved and rejected: `$.null`,
+`$.my_null_bin`, and `$."NULL"` all raise `AelParseException` at parse time.
+
 ### Comparison Operators
 
 ```
@@ -107,6 +121,23 @@ $.matrix.[0].[1] == 42
 $.users.["alice"].age > 30
 ```
 
+Map keys can be typed at parse time:
+
+```
+$.bin.42 == 100        # integer map key (decimal)
+$.bin.0xff == 100      # integer map key (hex)
+$.bin.0b101 == 100     # integer map key (binary)
+$.bin.+5 == 100        # signed integer map key
+$.bin.-3 == 100
+$.bin."42" == "x"      # string map key (quoting forces string type)
+$.bin.{1-5} == 100     # integer key range
+$.bin.{1,2,3} == 100   # integer key list
+```
+
+A digit-only segment after the dot (`$.bin.42`) becomes an integer map key;
+quote it (`$.bin."42"`) to force string interpretation. The two compile to
+distinct expressions and match different keys at runtime.
+
 ### CDT Functions
 
 ```
@@ -138,6 +169,19 @@ from aerospike_sdk import parse_ael
 
 expr = parse_ael("$.age > ?0 and $.status == ?1", 18, "active")
 ```
+
+### Unknown and Error
+
+The `unknown` and `error` keywords compile to a sentinel that the server
+treats as an evaluator-unknown result — useful as a `when` action when no
+sensible value can be returned:
+
+```
+when ($.role == "admin" => $.tier, default => unknown)
+```
+
+`error` is an alias for `unknown` and produces the same expression. Both
+short-circuit any enclosing comparison or logical operator.
 
 ## Auto Index Discovery
 

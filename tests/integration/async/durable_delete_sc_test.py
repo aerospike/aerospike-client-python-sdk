@@ -144,10 +144,10 @@ async def _namespaces_on_cluster_hint(session) -> str:
 
 
 def _require_default_durable_delete(builder: Any, *, ctx: str) -> Any:
-    """Require chainable ``default_durably_delete()`` on builders (Phase 3 API)."""
-    fn = getattr(builder, "default_durably_delete", None)
+    """Require chainable ``default_with_durable_delete()`` on builders (Phase 3 API)."""
+    fn = getattr(builder, "default_with_durable_delete", None)
     if fn is None:
-        pytest.fail(f"{ctx}: default_durably_delete() not implemented")
+        pytest.fail(f"{ctx}: default_with_durable_delete() not implemented")
     out = fn()
     return out
 
@@ -239,10 +239,10 @@ async def durable_delete_client(aerospike_host_sc, client_policy_sc):
         reg = await client.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
-        reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
 
         reg2 = await client.register_udf(BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
-        reg2.wait_till_complete()
+        await reg2.wait_till_complete()
 
         yield client
 
@@ -419,7 +419,7 @@ class TestDurableDeleteBackgroundUdf:
         except AerospikeError as exc:
             _skip_if_role_violation(exc)
             raise
-        assert task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
 
         await _validate_process_record_outcome(
             session, ds_sc, DD_UDF_BIN1, DD_UDF_BIN2, DD_UDF_SIZE,
@@ -468,7 +468,7 @@ class TestDurableDeleteBatchReset:
         for k in keys:
             await delete_keys_durable(session, [k])
 
-        del_stream = await session.delete(*keys).durably_delete().respond_all_keys().execute(
+        del_stream = await session.delete(*keys).with_durable_delete().respond_all_keys().execute(
             on_error=ErrorStrategy.IN_STREAM,
         )
         del_rows = await del_stream.collect()
@@ -500,13 +500,13 @@ class TestDurableDeleteTombstone:
         bin_name = "name"
         await delete_keys_durable(session, [key])
 
-        await session.delete(key).durably_delete().execute()
+        await session.delete(key).with_durable_delete().execute()
 
         await session.insert(key).bin(bin_name).set_to("bob").execute()
         r1 = await (await session.query(key).bins([bin_name]).execute()).first_or_raise()
         gen_after_first_insert = r1.record.generation
 
-        await session.delete(key).durably_delete().execute()
+        await session.delete(key).with_durable_delete().execute()
         await session.insert(key).bin(bin_name).set_to("bob").execute()
         r2 = await (await session.query(key).bins([bin_name]).execute()).first_or_raise()
         gen_after_second_insert = r2.record.generation
@@ -641,7 +641,7 @@ class TestDurableDeleteBatchOverride:
     async def test_batch_delete_durable_override_true_when_behavior_batch_durable_delete_false(
         self, session_sc, ds_sc, enterprise_sc,
     ):
-        """Explicit ``durably_delete()`` succeeds when batch behavior defaults to non-durable."""
+        """Explicit ``with_durable_delete()`` succeeds when batch behavior defaults to non-durable."""
         _skip_if_not_enterprise(enterprise_sc)
         probe_behavior = Behavior.DEFAULT.derive_with_changes(
             "BatchDdTrueOvProbe",
@@ -663,7 +663,7 @@ class TestDurableDeleteBatchOverride:
         await session.upsert(keys).bin(bin_name).add(10).execute()
         await session.upsert(keys).bin(bin_name).add(5).execute()
 
-        del_stream = await session.delete(*keys).durably_delete().execute(
+        del_stream = await session.delete(*keys).with_durable_delete().execute(
             on_error=ErrorStrategy.IN_STREAM,
         )
         del_rows = await del_stream.collect()
@@ -756,7 +756,7 @@ class TestQueryExecuteDurableDelete:
         except AerospikeError as exc:
             _skip_if_role_violation(exc)
             raise
-        assert task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
 
         await _validate_process_record_outcome(session, ds_sc, TQE_BIN1, TQE_BIN2, TQE_SIZE)
 
@@ -786,7 +786,7 @@ class TestBackgroundTaskDelete:
             b = _require_default_durable_delete(b, ctx="BackgroundOperationBuilder.delete")
 
         task = await b.execute()
-        assert task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
 
         for i in range(1, 11):
             rs = await session.query(ds_bg.id(f"bg_{i}")).execute()

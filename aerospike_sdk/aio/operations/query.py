@@ -706,7 +706,7 @@ class QueryBuilder(_WriteVerbs):
 
         Example::
 
-            from aerospike_async import CTX, CdtOperation
+            from aerospike_sdk import CTX, CdtOperation
             stream = await (
                 session.query(users)
                     .with_op_projection(
@@ -2589,14 +2589,25 @@ class QueryBuilder(_WriteVerbs):
         return RecordStream.from_recordset(recordset)
 
     def _resolve_index_context(self) -> None:
-        """Auto-populate ``_index_context`` from the monitor when not set."""
+        """Auto-populate ``_index_context`` from the monitor when not set.
+
+        The monitor's cached :class:`IndexContext` is at namespace granularity
+        and has no ``query_set``. We derive a per-query copy with
+        ``query_set=self._set_name`` so filter selection rejects indexes
+        defined on a different set; cross-set indexes (those without a
+        set name) remain eligible.
+        """
         if self._index_context is not None:
             return
         if self._indexes_monitor is None:
             return
         ctx = self._indexes_monitor.get_index_context(self._namespace)
-        if ctx is not None:
-            self._index_context = ctx
+        if ctx is None:
+            return
+        if self._set_name and ctx.query_set != self._set_name:
+            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
+            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
+        self._index_context = ctx
 
     def _auto_generate_filters(
         self,
@@ -2983,7 +2994,7 @@ class WriteSegmentBuilder(_WriteVerbs):
         self._qb._generation = generation
         return self
 
-    def durably_delete(self) -> WriteSegmentBuilder:
+    def with_durable_delete(self) -> WriteSegmentBuilder:
         """Enable durable delete on the current segment.
 
         Returns:
@@ -2992,9 +3003,14 @@ class WriteSegmentBuilder(_WriteVerbs):
         self._qb._durable_delete = True
         return self
 
-    def default_durably_delete(self) -> WriteSegmentBuilder:
+    def default_with_durable_delete(self) -> WriteSegmentBuilder:
         """Prefer durable deletes for this segment when resolving behavior defaults."""
         self._qb._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+        """Prefer non-durable deletes for this segment when resolving behavior defaults."""
+        self._qb._durable_delete_command_default = False
         return self
 
     def without_durable_delete(self) -> WriteSegmentBuilder:
@@ -3162,10 +3178,16 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._record_delete_in_fast_ops = True
         return self._add_op(Operation.delete())
 
-    def default_durably_delete(self) -> WriteSegmentBuilder:
+    def default_with_durable_delete(self) -> WriteSegmentBuilder:
         if self._qb is not None:
-            return super().default_durably_delete()
+            return super().default_with_durable_delete()
         self._dd_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().default_without_durable_delete()
+        self._dd_command_default = False
         return self
 
     def without_durable_delete(self) -> WriteSegmentBuilder:
@@ -3174,9 +3196,9 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._dd_override = False
         return self
 
-    def durably_delete(self) -> WriteSegmentBuilder:
+    def with_durable_delete(self) -> WriteSegmentBuilder:
         if self._qb is not None:
-            return super().durably_delete()
+            return super().with_durable_delete()
         self._dd_override = True
         return self
 

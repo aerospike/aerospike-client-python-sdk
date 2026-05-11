@@ -293,7 +293,7 @@ async def test_txn_delete(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async def op(tx):
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
 
     await session.do_in_transaction(op)
     assert await _fetch_bin(session, key) is None
@@ -308,7 +308,7 @@ async def test_txn_delete_abort(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async with session.begin_transaction() as tx:
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
         await tx.abort()
 
     assert await _fetch_bin(session, key) == "val1"
@@ -324,11 +324,11 @@ async def test_txn_delete_twice(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async def op(tx):
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
         # The second delete must not blow up: we only assert it doesn't
         # raise an unexpected error — a KEY_NOT_FOUND_ERROR is acceptable.
         try:
-            await tx.delete(key).durably_delete().execute()
+            await tx.delete(key).with_durable_delete().execute()
         except AerospikeError as exc:
             assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 

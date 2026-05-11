@@ -422,8 +422,8 @@ async def test_set_bins_execute(client):
     assert first.record_or_raise().bins == {"name": "Tim", "age": 1, "gender": "male"}
 
 
-async def test_durably_delete(client, enterprise):
-    """Test durably method for delete operations."""
+async def test_with_durable_delete(client, enterprise):
+    """Test ``with_durable_delete()`` on delete operations."""
     if not enterprise:
         pytest.skip("Requires Enterprise Edition")
     session = client.create_session()
@@ -434,7 +434,7 @@ async def test_durably_delete(client, enterprise):
         (await (await session.query(k).execute()).first_or_raise()).record.generation
     )
 
-    result = await session.delete(k).durably_delete().execute()
+    result = await session.delete(k).with_durable_delete().execute()
     first = await result.first_or_raise()
     assert first.is_ok
 

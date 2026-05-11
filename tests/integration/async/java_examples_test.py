@@ -492,7 +492,7 @@ async def test_java_example_delete_durably(session, customer_dataset, enterprise
     key = customer_dataset.id(5)
     await session.upsert(key).put({"name": "Test", "age": 25}).execute()
 
-    await session.delete(key).durably_delete().execute()
+    await session.delete(key).with_durable_delete().execute()
 
     stream = await session.query(key).execute()
     first = await stream.first()

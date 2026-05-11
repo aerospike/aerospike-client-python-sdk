@@ -144,12 +144,17 @@ class UdfBuilder:
             self._qb._filter_expression = expression
         return self
 
-    def default_durably_delete(self) -> UdfBuilder:
+    def default_with_durable_delete(self) -> UdfBuilder:
         """Prefer durable deletes when resolving policy defaults."""
         self._qb._durable_delete_command_default = True
         return self
 
-    def durably_delete(self) -> UdfBuilder:
+    def default_without_durable_delete(self) -> UdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._qb._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> UdfBuilder:
         """Force durable delete for this UDF invocation."""
         self._qb._durable_delete = True
         return self

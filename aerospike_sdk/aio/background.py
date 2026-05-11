@@ -216,12 +216,17 @@ class BackgroundOperationBuilder:
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
 
-    def default_durably_delete(self) -> BackgroundOperationBuilder:
+    def default_with_durable_delete(self) -> BackgroundOperationBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
         self._durable_delete_command_default = True
         return self
 
-    def durably_delete(self) -> BackgroundOperationBuilder:
+    def default_without_durable_delete(self) -> BackgroundOperationBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> BackgroundOperationBuilder:
         """Force durable delete on this background job."""
         self._durable_delete_override = True
         return self
@@ -467,12 +472,17 @@ class BackgroundUdfBuilder:
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
 
-    def default_durably_delete(self) -> BackgroundUdfBuilder:
+    def default_with_durable_delete(self) -> BackgroundUdfBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
         self._durable_delete_command_default = True
         return self
 
-    def durably_delete(self) -> BackgroundUdfBuilder:
+    def default_without_durable_delete(self) -> BackgroundUdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> BackgroundUdfBuilder:
         """Force durable delete on this background UDF job."""
         self._durable_delete_override = True
         return self

@@ -202,7 +202,7 @@ class TestWriteSegmentBuilder:
         qb._op_type = "delete"
         wsb = WriteSegmentBuilder(qb)
 
-        wsb.durably_delete()
+        wsb.with_durable_delete()
         assert qb._durable_delete is True
 
     def test_direct_set_to(self):
@@ -466,7 +466,7 @@ class TestPerSpecSettings:
         qb = _make_builder()
         qb._single_key = _make_key(1)
         wsb = qb.delete(_make_key(2))
-        wsb.durably_delete()
+        wsb.with_durable_delete()
         qb._finalize_current_spec()
 
         assert qb._specs[1].durable_delete is True

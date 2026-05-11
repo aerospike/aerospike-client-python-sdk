@@ -475,12 +475,12 @@ class ListRankRangePart(CDTPart):
 
 @dataclass
 class MapKeyPart(CDTPart):
-    """Map access by key: $.myMap.key or $.myMap["key"]"""
-    key: str
-    
+    """Map access by key: $.myMap.key, $.myMap.42, or $.myMap.\"my key\"."""
+    key: Any  # str | int | bytes — typed at parse time
+
     def get_context(self) -> CTX:
         return CTX.map_key(self.key)
-    
+
     def construct_expr(
         self,
         bin_name: str,
@@ -496,7 +496,7 @@ class MapKeyPart(CDTPart):
         return FilterExpression.map_get_by_key(
             return_type,
             value_type,
-            FilterExpression.string_val(self.key),
+            _object_to_exp(self.key),
             bin_expr,
             list(ctx),
         )
@@ -597,9 +597,9 @@ class MapValuePart(CDTPart):
 
 @dataclass
 class MapKeyRangePart(CDTPart):
-    """Map access by key range: $.myMap.{a-c}"""
-    key_begin: Optional[str] = None
-    key_end: Optional[str] = None
+    """Map access by key range: $.myMap.{a-c} or $.myMap.{1-5}."""
+    key_begin: Optional[Any] = None  # str | int | bytes | None
+    key_end: Optional[Any] = None
     inverted: bool = False
 
     def get_context(self) -> CTX:
@@ -617,8 +617,8 @@ class MapKeyRangePart(CDTPart):
             return_type = MapReturnType.VALUE
         if self.inverted:
             return_type = return_type | MapReturnType.INVERTED
-        begin_expr = FilterExpression.string_val(self.key_begin) if self.key_begin else None
-        end_expr = FilterExpression.string_val(self.key_end) if self.key_end else None
+        begin_expr = _object_to_exp(self.key_begin) if self.key_begin is not None else None
+        end_expr = _object_to_exp(self.key_end) if self.key_end is not None else None
         return FilterExpression.map_get_by_key_range(
             return_type,
             begin_expr,
@@ -630,8 +630,8 @@ class MapKeyRangePart(CDTPart):
 
 @dataclass
 class MapKeyListPart(CDTPart):
-    """Map access by key list: $.myMap.{a,b,c}"""
-    keys: List[str] = field(default_factory=list)
+    """Map access by key list: $.myMap.{a,b,c} or $.myMap.{1,2,3}."""
+    keys: List[Any] = field(default_factory=list)  # each str | int | bytes
     inverted: bool = False
 
     def get_context(self) -> CTX:
@@ -651,7 +651,7 @@ class MapKeyListPart(CDTPart):
             return_type = return_type | MapReturnType.INVERTED
         return FilterExpression.map_get_by_key_list(
             return_type,
-            FilterExpression.list_val(self.keys),
+            FilterExpression.list_val(list(self.keys)),
             bin_expr if bin_expr else FilterExpression.map_bin(bin_name),
             list(ctx),
         )
@@ -920,9 +920,9 @@ class MapRankRangeRelativePart(CDTPart):
 
 @dataclass
 class MapIndexRangeRelativePart(CDTPart):
-    """Map access by key-relative index range: $.map.{0:1~a} (index 0 to 1 relative to key a)"""
+    """Map access by key-relative index range: $.map.{0:1~a} (index 0 to 1 relative to key a)."""
     index: int
-    key: str
+    key: Any  # str | int | bytes
     count: Optional[int] = None
     inverted: bool = False
 
@@ -945,7 +945,7 @@ class MapIndexRangeRelativePart(CDTPart):
         if self.count is not None:
             return FilterExpression.map_get_by_key_relative_index_range_count(
                 return_type,
-                FilterExpression.string_val(self.key),
+                _object_to_exp(self.key),
                 FilterExpression.int_val(self.index),
                 FilterExpression.int_val(self.count),
                 base_bin,
@@ -954,7 +954,7 @@ class MapIndexRangeRelativePart(CDTPart):
         else:
             return FilterExpression.map_get_by_key_relative_index_range(
                 return_type,
-                FilterExpression.string_val(self.key),
+                _object_to_exp(self.key),
                 FilterExpression.int_val(self.index),
                 base_bin,
                 list(ctx),
@@ -1064,6 +1064,82 @@ def _unquote(text: str) -> str:
     if (text.startswith("'") and text.endswith("'")) or (text.startswith('"') and text.endswith('"')):
         return text[1:-1]
     return text
+
+
+def _reject_bin_name_containing_null(bin_name: str) -> None:
+    """Bin names containing ``null`` (case-insensitive) are reserved."""
+    if "null" in bin_name.lower():
+        raise AelParseException(
+            f"Bin name must not contain the reserved word 'null': {bin_name}"
+        )
+
+
+def _extract_bin_name(ctx) -> str:
+    """Resolve a ``binPart`` parser context to its bin-name string.
+
+    BIN_IDENTIFIER and NAME_IDENTIFIER pass through; QUOTED_STRING is unquoted
+    (and rejected if empty); IN is lowercased to preserve historical behavior;
+    a reservedWord alternative falls through to ``ctx.getText()``. The
+    result is checked for the reserved 'null' substring.
+    """
+    if ctx.BIN_IDENTIFIER() is not None:
+        bin_name = ctx.BIN_IDENTIFIER().getText()
+    elif ctx.NAME_IDENTIFIER() is not None:
+        bin_name = ctx.NAME_IDENTIFIER().getText()
+    elif ctx.QUOTED_STRING() is not None:
+        quoted = ctx.QUOTED_STRING().getText()
+        if len(quoted) <= 2:
+            raise AelParseException("Bin name must not be empty")
+        bin_name = _unquote(quoted)
+    elif ctx.IN() is not None:
+        bin_name = ctx.IN().getText().lower()
+    else:
+        bin_name = ctx.getText()
+    _reject_bin_name_containing_null(bin_name)
+    return bin_name
+
+
+def _parse_int_literal(text: str) -> int:
+    """Parse a decimal, hex (``0x...``), or binary (``0b...``) integer token.
+
+    Handles a leading ``+`` / ``-`` sign as may appear in ``LEADING_DOT_SIGNED_INT``.
+    """
+    sign = 1
+    body = text
+    if body and body[0] in "+-":
+        if body[0] == "-":
+            sign = -1
+        body = body[1:]
+    try:
+        if body[:2] in ("0x", "0X"):
+            return sign * int(body[2:], 16)
+        if body[:2] in ("0b", "0B"):
+            return sign * int(body[2:], 2)
+        return sign * int(body, 10)
+    except ValueError as e:
+        raise AelParseException(f"Invalid integer literal: {text}") from e
+
+
+def _object_to_exp(value: Any) -> FilterExpression:
+    """Convert a parsed Python value into a ``FilterExpression`` value node.
+
+    Supports the primitive types AEL currently lifts from the grammar:
+    ``str``, ``int``, ``bool``, and ``bytes``. Floats use the canonical
+    ``float_val`` constructor. Anything else is rejected.
+    """
+    if isinstance(value, bool):
+        return FilterExpression.bool_val(value)
+    if isinstance(value, int):
+        return FilterExpression.int_val(value)
+    if isinstance(value, str):
+        return FilterExpression.string_val(value)
+    if isinstance(value, float):
+        return FilterExpression.float_val(value)
+    if isinstance(value, (bytes, bytearray)):
+        return FilterExpression.blob_val(list(value))
+    raise AelParseException(
+        f"Unsupported value type for Exp conversion: {type(value).__name__}"
+    )
 
 
 def _get_type_hint(expr: ExprOrDeferred) -> InferredType:
@@ -1617,11 +1693,14 @@ class ExpressionConditionVisitor(ConditionVisitor):
         Returns a DeferredBin that will be resolved to the correct bin type
         based on context (comparison operand type) or explicit cast.
         Type defaults to INT.
+
+        Accepts BIN_IDENTIFIER (allows ``@``), NAME_IDENTIFIER, QUOTED_STRING
+        (single- or double-quoted bin name with otherwise-illegal characters),
+        IN (lowercased to match historical PSDK behavior), and any
+        ``reservedWord`` (a keyword used as a bin name). Bin names containing
+        ``null`` (case-insensitive) are rejected — that token is reserved.
         """
-        if ctx.NAME_IDENTIFIER() is not None:
-            bin_name = ctx.NAME_IDENTIFIER().getText()
-        else:
-            bin_name = ctx.IN().getText().lower()
+        bin_name = _extract_bin_name(ctx)
         return DeferredBin(bin_name)
 
     def visitPath(self, ctx: ConditionParser.PathContext) -> ExprOrDeferred:
@@ -1679,13 +1758,27 @@ class ExpressionConditionVisitor(ConditionVisitor):
             
             # Check for exists()
             if hasattr(path_func_ctx, 'pathFunctionExists') and path_func_ctx.pathFunctionExists() is not None:
-                # exists() returns boolean indicating if the path exists
+                # exists() returns a boolean indicating whether the path is
+                # present. For a bare bin path (no CDT parts) this is just
+                # bin_exists. For a CDT path we lower it to the underlying
+                # *_get_by_* op with EXISTS return-type and BOOL value-type,
+                # which is the same shape produced by ``.get(return: EXISTS)``.
                 if isinstance(base_path, CDTPath) and base_path.parts:
-                    # For CDT paths, we need bin_exists for the bin
+                    last_part = base_path.parts[-1]
+                    if isinstance(last_part, (ListIndexPart, ListRankPart, ListValuePart,
+                                              ListIndexRangePart, ListValueRangePart,
+                                              ListValueListPart, ListRankRangePart,
+                                              ListRankRangeRelativePart)):
+                        base_path.list_return_type = ListReturnType.EXISTS
+                    else:
+                        base_path.map_return_type = MapReturnType.EXISTS
+                    base_path.value_type = ExpType.BOOL
+                    base_path.has_path_function = True
+                    return base_path.to_expression(InferredType.BOOL)
+                if isinstance(base_path, CDTPath):
                     return FilterExpression.bin_exists(base_path.bin_name)
-                elif isinstance(base_path, (DeferredBin, CDTPath)):
-                    bin_name = base_path.bin_name if isinstance(base_path, CDTPath) else base_path.name
-                    return FilterExpression.bin_exists(bin_name)
+                if isinstance(base_path, DeferredBin):
+                    return FilterExpression.bin_exists(base_path.name)
             
             # Check for count()
             if hasattr(path_func_ctx, 'pathFunctionCount') and path_func_ctx.pathFunctionCount() is not None:
@@ -1902,31 +1995,46 @@ class ExpressionConditionVisitor(ConditionVisitor):
                                     deferred.explicit_type = type_map[param_value]
 
     def visitBasePath(self, ctx: ConditionParser.BasePathContext) -> ExprOrDeferred:
-        """Visit base path: binPart with optional CDT parts (list/map access)."""
+        """Visit base path: binPart with optional CDT parts (list/map access).
+
+        ``binPart`` is resolved through :func:`_extract_bin_name` so quoted /
+        reserved-keyword bin names and BIN_IDENTIFIER (with ``@``) all
+        normalize to a plain Python string. Any embedded ``.<int>`` or
+        ``.0xff`` segments produce integer-keyed ``MapKeyPart`` entries via
+        the dedicated ``pathIntMapKey`` / ``pathHexBinaryMapKey`` rules.
+        """
         bin_name: Optional[str] = None
         cdt_parts: List[CDTPart] = []
         designator_type: Optional[InferredType] = None
 
         for child in ctx.children:
-            if (hasattr(child, 'getRuleIndex')
-                    and child.getRuleIndex() == ConditionParser.RULE_binPart):
-                bin_name = child.getText()
-            elif hasattr(child, 'getRuleIndex'):
-                rule_index = child.getRuleIndex()
-                if rule_index == ConditionParser.RULE_listPart:
-                    if self._is_list_type_designator(child):
-                        designator_type = InferredType.LIST
-                    else:
-                        part = self._parse_list_part(child)
-                        if part:
-                            cdt_parts.append(part)
-                elif rule_index == ConditionParser.RULE_mapPart:
-                    if self._is_map_type_designator(child):
-                        designator_type = InferredType.MAP
-                    else:
-                        part = self._parse_map_part(child)
-                        if part:
-                            cdt_parts.append(part)
+            if not hasattr(child, 'getRuleIndex'):
+                continue
+            rule_index = child.getRuleIndex()
+            if rule_index == ConditionParser.RULE_binPart:
+                bin_name = _extract_bin_name(child)
+            elif rule_index == ConditionParser.RULE_listPart:
+                if self._is_list_type_designator(child):
+                    designator_type = InferredType.LIST
+                else:
+                    part = self._parse_list_part(child)
+                    if part:
+                        cdt_parts.append(part)
+            elif rule_index == ConditionParser.RULE_mapPart:
+                if self._is_map_type_designator(child):
+                    designator_type = InferredType.MAP
+                else:
+                    part = self._parse_map_part(child)
+                    if part:
+                        cdt_parts.append(part)
+            elif rule_index == ConditionParser.RULE_pathIntMapKey:
+                # ``.42`` or ``.+5`` / ``.-3`` after a bin or another part.
+                key_text = child.getText()[1:]  # strip leading dot
+                cdt_parts.append(MapKeyPart(_parse_int_literal(key_text)))
+            elif rule_index == ConditionParser.RULE_pathHexBinaryMapKey:
+                # ``.0xff`` or ``.0b101`` — leading dot, then a numeric token.
+                key_text = child.getText()[1:]
+                cdt_parts.append(MapKeyPart(_parse_int_literal(key_text)))
 
         if bin_name is None:
             raise AelParseException("Base path must start with a bin name")
@@ -2200,16 +2308,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
     def _parse_map_part(self, ctx) -> Optional[CDTPart]:
         """Parse a map part from the parse tree."""
         if hasattr(ctx, 'mapKey') and ctx.mapKey() is not None:
-            key_ctx = ctx.mapKey()
-            if hasattr(key_ctx, 'NAME_IDENTIFIER') and key_ctx.NAME_IDENTIFIER() is not None:
-                key = key_ctx.NAME_IDENTIFIER().getText()
-                return MapKeyPart(key)
-            elif hasattr(key_ctx, 'QUOTED_STRING') and key_ctx.QUOTED_STRING() is not None:
-                key = _unquote(key_ctx.QUOTED_STRING().getText())
-                return MapKeyPart(key)
-            else:
-                key = key_ctx.getText()
-                return MapKeyPart(key)
+            return MapKeyPart(self._parse_map_key(ctx.mapKey()))
 
         if hasattr(ctx, 'mapIndex') and ctx.mapIndex() is not None:
             idx_ctx = ctx.mapIndex()
@@ -2375,14 +2474,22 @@ class ExpressionConditionVisitor(ConditionVisitor):
         return keys
 
     @staticmethod
-    def _parse_map_key(ctx) -> str:
-        """Parse a mapKey into a string."""
+    def _parse_map_key(ctx) -> Any:
+        """Parse a ``mapKey`` parser context into its typed value.
+
+        Returns ``str`` for NAME_IDENTIFIER / QUOTED_STRING / IN / reservedWord,
+        and ``int`` for an INT literal (decimal, ``0x...``, or ``0b...``). An
+        empty context resolves to ``""`` so callers can branch cheaply.
+        """
         if ctx is None:
             return ""
         if hasattr(ctx, 'NAME_IDENTIFIER') and ctx.NAME_IDENTIFIER() is not None:
             return ctx.NAME_IDENTIFIER().getText()
-        elif hasattr(ctx, 'QUOTED_STRING') and ctx.QUOTED_STRING() is not None:
+        if hasattr(ctx, 'QUOTED_STRING') and ctx.QUOTED_STRING() is not None:
             return _unquote(ctx.QUOTED_STRING().getText())
+        if hasattr(ctx, 'INT') and ctx.INT() is not None:
+            return _parse_int_literal(ctx.INT().getText())
+        # IN keyword and reservedWord alternatives — fall through to literal text.
         return ctx.getText()
 
     def visitStringOperand(self, ctx: ConditionParser.StringOperandContext) -> ExprOrDeferred:
@@ -2466,6 +2573,9 @@ class ExpressionConditionVisitor(ConditionVisitor):
 
         if ctx.whenExpression() is not None:
             return self.visit(ctx.whenExpression())
+
+        if ctx.unknownExpression() is not None:
+            return self.visit(ctx.unknownExpression())
 
         raise AelParseException(f"Unsupported operand type: {ctx.getText()}")
 
@@ -2631,6 +2741,15 @@ class ExpressionConditionVisitor(ConditionVisitor):
     def visitOperandExpression(self, ctx: ConditionParser.OperandExpressionContext) -> Optional[FilterExpression]:
         """Visit operand expression."""
         return self.visit(ctx.operand())
+
+    def visitUnknownExpression(self, ctx: ConditionParser.UnknownExpressionContext) -> ExprOrDeferred:
+        """Visit ``unknown`` / ``error`` keyword.
+
+        Both produce ``Exp.unknown()`` — at evaluation the server raises an
+        evaluator-unknown error, which short-circuits enclosing expressions
+        the same way as a CDT path that fails to resolve.
+        """
+        return TypedExpr(FilterExpression.unknown(), InferredType.UNKNOWN)
 
     def visitUnaryMinusExpression(self, ctx: ConditionParser.UnaryMinusExpressionContext) -> ExprOrDeferred:
         """Visit unary minus: -expr"""
@@ -3090,9 +3209,12 @@ class ExpressionConditionVisitor(ConditionVisitor):
         return None
 
     def visitPathFunctionExists(self, ctx: ConditionParser.PathFunctionExistsContext) -> Optional[FilterExpression]:
-        """Visit path function exists: exists()"""
-        # Exists() is typically used in conditions, not as a value
-        # For now, return None - this may need special handling
+        """Visit path function exists: exists()
+
+        The expression is built in :meth:`visitPath` so the bin name and any
+        preceding CDT parts are in scope; this hook just acknowledges the
+        token in the parse tree.
+        """
         return None
 
     def visitPathFunctionCount(self, ctx: ConditionParser.PathFunctionCountContext) -> Optional[FilterExpression]:

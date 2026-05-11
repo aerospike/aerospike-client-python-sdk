@@ -21,10 +21,8 @@ wrappers around the 8.1.2 enhanced expression API (``in_list`` / ``map_keys``
 / ``map_values``).
 
 The pass-throughs deliberately have the same signatures as the canonical
-``FilterExpression`` factories. To navigate into nested CDTs use
-``CTX.map_keys_in`` / ``CTX.and_filter`` at the path layer (paired with
-``CdtOperation.select_by_path`` or ``Exp.exp_select_by_path``) — these
-helpers do not accept a ``ctx=`` kwarg.
+``FilterExpression`` factories and do not accept a ``ctx=`` kwarg — apply
+nested-CDT navigation at the AEL path layer instead (e.g. ``$.outer.inner``).
 """
 
 from typing import Any, Dict, List, overload
@@ -102,11 +100,6 @@ def in_list(value: Exp, list_exp: Exp) -> Exp:
     yourself using ``Exp.list_get_by_value`` with
     ``ListReturnType.COUNT``.
 
-    For navigation into nested CDTs, do **not** invent a ``ctx`` kwarg —
-    apply the path at the CTX layer instead, e.g. via
-    ``CTX.map_keys_in(...)`` and ``CTX.and_filter(...)`` paired with
-    ``CdtOperation.select_by_path`` or ``Exp.exp_select_by_path``.
-
     Args:
         value: The value to search for.
         list_exp: A list expression (e.g. ``Exp.list_bin("tags")``).
@@ -129,8 +122,7 @@ def map_keys(map_exp: Exp) -> Exp:
 
     Requires Aerospike server >= 8.1.2. On older servers, build the
     equivalent expression yourself using ``Exp.map_get_by_index_range``
-    with ``MapReturnType.KEY``. For nested-CDT navigation use
-    ``CTX.map_keys_in(...)`` / ``CTX.and_filter(...)`` at the path layer.
+    with ``MapReturnType.KEY``.
 
     Args:
         map_exp: A map expression (e.g. ``Exp.map_bin("scores")``).
@@ -152,8 +144,7 @@ def map_values(map_exp: Exp) -> Exp:
 
     Requires Aerospike server >= 8.1.2. On older servers, build the
     equivalent expression yourself using ``Exp.map_get_by_index_range``
-    with ``MapReturnType.VALUE``. For nested-CDT navigation use
-    ``CTX.map_keys_in(...)`` / ``CTX.and_filter(...)`` at the path layer.
+    with ``MapReturnType.VALUE``.
 
     Args:
         map_exp: A map expression (e.g. ``Exp.map_bin("scores")``).

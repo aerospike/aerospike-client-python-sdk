@@ -142,6 +142,49 @@ class TestIndexesMonitorLifecycle:
             await monitor.stop()
 
     @pytest.mark.asyncio
+    async def test_index_set_name_plumbed_from_sindex_list(self, mock_client):
+        """``set`` from sindex-list is wired into ``Index.set_name`` so query-set
+        filtering can exclude indexes defined on a different set."""
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        await monitor.start(mock_client)
+        await monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            sets = {idx.bin: idx.set_name for idx in ctx.indexes}
+            assert sets == {"age": "users", "name": "users"}
+
+            prod_ctx = monitor.get_index_context("prod")
+            assert prod_ctx is not None
+            assert prod_ctx.indexes[0].set_name == "orders"
+        finally:
+            await monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_blank_set_normalizes_to_none(self):
+        """An sindex-list entry with an empty/missing ``set`` produces a
+        cross-set Index (set_name=None)."""
+        client = AsyncMock()
+        client.info_on_all_nodes.return_value = {
+            "node1": {
+                "sindex-list": (
+                    "ns=test:indexname=cross_idx:set=:bin=val:type=numeric:state=RW"
+                )
+            }
+        }
+        client.info.return_value = {"sindex-stat": "entries_per_bval=1.0"}
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        await monitor.start(client)
+        await monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            assert len(ctx.indexes) == 1
+            assert ctx.indexes[0].set_name is None
+        finally:
+            await monitor.stop()
+
+    @pytest.mark.asyncio
     async def test_different_namespaces(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
         await monitor.start(mock_client)
@@ -197,6 +240,33 @@ class TestIndexesMonitorLifecycle:
             type_map = {idx.bin: idx.index_type for idx in ctx.indexes}
             assert type_map["age"] == IndexTypeEnum.NUMERIC
             assert type_map["name"] == IndexTypeEnum.STRING
+        finally:
+            await monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_server_integer_type_maps_to_numeric(self):
+        """Server 8.1.2+ may emit ``type=integer``; older servers emit
+        ``type=numeric``. Both must collapse to ``IndexTypeEnum.NUMERIC``
+        so filter selection is wire-version-agnostic."""
+        client = AsyncMock()
+        client.info_on_all_nodes.return_value = {
+            "node1": {
+                "sindex-list": (
+                    "ns=test:indexname=age_idx:set=users:bin=age:type=integer:state=RW;"
+                    "ns=test:indexname=score_idx:set=users:bin=score:type=numeric:state=RW"
+                )
+            }
+        }
+        client.info.return_value = {"sindex-stat": "entries_per_bval=1.0"}
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        await monitor.start(client)
+        await monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            type_map = {idx.bin: idx.index_type for idx in ctx.indexes}
+            assert type_map["age"] == IndexTypeEnum.NUMERIC
+            assert type_map["score"] == IndexTypeEnum.NUMERIC
         finally:
             await monitor.stop()
 

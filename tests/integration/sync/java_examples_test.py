@@ -500,7 +500,7 @@ def test_java_example_delete_durably(session, customer_dataset, enterprise):
     key = customer_dataset.id(5)
     session.upsert(key).put({"name": "Test", "age": 25}).execute()
 
-    session.delete(key).durably_delete().execute()
+    session.delete(key).with_durable_delete().execute()
 
     stream = session.query(key).execute()
     first = stream.first()

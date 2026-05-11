@@ -79,8 +79,13 @@ metadata, bypassing auto-discovery:
 ```python
 from aerospike_sdk import IndexContext, Index, IndexTypeEnum
 
-ctx = IndexContext(indexes=[
-    Index(name="age_idx", bin_name="age", index_type=IndexTypeEnum.NUMERIC)
+ctx = IndexContext.of("test", [
+    Index(
+        bin="age",
+        index_type=IndexTypeEnum.INTEGER,
+        namespace="test",
+        name="age_idx",
+    ),
 ])
 
 stream = await (
@@ -90,6 +95,35 @@ stream = await (
     .execute()
 )
 ```
+
+### Indexes on Sets
+
+Secondary indexes may be defined on a specific Aerospike set or be cross-set
+(no set name). When auto-discovery is on, the SDK scopes filter selection to
+the query's set automatically — an index on set `orders` is never used to
+plan a filter for a query on set `customers`. Cross-set indexes (those
+defined without a set name) remain eligible for any query.
+
+To configure this manually, use [`IndexContext.with_query_set()`](../api/ael-filter-gen.md):
+
+```python
+from aerospike_sdk import IndexContext, Index, IndexTypeEnum
+
+ctx = IndexContext.with_query_set(
+    "test",
+    "customers",  # query set
+    [
+        Index(bin="age", index_type=IndexTypeEnum.INTEGER,
+              namespace="test", set_name="customers"),
+        Index(bin="total", index_type=IndexTypeEnum.INTEGER,
+              namespace="test", set_name="orders"),  # excluded
+    ],
+)
+```
+
+The `total` index is on `orders` and won't be considered for queries on
+`customers`. Only the `age` index is selectable. Pass `query_set=None` (or
+omit it via `IndexContext.of`) to disable set-based filtering entirely.
 
 ## Query Hints
 

@@ -479,7 +479,7 @@ class TestFilteredDeletePaths:
 
         await (
             session.delete(k)
-                .durably_delete()
+                .with_durable_delete()
                 .where("$.v == 1")
                 .execute()
         )
@@ -503,7 +503,7 @@ class TestFilteredDeletePaths:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.delete(k)
-                    .durably_delete()
+                    .with_durable_delete()
                     .where("$.v == 999")
                     .fail_on_filtered_out()
                     .execute()

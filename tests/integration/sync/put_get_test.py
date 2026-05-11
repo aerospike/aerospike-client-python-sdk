@@ -217,7 +217,7 @@ def test_set_bins_execute(client):
     assert record.bins == {"name": "Tim", "age": 1, "gender": "male"}
 
 
-def test_durably_delete(client):
+def test_with_durable_delete(client):
     """Test delete operations."""
     session = client.create_session()
     ds = DataSet.of("test", "test")

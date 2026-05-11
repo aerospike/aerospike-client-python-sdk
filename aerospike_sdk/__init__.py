@@ -22,10 +22,14 @@ from aerospike_async import (
     BitwiseOverflowActions,
     BitwiseResizeFlags,
     BitWriteFlags,
+    CdtOperation,
     CommitStatus,
+    CTX,
+    ExpType,
     HLLWriteFlags,
     ListReturnType,
     ListWriteFlags,
+    LoopVarPart,
     MapReturnType,
     MapWriteFlags,
     ModifyFlags,
@@ -61,6 +65,7 @@ from aerospike_sdk.exceptions import (
 )
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
+from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -82,15 +87,18 @@ __all__ = [
     "BitWriteFlags",
     "BackoffError",
     "Behavior",
+    "CdtOperation",
     "ClusterDefinition",
     "CommitError",
     "CommitStatus",
     "ConnectionError",
+    "CTX",
     "DataSet",
     "AelParseException",
     "ErrorHandler",
     "ErrorStrategy",
     "Exp",
+    "ExpType",
     "Client",
     "in_list",
     "GenerationError",
@@ -103,11 +111,13 @@ __all__ = [
     "InvalidNodeError",
     "ListReturnType",
     "ListWriteFlags",
+    "LoopVarPart",
     "MapReturnType",
     "MapWriteFlags",
     "MaxErrorRate",
     "ModifyFlags",
     "OnError",
+    "OperationResult",
     "parse_ctx",
     "parse_ael",
     "parse_ael_with_index",

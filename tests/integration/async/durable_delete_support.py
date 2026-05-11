@@ -31,7 +31,7 @@ async def delete_keys_durable(session, keys: Iterable[Key]) -> None:
     """
     for k in keys:
         try:
-            await session.delete(k).durably_delete().execute()
+            await session.delete(k).with_durable_delete().execute()
         except Exception:
             try:
                 await session.delete(k).execute()

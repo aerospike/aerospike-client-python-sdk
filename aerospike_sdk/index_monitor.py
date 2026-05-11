@@ -44,6 +44,9 @@ _DEFAULT_READY_TIMEOUT: float = 30.0
 
 _SINDEX_TYPE_MAP: Dict[str, IndexTypeEnum] = {
     "numeric": IndexTypeEnum.NUMERIC,
+    # Server 8.1.2+ reports integer indexes as ``type=integer``; older servers
+    # report ``type=numeric``. Both collapse to the same internal enum.
+    "integer": IndexTypeEnum.NUMERIC,
     "string": IndexTypeEnum.STRING,
     "geo2dsphere": IndexTypeEnum.GEO2D_SPHERE,
     "blob": IndexTypeEnum.BLOB,
@@ -147,6 +150,7 @@ async def _fetch_indexes(client: "Client") -> Dict[str, IndexContext]:
             namespace=ns,
             name=entry["indexname"],
             bin_values_ratio=bval,
+            set_name=entry.get("set") or None,
         )
         indexes_by_ns.setdefault(ns, []).append(index)
 
