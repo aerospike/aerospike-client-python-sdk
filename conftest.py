@@ -248,6 +248,42 @@ def wait_for_index():
     return _wait
 
 
+@pytest.fixture(scope="session")
+def wait_for_set_visible():
+    """Return an async helper that polls a set scan until ``expected`` records are visible.
+
+    Point writes ack as soon as they are committed, but set scans / SI queries
+    can lag a few milliseconds behind the ack as the partition map and any
+    secondary-index entries catch up. Fixtures that insert N records and then
+    expect a scan to see them should call this before yielding to tests so the
+    suite is robust to CI runner load. Replaces fixed ``asyncio.sleep`` waits
+    that previously guessed a wall-clock value.
+
+    Usage::
+
+        await wait_for_set_visible(session, "test", "my_set", 4)
+    """
+    async def _wait(session, ns, set_name, expected, *, timeout=5.0, interval=0.05):
+        deadline = time.monotonic() + timeout
+        last_seen = -1
+        while time.monotonic() < deadline:
+            stream = await session.query(ns, set_name).execute()
+            seen = 0
+            async for _ in stream:
+                seen += 1
+            stream.close()
+            if seen >= expected:
+                return
+            last_seen = seen
+            await asyncio.sleep(interval)
+        raise TimeoutError(
+            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
+            f"to set scan within {timeout}s"
+        )
+
+    return _wait
+
+
 @pytest.fixture
 def sync_wait_for_index():
     """Fixture returning a sync helper that retries until a secondary index is queryable.
