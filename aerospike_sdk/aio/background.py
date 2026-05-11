@@ -192,8 +192,11 @@ class BackgroundOperationBuilder:
         "_op_type",
         "_operations",
         "_filter_expression",
+        "_index_filters",
         "_ttl_seconds",
         "_records_per_second",
+        "_durable_delete_command_default",
+        "_durable_delete_override",
     )
 
     def __init__(
@@ -207,8 +210,31 @@ class BackgroundOperationBuilder:
         self._op_type = op_type
         self._operations: List[Any] = []
         self._filter_expression: Optional[FilterExpression] = None
+        self._index_filters: List[Any] = []
         self._ttl_seconds: Optional[int] = None
         self._records_per_second: Optional[int] = None
+        self._durable_delete_command_default: Optional[bool] = None
+        self._durable_delete_override: Optional[bool] = None
+
+    def default_with_durable_delete(self) -> BackgroundOperationBuilder:
+        """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
+        self._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> BackgroundOperationBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> BackgroundOperationBuilder:
+        """Force durable delete on this background job."""
+        self._durable_delete_override = True
+        return self
+
+    def without_durable_delete(self) -> BackgroundOperationBuilder:
+        """Force non-durable deletes (may be rejected on SC)."""
+        self._durable_delete_override = False
+        return self
 
     @overload
     def where(self, expression: str) -> BackgroundOperationBuilder: ...
@@ -228,10 +254,43 @@ class BackgroundOperationBuilder:
         Example::
             builder.where("$.status == 'inactive'")
         """
+        if self._index_filters:
+            raise ValueError(
+                "where(...) cannot be combined with index_filters(...); "
+                "use one narrowing mechanism.",
+            )
         if isinstance(expression, str):
             self._filter_expression = parse_ael(expression)
         else:
             self._filter_expression = expression
+        return self
+
+    def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
+        """Restrict the job using secondary-index :class:`~aerospike_async.Filter` objects.
+
+        These attach to the query ``Statement`` (partition pruning). They cannot be
+        combined with :meth:`where`, which uses a policy filter expression instead.
+
+        Args:
+            *filters: One or more ``Filter`` instances (for example ``Filter.range``).
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            ValueError: If :meth:`where` was already called on this builder.
+
+        See Also:
+            :meth:`where`
+        """
+        if self._filter_expression is not None:
+            raise ValueError(
+                "index_filters(...) cannot be combined with where(...); "
+                "use one narrowing mechanism.",
+            )
+        if not filters:
+            raise ValueError("index_filters requires at least one Filter")
+        self._index_filters.extend(filters)
         return self
 
     def bin(self, name: str) -> BackgroundWriteBinBuilder:
@@ -315,16 +374,27 @@ class BackgroundOperationBuilder:
             self._op_type.name if self._op_type else "WRITE",
             self._dataset.namespace, self._dataset.set_name, len(ops),
         )
+        mode = await self._session._resolve_namespace_mode(self._dataset.namespace)
+        policy_filter = (
+            None if self._index_filters else self._filter_expression
+        )
         wp = make_background_write_policy(
             self._session.behavior,
-            self._filter_expression,
+            policy_filter,
             self._ttl_seconds,
             self._record_exists_action(),
+            namespace_mode=mode,
+            durable_delete_command_default=self._durable_delete_command_default,
+            durable_delete_override=self._durable_delete_override,
         )
+        if self._op_type is not _OpType.DELETE:
+            wp.durable_delete = False
         statement = dataset_statement(
             self._dataset.namespace,
             self._dataset.set_name,
         )
+        if self._index_filters:
+            statement.filters = list(self._index_filters)
         client = self._pac_client()
         try:
             return await client.query_operate(wp, statement, ops)
@@ -381,6 +451,8 @@ class BackgroundUdfBuilder:
         "_args",
         "_filter_expression",
         "_records_per_second",
+        "_durable_delete_command_default",
+        "_durable_delete_override",
     )
 
     def __init__(
@@ -397,6 +469,28 @@ class BackgroundUdfBuilder:
         self._args: Optional[List[Any]] = None
         self._filter_expression: Optional[FilterExpression] = None
         self._records_per_second: Optional[int] = None
+        self._durable_delete_command_default: Optional[bool] = None
+        self._durable_delete_override: Optional[bool] = None
+
+    def default_with_durable_delete(self) -> BackgroundUdfBuilder:
+        """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
+        self._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> BackgroundUdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> BackgroundUdfBuilder:
+        """Force durable delete on this background UDF job."""
+        self._durable_delete_override = True
+        return self
+
+    def without_durable_delete(self) -> BackgroundUdfBuilder:
+        """Force non-durable deletes (may be rejected on SC)."""
+        self._durable_delete_override = False
+        return self
 
     def passing(self, *args: Any) -> BackgroundUdfBuilder:
         """Set Lua arguments after the implicit record parameter.
@@ -470,11 +564,15 @@ class BackgroundUdfBuilder:
             self._dataset.namespace, self._dataset.set_name,
             self._package_name, self._function_name,
         )
+        mode = await self._session._resolve_namespace_mode(self._dataset.namespace)
         wp = make_background_write_policy(
             self._session.behavior,
             self._filter_expression,
             None,
             None,
+            namespace_mode=mode,
+            durable_delete_command_default=self._durable_delete_command_default,
+            durable_delete_override=self._durable_delete_override,
         )
         statement = dataset_statement(
             self._dataset.namespace,

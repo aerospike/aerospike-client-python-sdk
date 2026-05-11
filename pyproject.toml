@@ -9,7 +9,8 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    "aerospike-async==0.4.0a2",
+    #"aerospike-async==0.4.0a2",
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.4.0-alpha.2-rc1",
     "antlr4-python3-runtime>=4.13.0",
 ]
 classifiers = [
@@ -59,6 +60,12 @@ include = ["aerospike_sdk*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Module-scoped fixtures (e.g. the IndexesMonitor task on the SDK Client) must
+# share a single event loop with the tests that use them; otherwise the
+# monitor's background ``asyncio.sleep`` is starved while a function-scoped
+# test loop runs and the cache never refreshes.
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
 addopts = "-s"
 testpaths = ["tests"]
 python_files = ["*_test.py"]

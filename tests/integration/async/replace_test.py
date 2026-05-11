@@ -23,13 +23,6 @@ from aerospike_sdk.exceptions import AerospikeError
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
-    """Setup SDK client for testing."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
-
-
-@pytest.fixture
 def users():
     """DataSet fixture for replace tests."""
     return DataSet.of("test", "replace_test")

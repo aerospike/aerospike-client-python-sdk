@@ -379,7 +379,7 @@ class TestBinExpressions:
 # Integration tests with actual database operations
 
 @pytest.fixture
-async def client_with_data(aerospike_host, client_policy, enterprise):
+async def client_with_data(aerospike_host, client_policy, enterprise, wait_for_set_visible):
     """Setup test data for expression tests."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
@@ -395,7 +395,7 @@ async def client_with_data(aerospike_host, client_policy, enterprise):
         await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
         await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
 
-        await asyncio.sleep(0.5 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "exp_test", 3)
 
         yield client
 
@@ -722,7 +722,7 @@ class TestExpWithAel:
 
 # CDT Path Access Tests
 
-async def _seed_cdt_data(client, *, enterprise):
+async def _seed_cdt_data(client, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
 
     Used by both ``client_with_cdt_data`` (broad-surface seed) and
@@ -757,7 +757,7 @@ async def _seed_cdt_data(client, *, enterprise):
         "nested": [{"id": 4, "value": 400}, {"id": 5, "value": 500}],
     }).execute()
 
-    await asyncio.sleep(0.5 if not enterprise else 0.01)
+    await wait_for_set_visible(session, "test", "cdt_test", 3)
     return session, ds
 
 
@@ -770,7 +770,7 @@ async def _drop_cdt_data(session, ds):
 
 
 @pytest.fixture
-async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, enterprise):
+async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
     """SDK client + CDT dataset on the 8.1.2+ seed.
 
     Used by tests that exercise convenience wrappers around server-8.1.2
@@ -779,13 +779,13 @@ async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, e
     ``AEROSPIKE_HOST_8_1_2`` is unset.
     """
     async with Client(seeds=aerospike_host_812_required, policy=client_policy) as client:
-        session, ds = await _seed_cdt_data(client, enterprise=enterprise)
+        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
         yield client
         await _drop_cdt_data(session, ds)
 
 
 @pytest.fixture
-async def client_with_cdt_data(aerospike_host, client_policy, enterprise):
+async def client_with_cdt_data(aerospike_host, client_policy, wait_for_set_visible):
     """SDK client + CDT dataset on the broad-surface seed.
 
     Tests that exercise convenience wrappers around server-8.1.2 ExpOps
@@ -793,7 +793,7 @@ async def client_with_cdt_data(aerospike_host, client_policy, enterprise):
     to the 8.1.2+ cluster when one is available.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session, ds = await _seed_cdt_data(client, enterprise=enterprise)
+        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
         yield client
         await _drop_cdt_data(session, ds)
 
@@ -1067,7 +1067,7 @@ class TestExistsAndCount:
 
 
 @pytest.fixture
-async def client_with_list_data(aerospike_host, client_policy, enterprise):
+async def client_with_list_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with various lists for advanced list AEL tests."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
@@ -1096,7 +1096,7 @@ async def client_with_list_data(aerospike_host, client_policy, enterprise):
             "tags": ["zeta"],
         }).execute()
 
-        await asyncio.sleep(0.5 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "list_ael_test", 4)
 
         yield client
 
@@ -1250,7 +1250,7 @@ class TestAdvancedListAel:
 
 
 @pytest.fixture
-async def client_with_map_data(aerospike_host, client_policy, enterprise):
+async def client_with_map_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with maps for advanced map AEL tests."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
@@ -1275,7 +1275,7 @@ async def client_with_map_data(aerospike_host, client_policy, enterprise):
             "metadata": {"type": "premium", "level": 2},
         }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "map_ael_test", 3)
 
         yield client
 
@@ -1360,7 +1360,7 @@ class TestAdvancedMapAel:
 # =============================================================================
 
 @pytest.fixture
-async def client_with_nested_data(aerospike_host, client_policy, enterprise):
+async def client_with_nested_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with deeply nested structures."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
@@ -1389,7 +1389,7 @@ async def client_with_nested_data(aerospike_host, client_policy, enterprise):
             "simple_list": [10, 20, 30],
         }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "nested_ael_test", 2)
 
         yield client
 
@@ -1519,7 +1519,7 @@ class TestMapKeyOperationsAel:
 
 
 @pytest.fixture
-async def client_with_relative_range_data(aerospike_host, client_policy, enterprise):
+async def client_with_relative_range_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data for relative range operations."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
@@ -1544,7 +1544,7 @@ async def client_with_relative_range_data(aerospike_host, client_policy, enterpr
             "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
         }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "rel_range_test", 3)
 
         yield client
 
@@ -1722,7 +1722,7 @@ class TestAelErrorHandling:
 # =============================================================================
 
 @pytest.fixture
-async def filter_session(aerospike_host, client_policy, enterprise):
+async def filter_session(aerospike_host, client_policy, wait_for_set_visible):
     """Session with test data matching JFC FilterExpTest setUp.
 
     Key "A": A=1, B=1.1, C="abcde",      D=1, E=-1
@@ -1743,7 +1743,7 @@ async def filter_session(aerospike_host, client_policy, enterprise):
         await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
         await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "filter_exp_test", 3)
 
         yield session, ds
 
@@ -2062,7 +2062,7 @@ class TestAelMapBlobIntegrationQueries:
         self,
         aerospike_host,
         client_policy,
-        enterprise,
+        wait_for_set_visible,
     ):
         """BLOB bin filter using a base64 literal in AEL."""
         import base64
@@ -2077,7 +2077,7 @@ class TestAelMapBlobIntegrationQueries:
                 pass
 
             await session.upsert(k).put({"payload": payload}).execute()
-            await asyncio.sleep(0.25 if not enterprise else 0.01)
+            await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
 
             enc = base64.b64encode(payload).decode("ascii")
             stream = await (

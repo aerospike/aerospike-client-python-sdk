@@ -16,21 +16,37 @@
 """Integration tests for session-level operations and TransactionalSession."""
 
 import pytest
+import pytest_asyncio
 from aerospike_sdk import DataSet, Client
 
 
-@pytest.fixture
+_SHARED_KEYS = (1, 2, "user1")
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     """Setup SDK client for testing."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "test")
-        for key in (1, 2, "user1"):
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
         yield client
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_shared_keys(client):
+    """Wipe the keys these tests share so each one starts from a clean slate.
+
+    The whole file deliberately reuses ``DataSet.of("test", "test").id(...)``
+    for ``1``, ``2``, and ``"user1"``, so without a per-test wipe a prior
+    ``upsert({"name": ..., "age": ...})`` leaves bins behind that pollute
+    later assertions on the same key.
+    """
+    session = client.create_session()
+    ds = DataSet.of("test", "test")
+    for key in _SHARED_KEYS:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
+    yield
 
 
 async def test_session_put_get(client):

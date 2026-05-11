@@ -23,13 +23,6 @@ from aerospike_sdk.policy.behavior import Behavior
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
-    """Setup SDK client for testing."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
-
-
-@pytest.fixture
 async def session(client):
     """Setup session with default behavior for testing."""
     return client.create_session(Behavior.DEFAULT)

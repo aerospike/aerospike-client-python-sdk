@@ -241,16 +241,30 @@ def test_pac_txn_state_is_writable_and_round_trips() -> None:
         assert t.state == target
 
 
-def test_pac_txn_timeout_is_read_only() -> None:
-    """Guard for the ``test_txn_mrt_expired_after_deadline`` skip.
-
-    Setting ``Txn.timeout`` needs core's ``set_timeout`` to be callable
-    through ``Arc<Txn>`` (which today requires ``&mut self``). When core
-    changes the ``timeout`` field to atomic storage and PAC gains a
-    ``timeout`` setter, this guard will fail — at which point the
-    stubbed integration test should be filled in.
+def test_pac_txn_timeout_is_writable_before_sharing() -> None:
+    """``Txn.timeout`` is writable while the underlying ``Arc<Txn>`` is
+    uniquely held — i.e. before the txn has been handed to a policy or
+    operation builder. This is the path
+    ``test_txn_mrt_expired_after_deadline`` depends on.
     """
     from aerospike_async import Txn
     t = Txn()
-    with pytest.raises((AttributeError, TypeError)):
-        t.timeout = 2  # type: ignore[misc]
+    assert t.timeout == 0
+    t.timeout = 2
+    assert t.timeout == 2
+    t.timeout = 0
+    assert t.timeout == 0
+
+
+def test_pac_txn_timeout_setter_rejects_after_sharing() -> None:
+    """Mutating ``Txn.timeout`` after the txn has been cloned into a policy
+    raises ``ValueError``. Pins the set-before-use contract documented on
+    the PAC setter so a future regression (silent no-op, wrong error type)
+    is caught here at the PSDK boundary.
+    """
+    from aerospike_async import Txn, WritePolicy
+    t = Txn()
+    p = WritePolicy()
+    p.txn = t  # clones the underlying Arc, refcount > 1
+    with pytest.raises(ValueError, match="shared with a policy"):
+        t.timeout = 5

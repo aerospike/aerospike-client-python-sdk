@@ -165,10 +165,10 @@ class TestBuilderFlagWiring:
         wsb.respond_all_keys()
         assert qb._respond_all_keys is True
 
-    def test_durably_delete_sets_flag(self):
+    def test_with_durable_delete_sets_flag(self):
         wsb, qb = self._make_wsb()
         assert qb._durable_delete is None
-        wsb.durably_delete()
+        wsb.with_durable_delete()
         assert qb._durable_delete is True
 
     def test_ensure_generation_is_sets_value(self):
@@ -210,7 +210,7 @@ class TestBuilderFlagWiring:
         assert result is wsb
         result = wsb.respond_all_keys()
         assert result is wsb
-        result = wsb.durably_delete()
+        result = wsb.with_durable_delete()
         assert result is wsb
         result = wsb.ensure_generation_is(1)
         assert result is wsb

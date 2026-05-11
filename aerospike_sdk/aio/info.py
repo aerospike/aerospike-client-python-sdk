@@ -89,11 +89,11 @@ class InfoCommands:
         # Extract namespace names from all node responses
         namespace_set: Set[str] = set()
         for node_response in all_responses.values():
-            # Response format is typically {"namespaces": "ns1,ns2,ns3"}
+            # Response format is typically {"namespaces": "ns1;ns2;ns3"}
             for value in node_response.values():
                 if isinstance(value, str) and value:
-                    # Split comma-separated namespace list
-                    namespace_set.update([ns.strip() for ns in value.split(",") if ns.strip()])
+                    # Split semicolon-separated namespace list (info protocol)
+                    namespace_set.update([ns.strip() for ns in value.split(";") if ns.strip()])
 
         return namespace_set
 

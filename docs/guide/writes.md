@@ -84,9 +84,38 @@ await session.delete(users.id(1)).execute()
 
 # Multiple keys
 await session.delete(*users.ids(1, 2, 3)).execute()
+```
 
-# Durable delete
-await session.delete(users.id(5)).durably_delete().execute()
+### Durable delete
+
+Aerospike supports two delete modes:
+
+* a normal delete that removes the record (and its lineage) outright, and
+* a *durable* delete that leaves a tombstone so a strongly-consistent (SC)
+  cluster can resolve the deletion across partitions.
+
+The SDK exposes both *per-operation overrides* and *builder defaults*:
+
+| Method | Scope | Effect |
+|---|---|---|
+| `with_durable_delete()` | one operation | Force durable delete for this delete only |
+| `without_durable_delete()` | one operation | Force a non-durable delete for this delete only |
+| `default_with_durable_delete()` | builder | Prefer durable when resolving Behavior defaults — typical for SC namespaces |
+| `default_without_durable_delete()` | builder | Prefer non-durable when resolving Behavior defaults |
+
+The override (`with_*` / `without_*`) wins over the default; the default
+folds into [`Behavior`](../api/behavior.md) settings resolution.
+
+```python
+# Force durable on this single delete (per-op override)
+await session.delete(users.id(5)).with_durable_delete().execute()
+
+# Use durable as the default for every delete in this segment (SC-friendly)
+await (
+    session.delete(*users.ids(1, 2, 3))
+    .default_with_durable_delete()
+    .execute()
+)
 ```
 
 ## Conditional Writes

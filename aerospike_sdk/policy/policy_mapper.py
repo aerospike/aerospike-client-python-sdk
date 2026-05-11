@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from aerospike_async import (
     BatchPolicy,
     BatchReadPolicy,
@@ -26,6 +28,19 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.policy.behavior_settings import Settings
+
+
+def resolve_durable_delete(
+    setting: Optional[bool],
+    command_default: Optional[bool],
+    override: Optional[bool],
+) -> bool:
+    """Resolve durable-delete intent using override, command default, then behavior."""
+    if override is not None:
+        return override
+    if command_default is not None:
+        return command_default
+    return bool(setting)
 
 
 def _ms(td) -> int:
@@ -196,6 +211,8 @@ def apply_to_write_policy(settings: Settings, policy: WritePolicy) -> WritePolic
         policy.max_retries = settings.max_retries
     if settings.send_key is not None:
         policy.send_key = settings.send_key
+    if settings.durable_delete is not None:
+        policy.durable_delete = settings.durable_delete
     if settings.commit_level is not None:
         policy.commit_level = settings.commit_level
     if settings.use_compression is not None:

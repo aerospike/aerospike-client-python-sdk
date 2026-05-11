@@ -33,6 +33,7 @@ imported from ``aerospike_async`` directly.
 import asyncio
 
 import pytest
+import pytest_asyncio
 from aerospike_async import (
     CTX,
     CdtOperation,
@@ -101,7 +102,7 @@ async def _drop_qopproj_index(c):
         pass
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy, wait_for_index):
     """SDK client + 20-record dataset on the broad-surface seed.
 
@@ -117,9 +118,9 @@ async def client(aerospike_host, client_policy, wait_for_index):
 
 @pytest.fixture
 async def client_812(aerospike_host_812_required, client_policy, wait_for_index):
-    """SDK client + 20-record dataset on the 8.1.2+ seed.
+    """SDK client + 20-record dataset on the 8.1.2+ seed (function-scoped: pairs with skip fixture).
 
-    The dependent ``aerospike_host_812_required`` fixture skips the test
+    The dependent ``aerospike_host_812_required`` fixture skips the dependent test
     cleanly when ``AEROSPIKE_HOST_8_1_2`` is unset.
     """
     async with Client(seeds=aerospike_host_812_required, policy=client_policy) as c:

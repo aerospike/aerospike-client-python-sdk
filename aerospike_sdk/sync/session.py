@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING, overload, Union
 from aerospike_async import Key
 
 from aerospike_sdk.aio.client import Client
-from aerospike_sdk.aio.session import Session as AsyncSession
+from aerospike_sdk.aio.session import NamespaceScStatus, Session as AsyncSession
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.background import SyncBackgroundTaskSession
@@ -375,6 +375,25 @@ class SyncSession:
 
         self._loop_manager.run_async(_truncate())
 
+    def namespace_sc_status(self, namespace: str) -> NamespaceScStatus:
+        """Describe whether a namespace is SC; includes a reason when it is not.
+
+        See :meth:`aerospike_sdk.aio.session.Session.namespace_sc_status`.
+
+        Args:
+            namespace: The namespace name to check.
+
+        Returns:
+            :class:`~aerospike_sdk.aio.session.NamespaceScStatus`.
+
+        Raises:
+            RuntimeError: If the underlying client is not connected.
+            ValueError: If the info command fails.
+        """
+        return self._loop_manager.run_async(
+            self._async_session.namespace_sc_status(namespace)
+        )
+
     def is_namespace_sc(self, namespace: str) -> bool:
         """Check if a namespace is in strong-consistency (SC) mode.
 
@@ -395,6 +414,8 @@ class SyncSession:
                 print("Namespace is SC — MRTs are supported here.")
 
         See Also:
+            :meth:`~aerospike_sdk.aio.session.Session.namespace_sc_status`:
+                Async equivalent (also available sync on :class:`SyncSession`).
             :meth:`~aerospike_sdk.aio.session.Session.is_namespace_sc`:
                 Async equivalent.
         """

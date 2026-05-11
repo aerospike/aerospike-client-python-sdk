@@ -679,9 +679,24 @@ class SyncWriteSegmentBuilder(_SyncWriteVerbs):
         self._wsb.ensure_generation_is(generation)
         return self
 
-    def durably_delete(self) -> SyncWriteSegmentBuilder:
-        """Enable durable delete on the current segment."""
-        self._wsb.durably_delete()
+    def with_durable_delete(self) -> SyncWriteSegmentBuilder:
+        """Force durable delete on the current operation (override)."""
+        self._wsb.with_durable_delete()
+        return self
+
+    def without_durable_delete(self) -> SyncWriteSegmentBuilder:
+        """Force a non-durable delete on the current operation (override)."""
+        self._wsb.without_durable_delete()
+        return self
+
+    def default_with_durable_delete(self) -> SyncWriteSegmentBuilder:
+        """Prefer durable deletes when resolving behavior defaults (SC namespaces)."""
+        self._wsb.default_with_durable_delete()
+        return self
+
+    def default_without_durable_delete(self) -> SyncWriteSegmentBuilder:
+        """Prefer non-durable deletes when resolving behavior defaults."""
+        self._wsb.default_without_durable_delete()
         return self
 
     def respond_all_keys(self) -> SyncWriteSegmentBuilder:

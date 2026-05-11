@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
+    Callable,
     Generic,
     List,
     Optional,
@@ -129,6 +131,7 @@ def _to_expiration(ttl: int) -> Expiration:
 
 
 from aerospike_sdk.policy.policy_mapper import (
+    resolve_durable_delete,
     to_batch_policy,
     to_batch_read_policy,
     to_query_policy,
@@ -152,7 +155,7 @@ from aerospike_sdk.exceptions import (
     _convert_pac_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 from aerospike_sdk.record_stream import RecordStream
 
@@ -237,6 +240,8 @@ if TYPE_CHECKING:
     from aerospike_sdk.ael.filter_gen import IndexContext
     from aerospike_sdk.index_monitor import IndexesMonitor
     from aerospike_sdk.policy.behavior import Behavior
+
+NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
 
 
 class _WriteVerbs:
@@ -410,6 +415,8 @@ class _OperationSpec:
     generation: Optional[int] = None
     ttl_seconds: Optional[int] = None
     durable_delete: Optional[bool] = None
+    durable_delete_command_default: Optional[bool] = None
+    contains_record_delete_op: bool = False
     udf_package: Optional[str] = None
     udf_function: Optional[str] = None
     udf_args: Optional[List[Any]] = None
@@ -465,6 +472,7 @@ class QueryBuilder(_WriteVerbs):
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
+        namespace_mode_resolver: NamespaceModeResolver = None,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -484,6 +492,9 @@ class QueryBuilder(_WriteVerbs):
                 means no transaction participation. Callers rarely pass
                 this directly — transactional sessions thread it through
                 automatically.
+            namespace_mode_resolver: Optional async callable ``namespace -> Mode``
+                used to apply AP vs SC behavior scopes before policies are built.
+                Session-scoped builders supply this; client-only builders omit it.
         """
         self._client = client
         self._namespace = namespace
@@ -511,6 +522,8 @@ class QueryBuilder(_WriteVerbs):
         self._generation: Optional[int] = None
         self._ttl_seconds: Optional[int] = None
         self._durable_delete: Optional[bool] = None
+        self._durable_delete_command_default: Optional[bool] = None
+        self._record_delete_in_operations: bool = False
         self._default_filter_expression: Optional[FilterExpression] = None
         self._default_ttl_seconds: Optional[int] = None
         self._udf_package: Optional[str] = None
@@ -528,6 +541,8 @@ class QueryBuilder(_WriteVerbs):
         # reused under MRT because they were pre-computed without a txn, so
         # we null them out to force re-derivation from behavior.
         self._txn: Optional[Txn] = txn
+        self._namespace_mode_resolver = namespace_mode_resolver
+        self._namespace_mode: Optional[Mode] = None
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -554,6 +569,21 @@ class QueryBuilder(_WriteVerbs):
         if self._txn is not None and policy is not None:
             policy.txn = self._txn
         return policy
+
+    async def _ensure_namespace_mode(self) -> None:
+        """Resolve AP vs SC once per builder so behavior scopes match the namespace."""
+        if self._namespace_mode is not None:
+            return
+        if self._namespace_mode_resolver is not None:
+            self._namespace_mode = await self._namespace_mode_resolver(self._namespace)
+        else:
+            self._namespace_mode = Mode.AP
+        self._base_read_policy = None
+        self._base_write_policy = None
+
+    def _resolved_namespace_mode(self) -> Mode:
+        assert self._namespace_mode is not None
+        return self._namespace_mode
 
     def _make_batch_policy(
         self, settings: Optional[Any],
@@ -582,7 +612,8 @@ class QueryBuilder(_WriteVerbs):
     ) -> Optional[BatchPolicy]:
         """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings."""
         settings = (
-            self._behavior.get_settings(op_kind, op_shape)
+            self._behavior.get_settings(
+                op_kind, op_shape, self._resolved_namespace_mode())
             if self._behavior is not None else None
         )
         return self._make_batch_policy(settings)
@@ -675,7 +706,7 @@ class QueryBuilder(_WriteVerbs):
 
         Example::
 
-            from aerospike_async import CTX, CdtOperation
+            from aerospike_sdk import CTX, CdtOperation
             stream = await (
                 session.query(users)
                     .with_op_projection(
@@ -1414,6 +1445,7 @@ class QueryBuilder(_WriteVerbs):
             :class:`~aerospike_sdk.error_strategy.ErrorStrategy`: ``on_error`` options.
         """
         self._finalize_current_spec()
+        await self._ensure_namespace_mode()
 
         if self._specs:
             # Fast path for the common single-spec case: skip the
@@ -1425,13 +1457,19 @@ class QueryBuilder(_WriteVerbs):
                 # Ultra-fast path: single-key operations with no spec-level
                 # overrides bypass the full _execute_spec → policy-build →
                 # RecordStream chain and call the PAC directly.
+                # Namespace mode is already resolved via _ensure_namespace_mode();
+                # the direct path applies _resolved_namespace_mode() in policy helpers.
+                # Durable-delete / record-delete specs are excluded below so SC delete
+                # semantics stay on the full _execute_spec path.
                 if (
                     is_single
                     and on_error is None
                     and spec0.filter_expression is None
                     and spec0.generation is None
                     and spec0.ttl_seconds is None
-                    and not spec0.durable_delete
+                    and spec0.durable_delete is None
+                    and spec0.durable_delete_command_default is None
+                    and not spec0.contains_record_delete_op
                 ):
                     result = await self._execute_single_key_direct(spec0)
                     if result is not None:
@@ -1496,6 +1534,7 @@ class QueryBuilder(_WriteVerbs):
             self._filter_expression,
             None,
             None,
+            namespace_mode=self._resolved_namespace_mode(),
         )
 
     async def execute_background_task(self) -> ExecuteTask:
@@ -1510,6 +1549,7 @@ class QueryBuilder(_WriteVerbs):
             AerospikeError: If unsupported operation types are present.
         """
         self._finalize_current_spec()
+        await self._ensure_namespace_mode()
         if self._specs:
             raise ValueError(
                 "Background task execution applies only to dataset queries.",
@@ -1546,6 +1586,7 @@ class QueryBuilder(_WriteVerbs):
             ValueError: If the builder targets keys or has write operations set.
         """
         self._finalize_current_spec()
+        await self._ensure_namespace_mode()
         if self._specs:
             raise ValueError(
                 "Background task execution applies only to dataset queries.",
@@ -1613,6 +1654,8 @@ class QueryBuilder(_WriteVerbs):
             generation=self._generation,
             ttl_seconds=ttl,
             durable_delete=self._durable_delete,
+            durable_delete_command_default=self._durable_delete_command_default,
+            contains_record_delete_op=self._record_delete_in_operations,
             udf_package=None,
             udf_function=None,
             udf_args=None,
@@ -1628,6 +1671,8 @@ class QueryBuilder(_WriteVerbs):
         self._generation = None
         self._ttl_seconds = None
         self._durable_delete = None
+        self._durable_delete_command_default = None
+        self._record_delete_in_operations = False
 
     def _set_current_keys_from_varargs(self, keys: tuple[Key, ...]) -> None:
         if len(keys) == 1:
@@ -1665,7 +1710,9 @@ class QueryBuilder(_WriteVerbs):
             op_type="udf",
             generation=None,
             ttl_seconds=None,
-            durable_delete=None,
+            durable_delete=self._durable_delete,
+            durable_delete_command_default=self._durable_delete_command_default,
+            contains_record_delete_op=False,
             udf_package=self._udf_package,
             udf_function=self._udf_function,
             udf_args=udf_args,
@@ -1680,6 +1727,8 @@ class QueryBuilder(_WriteVerbs):
         self._generation = None
         self._ttl_seconds = None
         self._durable_delete = None
+        self._durable_delete_command_default = None
+        self._record_delete_in_operations = False
         self._clear_pending_udf_state()
 
     def _specs_require_sequential_run(self) -> bool:
@@ -1738,16 +1787,53 @@ class QueryBuilder(_WriteVerbs):
         return await self._execute_batch_write(spec, disp, handler)
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
+        settings = None
         if self._behavior is not None:
-            wp = to_write_policy(
-                self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            settings = self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.POINT,
+                self._resolved_namespace_mode(),
+            )
+            wp = to_write_policy(settings)
         else:
             wp = WritePolicy()
         self._apply_txn(wp)
+        wp.durable_delete = resolve_durable_delete(
+            settings.durable_delete if settings is not None else None,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
         if spec.filter_expression is not None:
             wp.filter_expression = spec.filter_expression
         return wp
+
+    def _make_batch_udf_policy(self, spec: _OperationSpec) -> Optional[BatchUDFPolicy]:
+        settings = (
+            self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.BATCH,
+                self._resolved_namespace_mode(),
+            )
+            if self._behavior is not None else None
+        )
+        eff = resolve_durable_delete(
+            settings.durable_delete if settings is not None else None,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+        has_settings = (
+            spec.filter_expression is not None
+            or spec.durable_delete is not None
+            or spec.durable_delete_command_default is not None
+            or eff
+        )
+        if not has_settings:
+            return None
+        up = BatchUDFPolicy()
+        if spec.filter_expression is not None:
+            up.filter_expression = spec.filter_expression
+        up.durable_delete = eff
+        return up
 
     async def _execute_single_key_udf(
         self,
@@ -1788,12 +1874,7 @@ class QueryBuilder(_WriteVerbs):
             raise ValueError("UDF spec missing package or function name")
         batch_policy = self._batch_policy_for(
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-        udf_policy: Optional[BatchUDFPolicy] = None
-        fe = spec.filter_expression
-        if fe is not None:
-            up = BatchUDFPolicy()
-            up.filter_expression = fe
-            udf_policy = up
+        udf_policy = self._make_batch_udf_policy(spec)
         try:
             batch_records = await self._client.batch_apply(
                 batch_policy,
@@ -1951,11 +2032,13 @@ class QueryBuilder(_WriteVerbs):
         elif self._behavior is not None:
             if self._base_read_policy is None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
-                    self._behavior.get_settings(OpKind.READ, OpShape.POINT)))
+                    self._behavior.get_settings(
+                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
             if spec.filter_expression is None:
                 return self._base_read_policy
             rp = self._apply_txn(to_read_policy(
-                self._behavior.get_settings(OpKind.READ, OpShape.POINT)))
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
         else:
             rp = self._apply_txn(ReadPolicy())
         if spec.filter_expression is not None:
@@ -1981,7 +2064,8 @@ class QueryBuilder(_WriteVerbs):
             # Simple read — all bins or projected bins.
             if self._base_read_policy is None and self._behavior is not None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
-                    self._behavior.get_settings(OpKind.READ, OpShape.POINT)))
+                    self._behavior.get_settings(
+                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
             rp = self._apply_txn(self._base_read_policy or ReadPolicy())
             try:
                 record = await self._client.get(rp, key, spec.bins)
@@ -1995,13 +2079,15 @@ class QueryBuilder(_WriteVerbs):
             if self._base_write_policy is None and self._behavior is not None:
                 self._base_write_policy = self._apply_txn(to_write_policy(
                     self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
+                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                        self._resolved_namespace_mode())))
             rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
             if rea is not None:
                 if self._behavior is not None:
                     wp = self._apply_txn(to_write_policy(
                         self._behavior.get_settings(
-                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
+                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                            self._resolved_namespace_mode())))
                 else:
                     wp = self._apply_txn(WritePolicy())
                 wp.record_exists_action = rea
@@ -2050,7 +2136,8 @@ class QueryBuilder(_WriteVerbs):
     ) -> RecordStream:
         batch_read_policy = None
         if self._behavior is not None:
-            settings = self._behavior.get_settings(OpKind.READ, OpShape.BATCH)
+            settings = self._behavior.get_settings(
+                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
             batch_read_policy = to_batch_read_policy(settings)
         batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
         if spec.filter_expression is not None:
@@ -2083,28 +2170,70 @@ class QueryBuilder(_WriteVerbs):
 
     # -- Write execution helpers ----------------------------------------------
 
+    def _effective_point_durable_delete(
+        self, spec: _OperationSpec, settings: Optional[Settings],
+    ) -> bool:
+        if spec.op_type == "touch":
+            return False
+        setting_dd = settings.durable_delete if settings is not None else None
+        return resolve_durable_delete(
+            setting_dd,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+
+    def _batch_write_effective_dd(self, spec: _OperationSpec) -> bool:
+        if self._behavior is None:
+            return resolve_durable_delete(
+                None,
+                spec.durable_delete_command_default,
+                spec.durable_delete,
+            )
+        bset = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            self._resolved_namespace_mode(),
+        )
+        return resolve_durable_delete(
+            bset.durable_delete,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+
     def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         """Build a ``WritePolicy`` for single-key writes."""
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        # Fast path: reuse the cached base policy when no spec-level
-        # overrides exist and the op type doesn't require a REA change.
+        settings = (
+            self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                self._resolved_namespace_mode(),
+            )
+            if self._behavior is not None else None
+        )
+        applies_dd = op_type == "delete" or spec.contains_record_delete_op
+        effective_dd = self._effective_point_durable_delete(spec, settings)
+
         if self._behavior is not None:
             if self._base_write_policy is None:
+                base_settings = settings
+                if base_settings is not None and base_settings.durable_delete:
+                    base_settings = Settings.merge(
+                        base_settings, Settings(durable_delete=False))
                 self._base_write_policy = self._apply_txn(to_write_policy(
-                    self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
+                    base_settings) if base_settings is not None else WritePolicy())
             if (
                 rea is None
                 and spec.filter_expression is None
                 and spec.generation is None
                 and spec.ttl_seconds is None
-                and not spec.durable_delete
+                and spec.durable_delete is None
+                and spec.durable_delete_command_default is None
+                and not spec.contains_record_delete_op
+                and not applies_dd
             ):
                 return self._base_write_policy
             wp = self._apply_txn(to_write_policy(
-                self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
+                settings) if settings is not None else WritePolicy())
         else:
             wp = self._apply_txn(WritePolicy())
         if rea is not None:
@@ -2116,18 +2245,26 @@ class QueryBuilder(_WriteVerbs):
             wp.generation = spec.generation
         if spec.ttl_seconds is not None:
             wp.expiration = _to_expiration(spec.ttl_seconds)
-        if spec.durable_delete:
-            wp.durable_delete = True
+        if applies_dd:
+            wp.durable_delete = effective_dd
+        else:
+            wp.durable_delete = False
         return wp
 
-    @staticmethod
-    def _make_batch_write_policy(spec: _OperationSpec) -> Optional[BatchWritePolicy]:
+    def _make_batch_write_policy(self, spec: _OperationSpec) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` for multi-key batch writes."""
+        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
             or spec.ttl_seconds is not None
-            or spec.durable_delete
+            or spec.durable_delete is not None
+            or spec.durable_delete_command_default is not None
+            or (spec.contains_record_delete_op and (
+                eff
+                or spec.durable_delete is not None
+                or spec.durable_delete_command_default is not None
+            ))
         )
         if not has_settings:
             return None
@@ -2138,17 +2275,19 @@ class QueryBuilder(_WriteVerbs):
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
-        if spec.durable_delete:
-            bwp.durable_delete = True
+        if spec.contains_record_delete_op:
+            bwp.durable_delete = eff
         return bwp
 
-    @staticmethod
-    def _make_batch_delete_policy(spec: _OperationSpec) -> Optional[BatchDeletePolicy]:
+    def _make_batch_delete_policy(self, spec: _OperationSpec) -> Optional[BatchDeletePolicy]:
         """Build a ``BatchDeletePolicy`` for multi-key batch deletes."""
+        eff = self._batch_write_effective_dd(spec)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
-            or spec.durable_delete
+            or spec.durable_delete is not None
+            or spec.durable_delete_command_default is not None
+            or eff
         )
         if not has_settings:
             return None
@@ -2157,8 +2296,7 @@ class QueryBuilder(_WriteVerbs):
             bdp.filter_expression = spec.filter_expression
         if spec.generation is not None:
             bdp.generation = spec.generation
-        if spec.durable_delete:
-            bdp.durable_delete = True
+        bdp.durable_delete = eff
         return bdp
 
     async def _execute_single_key_write(
@@ -2265,7 +2403,8 @@ class QueryBuilder(_WriteVerbs):
             rp = self._read_policy
         elif self._behavior is not None:
             rp = self._apply_txn(to_read_policy(
-                self._behavior.get_settings(OpKind.READ, OpShape.POINT)))
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
         else:
             rp = self._apply_txn(ReadPolicy())
         if spec.filter_expression is not None:
@@ -2351,20 +2490,30 @@ class QueryBuilder(_WriteVerbs):
         brp.filter_expression = spec.filter_expression
         return brp
 
-    @staticmethod
     def _make_batch_write_policy_mixed(
+        self,
         spec: _OperationSpec,
     ) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` that includes ``record_exists_action``
         for use in mixed-batch calls."""
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
+        eff = (
+            self._batch_write_effective_dd(spec)
+            if spec.contains_record_delete_op else False
+        )
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
             or spec.generation is not None
             or spec.ttl_seconds is not None
-            or spec.durable_delete
+            or spec.durable_delete is not None
+            or spec.durable_delete_command_default is not None
+            or (spec.contains_record_delete_op and (
+                eff
+                or spec.durable_delete is not None
+                or spec.durable_delete_command_default is not None
+            ))
         )
         if not has_settings:
             return None
@@ -2378,8 +2527,8 @@ class QueryBuilder(_WriteVerbs):
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
-        if spec.durable_delete:
-            bwp.durable_delete = True
+        if spec.contains_record_delete_op:
+            bwp.durable_delete = eff
         return bwp
 
     async def _execute_dataset_query(self) -> RecordStream:
@@ -2394,7 +2543,8 @@ class QueryBuilder(_WriteVerbs):
             policy = self._policy
         elif self._behavior is not None:
             policy = self._apply_txn(to_query_policy(
-                self._behavior.get_settings(OpKind.READ, OpShape.QUERY)))
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
         else:
             policy = self._apply_txn(QueryPolicy())
         if self._chunk_size is not None and self._chunk_size > 0:
@@ -2405,6 +2555,9 @@ class QueryBuilder(_WriteVerbs):
         hint = self._query_hint
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
+
+        if self._where_ael is not None and self._indexes_monitor is not None:
+            await self._indexes_monitor.wait_until_ready()
 
         self._resolve_index_context()
 
@@ -2436,14 +2589,25 @@ class QueryBuilder(_WriteVerbs):
         return RecordStream.from_recordset(recordset)
 
     def _resolve_index_context(self) -> None:
-        """Auto-populate ``_index_context`` from the monitor when not set."""
+        """Auto-populate ``_index_context`` from the monitor when not set.
+
+        The monitor's cached :class:`IndexContext` is at namespace granularity
+        and has no ``query_set``. We derive a per-query copy with
+        ``query_set=self._set_name`` so filter selection rejects indexes
+        defined on a different set; cross-set indexes (those without a
+        set name) remain eligible.
+        """
         if self._index_context is not None:
             return
         if self._indexes_monitor is None:
             return
         ctx = self._indexes_monitor.get_index_context(self._namespace)
-        if ctx is not None:
-            self._index_context = ctx
+        if ctx is None:
+            return
+        if self._set_name and ctx.query_set != self._set_name:
+            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
+            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
+        self._index_context = ctx
 
     def _auto_generate_filters(
         self,
@@ -2622,6 +2786,7 @@ class WriteSegmentBuilder(_WriteVerbs):
         See Also:
             :meth:`~_WriteVerbs.delete`: Start a new delete segment for a key.
         """
+        self._qb._record_delete_in_operations = True
         return self._add_op(Operation.delete())
 
     def touch_record(self) -> WriteSegmentBuilder:
@@ -2829,13 +2994,28 @@ class WriteSegmentBuilder(_WriteVerbs):
         self._qb._generation = generation
         return self
 
-    def durably_delete(self) -> WriteSegmentBuilder:
+    def with_durable_delete(self) -> WriteSegmentBuilder:
         """Enable durable delete on the current segment.
 
         Returns:
             self for method chaining.
         """
         self._qb._durable_delete = True
+        return self
+
+    def default_with_durable_delete(self) -> WriteSegmentBuilder:
+        """Prefer durable deletes for this segment when resolving behavior defaults."""
+        self._qb._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+        """Prefer non-durable deletes for this segment when resolving behavior defaults."""
+        self._qb._durable_delete_command_default = False
+        return self
+
+    def without_durable_delete(self) -> WriteSegmentBuilder:
+        """Force a non-durable delete for this segment (may be rejected on SC)."""
+        self._qb._durable_delete = False
         return self
 
     def respond_all_keys(self) -> WriteSegmentBuilder:
@@ -2907,7 +3087,8 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
     __slots__ = (
         "_client_fast", "_key", "_op_type_fast", "_ops",
         "_write_policy", "_behavior_fast", "_read_policy",
-        "_txn",
+        "_txn", "_namespace_mode_resolver",
+        "_dd_command_default", "_dd_override", "_record_delete_in_fast_ops",
     )
 
     def __init__(
@@ -2919,6 +3100,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         write_policy: WritePolicy | None,
         read_policy: ReadPolicy | None = None,
         txn: Optional[Txn] = None,
+        namespace_mode_resolver: NamespaceModeResolver = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -2936,6 +3118,10 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             self._read_policy = None
         self._behavior_fast = behavior
         self._txn: Optional[Txn] = txn
+        self._namespace_mode_resolver = namespace_mode_resolver
+        self._dd_command_default: Optional[bool] = None
+        self._dd_override: Optional[bool] = None
+        self._record_delete_in_fast_ops = False
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this segment's captured txn on an outer policy in place."""
@@ -2986,6 +3172,36 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._op_type_fast = "replace_if_exists"
         return self
 
+    def delete_record(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().delete_record()
+        self._record_delete_in_fast_ops = True
+        return self._add_op(Operation.delete())
+
+    def default_with_durable_delete(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().default_with_durable_delete()
+        self._dd_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().default_without_durable_delete()
+        self._dd_command_default = False
+        return self
+
+    def without_durable_delete(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().without_durable_delete()
+        self._dd_override = False
+        return self
+
+    def with_durable_delete(self) -> WriteSegmentBuilder:
+        if self._qb is not None:
+            return super().with_durable_delete()
+        self._dd_override = True
+        return self
+
     # -- In-place promotion --------------------------------------------------
 
     def _promote(self) -> None:
@@ -3000,10 +3216,14 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             cached_write_policy=self._write_policy,
             cached_read_policy=self._read_policy,
             txn=self._txn,
+            namespace_mode_resolver=self._namespace_mode_resolver,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key
         qb._operations = self._ops
+        qb._durable_delete_command_default = self._dd_command_default
+        qb._durable_delete = self._dd_override
+        qb._record_delete_in_operations = self._record_delete_in_fast_ops
         self._qb = qb
 
     def where(self, expression):
@@ -3029,10 +3249,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
     def ensure_generation_is(self, generation):
         self._promote()
         return super().ensure_generation_is(generation)
-
-    def durably_delete(self):
-        self._promote()
-        return super().durably_delete()
 
     def respond_all_keys(self):
         self._promote()
@@ -3083,6 +3299,9 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
     ) -> RecordStream:
         if self._qb is not None:
             return await self._qb.execute(on_error)
+        if self._namespace_mode_resolver is not None:
+            self._promote()
+            return await self._qb.execute(on_error)  # type: ignore[union-attr]
         if on_error is not None:
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]

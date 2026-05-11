@@ -32,11 +32,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError
 
-
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        yield c
+from .durable_delete_support import delete_keys_durable
 
 
 @pytest.fixture
@@ -458,7 +454,7 @@ class TestFilteredDeletePaths:
         assert rr is not None
         assert rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
-        await _cleanup(session, k)
+        await delete_keys_durable(session, [k])
 
     async def test_delete_with_nonmatching_where_preserves(self, session, ds):
         """Delete with a non-matching where() filter leaves the record intact."""
@@ -483,7 +479,7 @@ class TestFilteredDeletePaths:
 
         await (
             session.delete(k)
-                .durably_delete()
+                .with_durable_delete()
                 .where("$.v == 1")
                 .execute()
         )
@@ -493,7 +489,7 @@ class TestFilteredDeletePaths:
         assert rr is not None
         assert rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
-        await _cleanup(session, k)
+        await delete_keys_durable(session, [k])
 
     async def test_durable_delete_with_where_filtered_out(self, session, ds, enterprise):
         """Durable delete with non-matching where() + fail_on_filtered_out()
@@ -507,7 +503,7 @@ class TestFilteredDeletePaths:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.delete(k)
-                    .durably_delete()
+                    .with_durable_delete()
                     .where("$.v == 999")
                     .fail_on_filtered_out()
                     .execute()
@@ -517,7 +513,7 @@ class TestFilteredDeletePaths:
         rr = await (await session.query(k).execute()).first_or_raise()
         assert rr.record.bins["v"] == 1
 
-        await _cleanup(session, k)
+        await delete_keys_durable(session, [k])
 
 
 # ---------------------------------------------------------------------------

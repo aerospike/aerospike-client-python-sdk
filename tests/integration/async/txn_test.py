@@ -17,10 +17,13 @@
 against a fixed catalog of scenarios so behavior doesn't silently
 regress.
 
-Every test here needs a strong-consistency namespace. Set
-``AEROSPIKE_SC_NAMESPACE`` (default: ``test_sc``) to the namespace
-configured with ``strong-consistency true`` on your cluster. When no SC
-namespace is reachable each test skips with a clear reason.
+Optional ``AEROSPIKE_HOST_SC`` routes this suite (and durable-delete SC tests) to a
+dedicated SC cluster seed while ``AEROSPIKE_HOST`` stays on another box.
+
+Every test here needs a strong-consistency namespace. If
+``AEROSPIKE_SC_NAMESPACE`` is unset and the cluster has exactly one SC namespace,
+that name is used automatically; otherwise set the env var (required when several
+namespaces are SC). When no SC namespace is reachable each test skips with a clear reason.
 
 Provenance (per repo rules):
     reference: client/src/test/java/com/aerospike/client/sdk/TxnTest.java
@@ -28,51 +31,69 @@ Provenance (per repo rules):
 
 from __future__ import annotations
 
-import os
 import pytest
+import pytest_asyncio
 
 from aerospike_async import ResultCode
 from aerospike_sdk import Client, DataSet
 from aerospike_sdk.exceptions import AerospikeError
 
+from integration.sc_namespace_resolve import (
+    MultipleScNamespacesError,
+    NoStrongConsistencyNamespace,
+    pinned_namespace_env_hint,
+    resolve_sc_namespace,
+    skip_reason_no_sc_namespace,
+)
+
 
 BIN_NAME = "bin"
-DEFAULT_SC_NAMESPACE = "test_sc"
 
 
-@pytest.fixture(scope="module")
-def sc_namespace() -> str:
-    """Namespace name to run MRT tests against (env-tunable)."""
-    return os.environ.get("AEROSPIKE_SC_NAMESPACE", DEFAULT_SC_NAMESPACE)
+async def _namespaces_on_cluster_hint(session) -> str:
+    try:
+        names = sorted(await session.info().namespaces())
+    except Exception:
+        return ""
+    if not names:
+        return ""
+    return f" Namespaces on this cluster: {', '.join(names)}."
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def sc_namespace(aerospike_host_sc, client_policy_sc):
+    async with Client(seeds=aerospike_host_sc, policy=client_policy_sc) as client:
+        sess = client.create_session()
+        try:
+            return await resolve_sc_namespace(sess)
+        except MultipleScNamespacesError as e:
+            pytest.skip(
+                "Several namespaces have strong-consistency enabled; set "
+                f"AEROSPIKE_SC_NAMESPACE to one of: {', '.join(sorted(e.names))}",
+            )
+        except NoStrongConsistencyNamespace as e:
+            pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
-    """SDK Client opened against the default cluster for the session fixture."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        yield c
-
-
-@pytest.fixture
-async def session(client, sc_namespace):
+async def session(client_sc, sc_namespace):
     """Top-level (non-transactional) session used outside ``doInTransaction``.
 
     Skips the test if the configured SC namespace isn't available on the
     cluster.
     """
-    sess = client.create_session()
+    sess = client_sc.create_session()
     try:
-        is_sc = await sess.is_namespace_sc(sc_namespace)
+        status = await sess.namespace_sc_status(sc_namespace)
     except Exception as exc:
         pytest.skip(
             f"SC namespace {sc_namespace!r} unreachable "
-            f"({exc}); set AEROSPIKE_SC_NAMESPACE or stand up Phase 3e.3"
+            f"({exc}); set AEROSPIKE_HOST_SC / AEROSPIKE_SC_NAMESPACE or stand up Phase 3e.3"
         )
-    if not is_sc:
-        pytest.skip(
-            f"Namespace {sc_namespace!r} is not strong-consistency; "
-            "MRT tests require SC (see Phase 3e.3 in the cutover plan)"
-        )
+    if not status.is_sc:
+        ns_hint = await _namespaces_on_cluster_hint(sess)
+        pin = pinned_namespace_env_hint()
+        pytest.skip(f"{status.detail}{ns_hint}{pin} MRT tests require SC.")
     return sess
 
 
@@ -160,7 +181,7 @@ async def test_txn_write_conflict(session, mrt_set):
 #    OPEN txn must raise client-side (reference test does the same via
 #    ``txn.setState(...)`` — PAC now exposes an equivalent setter).
 # ---------------------------------------------------------------------------
-async def test_txn_read_fails_for_all_states_except_open(session, client, mrt_set):
+async def test_txn_read_fails_for_all_states_except_open(session, client_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.
     del session
     from aerospike_async import Txn, TxnState
@@ -176,7 +197,7 @@ async def test_txn_read_fails_for_all_states_except_open(session, client, mrt_se
         (TxnState.ABORTED, True),
         (TxnState.VERIFIED, True),
     ):
-        tx_session = client.transaction_session()
+        tx_session = client_sc.transaction_session()
         # Allocate a txn without going through __aenter__, then force
         # the state to exercise the non-OPEN state-machine guard.
         tx_session._txn = Txn()
@@ -272,7 +293,7 @@ async def test_txn_delete(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async def op(tx):
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
 
     await session.do_in_transaction(op)
     assert await _fetch_bin(session, key) is None
@@ -287,7 +308,7 @@ async def test_txn_delete_abort(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async with session.begin_transaction() as tx:
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
         await tx.abort()
 
     assert await _fetch_bin(session, key) == "val1"
@@ -303,11 +324,11 @@ async def test_txn_delete_twice(session, mrt_set):
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
     async def op(tx):
-        await tx.delete(key).durably_delete().execute()
+        await tx.delete(key).with_durable_delete().execute()
         # The second delete must not blow up: we only assert it doesn't
         # raise an unexpected error — a KEY_NOT_FOUND_ERROR is acceptable.
         try:
-            await tx.delete(key).durably_delete().execute()
+            await tx.delete(key).with_durable_delete().execute()
         except AerospikeError as exc:
             assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
@@ -428,14 +449,36 @@ async def test_txn_batch_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 17. txnMrtExpiredAfterDeadline: requires Txn.set_timeout, which the PAC
-#     does not expose as a setter today (timeout is a read-only property).
-#     Tracked as a PAC gap; wire up when the setter lands.
+# 17. txnMrtExpiredAfterDeadline: a write issued after the txn deadline must
+#     raise MRT_EXPIRED. JSDK parity (TxnTest.txnMrtExpiredAfterDeadline).
 # ---------------------------------------------------------------------------
-@pytest.mark.skip(
-    reason="Requires PAC to expose Txn.set_timeout (timeout is read-only "
-    "today). Tracked as a Phase 3 follow-up in "
-    "core_v3_cutover_08bef130.plan.md."
-)
-async def test_txn_mrt_expired_after_deadline() -> None:
-    pass
+async def test_txn_mrt_expired_after_deadline(session, mrt_set):
+    """Write after the txn deadline must raise MRT_EXPIRED.
+
+    Mirrors :class:`TxnTest`.\\ ``txnMrtExpiredAfterDeadline``: pin a 2-second
+    deadline on the active transaction, do one write, sleep past the deadline,
+    then attempt a second write — the server must reject it with
+    ``MRT_EXPIRED``. ``MRT_EXPIRED`` is non-retryable so
+    :meth:`do_in_transaction` propagates the failure on the first attempt.
+    """
+    import asyncio
+
+    key = mrt_set.id("txnMrtExpired")
+    await _reset(session, key)
+    await session.upsert(key).put({BIN_NAME: "val0"}).execute()
+
+    async def op(tx):
+        # Must be set before the first execute() under this txn — once a
+        # builder captures the underlying Arc<Txn> the timeout is frozen.
+        tx.txn.timeout = 2
+
+        await tx.upsert(key).put({BIN_NAME: "val1"}).execute()
+        await asyncio.sleep(3)
+        await tx.upsert(key).put({BIN_NAME: "val2"}).execute()
+
+    with pytest.raises(AerospikeError) as excinfo:
+        await session.do_in_transaction(op)
+    assert excinfo.value.result_code == ResultCode.MRT_EXPIRED
+
+    # Pre-txn value must remain visible to non-transactional reads.
+    assert await _fetch_bin(session, key) == "val0"

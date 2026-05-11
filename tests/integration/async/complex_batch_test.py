@@ -27,12 +27,6 @@ from aerospike_sdk.policy.behavior_settings import Settings
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        yield c
-
-
-@pytest.fixture
 def ds():
     return DataSet.of("test", "complex_batch")
 

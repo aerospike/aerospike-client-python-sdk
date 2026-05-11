@@ -18,9 +18,19 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TYPE_CHECKING,
+    Union,
+)
 
 from aerospike_async import (
+    BatchDeletePolicy,
     Client,
     ExpOperation,
     ExpReadFlags,
@@ -34,12 +44,14 @@ from aerospike_async import (
 from aerospike_sdk.aio.operations.query import _build_exp_write_flags
 from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import _convert_pac_exception
-from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
-from aerospike_sdk.policy.policy_mapper import to_batch_policy
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
+from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_batch_policy
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.policy.behavior import Behavior
+
+NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
 
 
 class BatchOpType(Enum):
@@ -328,6 +340,7 @@ class BatchOperationBuilder:
         client: Client,
         behavior: Optional[Behavior] = None,
         txn: Optional[Txn] = None,
+        namespace_mode_resolver: NamespaceModeResolver = None,
     ) -> None:
         """
         Initialize a BatchOperationBuilder.
@@ -338,11 +351,14 @@ class BatchOperationBuilder:
             txn: Optional active :class:`~aerospike_async.Txn` captured from
                 a transactional session; stamped on the outer batch policy
                 at execute. ``None`` means no transaction participation.
+            namespace_mode_resolver: Optional async callable ``namespace -> Mode``
+                used to apply AP vs SC behavior scopes before policies are built.
         """
         self._client = client
         self._behavior = behavior
         self._key_operations: List[BatchKeyOperationBuilder] = []
         self._txn: Optional[Txn] = txn
+        self._namespace_mode_resolver = namespace_mode_resolver
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on the outer batch policy."""
@@ -365,6 +381,20 @@ class BatchOperationBuilder:
         """
         self._txn = txn
         return self
+
+    async def _resolved_mode_for_keys(self, keys: List[Key]) -> Mode:
+        """Return SC when any key belongs to an SC namespace."""
+        if self._namespace_mode_resolver is None:
+            return Mode.AP
+        seen: set[str] = set()
+        for key in keys:
+            namespace = key.namespace
+            if namespace in seen:
+                continue
+            seen.add(namespace)
+            if await self._namespace_mode_resolver(namespace) == Mode.SC:
+                return Mode.SC
+        return Mode.AP
     
     def insert(self, key: Key) -> BatchKeyOperationBuilder:
         """
@@ -520,10 +550,14 @@ class BatchOperationBuilder:
 
         raw_results: list = []
 
+        all_keys = [key_op._key for key_op in self._key_operations]
+        batch_mode = await self._resolved_mode_for_keys(all_keys)
+
         batch_policy = None
         if self._behavior is not None:
             batch_policy = to_batch_policy(
-                self._behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH))
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, batch_mode))
         # Under MRT the PAC rejects a null BatchPolicy, so materialize one
         # just to carry the txn reference when the behavior path didn't.
         if self._txn is not None and batch_policy is None:
@@ -532,10 +566,21 @@ class BatchOperationBuilder:
         self._apply_txn(batch_policy)
 
         try:
+            delete_policy: Optional[BatchDeletePolicy] = None
+            if delete_keys and self._behavior is not None:
+                bs = self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE,
+                    OpShape.BATCH,
+                    await self._resolved_mode_for_keys(delete_keys),
+                )
+                if resolve_durable_delete(bs.durable_delete, None, None):
+                    delete_policy = BatchDeletePolicy()
+                    delete_policy.durable_delete = True
+
             if delete_keys:
                 delete_results = await self._client.batch_delete(
                     batch_policy,
-                    None,
+                    delete_policy,
                     delete_keys,
                 )
                 raw_results.extend(delete_results)

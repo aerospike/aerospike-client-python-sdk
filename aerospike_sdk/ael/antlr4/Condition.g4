@@ -88,6 +88,7 @@ operand
     | exclusiveExpression
     | letExpression
     | whenExpression
+    | unknownExpression
     ;
 
 notExpression: 'not' '(' expression ')';
@@ -97,6 +98,8 @@ exclusiveExpression: 'exclusive' '(' expression (',' expression)+ ')';
 letExpression: 'let' '(' variableDefinition (',' variableDefinition)* ')' 'then' '(' expression ')';
 
 whenExpression: 'when' '(' expressionMapping (',' expressionMapping)* ',' 'default' '=>' expression ')';
+
+unknownExpression: 'unknown' | 'error';
 
 functionCall
     : NAME_IDENTIFIER '(' expression (',' expression)* ')'
@@ -114,8 +117,12 @@ floatOperand: FLOAT | LEADING_DOT_FLOAT;
 INT: ('0' [xX] [0-9a-fA-F]+ | '0' [bB] [01]+ | [0-9]+);
 FLOAT: [0-9]+ '.' [0-9]+;
 
+// Precedes LEADING_DOT_FLOAT so the lexer greedily captures .0xff and .0b101 as one token.
 LEADING_DOT_FLOAT_HEX_OR_BINARY: '.' '0' ([xX] [0-9a-fA-F]+ | [bB] [01]+);
 
+LEADING_DOT_SIGNED_INT: '.' [+-] [0-9]+;
+
+// Supports the .N path syntax with predictable lexing.
 LEADING_DOT_FLOAT: '.' [0-9]+;
 
 booleanOperand: TRUE | FALSE;
@@ -153,7 +160,10 @@ pathOrMetadata: path | metadata;
 
 path: basePath ('.' pathFunction)?;
 
-basePath: binPart ('.' (mapPart | listPart))*?;
+basePath: binPart (('.' (mapPart | listPart)) | pathIntMapKey | pathHexBinaryMapKey)*?;
+
+pathIntMapKey: LEADING_DOT_FLOAT | LEADING_DOT_SIGNED_INT;
+pathHexBinaryMapKey: LEADING_DOT_FLOAT_HEX_OR_BINARY;
 
 metadata: METADATA_FUNCTION;
 
@@ -213,7 +223,38 @@ PATH_FUNCTION_CDT_RETURN_TYPE
     | 'REVERSE_RANK'
     ;
 
-binPart: NAME_IDENTIFIER | IN;
+reservedWord
+    : TRUE
+    | FALSE
+    | PATH_FUNCTION_GET
+    | PATH_FUNCTION_PARAM_TYPE
+    | PATH_FUNCTION_PARAM_RETURN
+    | 'and'
+    | 'or'
+    | 'not'
+    | 'exclusive'
+    | 'let'
+    | 'then'
+    | 'when'
+    | 'default'
+    | 'remove'
+    | 'insert'
+    | 'set'
+    | 'append'
+    | 'increment'
+    | 'clear'
+    | 'sort'
+    | 'unknown'
+    | 'error'
+    ;
+
+binPart
+    : BIN_IDENTIFIER
+    | NAME_IDENTIFIER
+    | QUOTED_STRING
+    | IN
+    | reservedWord
+    ;
 
 mapPart
     : MAP_TYPE_DESIGNATOR
@@ -237,6 +278,8 @@ mapKey
     : NAME_IDENTIFIER
     | QUOTED_STRING
     | IN
+    | INT
+    | reservedWord
     ;
 
 mapValue: '{=' valueIdentifier '}';
@@ -490,6 +533,7 @@ valueIdentifier
     | QUOTED_STRING
     | signedInt
     | IN
+    | reservedWord
     ;
 
 valueListIdentifier: valueIdentifier ',' valueIdentifier (',' valueIdentifier)*;
@@ -535,5 +579,10 @@ pathFunctionParam: pathFunctionParamName ':' pathFunctionParamValue;
 IN: [iI][nN];
 
 NAME_IDENTIFIER: [a-zA-Z0-9_]+;
+
+// Must come AFTER NAME_IDENTIFIER. Inputs containing '@' match this token only
+// (longer, exclusive match); inputs without '@' resolve to NAME_IDENTIFIER first
+// by ANTLR's first-match priority on equal-length matches.
+BIN_IDENTIFIER: [a-zA-Z0-9_@]+;
 
 WS: [ \t\r\n]+ -> skip;

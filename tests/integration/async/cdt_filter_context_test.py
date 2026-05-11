@@ -45,12 +45,6 @@ def _require_filter_context() -> None:
         )
 
 
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
-
-
 async def _cleanup_records(session, keys):
     for k in keys:
         try:
