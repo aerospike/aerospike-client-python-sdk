@@ -31,7 +31,10 @@ INDEX_NAME = "pfc_qhint_age_idx"
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy, enterprise, wait_for_index):
+async def client(
+    aerospike_host, client_policy, enterprise,
+    wait_for_index, wait_for_set_visible,
+):
     """Setup client, data, and a secondary index for hint tests."""
     async with Client(
         seeds=aerospike_host,
@@ -53,6 +56,12 @@ async def client(aerospike_host, client_policy, enterprise, wait_for_index):
                 .put({"id": i, "age": 20 + i, "name": f"User{i}"})
                 .execute()
             )
+
+        # Wait for the 10 writes to be visible to a set scan before creating
+        # the SI — otherwise a still-populating index can be flagged "readable"
+        # before all records have indexed entries, causing range queries to
+        # return short and flaky-fail tests that assert exact counts.
+        await wait_for_set_visible(session, "test", SET_NAME, 10)
 
         try:
             await (

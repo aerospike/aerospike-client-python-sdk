@@ -33,12 +33,13 @@ async def client(aerospike_host, client_policy):
 
 
 async def test_hll_init_add_and_get_count(client):
+    from aerospike_sdk import HllConfig
     session = client.create_session()
     k = DataSet.of("test", "test").id("hll_bit_fluent_1")
     await (
         session.upsert(k)
         .bin("hll")
-        .hll_init(12)
+        .hll_init(HllConfig.of(12))
         .bin("hll")
         .hll_add(["alpha", "beta", "gamma"])
         .execute()

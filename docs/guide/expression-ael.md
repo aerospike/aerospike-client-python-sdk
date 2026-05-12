@@ -161,6 +161,47 @@ Bins typed as `GEO` are recognized automatically when referenced inside
 `geoCompare(...)`; an explicit cast like `$.loc.get(type: GEO)` is accepted
 but not required.
 
+### HyperLogLog
+
+Seven read-side HLL path functions are available on HLL bins. Each operates on
+`$.binName` as the receiver:
+
+```
+$.h.hllCount() > 1000000
+$.h.hllDescribe() == [14, 0]
+$.h.hllMayContain(['alice', 'bob']) == 1
+$.h.hllUnionCount(?0) > 50000
+$.h.hllIntersectCount(?0) > 100
+$.h.hllSimilarity(?0) >= 0.8
+$.h.hllUnion(?0) == ?1
+```
+
+`hllDescribe()` returns a two-element list ``[index_bit_count, min_hash_bit_count]``;
+the server reports `0` for a sketch without minhash (the `-1` sentinel used
+client-side to mean "inherit / no minhash" is normalized away on the wire).
+
+The multi-sketch functions (`hllUnion`, `hllUnionCount`, `hllIntersectCount`,
+`hllSimilarity`) take their multi-sketch argument in one of two shapes:
+
+- **A single HLL bin reference** — `$.a`. The server treats a bare HLL value
+  as an implicit single-element list, so `$.h.hllUnionCount($.a)` evaluates
+  cleanly.
+- **A list-typed expression of HLL byte blobs** — either an inline literal
+  list `[?0, ?1]` or a placeholder bound to a Python `list[bytes]`.
+
+`[$.a, $.b]` (a list literal containing bin references) is **not** supported
+— the server's HLL ops can't recursively evaluate scalar bin sub-expressions
+inside a composed list. If you need to combine multiple bins in one
+expression without pre-fetching, drop down to the programmatic `Exp.*` API
+or open multiple bin-pair queries.
+
+Write-side AEL (`hllInit`, `hllAdd`) is **not** currently supported — the
+existing grammar allows at most one path function per path, and chained
+write-then-read forms require a grammar refactor that's better aligned with
+the upcoming server-side AEL design. Use the builder API
+(`session.upsert(key).bin("h").hll_init(HllConfig.of(14))`) for writes
+today; AEL is read-only for HLL until then.
+
 ### Hex and Binary Literals
 
 ```

@@ -25,6 +25,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     TYPE_CHECKING,
     Union,
 )
@@ -37,14 +38,16 @@ from aerospike_async import (
     ExpWriteFlags,
     FilterExpression,
     GeoJSON,
+    HllOperation,
     Key,
     Operation,
     Txn,
 )
 
-from aerospike_sdk.aio.operations.query import _build_exp_write_flags
+from aerospike_sdk.aio.operations.query import _build_exp_write_flags, _resolve_hll_flags
 from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_batch_policy
 from aerospike_sdk.record_stream import RecordStream
@@ -243,6 +246,126 @@ class BatchBinBuilder:
         )
         expr = parse_ael(expression) if isinstance(expression, str) else expression
         self._key_op._operations.append(ExpOperation.write(self._bin_name, expr, flags))
+        return self._key_op
+
+    # -- HyperLogLog ----------------------------------------------------------
+
+    def hll_init(
+        self,
+        config: HllConfig,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Initialize an empty HyperLogLog sketch in this bin.
+
+        Semantics match
+        :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_init`.
+        """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        self._key_op._operations.append(HllOperation.init(
+            self._bin_name, config.index_bit_count, config.min_hash_bit_count, flags,
+        ))
+        return self._key_op
+
+    def hll_add(
+        self,
+        values: Sequence[Any],
+        *,
+        config: Optional[HllConfig] = None,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Add distinct values to the HyperLogLog sketch in this bin.
+
+        Semantics match
+        :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_add`.
+        """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        index_bit_count = config.index_bit_count if config is not None else -1
+        min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
+        self._key_op._operations.append(HllOperation.add(
+            self._bin_name, list(values), index_bit_count, min_hash_bit_count, flags,
+        ))
+        return self._key_op
+
+    def hll_set_union(
+        self,
+        hll_list: Sequence[Any],
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Merge other HyperLogLog sketches into this bin (destructive union)."""
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        self._key_op._operations.append(
+            HllOperation.set_union(self._bin_name, list(hll_list), flags),
+        )
+        return self._key_op
+
+    def hll_fold(self, index_bit_count: int) -> BatchKeyOperationBuilder:
+        """Reduce sketch precision to a lower ``index_bit_count``."""
+        self._key_op._operations.append(
+            HllOperation.fold(self._bin_name, index_bit_count),
+        )
+        return self._key_op
+
+    def hll_refresh_count(self) -> BatchKeyOperationBuilder:
+        """Refresh the cached cardinality estimate."""
+        self._key_op._operations.append(HllOperation.refresh_count(self._bin_name))
+        return self._key_op
+
+    def hll_get_count(self) -> BatchKeyOperationBuilder:
+        """Read the estimated cardinality of the sketch."""
+        self._key_op._operations.append(HllOperation.get_count(self._bin_name))
+        return self._key_op
+
+    def hll_describe(self) -> BatchKeyOperationBuilder:
+        """Read the sketch's index and minhash bit widths."""
+        self._key_op._operations.append(HllOperation.describe(self._bin_name))
+        return self._key_op
+
+    def hll_get_union(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the union of this sketch with other sketches (non-destructive)."""
+        self._key_op._operations.append(
+            HllOperation.get_union(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_union_count(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the estimated cardinality of the union with other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_union_count(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the estimated intersection cardinality with other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_intersect_count(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_similarity(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read Jaccard similarity between this sketch and other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_similarity(self._bin_name, list(hll_list)),
+        )
         return self._key_op
 
 

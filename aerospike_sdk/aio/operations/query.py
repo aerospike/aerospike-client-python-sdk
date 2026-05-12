@@ -58,6 +58,7 @@ from aerospike_async import (
     FilterExpression,
     GenerationPolicy,
     GeoJSON,
+    HLLWriteFlags,
     HllOperation,
     Key,
     ListOperation,
@@ -114,6 +115,35 @@ def _resize_flags_or_default(resize_flags: Optional[Any]) -> Any:
     return resize_flags
 
 
+def _resolve_hll_flags(
+    *,
+    create_only: bool = False,
+    update_only: bool = False,
+    no_fail: bool = False,
+    allow_fold: bool = False,
+) -> int:
+    """Compose HLL write flags from individual keyword booleans.
+
+    ``create_only`` and ``update_only`` are mutually exclusive; passing both
+    raises :class:`ValueError`. Returns an int bitmask suitable as the
+    ``flags`` argument to PAC ``HllOperation.init`` / ``add`` / ``set_union``.
+    """
+    if create_only and update_only:
+        raise ValueError(
+            "create_only and update_only are mutually exclusive",
+        )
+    flags = int(HLLWriteFlags.DEFAULT)
+    if create_only:
+        flags |= int(HLLWriteFlags.CREATE_ONLY)
+    if update_only:
+        flags |= int(HLLWriteFlags.UPDATE_ONLY)
+    if no_fail:
+        flags |= int(HLLWriteFlags.NO_FAIL)
+    if allow_fold:
+        flags |= int(HLLWriteFlags.ALLOW_FOLD)
+    return flags
+
+
 
 _TTL_NEVER_EXPIRE = -1
 _TTL_DONT_UPDATE = -2
@@ -151,6 +181,7 @@ from aerospike_sdk.error_strategy import (
     _ErrorDisposition,
     _resolve_disposition,
 )
+from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.exceptions import (
     AerospikeError,
     _convert_pac_exception,
@@ -3928,37 +3959,53 @@ class WriteBinBuilder(_WriteVerbs):
 
     def hll_init(
         self,
-        index_bit_count: int,
-        min_hash_bit_count: int = -1,
-        flags: int = 0,
+        config: HllConfig,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
     ) -> WriteSegmentBuilder:
         """Initialize an empty HyperLogLog sketch in this bin.
 
-        Use before :meth:`hll_add` on a new bin. Pass ``-1`` for
-        ``min_hash_bit_count`` to use the server default. Combine ``flags``
-        with values from :class:`~aerospike_sdk.HLLWriteFlags`.
+        Use before :meth:`hll_add` on a new bin. ``create_only`` and
+        ``update_only`` are mutually exclusive; passing both raises
+        :class:`ValueError`.
 
         Example::
-            await ( session.upsert(key) .bin("visitors") .hll_init(12) .execute() )
+
+            await (
+                session.upsert(key)
+                .bin("visitors").hll_init(HllConfig.of(12))
+                .execute()
+            )
 
         Args:
-            index_bit_count: Register width index bits (precision); typical values are in the 4–16 range per server documentation.
-            min_hash_bit_count: Minimum hash bits, or ``-1`` for default.
-            flags: Optional HLL write flags (often ``0`` or :attr:`~aerospike_sdk.HLLWriteFlags.DEFAULT`).
+            config: Index and minhash bit widths for the new sketch.
+            create_only: Fail if the bin already exists.
+            update_only: Fail if the bin does not already exist.
+            no_fail: Skip the operation silently when a mode constraint blocks it.
+            allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
 
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
+
         See Also:
             :meth:`hll_add`: Add distinct values to the sketch.
             :meth:`QueryBinBuilder.hll_get_count`: Read cardinality in a query.
-            :class:`~aerospike_sdk.HLLWriteFlags`
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
         return self._segment._add_op(
             HllOperation.init(
                 self._bin,
-                index_bit_count,
-                min_hash_bit_count,
+                config.index_bit_count,
+                config.min_hash_bit_count,
                 flags,
             ),
         )
@@ -3966,32 +4013,52 @@ class WriteBinBuilder(_WriteVerbs):
     def hll_add(
         self,
         values: Sequence[Any],
-        index_bit_count: int = -1,
-        min_hash_bit_count: int = -1,
-        flags: int = 0,
+        *,
+        config: Optional[HllConfig] = None,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
     ) -> WriteSegmentBuilder:
         """Add distinct values to the HyperLogLog sketch in this bin.
 
-        The server hashes each element into the sketch. Use ``-1`` for index
-        or min-hash bit counts to inherit defaults.
+        The server hashes each element into the sketch. Pass ``config=...`` to
+        auto-create the sketch on the first call with that precision; omit it
+        to inherit defaults from an existing sketch.
 
         Example::
-            await ( session.upsert(key) .bin("visitors") .hll_add(["user-1", "user-2"]) .execute() )
+
+            await (
+                session.upsert(key)
+                .bin("visitors").hll_add(["user-1", "user-2"])
+                .execute()
+            )
 
         Args:
-            values: Sequence of values (for example strings or blobs) to add.
-            index_bit_count: Index bits, or ``-1`` for default.
-            min_hash_bit_count: Min-hash bits, or ``-1`` for default.
-            flags: Optional HLL write flags (often ``0``).
+            values: Sequence of values (e.g. strings or blobs) to add.
+            config: Optional HLL config used to auto-create the bin on first
+                use. When ``None``, inherits the existing sketch's bit widths.
+            create_only: Fail if the bin already exists.
+            update_only: Fail if the bin does not already exist.
+            no_fail: Skip the operation silently when a mode constraint blocks it.
+            allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
 
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
+
         See Also:
-            :meth:`hll_init`: Create an empty sketch.
+            :meth:`hll_init`: Create an empty sketch explicitly.
             :meth:`hll_get_count`: Read cardinality in the same operate batch.
-            :class:`~aerospike_sdk.HLLWriteFlags`
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        index_bit_count = config.index_bit_count if config is not None else -1
+        min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
         return self._segment._add_op(
             HllOperation.add(
                 self._bin,
@@ -4002,26 +4069,49 @@ class WriteBinBuilder(_WriteVerbs):
             ),
         )
 
-    def hll_set_union(self, hll_list: Sequence[Any], flags: int = 0) -> WriteSegmentBuilder:
+    def hll_set_union(
+        self,
+        hll_list: Sequence[Any],
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> WriteSegmentBuilder:
         """Merge other HyperLogLog sketches into this bin (destructive union).
 
         Each entry in ``hll_list`` is typically another HLL blob (``bytes``)
         returned from a prior read.
 
         Example::
-            await ( session.upsert(key) .bin("merged") .hll_set_union([other_hll_blob]) .execute() )
+
+            await (
+                session.upsert(key)
+                .bin("merged").hll_set_union([other_hll_blob])
+                .execute()
+            )
 
         Args:
             hll_list: Sketches to union into the target bin.
-            flags: Optional HLL write flags (often ``0``).
+            create_only: Fail if the bin already exists.
+            update_only: Fail if the bin does not already exist.
+            no_fail: Skip the operation silently when a mode constraint blocks it.
+            allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
+
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
 
         See Also:
             :meth:`hll_get_union`: Non-destructive union read.
             :meth:`hll_add`: Add raw values instead of whole sketches.
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
         return self._segment._add_op(
             HllOperation.set_union(self._bin, list(hll_list), flags),
         )

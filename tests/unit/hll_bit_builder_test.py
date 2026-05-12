@@ -50,8 +50,9 @@ class _OpCollector:
 
 class TestWriteBinHll:
     def test_hll_init_add_get_count_chain(self):
+        from aerospike_sdk import HllConfig
         wbb, segment = _make_wbb("sk")
-        wbb.hll_init(12, 4, 0).bin("sk").hll_add(["a", "b"]).bin("sk").hll_get_count()
+        wbb.hll_init(HllConfig.of(12, 4)).bin("sk").hll_add(["a", "b"]).bin("sk").hll_get_count()
         ops = segment._qb._operations
         assert len(ops) == 3
         assert isinstance(ops[0], type(HllOperation.init("x", 8)))
@@ -61,7 +62,7 @@ class TestWriteBinHll:
     def test_hll_set_union_fold_refresh(self):
         wbb, segment = _make_wbb("u")
         other = [b"\x01\x02"]
-        wbb.hll_set_union(other, 0).bin("u").hll_fold(10).bin("u").hll_refresh_count()
+        wbb.hll_set_union(other).bin("u").hll_fold(10).bin("u").hll_refresh_count()
         ops = segment._qb._operations
         assert len(ops) == 3
 

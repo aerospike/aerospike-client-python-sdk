@@ -543,6 +543,13 @@ pathFunction
     | pathFunctionExists
     | pathFunctionGet
     | pathFunctionCount
+    | pathFunctionHllCount
+    | pathFunctionHllDescribe
+    | pathFunctionHllMayContain
+    | pathFunctionHllUnion
+    | pathFunctionHllUnionCount
+    | pathFunctionHllIntersectCount
+    | pathFunctionHllSimilarity
     | 'remove' '()'
     | 'insert' '()'
     | 'set' '()'
@@ -551,6 +558,17 @@ pathFunction
     | 'clear' '()'
     | 'sort' '()'
     ;
+
+pathFunctionHllCount: PATH_FUNCTION_HLL_COUNT;
+pathFunctionHllDescribe: PATH_FUNCTION_HLL_DESCRIBE;
+pathFunctionHllMayContain: 'hllMayContain' '(' expression ')';
+pathFunctionHllUnion: 'hllUnion' '(' expression ')';
+pathFunctionHllUnionCount: 'hllUnionCount' '(' expression ')';
+pathFunctionHllIntersectCount: 'hllIntersectCount' '(' expression ')';
+pathFunctionHllSimilarity: 'hllSimilarity' '(' expression ')';
+
+PATH_FUNCTION_HLL_COUNT: 'hllCount' '()';
+PATH_FUNCTION_HLL_DESCRIBE: 'hllDescribe' '()';
 
 pathFunctionCast: PATH_FUNCTION_CAST;
 

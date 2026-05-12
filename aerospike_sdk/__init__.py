@@ -65,6 +65,7 @@ from aerospike_sdk.exceptions import (
 )
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
+from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
@@ -103,6 +104,7 @@ __all__ = [
     "in_list",
     "GenerationError",
     "Host",
+    "HllConfig",
     "HLLWriteFlags",
     "Index",
     "IndexContext",

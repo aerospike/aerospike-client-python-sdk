@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Sequence, Union
 
 from aerospike_async import FilterExpression, Key
 
@@ -26,6 +26,7 @@ from aerospike_sdk.aio.operations.batch import (
     BatchKeyOperationBuilder as AsyncBatchKeyOperationBuilder,
     BatchOperationBuilder as AsyncBatchOperationBuilder,
 )
+from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 
@@ -130,6 +131,103 @@ class SyncBatchBinBuilder:
                 delete_if_null=delete_if_null,
             ),
             self._loop_manager,
+        )
+
+    # -- HyperLogLog ----------------------------------------------------------
+
+    def hll_init(
+        self,
+        config: HllConfig,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_init(
+                config,
+                create_only=create_only, update_only=update_only,
+                no_fail=no_fail, allow_fold=allow_fold,
+            ),
+            self._loop_manager,
+        )
+
+    def hll_add(
+        self,
+        values: Sequence[Any],
+        *,
+        config: Optional[HllConfig] = None,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_add(
+                values, config=config,
+                create_only=create_only, update_only=update_only,
+                no_fail=no_fail, allow_fold=allow_fold,
+            ),
+            self._loop_manager,
+        )
+
+    def hll_set_union(
+        self,
+        hll_list: Sequence[Any],
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_set_union(
+                hll_list,
+                create_only=create_only, update_only=update_only,
+                no_fail=no_fail, allow_fold=allow_fold,
+            ),
+            self._loop_manager,
+        )
+
+    def hll_fold(self, index_bit_count: int) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_fold(index_bit_count), self._loop_manager,
+        )
+
+    def hll_refresh_count(self) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_refresh_count(), self._loop_manager,
+        )
+
+    def hll_get_count(self) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_get_count(), self._loop_manager,
+        )
+
+    def hll_describe(self) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_describe(), self._loop_manager,
+        )
+
+    def hll_get_union(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_get_union(hll_list), self._loop_manager,
+        )
+
+    def hll_get_union_count(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_get_union_count(hll_list), self._loop_manager,
+        )
+
+    def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_get_intersect_count(hll_list), self._loop_manager,
+        )
+
+    def hll_get_similarity(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.hll_get_similarity(hll_list), self._loop_manager,
         )
 
 

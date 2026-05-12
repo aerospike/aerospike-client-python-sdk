@@ -63,8 +63,10 @@ from aerospike_sdk.aio.operations.query import (
     _bitwise_not,
     _bitwise_or,
     _resize_flags_or_default,
+    _resolve_hll_flags,
 )
 from aerospike_sdk.ael.filter_gen import IndexContext
+from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.record_stream import SyncRecordStream
@@ -1351,9 +1353,12 @@ class SyncWriteBinBuilder(_SyncWriteVerbs):
 
     def hll_init(
         self,
-        index_bit_count: int,
-        min_hash_bit_count: int = -1,
-        flags: int = 0,
+        config: HllConfig,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
     ) -> SyncWriteSegmentBuilder:
         """Initialize an empty HyperLogLog sketch in this bin.
 
@@ -1362,24 +1367,34 @@ class SyncWriteBinBuilder(_SyncWriteVerbs):
         :meth:`SyncWriteSegmentBuilder.execute` instead of ``await``.
 
         Example::
-            session.upsert(key).bin("visitors").hll_init(12)
+
+            session.upsert(key).bin("visitors").hll_init(HllConfig.of(12))
 
         Args:
-            index_bit_count: Same as the async method.
-            min_hash_bit_count: Same as the async method.
-            flags: Same as the async method.
+            config: Same as the async method.
+            create_only: Same as the async method.
+            update_only: Same as the async method.
+            no_fail: Same as the async method.
+            allow_fold: Same as the async method.
 
         Returns:
             The parent :class:`SyncWriteSegmentBuilder` for chaining.
 
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
+
         See Also:
             :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_init`
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
         self._sync_segment.add_operation(
             HllOperation.init(
                 self._bin,
-                index_bit_count,
-                min_hash_bit_count,
+                config.index_bit_count,
+                config.min_hash_bit_count,
                 flags,
             ),
         )
@@ -1388,29 +1403,44 @@ class SyncWriteBinBuilder(_SyncWriteVerbs):
     def hll_add(
         self,
         values: Sequence[Any],
-        index_bit_count: int = -1,
-        min_hash_bit_count: int = -1,
-        flags: int = 0,
+        *,
+        config: Optional[HllConfig] = None,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
     ) -> SyncWriteSegmentBuilder:
         """Add distinct values to the HyperLogLog sketch in this bin.
 
         Semantics match :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_add`.
 
         Example::
+
             session.upsert(key).bin("visitors").hll_add(["user-1", "user-2"])
 
         Args:
             values: Same as the async method.
-            index_bit_count: Same as the async method.
-            min_hash_bit_count: Same as the async method.
-            flags: Same as the async method.
+            config: Same as the async method.
+            create_only: Same as the async method.
+            update_only: Same as the async method.
+            no_fail: Same as the async method.
+            allow_fold: Same as the async method.
 
         Returns:
             The parent :class:`SyncWriteSegmentBuilder` for chaining.
 
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
+
         See Also:
             :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_add`
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        index_bit_count = config.index_bit_count if config is not None else -1
+        min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
         self._sync_segment.add_operation(
             HllOperation.add(
                 self._bin,
@@ -1422,24 +1452,43 @@ class SyncWriteBinBuilder(_SyncWriteVerbs):
         )
         return self._sync_segment
 
-    def hll_set_union(self, hll_list: Sequence[Any], flags: int = 0) -> SyncWriteSegmentBuilder:
+    def hll_set_union(
+        self,
+        hll_list: Sequence[Any],
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> SyncWriteSegmentBuilder:
         """Merge other HyperLogLog sketches into this bin.
 
         Semantics match :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_set_union`.
 
         Example::
+
             session.update(key).bin("merged").hll_set_union([other_hll_blob])
 
         Args:
             hll_list: Same as the async method.
-            flags: Same as the async method.
+            create_only: Same as the async method.
+            update_only: Same as the async method.
+            no_fail: Same as the async method.
+            allow_fold: Same as the async method.
 
         Returns:
             The parent :class:`SyncWriteSegmentBuilder` for chaining.
 
+        Raises:
+            ValueError: If ``create_only`` and ``update_only`` are both true.
+
         See Also:
             :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_set_union`
         """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
         self._sync_segment.add_operation(
             HllOperation.set_union(self._bin, list(hll_list), flags),
         )

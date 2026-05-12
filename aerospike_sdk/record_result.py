@@ -24,6 +24,7 @@ from aerospike_async import Key, Record
 from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import _result_code_to_exception
+from aerospike_sdk.hll_config import HllConfig
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
     from aerospike_async import BatchRecord
@@ -130,6 +131,43 @@ class RecordResult:
         if self.record is None:
             raise ValueError("Record is None despite ResultCode.OK")
         return self.record
+
+    def get_hll_config(self, bin_name: str) -> HllConfig | None:
+        """Return the HLL bin's :class:`~aerospike_sdk.HllConfig` from a ``hll_describe()`` result.
+
+        Wraps the two-element ``[index_bit_count, min_hash_bit_count]`` list
+        that ``hll_describe()`` writes back into the bin and returns it as an
+        :class:`HllConfig`. Returns ``None`` if the bin is absent from the
+        record (or the record itself is ``None``).
+
+        Args:
+            bin_name: Name of the bin holding a ``hll_describe()`` result.
+
+        Returns:
+            An :class:`HllConfig`, or ``None`` if the bin is absent.
+
+        Raises:
+            TypeError: If the bin value is not a 2-element list of ints.
+
+        Example::
+
+            result = await (
+                session.update(key).bin("h").hll_describe().execute()
+            ).first_or_raise()
+            cfg = result.get_hll_config("h")
+            assert cfg.index_bit_count == 14
+        """
+        if self.record is None:
+            return None
+        value = self.record.bins.get(bin_name)
+        if value is None:
+            return None
+        if not isinstance(value, list) or len(value) != 2:
+            raise TypeError(
+                f"Bin {bin_name!r} is not a 2-element list "
+                f"(got {type(value).__name__})",
+            )
+        return HllConfig(int(value[0]), int(value[1]))
 
     def as_bool(self) -> bool:
         """Interpret the row as an existence check (for example after :meth:`Session.exists`).

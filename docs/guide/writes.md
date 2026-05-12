@@ -73,6 +73,57 @@ await (
 AeroCircle and Polygon values use the same method — only the GeoJSON string
 differs.
 
+## HyperLogLog Bins
+
+[`HllConfig`](../api/hll-config.md) describes a sketch's precision
+(`index_bit_count` + optional `min_hash_bit_count`). Initialize a new sketch
+with `hll_init(...)`, then accumulate elements with `hll_add(...)`:
+
+```python
+from aerospike_sdk import HllConfig
+
+visitors = DataSet.of("test", "visitors")
+
+await (
+    session.upsert(visitors.id("day_1"))
+    .bin("h").hll_init(HllConfig.of(14))
+    .bin("h").hll_add(["user-1", "user-2", "user-3"])
+    .execute()
+)
+```
+
+Each write method (`hll_init`, `hll_add`, `hll_set_union`) accepts four
+keyword-only flags:
+
+| Flag | Effect |
+|---|---|
+| `create_only` | Fail with `BIN_EXISTS_ERROR` if the bin already exists. Mutually exclusive with `update_only`. |
+| `update_only` | Fail with `BIN_NOT_FOUND` if the bin does not already exist. Mutually exclusive with `create_only`. |
+| `no_fail` | Suppress the mode-constraint error from `create_only` / `update_only` and silently no-op instead of raising. Has no effect on other server-side errors. |
+| `allow_fold` | (`hll_set_union` only) Allow union sources at differing precisions — the server folds higher-precision inputs down to the target's `index_bit_count`. Rejected with `PARAMETER_ERROR` on `hll_init`. |
+
+Passing both `create_only=True` and `update_only=True` raises `ValueError`
+immediately at the call site (before the wire request).
+
+```python
+# Create the sketch only if it doesn't exist; don't error if it does.
+await (
+    session.upsert(visitors.id("day_2"))
+    .bin("h").hll_init(HllConfig.of(14), create_only=True, no_fail=True)
+    .execute()
+)
+```
+
+To inspect a sketch's bit widths, call `hll_describe()` and decode the
+two-element list result via `RecordResult.get_hll_config(bin_name)`:
+
+```python
+rs = await session.query(visitors.id("day_1")).bin("h").hll_describe().execute()
+result = await rs.first_or_raise()
+config = result.get_hll_config("h")
+# config == HllConfig.of(14)
+```
+
 ## Insert (Fail if Exists)
 
 ```python

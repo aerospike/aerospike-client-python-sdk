@@ -62,6 +62,7 @@ class InferredType(Enum):
     LIST = auto()
     MAP = auto()
     GEO = auto()
+    HLL = auto()
     UNKNOWN = auto()
 
 
@@ -74,6 +75,7 @@ _INFERRED_TO_EXP_TYPE: dict[InferredType, ExpType] = {
     InferredType.MAP: ExpType.MAP,
     InferredType.BLOB: ExpType.BLOB,
     InferredType.GEO: ExpType.GEO,
+    InferredType.HLL: ExpType.HLL,
 }
 
 
@@ -111,6 +113,8 @@ class DeferredBin:
             return FilterExpression.map_bin(self.name)
         elif type_to_use == InferredType.GEO:
             return FilterExpression.geo_bin(self.name)
+        elif type_to_use == InferredType.HLL:
+            return FilterExpression.hll_bin(self.name)
         else:
             return FilterExpression.int_bin(self.name)
 
@@ -1317,6 +1321,81 @@ def _resolve_for_in_value(value: ExprOrDeferred, list_expr: ExprOrDeferred) -> F
     return _resolve_deferred(value, InferredType.STRING)
 
 
+def _resolve_for_hll(expr: ExprOrDeferred) -> FilterExpression:
+    """Resolve a bare path / typed expression as an HLL-typed FilterExpression.
+
+    Used as the receiver of an HLL path function (the ``$.h`` in
+    ``$.h.hllCount()``). Bare bin references are wrapped as ``hll_bin(name)``;
+    already-resolved expressions are passed through unchanged.
+    """
+    if isinstance(expr, DeferredBin):
+        return FilterExpression.hll_bin(expr.name)
+    if isinstance(expr, TypedExpr):
+        return expr.expr
+    if isinstance(expr, FilterExpression):
+        return expr
+    resolved = _finalize_result(expr, InferredType.HLL)
+    if resolved is None:
+        raise AelParseException("Failed to resolve HLL receiver expression")
+    return resolved
+
+
+def _resolve_for_list(expr: ExprOrDeferred) -> FilterExpression:
+    """Resolve any expression as a LIST-typed FilterExpression.
+
+    Used for AEL arguments that must be a list — e.g. the values argument to
+    ``hllMayContain([...])``. List literals come through as ``TypedExpr`` with
+    ``InferredType.LIST``; bin references are resolved via ``list_bin``.
+    """
+    if isinstance(expr, DeferredBin):
+        return FilterExpression.list_bin(expr.name)
+    if isinstance(expr, TypedExpr):
+        return expr.expr
+    if isinstance(expr, FilterExpression):
+        return expr
+    resolved = _finalize_result(expr, InferredType.LIST)
+    if resolved is None:
+        raise AelParseException("Failed to resolve list expression")
+    return resolved
+
+
+def _resolve_for_hll_list(expr: ExprOrDeferred) -> FilterExpression:
+    """Resolve the ``hlls`` argument of a multi-HLL AEL function.
+
+    Acceptable shapes:
+
+    - **Single HLL bin reference** — ``$.a``: passed through as
+      ``hll_bin('a')``. The server's HLL ops treat a bare HLL value as an
+      implicit single-element list (matches the JSDK Javadoc example
+      ``HLLExp.getUnion(Exp.hllBin("a"), Exp.hllBin("b"))``).
+    - **Literal byte-blob list** — ``[?0, ?1]`` or an inline list of bytes,
+      packed by :meth:`visitListConstant` into ``list_val(...)``.
+    - **Placeholder** bound to a Python list of bytes (``?0``).
+
+    Not supported: ``[$.a, $.b]`` (list of bin references). The Aerospike
+    server expression VM does not recursively dereference scalar bin
+    expressions inside a composed list when that list is fed to an HLL op.
+    Both JSDK and the legacy Java client work around this the same way —
+    they pre-fetch HLL blobs via a separate read and pass them as a
+    literal value-list. (Confirmed May 2026.)
+    """
+    if isinstance(expr, TypedExpr):
+        if expr.type_hint in (InferredType.LIST, InferredType.UNKNOWN):
+            return expr.expr
+        raise AelParseException(
+            f"HLL multi-sketch argument must resolve to a list expression "
+            f"or a single HLL bin reference; got {expr.type_hint.name}",
+        )
+    if isinstance(expr, DeferredBin):
+        return FilterExpression.hll_bin(expr.name)
+    if isinstance(expr, FilterExpression):
+        return expr
+    resolved = _finalize_result(expr, InferredType.LIST)
+    if resolved is None:
+        raise AelParseException("Failed to resolve HLL list expression")
+    return resolved
+
+
 def _resolve_for_in_list(expr: ExprOrDeferred) -> FilterExpression:
     """Resolve the right operand of an IN expression (must be a list)."""
     if expr is None:
@@ -1789,7 +1868,50 @@ class ExpressionConditionVisitor(ConditionVisitor):
                 count_expr = self._build_count(base_path)
                 if count_expr is not None:
                     return TypedExpr(count_expr, InferredType.INT)
-        
+
+            # Check for HLL read-side path functions.
+            if hasattr(path_func_ctx, 'pathFunctionHllCount') and path_func_ctx.pathFunctionHllCount() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                return TypedExpr(FilterExpression.hll_get_count(bin_expr), InferredType.INT)
+            if hasattr(path_func_ctx, 'pathFunctionHllDescribe') and path_func_ctx.pathFunctionHllDescribe() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                return TypedExpr(FilterExpression.hll_describe(bin_expr), InferredType.LIST)
+            if hasattr(path_func_ctx, 'pathFunctionHllMayContain') and path_func_ctx.pathFunctionHllMayContain() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                values_arg = self.visit(path_func_ctx.pathFunctionHllMayContain().expression())
+                values_expr = _resolve_for_list(values_arg)
+                return TypedExpr(
+                    FilterExpression.hll_may_contain(values_expr, bin_expr), InferredType.INT,
+                )
+            if hasattr(path_func_ctx, 'pathFunctionHllUnion') and path_func_ctx.pathFunctionHllUnion() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                hlls_arg = self.visit(path_func_ctx.pathFunctionHllUnion().expression())
+                hlls_expr = _resolve_for_hll_list(hlls_arg)
+                return TypedExpr(
+                    FilterExpression.hll_get_union(hlls_expr, bin_expr), InferredType.UNKNOWN,
+                )
+            if hasattr(path_func_ctx, 'pathFunctionHllUnionCount') and path_func_ctx.pathFunctionHllUnionCount() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                hlls_arg = self.visit(path_func_ctx.pathFunctionHllUnionCount().expression())
+                hlls_expr = _resolve_for_hll_list(hlls_arg)
+                return TypedExpr(
+                    FilterExpression.hll_get_union_count(hlls_expr, bin_expr), InferredType.INT,
+                )
+            if hasattr(path_func_ctx, 'pathFunctionHllIntersectCount') and path_func_ctx.pathFunctionHllIntersectCount() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                hlls_arg = self.visit(path_func_ctx.pathFunctionHllIntersectCount().expression())
+                hlls_expr = _resolve_for_hll_list(hlls_arg)
+                return TypedExpr(
+                    FilterExpression.hll_get_intersect_count(hlls_expr, bin_expr), InferredType.INT,
+                )
+            if hasattr(path_func_ctx, 'pathFunctionHllSimilarity') and path_func_ctx.pathFunctionHllSimilarity() is not None:
+                bin_expr = _resolve_for_hll(base_path)
+                hlls_arg = self.visit(path_func_ctx.pathFunctionHllSimilarity().expression())
+                hlls_expr = _resolve_for_hll_list(hlls_arg)
+                return TypedExpr(
+                    FilterExpression.hll_get_similarity(hlls_expr, bin_expr), InferredType.FLOAT,
+                )
+
         return base_path
     
     @staticmethod
@@ -1995,6 +2117,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
                                     "LIST": InferredType.LIST,
                                     "MAP": InferredType.MAP,
                                     "GEO": InferredType.GEO,
+                                    "HLL": InferredType.HLL,
                                 }
                                 if param_value in type_map:
                                     deferred.explicit_type = type_map[param_value]
