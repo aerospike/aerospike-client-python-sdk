@@ -68,7 +68,7 @@ _MAP_BIN = "tqomapbin"
 _SIZE = 20
 
 
-async def _seed_qopproj_dataset(c, wait_for_index):
+async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
     """Seed the 20-record dataset and SI used by both ``client`` fixtures."""
     session = c.create_session()
     ds = DataSet.of(_NS, _SET)
@@ -88,6 +88,11 @@ async def _seed_qopproj_dataset(c, wait_for_index):
             _MAP_BIN: {"a": i, "b": i * 10},
         }).execute()
 
+    # Wait for all writes to be visible to a set scan before creating the SI
+    # — otherwise a still-populating SI can be flagged "readable" before all
+    # records have indexed entries, causing range queries to return short.
+    await wait_for_set_visible(session, _NS, _SET, _SIZE)
+
     try:
         await c.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
     except Exception:
@@ -103,7 +108,7 @@ async def _drop_qopproj_index(c):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy, wait_for_index):
+async def client(aerospike_host, client_policy, wait_for_index, wait_for_set_visible):
     """SDK client + 20-record dataset on the broad-surface seed.
 
     Tests that exercise server-8.1.2-only ops projection should consume
@@ -111,20 +116,22 @@ async def client(aerospike_host, client_policy, wait_for_index):
     one is available and skip cleanly otherwise.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        await _seed_qopproj_dataset(c, wait_for_index)
+        await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
 
 
 @pytest.fixture
-async def client_812(aerospike_host_812_required, client_policy, wait_for_index):
+async def client_812(
+    aerospike_host_812_required, client_policy, wait_for_index, wait_for_set_visible,
+):
     """SDK client + 20-record dataset on the 8.1.2+ seed (function-scoped: pairs with skip fixture).
 
     The dependent ``aerospike_host_812_required`` fixture skips the dependent test
     cleanly when ``AEROSPIKE_HOST_8_1_2`` is unset.
     """
     async with Client(seeds=aerospike_host_812_required, policy=client_policy) as c:
-        await _seed_qopproj_dataset(c, wait_for_index)
+        await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
 
