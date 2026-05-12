@@ -36,6 +36,7 @@ from aerospike_async import (
     ExpReadFlags,
     ExpWriteFlags,
     FilterExpression,
+    GeoJSON,
     Key,
     Operation,
     Txn,
@@ -79,17 +80,34 @@ class BatchBinBuilder:
     def set_to(self, value: Any) -> BatchKeyOperationBuilder:
         """
         Set a bin value.
-        
+
         Args:
             value: The value to set.
-        
+
         Returns:
             The parent BatchKeyOperationBuilder for chaining.
         """
         self._key_op._bins[self._bin_name] = value
         self._key_op._operations.append(Operation.put(self._bin_name, value))
         return self._key_op
-    
+
+    def set_to_geo_json(self, geo_json: str) -> BatchKeyOperationBuilder:
+        """Set the bin to a GeoJSON value from its string form.
+
+        The bin's server-side particle type is GEOJSON, not STRING. Equivalent
+        to ``set_to(GeoJSON(geo_json))`` but reads naturally for spatial data.
+
+        Args:
+            geo_json: A GeoJSON string (e.g. a Point, Polygon, or AeroCircle).
+
+        Returns:
+            The parent :class:`BatchKeyOperationBuilder`.
+        """
+        value = GeoJSON(geo_json)
+        self._key_op._bins[self._bin_name] = value
+        self._key_op._operations.append(Operation.put(self._bin_name, value))
+        return self._key_op
+
     def add(self, value: int) -> BatchKeyOperationBuilder:
         """Add *value* to the bin (numeric increment)."""
         self._key_op._operations.append(Operation.add(self._bin_name, value))

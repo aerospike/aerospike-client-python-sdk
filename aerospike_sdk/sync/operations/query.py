@@ -26,6 +26,7 @@ from aerospike_async import (
     ExecuteTask,
     Filter,
     FilterExpression,
+    GeoJSON,
     HllOperation,
     Key,
     ListOperation,
@@ -768,6 +769,20 @@ class SyncWriteBinBuilder(_SyncWriteVerbs):
             The parent :class:`SyncWriteSegmentBuilder`.
         """
         return self._sync_segment.set_to(self._bin, value)
+
+    def set_to_geo_json(self, geo_json: str) -> SyncWriteSegmentBuilder:
+        """Set the bin to a GeoJSON value from its string form.
+
+        The bin's server-side particle type is GEOJSON, not STRING. Equivalent
+        to ``set_to(GeoJSON(geo_json))`` but reads naturally for spatial data.
+
+        Args:
+            geo_json: A GeoJSON string (e.g. a Point, Polygon, or AeroCircle).
+
+        Returns:
+            The parent :class:`SyncWriteSegmentBuilder`.
+        """
+        return self._sync_segment.set_to(self._bin, GeoJSON(geo_json))
 
     def add(self, value: Any) -> SyncWriteSegmentBuilder:
         """Add a numeric *value* to the bin.

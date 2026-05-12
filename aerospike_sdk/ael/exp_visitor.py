@@ -61,6 +61,7 @@ class InferredType(Enum):
     BLOB = auto()
     LIST = auto()
     MAP = auto()
+    GEO = auto()
     UNKNOWN = auto()
 
 
@@ -72,6 +73,7 @@ _INFERRED_TO_EXP_TYPE: dict[InferredType, ExpType] = {
     InferredType.LIST: ExpType.LIST,
     InferredType.MAP: ExpType.MAP,
     InferredType.BLOB: ExpType.BLOB,
+    InferredType.GEO: ExpType.GEO,
 }
 
 
@@ -107,6 +109,8 @@ class DeferredBin:
             return FilterExpression.list_bin(self.name)
         elif type_to_use == InferredType.MAP:
             return FilterExpression.map_bin(self.name)
+        elif type_to_use == InferredType.GEO:
+            return FilterExpression.geo_bin(self.name)
         else:
             return FilterExpression.int_bin(self.name)
 
@@ -1990,6 +1994,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
                                     "BLOB": InferredType.BLOB,
                                     "LIST": InferredType.LIST,
                                     "MAP": InferredType.MAP,
+                                    "GEO": InferredType.GEO,
                                 }
                                 if param_value in type_map:
                                     deferred.explicit_type = type_map[param_value]
@@ -3023,6 +3028,26 @@ class ExpressionConditionVisitor(ConditionVisitor):
                     _resolve_for_arithmetic(args[0], has_float=False),
                     _resolve_for_arithmetic(args[1], has_float=False),
                 ), InferredType.INT)
+            case "geoJson":
+                _validate_arg_count(name, args, 1)
+                arg = args[0]
+                if not (isinstance(arg, TypedExpr) and arg.type_hint == InferredType.STRING
+                        and isinstance(arg.value, str)):
+                    raise AelParseException(
+                        "geoJson() requires a single string literal argument",
+                    )
+                return TypedExpr(FilterExpression.geo_val(arg.value), InferredType.GEO)
+            case "geoCompare":
+                _validate_arg_count(name, args, 2)
+                left = _finalize_result(args[0], InferredType.GEO)
+                right = _finalize_result(args[1], InferredType.GEO)
+                if left is None or right is None:
+                    raise AelParseException(
+                        "geoCompare() requires two GEO-typed arguments",
+                    )
+                return TypedExpr(
+                    FilterExpression.geo_compare(left, right), InferredType.BOOL,
+                )
             case _:
                 raise AelParseException(f"Unknown function: {name}")
 

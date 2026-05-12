@@ -36,6 +36,16 @@ await (
     .collection(CollectionIndexType.LIST)
     .create()
 )
+
+# GEO2DSPHERE index (for GeoJSON bins)
+places = DataSet.of("test", "places")
+await (
+    session.index(places)
+    .on_bin("loc")
+    .named("places_loc_idx")
+    .geo2dsphere()
+    .create()
+)
 ```
 
 ## Dropping Indexes

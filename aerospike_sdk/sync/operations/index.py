@@ -97,6 +97,11 @@ class SyncIndexBuilder:
         self._index_type = IndexType.STRING
         return self
 
+    def geo2dsphere(self) -> SyncIndexBuilder:
+        """Set the secondary index type to GEO2DSPHERE (for GeoJSON bin values)."""
+        self._index_type = IndexType.GEO2D_SPHERE
+        return self
+
     def collection(
         self, collection_index_type: CollectionIndexType
     ) -> SyncIndexBuilder:

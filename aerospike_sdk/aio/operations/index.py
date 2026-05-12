@@ -122,6 +122,18 @@ class IndexBuilder:
         self._index_type = IndexType.STRING
         return self
 
+    def geo2dsphere(self) -> IndexBuilder:
+        """Set the secondary index type to GEO2DSPHERE (for GeoJSON bin values).
+
+        Call this before :meth:`create` to index a bin containing GeoJSON Points,
+        Polygons, or AeroCircles for spatial query via ``geoCompare(...)``.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        self._index_type = IndexType.GEO2D_SPHERE
+        return self
+
     def collection(
         self, collection_index_type: CollectionIndexType
     ) -> IndexBuilder:

@@ -145,6 +145,22 @@ $.scores.count() > 5
 $.tags.count() == 0
 ```
 
+### GeoJSON
+
+Compare a GeoJSON bin to a literal value with `geoCompare(a, b)`. Either side
+can be a bin path or a `geoJson('...')` literal — pick whichever reads more
+naturally. The match semantics are server-side GEO2DSPHERE: a Point matches
+any AeroCircle or Polygon containing it, and vice versa.
+
+```
+geoCompare($.loc, geoJson('{"type":"Point","coordinates":[-122.349,47.620]}'))
+geoCompare(geoJson('{"type":"AeroCircle","coordinates":[[-122.0,37.4],3000.0]}'), $.loc)
+```
+
+Bins typed as `GEO` are recognized automatically when referenced inside
+`geoCompare(...)`; an explicit cast like `$.loc.get(type: GEO)` is accepted
+but not required.
+
 ### Hex and Binary Literals
 
 ```

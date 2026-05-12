@@ -50,6 +50,11 @@ class SyncBatchBinBuilder:
     def set_to(self, value: Any) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(self._inner.set_to(value), self._loop_manager)
 
+    def set_to_geo_json(self, geo_json: str) -> SyncBatchKeyOperationBuilder:
+        return SyncBatchKeyOperationBuilder(
+            self._inner.set_to_geo_json(geo_json), self._loop_manager,
+        )
+
     def add(self, value: int) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(self._inner.add(value), self._loop_manager)
 

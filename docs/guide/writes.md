@@ -54,6 +54,25 @@ await (
 )
 ```
 
+## GeoJSON Bins
+
+Use `set_to_geo_json(...)` to write a bin as a GeoJSON value. The bin's
+server-side particle type is GEOJSON, not STRING, which makes it eligible for
+GEO2DSPHERE indexing and `geoCompare(...)` queries.
+
+```python
+places = DataSet.of("test", "places")
+
+await (
+    session.upsert(places.id("space_needle"))
+    .bin("loc").set_to_geo_json('{"type":"Point","coordinates":[-122.349,47.620]}')
+    .execute()
+)
+```
+
+AeroCircle and Polygon values use the same method — only the GeoJSON string
+differs.
+
 ## Insert (Fail if Exists)
 
 ```python
