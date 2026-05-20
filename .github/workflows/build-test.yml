@@ -27,17 +27,21 @@ jobs:
       # `pip install .` for the SDK finds the dependency already satisfied
       # and doesn't go to PyPI. Switch back to a plain PyPI install once
       # the matching PAC release lands on PyPI.
+      - name: Read PAC ref from pyproject.toml
+        run: |
+          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
+          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
         uses: actions/checkout@v4
         with:
           repository: aerospike/aerospike-client-python-async
-          ref: v0.4.0-alpha.2-rc1
+          ref: ${{ env.PAC_REF }}
           path: aerospike-client-python-async
 
       - name: Setup Rust toolchain (for PAC build)
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.90.0
+          toolchain: 1.93.0
           components: rustfmt, clippy
 
       - name: Setup Python ${{ matrix.python }}
@@ -82,17 +86,21 @@ jobs:
       # `pip install .` for the SDK finds the dependency already satisfied
       # and doesn't go to PyPI. Switch back to a plain PyPI install once
       # the matching PAC release lands on PyPI.
+      - name: Read PAC ref from pyproject.toml
+        run: |
+          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
+          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
         uses: actions/checkout@v4
         with:
           repository: aerospike/aerospike-client-python-async
-          ref: v0.4.0-alpha.2-rc1
+          ref: ${{ env.PAC_REF }}
           path: aerospike-client-python-async
 
       - name: Setup Rust toolchain (for PAC build)
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.90.0
+          toolchain: 1.93.0
           components: rustfmt, clippy
 
       - name: Setup Python ${{ matrix.python }}
@@ -158,5 +166,136 @@ jobs:
             echo "=== Aerospike Server Log (last 100 lines) ==="
             docker logs --tail 100 aerospike-server
             echo "=== End of Server Log ==="
+            exit 1
+          fi
+
+  # Free-threaded (PEP 703) Python builds.  Catches no-GIL regressions that
+  # would otherwise land silently: anything that relies on the GIL for
+  # de-facto serialization (module-level singletons, dict mutation races,
+  # cross-loop asyncio primitives) fails here before it reaches users.
+  unit-freethreaded:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.13t', '3.14t']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read PAC ref from pyproject.toml
+        run: |
+          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
+          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
+      - name: Checkout PAC source (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: aerospike/aerospike-client-python-async
+          ref: ${{ env.PAC_REF }}
+          path: aerospike-client-python-async
+      - name: Setup Rust toolchain (for PAC build)
+        # `actions-rs/toolchain` is archived; use the maintained replacement
+        # for new jobs.  Existing jobs in this file still use the old action
+        # and should be migrated in a separate cleanup pass.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.0
+          components: rustfmt, clippy
+      - name: Setup free-threaded Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build & install PAC from source
+        working-directory: aerospike-client-python-async
+        run: |
+          pip install maturin
+          maturin build --release --out dist
+          pip install dist/aerospike_async-*.whl
+      - name: Install SDK and dev dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install . --no-deps
+      - name: Generate ANTLR parser
+        run: make generate-ael
+      - name: Verify GIL stays disabled after import
+        run: |
+          python -c "import sys; before = sys._is_gil_enabled(); import aerospike_sdk; after = sys._is_gil_enabled(); print(f'GIL before={before} after={after}'); assert before is False and after is False, 'gil_used = false flag is not being honored'"
+      - name: Run unit tests
+        run: python -m pytest tests/unit -v
+
+  integration-freethreaded:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.13t', '3.14t']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read PAC ref from pyproject.toml
+        run: |
+          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
+          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
+      - name: Checkout PAC source (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: aerospike/aerospike-client-python-async
+          ref: ${{ env.PAC_REF }}
+          path: aerospike-client-python-async
+      - name: Setup Rust toolchain (for PAC build)
+        # `actions-rs/toolchain` is archived; use the maintained replacement
+        # for new jobs.  Existing jobs in this file still use the old action
+        # and should be migrated in a separate cleanup pass.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.0
+          components: rustfmt, clippy
+      - name: Setup free-threaded Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Start Aerospike server
+        run: |
+          docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
+          for i in {1..10}; do
+            if docker exec aerospike-server asinfo -v "statistics" > /dev/null 2>&1; then
+              echo "Aerospike server is ready after $i seconds"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "Aerospike server failed to start after 10 seconds"
+              docker logs aerospike-server
+              exit 1
+            fi
+            echo "Waiting for Aerospike server... ($i/10)"
+            sleep 1
+          done
+          echo "Configuring namespace for TTL support..."
+          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
+          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
+          echo "=== Server Build ==="
+          docker exec aerospike-server asinfo -v "build"
+      - name: Build & install PAC from source
+        working-directory: aerospike-client-python-async
+        run: |
+          pip install maturin
+          maturin build --release --out dist
+          pip install dist/aerospike_async-*.whl
+      - name: Install SDK and dev dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install . --no-deps
+      - name: Generate ANTLR parser
+        run: make generate-ael
+      - name: Verify GIL stays disabled after import
+        run: |
+          python -c "import sys; before = sys._is_gil_enabled(); import aerospike_sdk; after = sys._is_gil_enabled(); print(f'GIL before={before} after={after}'); assert before is False and after is False, 'gil_used = false flag is not being honored'"
+      - name: Run integration tests (smoke)
+        env:
+          AEROSPIKE_HOST: localhost:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+        run: |
+          rm -f aerospike.env
+          python -m pytest tests/integration -v || TEST_FAILED=true
+          if [ "$TEST_FAILED" = "true" ]; then
+            echo "=== Aerospike Server Log (last 100 lines) ==="
+            docker logs --tail 100 aerospike-server
             exit 1
           fi

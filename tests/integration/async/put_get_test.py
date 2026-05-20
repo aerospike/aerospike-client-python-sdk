@@ -265,10 +265,14 @@ async def test_operate_put_and_get(client):
 
     await session.upsert(k).put({"bin1": 7, "bin2": "string value"}).execute()
 
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         Operation.put("bin2", "new string"),
         Operation.get(),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -300,10 +304,14 @@ async def test_operate_list_append(client):
     await session.upsert(k).put({"listbin": [1, 2, 3]}).execute()
 
     list_policy = ListPolicy(ListOrderType.ORDERED, None)
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         ListOperation.append("listbin", 4, list_policy),
         ListOperation.size("listbin"),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -322,10 +330,14 @@ async def test_operate_map_put_and_get(client):
     await session.upsert(k).put({"mapbin": {"key1": "value1"}}).execute()
 
     map_policy = MapPolicy(None, None)
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         MapOperation.put("mapbin", "key2", "value2", map_policy),
         MapOperation.get_by_key("mapbin", "key2", MapReturnType.VALUE),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -343,10 +355,14 @@ async def test_operate_map_clear(client):
 
     await session.upsert(k).put({"mapbin": {"key1": "value1", "key2": "value2"}}).execute()
 
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         MapOperation.clear("mapbin"),
         MapOperation.size("mapbin"),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None

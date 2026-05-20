@@ -67,7 +67,7 @@ async def test_delete_auto_adds_delete_op():
     s.client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.DELETE).execute()
-    _wp, _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s.client._client.query_operate.call_args[0]
     assert len(ops) == 1
     assert ops[0] is not None
 
@@ -77,7 +77,7 @@ async def test_touch_auto_adds_touch_op():
     s.client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.TOUCH).execute()
-    _wp, _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s.client._client.query_operate.call_args[0]
     assert len(ops) == 1
 
 
@@ -137,7 +137,7 @@ async def test_delete_execute_passes_statement_index_filters():
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
     b.index_filters(Filter.range("n", 1, 3))
     await b.execute()
-    _wp, stmt, ops = s.client._client.query_operate.call_args[0]
+    stmt, ops = s.client._client.query_operate.call_args[0]
     assert stmt.filters is not None
     assert len(ops) == 1
 

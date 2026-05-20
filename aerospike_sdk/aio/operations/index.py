@@ -29,30 +29,11 @@ from aerospike_async import (
 from aerospike_sdk.exceptions import _convert_pac_exception
 
 
-class IndexBuilder:
-    """Configure a secondary index, then :meth:`create` or :meth:`drop` it.
+class _IndexBuilderBase:
+    """State + chaining shared by async and sync IndexBuilder.
 
-    Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
-    :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
-    :meth:`context` → ``await`` :meth:`create`.
-
-    For removal, only :meth:`named` (and namespace/set from construction) is
-    required before ``await`` :meth:`drop`.
-
-    Example::
-
-            await (
-                client.index(namespace="test", set_name="users")
-                .on_bin("email")
-                .named("email_idx")
-                .string()
-                .create()
-            )
-
-    See Also:
-        :meth:`~aerospike_sdk.aio.client.Client.index`
+    Methods migrate from :class:`IndexBuilder` during Phase 4 collapse.
     """
-
     def __init__(
         self,
         client: Client,
@@ -178,6 +159,40 @@ class IndexBuilder:
         """
         self._ctx = ctx
         return self
+
+
+
+class IndexBuilder(_IndexBuilderBase):
+    """Configure a secondary index, then :meth:`create` or :meth:`drop` it.
+
+    Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
+    :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
+    :meth:`context` → ``await`` :meth:`create`.
+
+    For removal, only :meth:`named` (and namespace/set from construction) is
+    required before ``await`` :meth:`drop`.
+
+    Example::
+
+            await (
+                client.index(namespace="test", set_name="users")
+                .on_bin("email")
+                .named("email_idx")
+                .string()
+                .create()
+            )
+
+    See Also:
+        :meth:`~aerospike_sdk.aio.client.Client.index`
+    """
+
+
+
+
+
+
+
+
 
     async def create(self) -> None:
         """Create the index on the cluster.

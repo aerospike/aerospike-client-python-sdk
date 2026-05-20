@@ -66,9 +66,95 @@ async def main():
 asyncio.run(main())
 ```
 
+### Sync
+
+The same surface is available without asyncio via `SyncClient`. No `async`/`await`,
+no event loop — useful for sync codebases or when a dependency forbids asyncio.
+
+```python
+from aerospike_sdk import Behavior, DataSet, SyncClient
+
+
+def main():
+    with SyncClient("localhost:3000") as client:
+        session = client.create_session(Behavior.DEFAULT)
+        users = DataSet.of("test", "users")
+
+        # High-level key-value writes
+        session.upsert(users.id(1)).put({"name": "Alice", "age": 28, "country": "UK"}).execute()
+        session.upsert(users.id(2)).put({"name": "Bob", "age": 35, "country": "US"}).execute()
+
+        # Filtered query with AEL — same builder API as async
+        results = (
+            session.query(users)
+            .where("$.age > %s and $.country == '%s'", 25, "US")
+            .execute()
+        )
+        for row in results:
+            if row.is_ok and row.record is not None:
+                print(row.record.bins)
+
+
+main()
+```
+
+`SyncClient` is a thin façade over the PAC `_blocking` surface — there is no per-call
+event loop and no per-thread loop runner. Sessions, behaviors, builders, and AEL
+filters are identical to the async path.
+
 See the [Quick Start guide](https://aerospike.com/docs/develop/client/sdk/) for
 a deeper walkthrough; the [API reference](https://aerospike-python-sdk.readthedocs.io/)
 covers every public class and method in detail.
+
+## Performance modes
+
+PSDK offers two API shapes — pick based on what your code needs.
+
+| API | Use when | Trade-off |
+|---|---|---|
+| **Chained builder** (`session.query(k).execute()`, `session.upsert(k).put(...).execute()`) | You need filters (`where(...)`), batch ops, error handlers, secondary-index queries, TTL overrides, generation checks, etc. Same shape as the Aerospike Java SDK. | Builder + stream wrapping costs ~80 µs/op of Python overhead. |
+| **Fast-path** (`session.get(key)`, `session.put(key, bins)`) | Single-key reads/writes where you want the lowest per-op overhead. | Single-key only; no filters, no error-handler callbacks, no batch semantics. Errors raise directly. |
+
+Both shapes work in sync and async modes. Use whichever fits each call site — they share the same `Session` and `Behavior`.
+
+### Free-threaded Python
+
+For high-throughput multi-threaded workloads, run PSDK on the free-threaded build with the GIL disabled:
+
+```bash
+# uv example — install once, then always launch with PYTHON_GIL=0
+uv python install 3.14.5+freethreaded
+PYTHON_GIL=0 python my_app.py
+```
+
+Verify with `sys._is_gil_enabled() == False` after imports — if any non-FT-safe C extension is imported, the interpreter silently re-enables the GIL and your multi-threaded perf collapses 4-6×.
+
+`AsyncPool` (multi-loop async) is a free-threading feature — **don't use it on regular Python**, it's slower than a single-client setup there. Each pool spawns N event loops on N OS threads, each with its own `Client`; coroutines submitted via `pool.run(...)` round-robin across loops:
+
+```python
+from aerospike_sdk import AsyncPool, Behavior, Client, DataSet
+
+
+async def main():
+    pool = AsyncPool(
+        client_factory=lambda: Client("localhost:3000"),
+        loop_count=4,
+    )
+    async with pool:
+        users = DataSet.of("test", "users")
+
+        # Submit a coroutine — picks an idle loop round-robin
+        await pool.run(
+            lambda client: client.create_session(Behavior.DEFAULT)
+                                 .upsert(users.id(1))
+                                 .put({"name": "Alice"})
+                                 .execute()
+        )
+```
+
+Tune `loop_count` based on your workload — `os.cpu_count()` is the default. Cluster-wide index metadata is shared via a single `IndexesMonitor` across the pool, so `sindex-list` load doesn't scale with `loop_count`.
+
+For the full decision guide, the trade-offs, and measured TPS/latency across all modes, see [`docs/guide/performance.md`](docs/guide/performance.md). For the raw bench data and methodology, see [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md).
 
 ## Documentation
 
@@ -207,22 +293,46 @@ bin/get-version    # prints 0.9.0-alpha.2
 
 PSDK depends on a published release of the
 [Aerospike Python Async Client](https://github.com/aerospike/aerospike-client-python-async)
-on PyPI as `aerospike-async`. The pin lives in `pyproject.toml` under
+on PyPI as `aerospike-async`. On `dev` and downstream release branches the pin
+**must** be a published PyPI version. The pin lives in `pyproject.toml` under
 `[project] dependencies`:
 
 ```toml
-"aerospike-async==0.4.0a1",
+[project]
+dependencies = [
+    "aerospike-async==0.5.0a1",
+    # ...other deps
+]
 ```
 
 To bump: change the version to the new release on PyPI, then reinstall:
 
 ```bash
-pip install --upgrade "aerospike-async==0.4.0aN"
+pip install --upgrade "aerospike-async==0.5.0aN"
 ```
 
 Open the PR against `dev`. PSDK's own `VERSION` does not need to change for a
 PAC pin bump unless the underlying API contract has shifted enough to warrant
 it.
+
+#### Mid-cycle: pinning a tagged but unpublished PAC
+
+During a breaking-change cycle, the new PAC may be git-tagged on GitHub before
+its PyPI wheel is published. Feature branches (not `dev`) may temporarily pin
+to the git ref to validate against the new PAC before publish:
+
+```toml
+[project]
+dependencies = [
+    #"aerospike-async==0.5.0a1",   # ← restore this form before merging to dev
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.5.0-alpha.1",
+    # ...other deps
+]
+```
+
+Use git refs only on feature branches; switch back to the `==X.Y.ZaN` form
+before opening a PR against `dev`. CI reads the PAC ref out of `pyproject.toml`
+at job start, so both forms work transparently for the build matrix.
 
 ### Reading the version programmatically
 

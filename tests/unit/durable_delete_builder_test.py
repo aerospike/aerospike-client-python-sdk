@@ -263,15 +263,16 @@ class TestUdfBuilder:
 
 
 class TestSyncWriteSegmentBuilder:
-    """The sync façade forwards the full quartet to its wrapped async segment."""
+    """SyncWriteSegmentBuilder is a native subclass of ``_WriteSegmentBuilderBase``;
+    durable-delete methods mutate the wrapped builder's state directly."""
 
     @staticmethod
     def _make():
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
         qb._op_type = "upsert"
         qb._single_key = _key()
-        wsb = WriteSegmentBuilder(qb)
-        return SyncWriteSegmentBuilder(wsb, MagicMock()), qb
+        return SyncWriteSegmentBuilder(qb), qb
 
     def test_with_durable_delete_forwards(self):
         sync_wsb, qb = self._make()

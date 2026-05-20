@@ -14,7 +14,8 @@ import pytest
 import pytest_asyncio
 from pathlib import Path
 
-from aerospike_async import AuthMode, ClientPolicy, new_client
+from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
+from aerospike_async.exceptions import ConnectionError as PacConnectionError
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -186,13 +187,39 @@ def aerospike_host():
 def aerospike_host_sc():
     """Seed for SC / MRT / durable-delete integration tests.
 
-    Uses ``AEROSPIKE_HOST_SC`` when set; otherwise the same seed as :func:`aerospike_host`
-    (CI and single-cluster setups).
+    Uses ``AEROSPIKE_HOST_SC`` when set; otherwise the same seed as
+    :func:`aerospike_host` (CI and single-cluster setups).
+
+    Probes the seed once at session scope and ``pytest.skip``s every
+    dependent test when the SC cluster is unreachable, rather than
+    surfacing a connect error per test. Uses :func:`new_client_blocking`
+    so we don't need an asyncio loop just to probe.
     """
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
-    if sc:
-        return sc
-    return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    seed = sc if sc else os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+
+    # Build a probe-only ClientPolicy: short timeout, same auth/services-alt
+    # config as the real client_policy_sc. We don't reuse the fixture's
+    # policy here because (a) it would create a fixture cycle and (b) we
+    # want a tight timeout for the probe specifically.
+    probe_policy = ClientPolicy()
+    probe_policy.use_services_alternate = _use_services_alternate_from_env()
+    _apply_auth_from_env(probe_policy)
+    probe_policy.timeout = 2000  # 2s — enough for a healthy cluster, fast skip otherwise
+
+    try:
+        client = new_client_blocking(probe_policy, seed)
+    except PacConnectionError as exc:
+        pytest.skip(
+            f"SC cluster at {seed!r} is unreachable "
+            f"(AEROSPIKE_HOST_SC={os.environ.get('AEROSPIKE_HOST_SC', '')!r}). "
+            f"Start the SC cluster or unset AEROSPIKE_HOST_SC to fall back to "
+            f"AEROSPIKE_HOST. Underlying error: {exc}"
+        )
+    else:
+        client.close_blocking()
+
+    return seed
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

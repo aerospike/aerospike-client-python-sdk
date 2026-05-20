@@ -522,15 +522,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="If >1, each operation issues one batch command of N keys "
                    "(drives batch_read/batch_write paths). Default: 0 (single-key).")
     p.add_argument("--threads", type=int, default=None,
-                   help="OS threads for sim-sync mode (default: falls back to -z).")
+                   help="OS threads for sync mode (default: falls back to -z).")
     p.add_argument("-d", "--duration", type=float, default=10.0, help="Run duration in seconds.")
     p.add_argument("--latency", default="7,1", help="Latency histogram config (COLUMNS,SHIFT).")
     p.add_argument("--warmup", type=int, default=0, help="PSDK warmup intervals.")
     p.add_argument("--cooldown", type=int, default=0, help="PSDK cooldown intervals.")
     p.add_argument("--runs", type=int, default=1, help="Number of runs for averaging.")
     p.add_argument(
-        "--modes", default="pac,async,sim-sync",
-        help="Comma-separated PSDK modes to test (default: pac,async,sim-sync).",
+        "--modes", default="pac,async,sync",
+        help="Comma-separated PSDK modes to test (default: pac,async,sync).",
     )
     p.add_argument("--csv", default=None, metavar="FILE", help="Export results to CSV.")
     p.add_argument(

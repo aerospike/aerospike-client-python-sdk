@@ -57,7 +57,7 @@ class WorkloadConfig:
     async_tasks: int
     """Number of concurrent async tasks (``-z``). Used in async mode."""
     threads: int
-    """Number of OS threads (``--threads``). Used in sim-sync mode."""
+    """Number of OS threads (``--threads``). Used in sync mode."""
     duration_sec: float
     max_ops: Optional[int]
     batch_size: int
@@ -87,13 +87,37 @@ class WorkloadConfig:
     """Use Session.get/put shortcuts (bypass QueryBuilder / RecordStream) for
     single-key RU reads and full-bin writes. Prototype path for benchmarking
     the upper bound on PSDK single-key throughput."""
+    lat_sample_every: int = 100
+    """Latency sampling rate. Workers time every Nth op (default: 1-in-100)
+    and feed the sampled latency to the histogram + summary percentiles.
+    TPS / read-write / timeout / error counters are still incremented every
+    op (cheap). Full-sample timing would add per-op overhead that compresses
+    TPS by 2-4× on fast clients."""
+    pool_loops: int = 0
+    """When >0, use AsyncPool with this many event loops instead of a single
+    Client.  Each loop gets ``async_tasks`` concurrent workers, so total
+    concurrency = pool_loops × async_tasks."""
+    with_telemetry: bool = False
+    """When True, enable per-second TPS ticker, sampled latency histograms,
+    and summary percentiles. Default is the lean path that runs straight to
+    ``--duration`` and prints only a final TPS / errors / timeouts summary."""
 
 
-def parse_latency_arg(value: str) -> tuple[int, int]:
-    """Parse ``COLUMNS,SHIFT`` for latency histogram layout."""
+def parse_latency_arg(value: str) -> tuple[int, int, str]:
+    """Parse ``COLUMNS,SHIFT`` for latency histogram layout.
+
+    Also accepts the bare token ``ycsb``, which selects the YCSB-style
+    per-second latency output. Returns ``(columns, shift, style)`` where
+    ``style`` is ``"columns"`` for the histogram layout and ``"ycsb"`` for
+    the YCSB-style output.
+    """
+    v = value.strip().lower()
+    if v == "ycsb":
+        return 7, 1, "ycsb"
     parts = value.split(",")
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError("expected COLUMNS,SHIFT (e.g. 7,1)")
+        raise argparse.ArgumentTypeError(
+            "expected COLUMNS,SHIFT (e.g. 7,1) or 'ycsb'")
     try:
         cols = int(parts[0].strip())
         shift = int(parts[1].strip())
@@ -103,7 +127,7 @@ def parse_latency_arg(value: str) -> tuple[int, int]:
         raise argparse.ArgumentTypeError("COLUMNS must be at least 2")
     if shift < 0:
         raise argparse.ArgumentTypeError("SHIFT must be non-negative")
-    return cols, shift
+    return cols, shift, "columns"
 
 
 def parse_workload_arg(raw: str) -> tuple[WorkloadKind, int, int, int]:
@@ -189,13 +213,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=32,
         dest="async_tasks",
         help="Number of concurrent async tasks (default: %(default)s). "
-        "Used in async mode; overridden by --threads in sim-sync mode.",
+        "Used in async mode; overridden by --threads in sync mode.",
     )
     p.add_argument(
         "--threads",
         type=int,
         default=None,
-        help="Number of OS threads for sim-sync mode. "
+        help="Number of OS threads for sync mode. "
         "If not set, falls back to -z value.",
     )
     p.add_argument(
@@ -227,10 +251,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=("async", "sim-sync"),
+        choices=("async", "sync", "pac-blocking", "pac-async", "legacy-sync"),
         default="async",
-        help="Client API style: async or sim-sync (simulated sync) "
-        "(default: %(default)s).",
+        help="Client API style. 'async' / 'sync' use PSDK sessions. "
+        "'pac-blocking' calls PAC's `_blocking` entries directly. "
+        "'pac-async' uses PAC's async client directly, bypassing PSDK. "
+        "'legacy-sync' uses the legacy `aerospike` C client. "
+        "(default: %(default)s)",
     )
     p.add_argument(
         "--warmup",
@@ -333,11 +360,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "and full-bin writes (bypasses QueryBuilder/RecordStream). "
         "Experimental upper-bound bench mode.",
     )
+    p.add_argument(
+        "--pool-loops",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Use AsyncPool with N event loops instead of a single Client. "
+        "Each loop gets -z concurrent tasks (total = N × z). "
+        "0 (default) uses the single-Client async path.",
+    )
+    p.add_argument(
+        "--lat-sample-every",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Latency sampling rate: time every Nth op (default: %(default)s). "
+        "TPS / error / timeout counters are still updated every op. "
+        "Sampling preserves percentile accuracy via uniform random sampling "
+        "and avoids the per-op timing overhead that compresses TPS on fast "
+        "clients. Set to 1 for full-sample timing (slower, only useful for "
+        "p99.99+ tail analysis). Only applies when --with-telemetry is set.",
+    )
+    p.add_argument(
+        "--with-telemetry",
+        action="store_true",
+        default=False,
+        help="Enable per-second TPS ticker output, sampled latency "
+        "histograms, and the warmup / cooldown windowing. Off by default; "
+        "the lean path runs straight to --duration and prints only a final "
+        "TPS / errors / timeouts summary.",
+    )
     return p
 
 
 def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
-    cols, shift = ns.latency
+    cols, shift, lat_style_from_latency = ns.latency
+    # Explicit --latency-style wins over the bare-`ycsb` form of --latency.
+    if getattr(ns, "latency_style", "columns") == "columns" and lat_style_from_latency != "columns":
+        ns.latency_style = lat_style_from_latency
     fields = parse_bin_spec(ns.bins)
     kind, rp, rap, wap = parse_workload_arg(ns.workload)
     seed = int(ns.seed)
@@ -381,4 +441,12 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         latency_style=getattr(ns, "latency_style", "columns"),
         tracemalloc_enabled=bool(getattr(ns, "tracemalloc", False)),
         fast_path=bool(getattr(ns, "fast_path", False)),
+        pool_loops=max(0, int(getattr(ns, "pool_loops", 0))),
+        lat_sample_every=max(1, int(getattr(ns, "lat_sample_every", 100))),
+        # --latency-style ycsb only makes sense with per-second output, so
+        # treat it as implicit --with-telemetry.
+        with_telemetry=(
+            bool(getattr(ns, "with_telemetry", False))
+            or getattr(ns, "latency_style", "columns") != "columns"
+        ),
     )

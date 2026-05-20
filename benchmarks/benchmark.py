@@ -32,16 +32,25 @@ if str(_ROOT) not in sys.path:
 import benchmarks._env  # noqa: E402, F401 — load aerospike.env before arg parsing
 from benchmarks.config import WorkloadKind, build_arg_parser, config_from_args  # noqa: E402
 from benchmarks.stats import StatsCollector, latency_column_labels  # noqa: E402
-from benchmarks.workers import run_async, run_sync  # noqa: E402
+from benchmarks.workers import (  # noqa: E402
+    run_async,
+    run_async_pool,
+    run_legacy_sync,
+    run_pac_async,
+    run_pac_blocking,
+    run_sync,
+)
 
 
 async def _run_async_mode(cfg, runner=None) -> StatsCollector:
     cols, shift = cfg.latency_columns, cfg.latency_shift
+    warmup = cfg.warmup_intervals if cfg.with_telemetry else 0
+    cooldown = cfg.cooldown_intervals if cfg.with_telemetry else 0
     stats = StatsCollector(
         cols,
         shift,
-        cfg.warmup_intervals,
-        cfg.cooldown_intervals,
+        warmup,
+        cooldown,
         latency_style=getattr(cfg, "latency_style", "columns"),
     )
     stop = asyncio.Event()
@@ -58,8 +67,9 @@ async def _run_async_mode(cfg, runner=None) -> StatsCollector:
                 return
             stats.sample_cpu()
             snap = stats.end_interval()
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(stats.format_interval_lines(snap, stamp, labels))
+            if cfg.with_telemetry:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(stats.format_interval_lines(snap, stamp, labels))
             stats.set_interval(i + 1)
 
     _runner = runner or run_async
@@ -105,13 +115,24 @@ async def _run_async_mode(cfg, runner=None) -> StatsCollector:
     return stats
 
 
-async def _run_sync_mode(cfg) -> StatsCollector:
+async def _run_sync_mode(cfg, runner=None) -> StatsCollector:
+    """Drive a thread-pool worker (sync, pac-blocking, or legacy-sync)
+    from the asyncio loop.
+
+    The asyncio loop only runs the ticker + duration sleep; the actual work
+    happens on OS threads driven by ``runner``. Defaults to ``run_sync``
+    (PSDK sync); pass ``run_pac_blocking`` for ``--mode pac-blocking`` or
+    ``run_legacy_sync`` for ``--mode legacy-sync``.
+    """
+    _runner = runner or run_sync
     cols, shift = cfg.latency_columns, cfg.latency_shift
+    warmup = cfg.warmup_intervals if cfg.with_telemetry else 0
+    cooldown = cfg.cooldown_intervals if cfg.with_telemetry else 0
     stats = StatsCollector(
         cols,
         shift,
-        cfg.warmup_intervals,
-        cfg.cooldown_intervals,
+        warmup,
+        cooldown,
         latency_style=getattr(cfg, "latency_style", "columns"),
     )
     sync_stop = threading.Event()
@@ -127,7 +148,7 @@ async def _run_sync_mode(cfg) -> StatsCollector:
     def sync_thread_main() -> None:
         nonlocal sync_error
         try:
-            run_sync(cfg, stats, sync_stop, sync_connected)
+            _runner(cfg, stats, sync_stop, sync_connected)
         except BaseException as exc:
             sync_error = exc
             # Unblock the main thread if we never connected.
@@ -153,8 +174,9 @@ async def _run_sync_mode(cfg) -> StatsCollector:
                 return
             stats.sample_cpu()
             snap = stats.end_interval()
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(stats.format_interval_lines(snap, stamp, labels))
+            if cfg.with_telemetry:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(stats.format_interval_lines(snap, stamp, labels))
             stats.set_interval(i + 1)
 
     tick = asyncio.create_task(ticker())
@@ -211,7 +233,16 @@ async def async_main() -> int:
     if cfg.tracemalloc_enabled:
         tracemalloc.start()
     if cfg.mode == "async":
-        stats = await _run_async_mode(cfg)
+        runner = run_async_pool if cfg.pool_loops > 0 else None
+        stats = await _run_async_mode(cfg, runner=runner)
+    elif cfg.mode == "pac-async":
+        stats = await _run_async_mode(cfg, runner=run_pac_async)
+    elif cfg.mode == "pac-blocking":
+        stats = await _run_sync_mode(cfg, runner=run_pac_blocking)
+    elif cfg.mode == "legacy-sync":
+        stats = await _run_sync_mode(cfg, runner=run_legacy_sync)
+    elif cfg.mode == "sync":
+        stats = await _run_sync_mode(cfg)
     else:
         stats = await _run_sync_mode(cfg)
     labels = latency_column_labels(cfg.latency_columns, cfg.latency_shift)

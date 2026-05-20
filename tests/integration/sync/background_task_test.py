@@ -50,10 +50,8 @@ end
 
 
 def _wait_task(client: SyncClient, task) -> bool:
-    async def _run():
-        return await task.wait_till_complete()
-
-    return client._loop_manager.run_async(_run())
+    """Wait for ``task`` synchronously via PAC's blocking sibling."""
+    return task.wait_till_complete_blocking()
 
 
 @pytest.fixture
@@ -63,11 +61,8 @@ def client(aerospike_host, client_policy):
         raw = ac._client
         assert raw is not None
 
-        async def _reg():
-            reg = await raw.register_udf(None, BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
-            await reg.wait_till_complete()
-
-        c._loop_manager.run_async(_reg())
+        reg = raw.register_udf_blocking(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
+        reg.wait_till_complete_blocking()
         session = c.create_session()
         for i in range(1, 60):
             try:

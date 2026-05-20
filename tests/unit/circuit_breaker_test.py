@@ -79,13 +79,14 @@ class TestClientPlumbing:
         finally:
             sc.close()
 
-    def test_sync_client_no_kwargs_keeps_policy_none(self, aerospike_host):
-        # Without any kwargs and no explicit policy, we don't materialize a
-        # ClientPolicy in PSDK — PAC will allocate its own default at
-        # connect time. This avoids leaking SDK-managed mutable state.
+    def test_sync_client_no_kwargs_uses_default_policy(self, aerospike_host):
+        # Without any kwargs and no explicit policy, the inherited Client
+        # constructor materializes a default ClientPolicy. The user-visible
+        # invariant (PAC sees a default policy at connect time) is unchanged.
         sc = SyncClient(aerospike_host)
         try:
-            assert sc._policy is None
+            assert sc._policy is not None
+            assert isinstance(sc._policy, ClientPolicy)
         finally:
             sc.close()
 

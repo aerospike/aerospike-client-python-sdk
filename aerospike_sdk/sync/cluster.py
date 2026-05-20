@@ -78,10 +78,9 @@ class Cluster:
         sdk_client = SyncClient(seeds=seeds, policy=policy)
         sdk_client.connect()
 
-        async def _check():
-            return await sdk_client._async_client.underlying_client.is_connected()
-
-        if not sdk_client._loop_manager.run_async(_check()):
+        # Bypass asyncio for the post-connect sanity check — `is_connected`
+        # on PAC is a non-blocking synchronous probe (no I/O).
+        if not sdk_client._pac_client().is_connected_blocking():
             sdk_client.close()
             raise ConnectionError(
                 f"Connected to seeds '{seeds}' but cluster reports not connected"

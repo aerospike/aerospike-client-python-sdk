@@ -138,7 +138,7 @@ class TestBatchOperationBuilderPolicies:
 
         mock_client.batch_delete.assert_awaited()
         call = mock_client.batch_delete.await_args
-        delete_policy = call.args[1]
+        delete_policy = call.kwargs["delete_policy"]
         assert delete_policy is not None
 
     async def test_batch_delete_policy_uses_sc_namespace_mode(self):
@@ -162,7 +162,7 @@ class TestBatchOperationBuilderPolicies:
         await bob.delete(_make_key()).execute()
 
         mock_client.batch_delete.assert_awaited()
-        delete_policy = mock_client.batch_delete.await_args.args[1]
+        delete_policy = mock_client.batch_delete.await_args.kwargs["delete_policy"]
         assert delete_policy is not None
         assert delete_policy.durable_delete is True
 

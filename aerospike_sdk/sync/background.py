@@ -29,7 +29,6 @@ from aerospike_sdk.aio.background import (
     BackgroundWriteBinBuilder as AsyncBackgroundWriteBinBuilder,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.sync.client import _EventLoopManager
 
 
 class SyncBackgroundWriteBinBuilder:
@@ -39,27 +38,20 @@ class SyncBackgroundWriteBinBuilder:
         :class:`~aerospike_sdk.aio.background.BackgroundWriteBinBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBackgroundWriteBinBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBackgroundWriteBinBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def set_to(self, value: Any) -> SyncBackgroundOperationBuilder:
         """Set the bin to *value* (sync wrapper)."""
         self._inner.set_to(value)
-        return SyncBackgroundOperationBuilder(
-            self._inner._parent, self._loop_manager)
+        return SyncBackgroundOperationBuilder(self._inner._parent)
 
     def add(self, value: Any) -> SyncBackgroundOperationBuilder:
         """Numeric increment (sync wrapper)."""
         self._inner.add(value)
-        return SyncBackgroundOperationBuilder(
-            self._inner._parent, self._loop_manager)
+        return SyncBackgroundOperationBuilder(self._inner._parent)
 
 
 class SyncBackgroundOperationBuilder:
@@ -69,15 +61,10 @@ class SyncBackgroundOperationBuilder:
         :class:`~aerospike_sdk.aio.background.BackgroundOperationBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBackgroundOperationBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBackgroundOperationBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     @overload
     def where(self, expression: str) -> SyncBackgroundOperationBuilder: ...
@@ -99,8 +86,7 @@ class SyncBackgroundOperationBuilder:
         return self
 
     def bin(self, name: str) -> SyncBackgroundWriteBinBuilder:
-        return SyncBackgroundWriteBinBuilder(
-            self._inner.bin(name), self._loop_manager)
+        return SyncBackgroundWriteBinBuilder(self._inner.bin(name))
 
     def expire_record_after_seconds(self, seconds: int) -> SyncBackgroundOperationBuilder:
         """Set record TTL for the background job."""
@@ -127,12 +113,7 @@ class SyncBackgroundOperationBuilder:
         See Also:
             :meth:`~aerospike_sdk.aio.background.BackgroundOperationBuilder.execute`
         """
-        inner = self._inner
-
-        async def _run() -> ExecuteTask:
-            return await inner.execute()
-
-        return self._loop_manager.run_async(_run())
+        return self._inner.execute_blocking()
 
 
 class SyncBackgroundUdfFunctionBuilder:
@@ -142,15 +123,10 @@ class SyncBackgroundUdfFunctionBuilder:
         :class:`~aerospike_sdk.aio.background.BackgroundUdfFunctionBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBackgroundUdfFunctionBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBackgroundUdfFunctionBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def function(
         self,
@@ -158,8 +134,8 @@ class SyncBackgroundUdfFunctionBuilder:
         function_name: str,
     ) -> SyncBackgroundUdfBuilder:
         """Select the UDF package and Lua function."""
-        b = self._inner.function(package_name, function_name)
-        return SyncBackgroundUdfBuilder(b, self._loop_manager)
+        async_udf_builder = self._inner.function(package_name, function_name)
+        return SyncBackgroundUdfBuilder(async_udf_builder)
 
 
 class SyncBackgroundUdfBuilder:
@@ -169,15 +145,10 @@ class SyncBackgroundUdfBuilder:
         :class:`~aerospike_sdk.aio.background.BackgroundUdfBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBackgroundUdfBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBackgroundUdfBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def passing(self, *args: Any) -> SyncBackgroundUdfBuilder:
         self._inner.passing(*args)
@@ -217,12 +188,7 @@ class SyncBackgroundUdfBuilder:
         See Also:
             :meth:`~aerospike_sdk.aio.background.BackgroundUdfBuilder.execute`
         """
-        inner = self._inner
-
-        async def _run() -> ExecuteTask:
-            return await inner.execute()
-
-        return self._loop_manager.run_async(_run())
+        return self._inner.execute_blocking()
 
 
 class SyncBackgroundTaskSession:
@@ -240,31 +206,26 @@ class SyncBackgroundTaskSession:
         session.background_task().execute_udf(dataset).function("pkg", "fn").execute()
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBackgroundTaskSession,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBackgroundTaskSession) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def update(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
-        b = self._inner.update(dataset)
-        return SyncBackgroundOperationBuilder(b, self._loop_manager)
+        async_op_builder = self._inner.update(dataset)
+        return SyncBackgroundOperationBuilder(async_op_builder)
 
     def delete(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
         """Start a background delete over *dataset*."""
-        b = self._inner.delete(dataset)
-        return SyncBackgroundOperationBuilder(b, self._loop_manager)
+        async_op_builder = self._inner.delete(dataset)
+        return SyncBackgroundOperationBuilder(async_op_builder)
 
     def touch(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
         """Start a background touch (TTL refresh) over *dataset*."""
-        b = self._inner.touch(dataset)
-        return SyncBackgroundOperationBuilder(b, self._loop_manager)
+        async_op_builder = self._inner.touch(dataset)
+        return SyncBackgroundOperationBuilder(async_op_builder)
 
     def execute_udf(self, dataset: DataSet) -> SyncBackgroundUdfFunctionBuilder:
         """Start a background UDF over *dataset*."""
-        b = self._inner.execute_udf(dataset)
-        return SyncBackgroundUdfFunctionBuilder(b, self._loop_manager)
+        async_udf_function_builder = self._inner.execute_udf(dataset)
+        return SyncBackgroundUdfFunctionBuilder(async_udf_function_builder)

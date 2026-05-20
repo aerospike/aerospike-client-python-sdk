@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import (
@@ -457,42 +458,33 @@ class _OperationSpec:
 _T = TypeVar("_T")
 
 
-class QueryBuilder(_WriteVerbs):
-    """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
+class _QueryBuilderBase:
+    """State + chaining + policy factories + blocking IO shared by query builders.
 
-    Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.aio.client.Client.query`. Use :meth:`where`
-    or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
-    :meth:`bin` for projections, and transition methods such as :meth:`upsert`
-    for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
+    Holds all the configuration state (filters, bins, partitions, write specs,
+    durable-delete flags, namespace/MRT plumbing), the policy factories that
+    convert that state into PAC policy objects, and the blocking IO
+    dispatchers (``execute_blocking_*``, ``_execute_*_blocking``) — they are
+    sync code paths that both concrete subclasses can route to.
 
-    Example:
-        Set-wide read with filter and projection::
+    Subclasses:
+        - :class:`QueryBuilder` (this file): async ``execute()`` returning
+          an awaitable :class:`~aerospike_sdk.record_stream.RecordStream`.
+        - :class:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder`:
+          sync ``execute()`` dispatching through the inherited blocking
+          methods and returning
+          :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
 
-            stream = await (
-                session.query(users)
-                    .where("$.status == 'active'")
-                    .bins(["user_id", "name"])
-                    .execute()
-            )
-            async for row in stream:
-                if row.is_ok and row.record:
-                    print(row.record.bins)
-
-        Point read on a key, then chain an upsert::
-
-            stream = await (
-                session.query(users.id("u1"))
-                    .bins(["name"])
-                    .upsert(users.id("u1"))
-                    .put({"last_seen": 123})
-                    .execute()
-            )
-
-    See Also:
-        :class:`WriteSegmentBuilder`: Bin writes after a write verb.
-        :class:`QueryBinBuilder`: Per-bin read operations.
+    End users never construct this base directly; they get a concrete
+    subclass via :meth:`~aerospike_sdk.aio.session.Session.query` or
+    :meth:`~aerospike_sdk.sync.session.SyncSession.query`.
     """
+
+    # Op types whose single-key/batch writes require the record to exist
+    # (no insert/upsert semantics). The dispatch + error-handling paths
+    # consult this to decide whether ``KEY_NOT_FOUND`` is a fatal error or
+    # a soft "no-op" outcome.
+    _WRITES_REQUIRING_EXISTING_KEY = frozenset({"update", "replace_if_exists"})
 
     def __init__(
         self,
@@ -505,6 +497,7 @@ class QueryBuilder(_WriteVerbs):
         cached_write_policy: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -527,12 +520,15 @@ class QueryBuilder(_WriteVerbs):
             namespace_mode_resolver: Optional async callable ``namespace -> Mode``
                 used to apply AP vs SC behavior scopes before policies are built.
                 Session-scoped builders supply this; client-only builders omit it.
+            namespace_mode_resolver_blocking: Sync counterpart used by
+                :meth:`execute_blocking` (the sync path bypassing asyncio).
         """
         self._client = client
         self._namespace = namespace
         self._set_name = set_name
         self._behavior = behavior
         self._indexes_monitor = indexes_monitor
+        self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
         self._bins: Optional[List[str]] = None
         self._with_no_bins: bool = False
         self._filter_records: List[_FilterRecord] = []
@@ -581,7 +577,6 @@ class QueryBuilder(_WriteVerbs):
         else:
             self._base_read_policy = None
             self._base_write_policy = None
-
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -602,16 +597,21 @@ class QueryBuilder(_WriteVerbs):
             policy.txn = self._txn
         return policy
 
-    async def _ensure_namespace_mode(self) -> None:
-        """Resolve AP vs SC once per builder so behavior scopes match the namespace."""
+    def _ensure_namespace_mode_blocking(self) -> None:
+        """Sync counterpart of :meth:`_ensure_namespace_mode`.
+
+        Resolves AP vs SC via the sync resolver (info_blocking-backed)
+        when present; falls back to AP otherwise.
+        """
         if self._namespace_mode is not None:
             return
-        if self._namespace_mode_resolver is not None:
-            self._namespace_mode = await self._namespace_mode_resolver(self._namespace)
+        if self._namespace_mode_resolver_blocking is not None:
+            self._namespace_mode = self._namespace_mode_resolver_blocking(self._namespace)
         else:
             self._namespace_mode = Mode.AP
-        self._base_read_policy = None
-        self._base_write_policy = None
+        if self._namespace_mode != Mode.AP:
+            self._base_read_policy = None
+            self._base_write_policy = None
 
     def _resolved_namespace_mode(self) -> Mode:
         assert self._namespace_mode is not None
@@ -638,17 +638,6 @@ class QueryBuilder(_WriteVerbs):
         if self._txn is not None and bp is None:
             bp = BatchPolicy()
         return self._apply_txn(bp)
-
-    def _batch_policy_for(
-        self, op_kind: "OpKind", op_shape: "OpShape",
-    ) -> Optional[BatchPolicy]:
-        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings."""
-        settings = (
-            self._behavior.get_settings(
-                op_kind, op_shape, self._resolved_namespace_mode())
-            if self._behavior is not None else None
-        )
-        return self._make_batch_policy(settings)
 
     def with_txn(self, txn: Optional[Txn]) -> "QueryBuilder":
         """Opt this builder into (or out of) a specific transaction.
@@ -713,7 +702,7 @@ class QueryBuilder(_WriteVerbs):
         self._bins = bin_names
         self._with_no_bins = False
         return self
-    
+
     def with_op_projection(self, *ops: Any) -> QueryBuilder:
         """Project query results through one or more read operations.
 
@@ -750,52 +739,6 @@ class QueryBuilder(_WriteVerbs):
             )
         """
         self._op_projection = list(ops) if ops else None
-        return self
-
-    def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
-        """Start a bin-level read operation.
-
-        Returns a :class:`QueryBinBuilder` for specifying how to read from
-        the named bin (simple get, CDT navigation, or expression read).
-
-        Args:
-            bin_name: The bin to operate on.
-
-        Returns:
-            A QueryBinBuilder for method chaining.
-
-        Example::
-
-            rs = await session.query(users.id(1)) \\
-                .bin("settings").on_map_key("theme").get_values() \\
-                .bin("age").get() \\
-                .execute()
-        """
-        return QueryBinBuilder(self, bin_name)
-
-    def add_operation(self, op: Any) -> None:
-        """Append a read operation produced by a bin or CDT builder."""
-        self._operations.append(op)
-
-    def with_write_operations(
-        self, operations: Sequence[Any],
-    ) -> QueryBuilder:
-        """Attach scalar write operations for a background dataset task.
-
-        Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
-        chained bin writes. Use with :meth:`execute_background_task` on a dataset
-        query (no keys).
-        Only ``Operation`` and ``ExpOperation.write``-style writes are valid;
-        list, map, bit, and HLL operations are rejected before calling the client.
-
-        Args:
-            operations: Sequence of write operations (e.g. ``Operation.put``,
-                ``Operation.touch``).
-
-        Returns:
-            self for method chaining.
-        """
-        self._operations.extend(operations)
         return self
 
     def with_no_bins(self) -> QueryBuilder:
@@ -863,7 +806,7 @@ class QueryBuilder(_WriteVerbs):
         """
         self._filter_expression = expression
         return self
-    
+
     @overload
     def where(self, expression: str) -> QueryBuilder: ...
 
@@ -1231,7 +1174,7 @@ class QueryBuilder(_WriteVerbs):
         """
         self._ensure_policy().base_policy = base_policy
         return self
-    
+
     def fail_on_filtered_out(self) -> QueryBuilder:
         """Surface rows that fail a filter as ``FILTERED_OUT`` instead of omitting them.
 
@@ -1246,7 +1189,7 @@ class QueryBuilder(_WriteVerbs):
         """
         self._fail_on_filtered_out = True
         return self
-    
+
     def respond_all_keys(self) -> QueryBuilder:
         """Ensure batch/point reads emit one row per requested key, including not-found.
 
@@ -1261,8 +1204,6 @@ class QueryBuilder(_WriteVerbs):
         """
         self._respond_all_keys = True
         return self
-
-    # -- Chain-level defaults -------------------------------------------------
 
     @overload
     def default_where(self, expression: str) -> QueryBuilder: ...
@@ -1341,307 +1282,11 @@ class QueryBuilder(_WriteVerbs):
         self._default_ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
-    # -- Query stacking -------------------------------------------------------
-
-    def query(
-        self,
-        arg1: Union[Key, List[Key]],
-        *more_keys: Key,
-    ) -> QueryBuilder:
-        """Chain another query with new key(s) for batch/point stacking.
-
-        Finalizes the current query segment and begins a new one with
-        the given key(s).  Each segment can have its own bins, operations,
-        and filter expression.  Dataset (index) queries cannot be stacked.
-
-        Args:
-            arg1: A single :class:`Key` or a ``List[Key]``.
-            *more_keys: Additional keys (varargs).
-
-        Returns:
-            ``self`` for method chaining.
-
-        Raises:
-            ValueError: If the current query is a dataset query (no keys).
-
-        Example::
-
-            rs = await session.query(users.ids(1, 2, 3)) \\
-                .bin("map").get() \\
-                .query(users.ids(4, 5, 6)) \\
-                .bin("name").get() \\
-                .execute()
-        """
-        if (self._single_key is None and self._keys is None
-                and not self._specs):
-            raise ValueError(
-                "Dataset (index) queries cannot be stacked. "
-                "Query stacking is only supported for key-based queries."
-            )
-
-        self._finalize_current_spec()
-        self._op_type = None
-        self._set_current_keys(arg1, *more_keys)
-        return self
-
-    # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
-
-    def _start_write_segment(
-        self,
-        op_type: str,
-        arg1: Union[Key, List[Key]],
-        *more_keys: Key,
-    ) -> WriteSegmentBuilder:
-        """Finalize current spec, set up a write segment, return builder."""
-        self._finalize_current_spec()
-        self._op_type = op_type
-        self._set_current_keys(arg1, *more_keys)
-        return WriteSegmentBuilder(self)
-
-    def _start_write_verb(
-        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> WriteSegmentBuilder:
-        return self._start_write_segment(op_type, arg1, *more_keys)
-
     def _ensure_policy(self) -> QueryPolicy:
         """Return the existing policy or create a default one."""
         if self._policy is None:
             self._policy = self._apply_txn(QueryPolicy())
         return self._policy
-
-    def _build_statement(self) -> Statement:
-        """Build a Statement object from the builder configuration."""
-        bins = self._bins
-        statement = Statement(self._namespace, self._set_name, bins)
-        if self._filter_records:
-            hint = self._query_hint
-            needs_rebuild = (
-                hint is not None
-                and (hint.index_name is not None or hint.bin_name is not None)
-            )
-            filters = []
-            for rec in self._filter_records:
-                if needs_rebuild and hint is not None and rec.method is not None:
-                    filters.append(rec.rebuild_for_hint(hint))
-                else:
-                    filters.append(rec.filter)
-            statement.filters = filters
-        if self._op_projection is not None:
-            statement.set_operations(self._op_projection)
-        return statement
-
-    async def execute(
-        self, on_error: OnError | None = None,
-    ) -> RecordStream:
-        """Execute the query and return a :class:`RecordStream`.
-
-        Handles single-key, batch-key, and dataset queries.  When a chain
-        contains multiple operations, each operation is executed and results
-        are combined into a single stream.
-
-        Args:
-            on_error: Controls how per-record errors are surfaced.
-
-                - ``None`` (default): single-key operations raise on error;
-                  batch / multi-key operations embed errors in the stream.
-                - ``ErrorStrategy.IN_STREAM``: always embed errors in the
-                  stream as ``RecordResult`` entries.
-                - A callable ``(key, index, exception) -> None``: errors are
-                  dispatched to the callback and excluded from the stream.
-
-        Returns:
-            A :class:`~aerospike_sdk.record_stream.RecordStream` of
-            :class:`~aerospike_sdk.record_result.RecordResult` rows.
-
-        Raises:
-            AerospikeError: If the builder mixes dataset query with per-bin read
-                operations (unsupported combination).
-            AerospikeError: Typed subclasses for timeouts, connection failures, etc.
-                when the client raises instead of embedding errors.
-
-        Example:
-            Single-key read with default error handling::
-
-                stream = await session.query(key).bins(["x"]).execute()
-                row = await stream.first_or_raise()
-
-            Multi-key read, keep errors in the stream::
-
-                stream = await (
-                    session.query(k1, k2, k3)
-                        .execute(on_error=ErrorStrategy.IN_STREAM)
-                )
-                rows = await stream.collect()
-
-        See Also:
-            :class:`~aerospike_sdk.error_strategy.ErrorStrategy`: ``on_error`` options.
-        """
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-
-        if self._specs:
-            # Fast path for the common single-spec case: skip the
-            # sum/log overhead that only benefits multi-spec debugging.
-            if len(self._specs) == 1:
-                spec0 = self._specs[0]
-                is_single = len(spec0.keys) == 1
-
-                # Ultra-fast path: single-key operations with no spec-level
-                # overrides bypass the full _execute_spec → policy-build →
-                # RecordStream chain and call the PAC directly.
-                # Namespace mode is already resolved via _ensure_namespace_mode();
-                # the direct path applies _resolved_namespace_mode() in policy helpers.
-                # Durable-delete / record-delete specs are excluded below so SC delete
-                # semantics stay on the full _execute_spec path.
-                if (
-                    is_single
-                    and on_error is None
-                    and spec0.filter_expression is None
-                    and spec0.generation is None
-                    and spec0.ttl_seconds is None
-                    and spec0.durable_delete is None
-                    and spec0.durable_delete_command_default is None
-                    and not spec0.contains_record_delete_op
-                ):
-                    result = await self._execute_single_key_direct(spec0)
-                    if result is not None:
-                        return result
-
-                if __debug__ and log.isEnabledFor(logging.DEBUG):
-                    log.debug(
-                        "execute: %s.%s specs=1 keys=%d",
-                        self._namespace, self._set_name,
-                        len(spec0.keys),
-                    )
-                disp = _resolve_disposition(on_error, is_single)
-                handler = on_error if callable(on_error) else None
-                return await self._execute_spec(spec0, disp, handler)
-            total_keys = sum(len(s.keys) for s in self._specs)
-            log.debug(
-                "execute: %s.%s specs=%d keys=%d",
-                self._namespace, self._set_name,
-                len(self._specs), total_keys,
-            )
-            is_single = False
-            disp = _resolve_disposition(on_error, is_single)
-            handler = on_error if callable(on_error) else None
-            if self._specs_require_sequential_run():
-                sub_disp = _resolve_disposition(on_error, is_single_key=False)
-                streams: List[RecordStream] = []
-                for spec in self._specs:
-                    streams.append(
-                        await self._execute_spec(spec, sub_disp, handler))
-                return RecordStream.chain(streams)
-            batch_policy = self._batch_policy_for(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-            all_ops: list = []
-            all_keys: List[Key] = []
-            for spec in self._specs:
-                all_keys.extend(spec.keys)
-                all_ops.extend(self._spec_to_batch_ops(spec))
-            try:
-                batch_records = await self._client.batch(batch_policy, all_ops)
-            except Exception as e:
-                return self._handle_batch_error(all_keys, e, disp, handler)
-            return self._filtered_batch_stream(batch_records, disp, handler)
-
-        # Dataset query path (no keys were specified)
-        if self._operations:
-            raise AerospikeError(
-                "Bin-level read operations are not supported on dataset/index "
-                "queries (requires Advanced Bin Projection, not yet available)",
-                result_code=ResultCode.OP_NOT_APPLICABLE,
-            )
-        return await self._execute_dataset_query()
-
-    @staticmethod
-    def _reject_unsupported_background_write_ops(
-        operations: Sequence[Any],
-    ) -> None:
-        reject_unsupported_background_write_ops(operations)
-
-    def _make_background_write_policy(self) -> WritePolicy:
-        return make_background_write_policy(
-            self._behavior,
-            self._filter_expression,
-            None,
-            None,
-            namespace_mode=self._resolved_namespace_mode(),
-        )
-
-    async def execute_background_task(self) -> ExecuteTask:
-        """Run a background write against all records matching this dataset query.
-
-        Returns a server task handle; poll with ``wait_till_complete`` or
-        ``query_status``. Requires :meth:`with_write_operations`; only scalar
-        ``Operation`` / expression writes are allowed.
-
-        Raises:
-            ValueError: If the builder targets keys or has no write operations.
-            AerospikeError: If unsupported operation types are present.
-        """
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if not self._operations:
-            raise ValueError(
-                "At least one write operation is required; use "
-                "with_write_operations(...).",
-            )
-        self._reject_unsupported_background_write_ops(self._operations)
-        log.debug(
-            "background task: %s.%s ops=%d",
-            self._namespace, self._set_name, len(self._operations),
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        try:
-            return await self._client.query_operate(
-                wp, statement, list(self._operations))
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    async def execute_udf_background_task(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Apply a registered UDF to matching records as a background task.
-
-        Do not use :meth:`with_write_operations` on the same builder.
-
-        Raises:
-            ValueError: If the builder targets keys or has write operations set.
-        """
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if self._operations:
-            raise ValueError(
-                "Do not combine with_write_operations with "
-                "execute_udf_background_task.",
-            )
-        log.debug(
-            "background UDF: %s.%s %s.%s",
-            self._namespace, self._set_name, package_name, function_name,
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        py_args: Optional[List[Any]] = list(args) if args is not None else None
-        try:
-            return await self._client.query_execute_udf(
-                wp, statement, package_name, function_name, py_args)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    # -- Private helpers -------------------------------------------------------
 
     def _set_current_keys(
         self,
@@ -1766,79 +1411,6 @@ class QueryBuilder(_WriteVerbs):
     def _specs_require_sequential_run(self) -> bool:
         return any(spec.op_type == "udf" for spec in self._specs)
 
-    async def _execute_spec(
-        self,
-        spec: _OperationSpec,
-        disp: _ErrorDisposition,
-        handler: ErrorHandler | None,
-    ) -> RecordStream:
-        """Execute a single :class:`_OperationSpec`."""
-        keys = spec.keys
-        op_type = spec.op_type
-        if __debug__ and log.isEnabledFor(logging.DEBUG):
-            log.debug(
-                "_execute_spec: op=%s keys=%d ops=%d",
-                op_type or "read", len(keys), len(spec.operations),
-            )
-
-        if op_type is None:
-            has_ops = bool(spec.operations)
-            if len(keys) == 1:
-                if has_ops:
-                    return await self._execute_single_key_operate(
-                        spec, disp, handler)
-                return await self._execute_single_key_read(
-                    spec, disp, handler)
-            if has_ops:
-                return await self._execute_batch_read_operate(
-                    spec, disp, handler)
-            return await self._execute_batch_read(spec, disp, handler)
-
-        if op_type == "udf":
-            if len(keys) == 1:
-                return await self._execute_single_key_udf(spec, disp, handler)
-            return await self._execute_batch_udf(spec, disp, handler)
-
-        if op_type == "delete":
-            if len(keys) == 1:
-                return await self._execute_single_key_delete(spec, disp, handler)
-            return await self._execute_batch_delete(spec, disp, handler)
-
-        if op_type == "touch":
-            if len(keys) == 1:
-                return await self._execute_single_key_touch(spec, disp, handler)
-            return await self._execute_batch_touch(spec, disp, handler)
-
-        if op_type == "exists":
-            if len(keys) == 1:
-                return await self._execute_single_key_exists(spec, disp, handler)
-            return await self._execute_batch_exists(spec, disp, handler)
-
-        if len(keys) == 1:
-            return await self._execute_single_key_write(spec, disp, handler)
-        return await self._execute_batch_write(spec, disp, handler)
-
-    def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
-        settings = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE,
-                OpShape.POINT,
-                self._resolved_namespace_mode(),
-            )
-            wp = to_write_policy(settings)
-        else:
-            wp = WritePolicy()
-        self._apply_txn(wp)
-        wp.durable_delete = resolve_durable_delete(
-            settings.durable_delete if settings is not None else None,
-            spec.durable_delete_command_default,
-            spec.durable_delete,
-        )
-        if spec.filter_expression is not None:
-            wp.filter_expression = spec.filter_expression
-        return wp
-
     def _make_batch_udf_policy(self, spec: _OperationSpec) -> Optional[BatchUDFPolicy]:
         settings = (
             self._behavior.get_settings(
@@ -1867,60 +1439,6 @@ class QueryBuilder(_WriteVerbs):
         up.durable_delete = eff
         return up
 
-    async def _execute_single_key_udf(
-        self,
-        spec: _OperationSpec,
-        disp: _ErrorDisposition,
-        handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        pkg = spec.udf_package
-        fn = spec.udf_function
-        if pkg is None or fn is None:
-            raise ValueError("UDF spec missing package or function name")
-        wp = self._make_udf_write_policy(spec)
-        try:
-            val = await self._client.execute_udf(
-                wp, key, pkg, fn, spec.udf_args)
-        except Exception as e:
-            return self._handle_error(key, e, disp, handler, op_type="udf")
-        return RecordStream.from_list([
-            RecordResult(
-                key=key,
-                record=None,
-                result_code=ResultCode.OK,
-                index=0,
-                udf_result=val,
-            ),
-        ])
-
-    async def _execute_batch_udf(
-        self,
-        spec: _OperationSpec,
-        disp: _ErrorDisposition,
-        handler: ErrorHandler | None,
-    ) -> RecordStream:
-        pkg = spec.udf_package
-        fn = spec.udf_function
-        if pkg is None or fn is None:
-            raise ValueError("UDF spec missing package or function name")
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-        udf_policy = self._make_batch_udf_policy(spec)
-        try:
-            batch_records = await self._client.batch_apply(
-                batch_policy,
-                udf_policy,
-                spec.keys,
-                pkg,
-                fn,
-                spec.udf_args,
-            )
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="udf")
-
     @staticmethod
     def _should_include_result(
         result_code: ResultCode,
@@ -1939,18 +1457,20 @@ class QueryBuilder(_WriteVerbs):
             return fail_on_filtered_out or respond_all_keys
         return True
 
-    def _filtered_batch_stream(
+    def _filtered_batch_list(
         self,
         batch_records,
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
-    ) -> RecordStream:
-        """Convert batch records to a filtered RecordStream.
+    ) -> List[RecordResult]:
+        """Filter batch records by disposition; return as a plain list.
 
-        Applies the error disposition to each per-record result:
-        THROW raises on the first error, HANDLER dispatches errors to the
-        callback (excluding them from the stream), IN_STREAM includes them.
+        Same disposition semantics as :meth:`_filtered_batch_stream` (THROW
+        raises on the first error, HANDLER dispatches to the callback and
+        omits the entry, IN_STREAM includes errors). Returns a list so
+        blocking-dispatch paths (sync collapse onto ``_blocking``) can
+        skip the :class:`RecordStream` wrapping.
         """
         all_results = batch_records_to_results(list(batch_records))
         filtered: list[RecordResult] = []
@@ -1970,9 +1490,23 @@ class QueryBuilder(_WriteVerbs):
                 continue
 
             filtered.append(r)
-        return RecordStream.from_list(filtered)
+        return filtered
 
-    _WRITES_REQUIRING_EXISTING_KEY = frozenset({"update", "replace_if_exists"})
+    def _filtered_batch_stream(
+        self,
+        batch_records,
+        disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
+        handler: ErrorHandler | None = None,
+        op_type: Optional[str] = None,
+    ) -> RecordStream:
+        """Convert batch records to a filtered RecordStream.
+
+        Thin wrapper over :meth:`_filtered_batch_list` for async callers
+        that hand the result back to streaming code.
+        """
+        return RecordStream.from_list(
+            self._filtered_batch_list(batch_records, disp, handler, op_type),
+        )
 
     def _is_actionable(self, rc: ResultCode, op_type: Optional[str]) -> bool:
         """Whether *rc* should be routed through disposition logic.
@@ -2023,16 +1557,16 @@ class QueryBuilder(_WriteVerbs):
         return RecordStream.from_error(key, rc, in_doubt, exception=pfc_exc)
 
     @staticmethod
-    def _handle_batch_error(
+    def _handle_batch_error_list(
         keys: List[Key],
         exc: Exception,
         disp: _ErrorDisposition,
         handler: ErrorHandler | None,
-    ) -> RecordStream:
-        """Route a batch-level error according to the resolved disposition.
+    ) -> List[RecordResult]:
+        """List version of :meth:`_handle_batch_error` for blocking paths.
 
-        When the entire batch call fails (e.g. timeout, connection error),
-        we create one error result per key.
+        Raises (THROW), dispatches and returns ``[]`` (HANDLER), or returns
+        one error :class:`RecordResult` per key (IN_STREAM).
         """
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
@@ -2044,16 +1578,32 @@ class QueryBuilder(_WriteVerbs):
         if disp is _ErrorDisposition.HANDLER and handler is not None:
             for i, key in enumerate(keys):
                 handler(key, i, pfc_exc)
-            return RecordStream.from_list([])
+            return []
 
-        results = [
+        return [
             RecordResult(
                 key=key, record=None, result_code=rc,
                 in_doubt=in_doubt, index=i, exception=pfc_exc,
             )
             for i, key in enumerate(keys)
         ]
-        return RecordStream.from_list(results)
+
+    @classmethod
+    def _handle_batch_error(
+        cls,
+        keys: List[Key],
+        exc: Exception,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> RecordStream:
+        """Route a batch-level error according to the resolved disposition.
+
+        When the entire batch call fails (e.g. timeout, connection error),
+        we create one error result per key.
+        """
+        return RecordStream.from_list(
+            cls._handle_batch_error_list(keys, exc, disp, handler),
+        )
 
     def _make_read_policy(
         self, spec: _OperationSpec,
@@ -2076,160 +1626,6 @@ class QueryBuilder(_WriteVerbs):
         if spec.filter_expression is not None:
             rp.filter_expression = spec.filter_expression
         return rp
-
-    async def _execute_single_key_direct(
-        self, spec: _OperationSpec,
-    ) -> Optional[RecordStream]:
-        """Ultra-fast path for single-key reads and writes.
-
-        Calls the PAC directly, bypassing _execute_spec, policy
-        construction, and full RecordStream wrapping.  Returns
-        ``None`` if the operation type is not supported by this path
-        (caller falls back to the normal chain).  On PAC exceptions,
-        uses the standard error disposition (single-key default = THROW).
-        """
-        key = spec.keys[0]
-        op_type = spec.op_type
-        has_ops = bool(spec.operations)
-
-        if op_type is None and not has_ops:
-            # Simple read — all bins or projected bins.
-            if self._base_read_policy is None and self._behavior is not None:
-                self._base_read_policy = self._apply_txn(to_read_policy(
-                    self._behavior.get_settings(
-                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            rp = self._apply_txn(self._base_read_policy or ReadPolicy())
-            try:
-                record = await self._client.get(rp, key, spec.bins)
-            except Exception as e:
-                return self._handle_error(
-                    key, e, _ErrorDisposition.THROW, None)
-            return RecordStream.from_single(key, record)
-
-        if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
-            # Write via operate — upsert or verb with REA override.
-            if self._base_write_policy is None and self._behavior is not None:
-                self._base_write_policy = self._apply_txn(to_write_policy(
-                    self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                        self._resolved_namespace_mode())))
-            rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
-            if rea is not None:
-                if self._behavior is not None:
-                    wp = self._apply_txn(to_write_policy(
-                        self._behavior.get_settings(
-                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                            self._resolved_namespace_mode())))
-                else:
-                    wp = self._apply_txn(WritePolicy())
-                wp.record_exists_action = rea
-            else:
-                wp = self._apply_txn(self._base_write_policy or WritePolicy())
-            try:
-                record = await self._client.operate(wp, key, spec.operations)
-            except Exception as e:
-                return self._handle_error(
-                    key, e, _ErrorDisposition.THROW, None,
-                    op_type=spec.op_type)
-            return RecordStream.from_single(key, record)
-
-        # Not a simple case — fall back to normal chain.
-        return None
-
-    async def _execute_single_key_read(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        read_policy = self._make_read_policy(spec)
-        try:
-            record = await self._client.get(read_policy, key, spec.bins)
-        except Exception as e:
-            return self._handle_error(key, e, disp, handler)
-        return RecordStream.from_single(key, record)
-
-    async def _execute_single_key_operate(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        policy = self._apply_txn(WritePolicy())
-        if spec.filter_expression is not None:
-            policy.filter_expression = spec.filter_expression
-        try:
-            record = await self._client.operate(policy, key, spec.operations)
-        except Exception as e:
-            return self._handle_error(key, e, disp, handler)
-        return RecordStream.from_single(key, record)
-
-    async def _execute_batch_read(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_read_policy = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
-            batch_read_policy = to_batch_read_policy(settings)
-        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
-        if spec.filter_expression is not None:
-            if batch_read_policy is None:
-                batch_read_policy = BatchReadPolicy()
-            batch_read_policy.filter_expression = spec.filter_expression
-        try:
-            batch_records = await self._client.batch_read(
-                batch_policy, batch_read_policy, spec.keys, spec.bins)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler)
-
-    async def _execute_batch_read_operate(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
-        ops_per_key = [spec.operations] * len(spec.keys)
-        bwp = None
-        if spec.filter_expression is not None:
-            bwp = BatchWritePolicy()
-            bwp.filter_expression = spec.filter_expression
-        try:
-            batch_records = await self._client.batch_operate(
-                batch_policy, bwp, spec.keys, ops_per_key)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler)
-
-    # -- Write execution helpers ----------------------------------------------
-
-    def _effective_point_durable_delete(
-        self, spec: _OperationSpec, settings: Optional[Settings],
-    ) -> bool:
-        if spec.op_type == "touch":
-            return False
-        setting_dd = settings.durable_delete if settings is not None else None
-        return resolve_durable_delete(
-            setting_dd,
-            spec.durable_delete_command_default,
-            spec.durable_delete,
-        )
-
-    def _batch_write_effective_dd(self, spec: _OperationSpec) -> bool:
-        if self._behavior is None:
-            return resolve_durable_delete(
-                None,
-                spec.durable_delete_command_default,
-                spec.durable_delete,
-            )
-        bset = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
-            self._resolved_namespace_mode(),
-        )
-        return resolve_durable_delete(
-            bset.durable_delete,
-            spec.durable_delete_command_default,
-            spec.durable_delete,
-        )
 
     def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         """Build a ``WritePolicy`` for single-key writes."""
@@ -2311,6 +1707,921 @@ class QueryBuilder(_WriteVerbs):
             bwp.durable_delete = eff
         return bwp
 
+    def _resolve_index_context(self) -> None:
+        """Auto-populate ``_index_context`` from the monitor when not set.
+
+        The monitor's cached :class:`IndexContext` is at namespace granularity
+        and has no ``query_set``. We derive a per-query copy with
+        ``query_set=self._set_name`` so filter selection rejects indexes
+        defined on a different set; cross-set indexes (those without a
+        set name) remain eligible.
+        """
+        if self._index_context is not None:
+            return
+        if self._indexes_monitor is None:
+            return
+        ctx = self._indexes_monitor.get_index_context(self._namespace)
+        if ctx is None:
+            return
+        if self._set_name and ctx.query_set != self._set_name:
+            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
+            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
+        self._index_context = ctx
+
+    def _auto_generate_filters(
+        self,
+        hint: Optional[QueryHint],
+        policy: QueryPolicy,
+    ) -> None:
+        """Parse AEL with index context to generate Filter + Exp.
+
+        When a hint provides ``index_name`` or ``bin_name``, those overrides
+        are forwarded to the filter generation pipeline.
+        """
+        if self._where_ael is None or self._index_context is None:
+            return
+
+        hint_index = hint.index_name if hint is not None else None
+        hint_bin = hint.bin_name if hint is not None else None
+
+        result = parse_ael_with_index(
+            self._where_ael,
+            self._index_context,
+            hint_index_name=hint_index,
+            hint_bin_name=hint_bin,
+        )
+        if result.filter is not None:
+            self._filter_records.append(_FilterRecord(filter=result.filter))
+            log.debug(
+                "Auto-selected secondary index filter for query on %s.%s",
+                self._namespace,
+                self._set_name,
+            )
+        if result.exp is not None:
+            policy.filter_expression = result.exp
+    def execute_background_task_blocking(self) -> ExecuteTask:
+        """Sync counterpart of :meth:`execute_background_task`.
+
+        Uses PAC ``query_operate_blocking`` — zero asyncio.
+        """
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+        if self._specs:
+            raise ValueError(
+                "Background task execution applies only to dataset queries.",
+            )
+        if not self._operations:
+            raise ValueError(
+                "At least one write operation is required; use "
+                "with_write_operations(...).",
+            )
+        self._reject_unsupported_background_write_ops(self._operations)
+        wp = self._make_background_write_policy()
+        statement = self._build_statement()
+        try:
+            return self._client.query_operate_blocking(
+                statement, list(self._operations), write_policy=wp)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+    def execute_udf_background_task_blocking(
+        self,
+        package_name: str,
+        function_name: str,
+        args: Optional[Sequence[Any]] = None,
+    ) -> ExecuteTask:
+        """Sync counterpart of :meth:`execute_udf_background_task`.
+
+        Uses PAC ``query_execute_udf_blocking`` — zero asyncio.
+        """
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+        if self._specs:
+            raise ValueError(
+                "Background task execution applies only to dataset queries.",
+            )
+        if self._operations:
+            raise ValueError(
+                "Do not combine with_write_operations with "
+                "execute_udf_background_task.",
+            )
+        wp = self._make_background_write_policy()
+        statement = self._build_statement()
+        py_args: Optional[List[Any]] = list(args) if args is not None else None
+        try:
+            return self._client.query_execute_udf_blocking(
+                statement, package_name, function_name, py_args, write_policy=wp)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+    def _execute_batch_udf_blocking(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_udf` — uses
+        ``batch_apply_blocking``."""
+        pkg = spec.udf_package
+        fn = spec.udf_function
+        if pkg is None or fn is None:
+            raise ValueError("UDF spec missing package or function name")
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        udf_policy = self._make_batch_udf_policy(spec)
+        try:
+            batch_records = self._client.batch_apply_blocking(
+                spec.keys,
+                pkg,
+                fn,
+                spec.udf_args,
+                batch_policy=batch_policy,
+                udf_policy=udf_policy,
+            )
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(
+            batch_records, disp, handler, op_type="udf")
+
+    def _execute_batch_touch_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_touch` — uses
+        ``batch_operate_blocking`` with a single touch op per key."""
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bwp = self._make_batch_write_policy(spec)
+        touch_ops = [Operation.touch()]
+        ops_per_key = [touch_ops] * len(spec.keys)
+        try:
+            batch_records = self._client.batch_operate_blocking(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(
+            batch_records, disp, handler, op_type="touch")
+
+    def _execute_batch_exists_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_exists` — uses
+        ``batch_exists_blocking`` (returns ``list[bool]``, one per key)."""
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        brp = self._make_batch_read_policy(spec)
+        try:
+            found_list = self._client.batch_exists_blocking(
+                spec.keys, batch_policy=batch_policy, read_policy=brp)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        results: list[RecordResult] = []
+        for i, (key, found) in enumerate(zip(spec.keys, found_list)):
+            rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
+            if (
+                not found
+                and self._is_actionable(rc, "exists")
+                and disp is _ErrorDisposition.THROW
+            ):
+                raise _result_code_to_exception(rc, str(rc), False)
+            if not self._should_include_result(
+                rc, self._respond_all_keys, self._fail_on_filtered_out,
+            ):
+                continue
+            results.append(RecordResult(
+                key=key, record=None, result_code=rc, index=i,
+            ))
+        return results
+
+    def _execute_single_key_direct_blocking(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition = _ErrorDisposition.THROW,
+        handler: ErrorHandler | None = None,
+    ) -> Optional[List[RecordResult]]:
+        """Sync counterpart of :meth:`_execute_single_key_direct`.
+
+        Builds the policy via the same :meth:`_make_read_policy` /
+        :meth:`_make_write_policy` / :meth:`_make_udf_write_policy`
+        helpers as the async path (so filter expressions, generation/TTL/
+        durable-delete overrides, and record-delete ops are honored),
+        then dispatches via the matching PAC ``*_blocking`` entry — zero
+        asyncio. Handles plain reads, ``operate``-style writes, ``delete``,
+        ``touch``, ``exists`` and ``udf`` op types. Errors are routed via
+        the supplied ``disp`` / ``handler``.
+
+        Returns:
+            A list of zero or one :class:`RecordResult`. Caller wraps with
+            ``SyncRecordStream.from_list``. ``None`` when the spec shape
+            isn't handled (caller falls back to the async path).
+        """
+        key = spec.keys[0]
+        op_type = spec.op_type
+        has_ops = bool(spec.operations)
+
+        if op_type == "delete":
+            wp = self._make_write_policy(spec)
+            try:
+                existed = self._client.delete_blocking(key, policy=wp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, "delete", disp, handler)
+            rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
+            if self._should_include_result(
+                rc, self._respond_all_keys, self._fail_on_filtered_out,
+            ):
+                return [RecordResult(
+                    key=key, record=None, result_code=rc, index=0,
+                )]
+            return []
+
+        if op_type == "touch":
+            wp = self._make_write_policy(spec)
+            try:
+                self._client.touch_blocking(key, policy=wp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, "touch", disp, handler)
+            if self._should_include_result(
+                ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out,
+            ):
+                return [RecordResult(
+                    key=key, record=None, result_code=ResultCode.OK, index=0,
+                )]
+            return []
+
+        if op_type == "exists":
+            rp = self._make_read_policy(spec)
+            try:
+                found = self._client.exists_blocking(key, policy=rp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, "exists", disp, handler)
+            rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
+            if self._should_include_result(
+                rc, self._respond_all_keys, self._fail_on_filtered_out,
+            ):
+                return [RecordResult(
+                    key=key, record=None, result_code=rc, index=0,
+                )]
+            return []
+
+        if op_type == "udf":
+            pkg = spec.udf_package
+            fn = spec.udf_function
+            if pkg is None or fn is None:
+                raise ValueError("UDF spec missing package or function name")
+            wp = self._make_udf_write_policy(spec)
+            try:
+                val = self._client.execute_udf_blocking(
+                    key, pkg, fn, spec.udf_args, policy=wp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, "udf", disp, handler)
+            return [RecordResult(
+                key=key, record=None, result_code=ResultCode.OK,
+                index=0, udf_result=val,
+            )]
+
+        if op_type is None and not has_ops:
+            # Simple read — all bins or projected bins. _make_read_policy
+            # picks up the spec-level filter_expression when present.
+            rp = self._make_read_policy(spec)
+            try:
+                record = self._client.get_blocking(key, spec.bins, policy=rp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, None, disp, handler)
+            return [RecordResult(
+                key=key, record=record, result_code=ResultCode.OK,
+            )]
+
+        if has_ops:
+            # Write via operate. _make_write_policy threads filter
+            # expression, generation, TTL, durable-delete, REA-from-op-type,
+            # and the txn binding into the WritePolicy.
+            wp = self._make_write_policy(spec)
+            try:
+                record = self._client.operate_blocking(key, spec.operations, policy=wp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, spec.op_type, disp, handler)
+            return [RecordResult(
+                key=key, record=record, result_code=ResultCode.OK,
+            )]
+
+        # Not eligible — caller falls back.
+        return None
+
+    def execute_blocking_fast_path(
+        self,
+        on_error: Optional[OnError] = None,
+    ) -> Optional[List[RecordResult]]:
+        """Try a blocking dispatch path; fall back to async when ineligible.
+
+        Handled shapes:
+
+        - **Single key, single spec** — routes through
+          :meth:`_execute_single_key_direct_blocking` (PAC
+          ``get_blocking`` / ``operate_blocking``). Honors filter
+          expressions, generation / TTL / durable-delete overrides, and
+          record-delete ops via :meth:`_make_read_policy` /
+          :meth:`_make_write_policy`. Caller-supplied ``on_error`` still
+          falls back to the async path (handler dispositions on single-key
+          land in Phase 2b).
+        - **Multi-key plain read, single spec** — routes through
+          :meth:`_execute_batch_read_blocking` (PAC ``batch_read_blocking``).
+          Honors filter expressions via :meth:`_make_batch_read_policy` and
+          the resolved disposition (THROW / IN_STREAM / HANDLER).
+
+        Returns:
+            A list of :class:`RecordResult` on a hit. ``None`` when the
+            spec shape isn't yet handled by the blocking dispatch (delete /
+            touch / exists / udf single-key ops, multi-key with per-key
+            operate, dataset / SI queries, scans, UDF background — caller
+            falls back to the async path).
+        """
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+
+        if not self._specs or len(self._specs) != 1:
+            return None
+        spec0 = self._specs[0]
+
+        if len(spec0.keys) == 1:
+            disp = _resolve_disposition(on_error, is_single_key=True)
+            handler = on_error if callable(on_error) else None
+            return self._execute_single_key_direct_blocking(spec0, disp, handler)
+
+        if len(spec0.keys) > 1:
+            disp = _resolve_disposition(on_error, is_single_key=False)
+            handler = on_error if callable(on_error) else None
+
+            # Multi-key plain read → batch_read_blocking
+            if not spec0.operations and spec0.op_type is None:
+                return self._execute_batch_read_blocking(spec0, disp, handler)
+
+            # Multi-key delete → batch_delete_blocking
+            if spec0.op_type == "delete":
+                return self._execute_batch_delete_blocking(spec0, disp, handler)
+
+            # Multi-key write (upsert / insert / update / replace) → batch_operate_blocking
+            if spec0.op_type in (
+                "upsert", "insert", "update",
+                "replace", "replace_if_exists",
+            ):
+                return self._execute_batch_write_blocking(spec0, disp, handler)
+
+            # Multi-key touch → batch_operate_blocking with touch op
+            if spec0.op_type == "touch":
+                return self._execute_batch_touch_blocking(spec0, disp, handler)
+
+            # Multi-key exists → batch_exists_blocking
+            if spec0.op_type == "exists":
+                return self._execute_batch_exists_blocking(spec0, disp, handler)
+
+            # Multi-key read-operate (bin projection, read-style ops on
+            # batch) → batch_operate_blocking with a read-shaped policy
+            if spec0.operations and spec0.op_type is None:
+                return self._execute_batch_read_operate_blocking(
+                    spec0, disp, handler)
+
+            # Multi-key UDF → batch_apply_blocking
+            if spec0.op_type == "udf":
+                return self._execute_batch_udf_blocking(spec0, disp, handler)
+
+        return None
+
+    def _execute_spec_blocking(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync dispatch for one :class:`_OperationSpec`.
+
+        Mirrors :meth:`_execute_spec` shape-for-shape, routing each
+        (op_type, key-cardinality) combination to its blocking sibling.
+        Single-key dispatches via :meth:`_execute_single_key_direct_blocking`
+        (which itself branches on op_type). Multi-key dispatches via the
+        ``_execute_batch_*_blocking`` family.
+        """
+        keys = spec.keys
+        op_type = spec.op_type
+
+        if len(keys) == 1:
+            result = self._execute_single_key_direct_blocking(spec, disp, handler)
+            if result is None:
+                raise NotImplementedError(
+                    f"blocking single-key dispatch missing for op_type={op_type}")
+            return result
+
+        if op_type is None:
+            if spec.operations:
+                return self._execute_batch_read_operate_blocking(spec, disp, handler)
+            return self._execute_batch_read_blocking(spec, disp, handler)
+        if op_type == "udf":
+            return self._execute_batch_udf_blocking(spec, disp, handler)
+        if op_type == "delete":
+            return self._execute_batch_delete_blocking(spec, disp, handler)
+        if op_type == "touch":
+            return self._execute_batch_touch_blocking(spec, disp, handler)
+        if op_type == "exists":
+            return self._execute_batch_exists_blocking(spec, disp, handler)
+        return self._execute_batch_write_blocking(spec, disp, handler)
+
+    def execute_multispec_blocking(
+        self,
+        on_error: Optional[OnError] = None,
+    ) -> Optional[List[RecordResult]]:
+        """Multi-spec blocking dispatch.
+
+        For builders that ended up with more than one :class:`_OperationSpec`
+        (chained queries), routes through either:
+
+        - **Sequential**: when :meth:`_specs_require_sequential_run` is true
+          (e.g. any UDF spec), per-spec dispatch via
+          :meth:`_execute_spec_blocking`, results concatenated.
+        - **Mixed batch**: combine all per-spec ops into a single PAC
+          ``batch_blocking`` call.
+
+        Returns:
+            Concatenated list of :class:`RecordResult` on success. ``None``
+            when the builder has 0 or 1 specs (caller falls back —
+            single-spec handled by :meth:`execute_blocking_fast_path`).
+        """
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+
+        if not self._specs or len(self._specs) <= 1:
+            return None
+
+        disp = _resolve_disposition(on_error, is_single_key=False)
+        handler = on_error if callable(on_error) else None
+
+        if self._specs_require_sequential_run():
+            all_results: List[RecordResult] = []
+            for spec in self._specs:
+                all_results.extend(
+                    self._execute_spec_blocking(spec, disp, handler))
+            return all_results
+
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops: list = []
+        all_keys: List[Key] = []
+        for spec in self._specs:
+            all_keys.extend(spec.keys)
+            all_ops.extend(self._spec_to_batch_ops(spec))
+        try:
+            batch_records = self._client.batch_blocking(
+                all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return self._handle_batch_error_list(all_keys, e, disp, handler)
+        return self._filtered_batch_list(batch_records, disp, handler)
+
+    def execute_blocking_stream(
+        self,
+        on_error: Optional[OnError] = None,
+    ) -> Optional[tuple]:
+        """Dataset/SI/scan blocking dispatch returning a streaming source.
+
+        For keyless query shapes (``session.query(dataset)`` or
+        ``session.query(namespace, set_name)``), build the policy +
+        statement synchronously and call PAC ``query_blocking``. Returns
+        the raw :class:`Recordset` (Python iterator that blocks per
+        record) so the caller can wrap it in :class:`SyncRecordStream`
+        without materializing — memory stays bounded for arbitrarily large
+        result sets.
+
+        Returns:
+            ``(kind, payload)`` where ``kind`` is ``"recordset"`` for
+            non-chunked or ``"chunked"`` for chunk-resumable queries. The
+            payload for ``"recordset"`` is the PAC ``Recordset``; for
+            ``"chunked"`` it is ``(recordset, reexecute_callable)``.
+            Returns ``None`` when the spec shape isn't a keyless dataset
+            query (caller falls back).
+        """
+        del on_error  # dataset queries don't currently honor per-record
+                      # dispositions here; PSDK propagates errors at the
+                      # iterator boundary.
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+
+        # Keyless query: either no specs (dataset query, attached at
+        # builder construction) or specs without keys.
+        is_keyless = (
+            not self._specs
+            or all(not s.keys for s in self._specs)
+        )
+        if not is_keyless:
+            return None
+
+        recordset, reexecute = self._execute_dataset_query_blocking()
+        if reexecute is not None:
+            return ("chunked", (recordset, reexecute))
+        return ("recordset", recordset)
+
+    def _execute_batch_read_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_read`.
+
+        Same policy construction and disposition handling, but the dispatch
+        is PAC ``batch_read_blocking`` — zero asyncio. Returns a list of
+        :class:`RecordResult` that the caller (the sync builder) wraps with
+        :class:`SyncRecordStream.from_list`.
+        """
+        batch_read_policy = None
+        if self._behavior is not None:
+            settings = self._behavior.get_settings(
+                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
+            batch_read_policy = to_batch_read_policy(settings)
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        spec_brp = self._make_batch_read_policy(spec)
+        if spec_brp is not None:
+            # _make_batch_read_policy currently returns a fresh policy
+            # carrying the spec's filter_expression. Merge into the behavior
+            # policy when both exist; otherwise the spec policy wins.
+            if batch_read_policy is None:
+                batch_read_policy = spec_brp
+            else:
+                batch_read_policy.filter_expression = spec_brp.filter_expression
+        try:
+            batch_records = self._client.batch_read_blocking(
+                spec.keys, spec.bins,
+                batch_policy=batch_policy, read_policy=batch_read_policy)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(batch_records, disp, handler)
+
+    def _execute_batch_write_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_write` — uses
+        ``batch_operate_blocking``."""
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bwp = self._make_batch_write_policy(spec)
+        ops_per_key = [spec.operations] * len(spec.keys)
+        try:
+            batch_records = self._client.batch_operate_blocking(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(
+            batch_records, disp, handler, op_type=spec.op_type)
+
+    def _execute_batch_read_operate_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_read_operate` — uses
+        ``batch_operate_blocking`` with read-style ops."""
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        ops_per_key = [spec.operations] * len(spec.keys)
+        bwp = None
+        if spec.filter_expression is not None:
+            bwp = BatchWritePolicy()
+            bwp.filter_expression = spec.filter_expression
+        try:
+            batch_records = self._client.batch_operate_blocking(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(batch_records, disp, handler)
+
+    def _execute_batch_delete_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_batch_delete` — uses
+        ``batch_delete_blocking``."""
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bdp = self._make_batch_delete_policy(spec)
+        try:
+            batch_records = self._client.batch_delete_blocking(
+                spec.keys, batch_policy=batch_policy, delete_policy=bdp)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(
+            batch_records, disp, handler, op_type="delete")
+
+    def _execute_dataset_query_blocking(self) -> Any:
+        """Sync counterpart of :meth:`_execute_dataset_query`.
+
+        Builds the same policy + statement, then dispatches via PAC
+        ``query_blocking`` which returns a :class:`Recordset` with the
+        Python-iterator protocol (blocking ``__next__`` that releases the
+        GIL while waiting on the underlying Tokio stream). The caller wraps
+        the returned recordset in :class:`SyncRecordStream`.
+
+        Returns:
+            The PAC ``Recordset`` (raw). For chunked queries the second
+            return value is a sync ``reexecute`` callable; otherwise it is
+            ``None``. ``(recordset, reexecute_or_none)``.
+
+        Note:
+            Mirrors the async path: when an AEL ``where()`` is present and
+            an :class:`IndexesMonitor` is attached, blocks until the
+            monitor's first refresh has completed so cached secondary-index
+            metadata is available for filter generation.
+        """
+        log.debug(
+            "dataset query (blocking): %s.%s filter=%s chunk=%s hint=%s",
+            self._namespace, self._set_name,
+            self._filter_expression is not None or bool(self._filter_records),
+            self._chunk_size,
+            self._query_hint is not None,
+        )
+        if self._policy is not None:
+            policy = self._policy
+        elif self._behavior is not None:
+            policy = self._apply_txn(to_query_policy(
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
+        else:
+            policy = self._apply_txn(QueryPolicy())
+        if self._chunk_size is not None and self._chunk_size > 0:
+            policy.max_records = self._chunk_size
+        if self._filter_expression is not None:
+            policy.filter_expression = self._filter_expression
+
+        hint = self._query_hint
+        if hint is not None and hint.query_duration is not None:
+            policy.expected_duration = hint.query_duration
+
+        if self._where_ael is not None and self._indexes_monitor is not None:
+            # Lazy start (idempotent); mirrors the async path.
+            self._indexes_monitor.start(self._client)
+            self._indexes_monitor.wait_until_ready()
+
+        self._resolve_index_context()
+
+        partition_filter = self._partition_filter or PartitionFilter.all()
+
+        if self._where_ael is not None and self._index_context is not None:
+            self._auto_generate_filters(hint, policy)
+
+        statement = self._build_statement()
+
+        try:
+            recordset = self._client.query_blocking(
+                statement, partition_filter, policy=policy)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+        if self._chunk_size is not None and self._chunk_size > 0:
+            client = self._client
+
+            def _reexecute_blocking(pf: PartitionFilter) -> Any:
+                return client.query_blocking(statement, pf, policy=policy)
+
+            return (recordset, _reexecute_blocking)
+
+        return (recordset, None)
+    def _handle_error_blocking_singlekey(
+        self,
+        key: Key,
+        exc: Exception,
+        op_type: Optional[str] = None,
+        disp: _ErrorDisposition = _ErrorDisposition.THROW,
+        handler: ErrorHandler | None = None,
+    ) -> List[RecordResult]:
+        """Mirror :meth:`_handle_error` for the blocking single-key path.
+
+        Returns a list of zero or one :class:`RecordResult` — caller wraps
+        with ``SyncRecordStream.from_list``. THROW raises the converted
+        exception on actionable codes; HANDLER dispatches to the callback
+        and returns ``[]``; IN_STREAM embeds the error as a
+        :class:`RecordResult`.
+        """
+        pfc_exc = _convert_pac_exception(exc)
+        rc = pfc_exc.result_code or ResultCode.OK
+        in_doubt = pfc_exc.in_doubt
+
+        if self._is_actionable(rc, op_type):
+            if disp is _ErrorDisposition.THROW:
+                raise pfc_exc from exc
+            if disp is _ErrorDisposition.HANDLER and handler is not None:
+                handler(key, 0, pfc_exc)
+                return []
+
+        if not self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out
+        ):
+            return []
+        return [RecordResult(
+            key=key, record=None, result_code=rc,
+            in_doubt=in_doubt, index=0, exception=pfc_exc,
+        )]
+    def _batch_policy_for(
+        self, op_kind: "OpKind", op_shape: "OpShape",
+    ) -> Optional[BatchPolicy]:
+        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings."""
+        settings = (
+            self._behavior.get_settings(
+                op_kind, op_shape, self._resolved_namespace_mode())
+            if self._behavior is not None else None
+        )
+        return self._make_batch_policy(settings)
+
+    def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
+        """Start a bin-level read operation.
+
+        Returns a :class:`QueryBinBuilder` for specifying how to read from
+        the named bin (simple get, CDT navigation, or expression read).
+
+        Args:
+            bin_name: The bin to operate on.
+
+        Returns:
+            A QueryBinBuilder for method chaining.
+
+        Example::
+
+            rs = await session.query(users.id(1)) \\
+                .bin("settings").on_map_key("theme").get_values() \\
+                .bin("age").get() \\
+                .execute()
+        """
+        return QueryBinBuilder(self, bin_name)
+
+    def add_operation(self, op: Any) -> None:
+        """Append a read operation produced by a bin or CDT builder."""
+        self._operations.append(op)
+
+    def with_write_operations(
+        self, operations: Sequence[Any],
+    ) -> QueryBuilder:
+        """Attach scalar write operations for a background dataset task.
+
+        Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
+        chained bin writes. Use with :meth:`execute_background_task` on a dataset
+        query (no keys).
+        Only ``Operation`` and ``ExpOperation.write``-style writes are valid;
+        list, map, bit, and HLL operations are rejected before calling the client.
+
+        Args:
+            operations: Sequence of write operations (e.g. ``Operation.put``,
+                ``Operation.touch``).
+
+        Returns:
+            self for method chaining.
+        """
+        self._operations.extend(operations)
+        return self
+
+    def query(
+        self,
+        arg1: Union[Key, List[Key]],
+        *more_keys: Key,
+    ) -> QueryBuilder:
+        """Chain another query with new key(s) for batch/point stacking.
+
+        Finalizes the current query segment and begins a new one with
+        the given key(s).  Each segment can have its own bins, operations,
+        and filter expression.  Dataset (index) queries cannot be stacked.
+
+        Args:
+            arg1: A single :class:`Key` or a ``List[Key]``.
+            *more_keys: Additional keys (varargs).
+
+        Returns:
+            ``self`` for method chaining.
+
+        Raises:
+            ValueError: If the current query is a dataset query (no keys).
+
+        Example::
+
+            rs = await session.query(users.ids(1, 2, 3)) \\
+                .bin("map").get() \\
+                .query(users.ids(4, 5, 6)) \\
+                .bin("name").get() \\
+                .execute()
+        """
+        if (self._single_key is None and self._keys is None
+                and not self._specs):
+            raise ValueError(
+                "Dataset (index) queries cannot be stacked. "
+                "Query stacking is only supported for key-based queries."
+            )
+
+        self._finalize_current_spec()
+        self._op_type = None
+        self._set_current_keys(arg1, *more_keys)
+        return self
+
+    def _start_write_segment(
+        self,
+        op_type: str,
+        arg1: Union[Key, List[Key]],
+        *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize current spec, set up a write segment, return builder."""
+        self._finalize_current_spec()
+        self._op_type = op_type
+        self._set_current_keys(arg1, *more_keys)
+        return WriteSegmentBuilder(self)
+
+    def _start_write_verb(
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        return self._start_write_segment(op_type, arg1, *more_keys)
+
+    def _build_statement(self) -> Statement:
+        """Build a Statement object from the builder configuration."""
+        bins = self._bins
+        statement = Statement(self._namespace, self._set_name, bins)
+        if self._filter_records:
+            hint = self._query_hint
+            needs_rebuild = (
+                hint is not None
+                and (hint.index_name is not None or hint.bin_name is not None)
+            )
+            filters = []
+            for rec in self._filter_records:
+                if needs_rebuild and hint is not None and rec.method is not None:
+                    filters.append(rec.rebuild_for_hint(hint))
+                else:
+                    filters.append(rec.filter)
+            statement.filters = filters
+        if self._op_projection is not None:
+            statement.set_operations(self._op_projection)
+        return statement
+
+    @staticmethod
+    def _reject_unsupported_background_write_ops(
+        operations: Sequence[Any],
+    ) -> None:
+        reject_unsupported_background_write_ops(operations)
+
+    def _make_background_write_policy(self) -> WritePolicy:
+        return make_background_write_policy(
+            self._behavior,
+            self._filter_expression,
+            None,
+            None,
+            namespace_mode=self._resolved_namespace_mode(),
+        )
+
+    def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
+        settings = None
+        if self._behavior is not None:
+            settings = self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.POINT,
+                self._resolved_namespace_mode(),
+            )
+            wp = to_write_policy(settings)
+        else:
+            wp = WritePolicy()
+        self._apply_txn(wp)
+        wp.durable_delete = resolve_durable_delete(
+            settings.durable_delete if settings is not None else None,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+        if spec.filter_expression is not None:
+            wp.filter_expression = spec.filter_expression
+        return wp
+
+    def _effective_point_durable_delete(
+        self, spec: _OperationSpec, settings: Optional[Settings],
+    ) -> bool:
+        if spec.op_type == "touch":
+            return False
+        setting_dd = settings.durable_delete if settings is not None else None
+        return resolve_durable_delete(
+            setting_dd,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+
+    def _batch_write_effective_dd(self, spec: _OperationSpec) -> bool:
+        if self._behavior is None:
+            return resolve_durable_delete(
+                None,
+                spec.durable_delete_command_default,
+                spec.durable_delete,
+            )
+        bset = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            self._resolved_namespace_mode(),
+        )
+        return resolve_durable_delete(
+            bset.durable_delete,
+            spec.durable_delete_command_default,
+            spec.durable_delete,
+        )
+
     def _make_batch_delete_policy(self, spec: _OperationSpec) -> Optional[BatchDeletePolicy]:
         """Build a ``BatchDeletePolicy`` for multi-key batch deletes."""
         eff = self._batch_write_effective_dd(spec)
@@ -2330,150 +2641,6 @@ class QueryBuilder(_WriteVerbs):
             bdp.generation = spec.generation
         bdp.durable_delete = eff
         return bdp
-
-    async def _execute_single_key_write(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        wp = self._make_write_policy(spec)
-        try:
-            record = await self._client.operate(wp, key, spec.operations)
-        except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type=spec.op_type)
-        return RecordStream.from_single(key, record)
-
-    async def _execute_single_key_delete(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        wp = self._make_write_policy(spec)
-        try:
-            existed = await self._client.delete(wp, key)
-        except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type="delete")
-        rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
-            return RecordStream.from_error(key, rc)
-        return RecordStream.from_list([])
-
-    async def _execute_batch_write(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-        bwp = self._make_batch_write_policy(spec)
-        ops_per_key = [spec.operations] * len(spec.keys)
-        try:
-            batch_records = await self._client.batch_operate(
-                batch_policy, bwp, spec.keys, ops_per_key)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type=spec.op_type)
-
-    async def _execute_batch_delete(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-        bdp = self._make_batch_delete_policy(spec)
-        try:
-            batch_records = await self._client.batch_delete(
-                batch_policy, bdp, spec.keys)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="delete")
-
-    async def _execute_single_key_touch(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        wp = self._make_write_policy(spec)
-        try:
-            await self._client.touch(wp, key)
-        except Exception as e:
-            return self._handle_error(key, e, disp, handler, op_type="touch")
-        if self._should_include_result(
-            ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out
-        ):
-            return RecordStream.from_error(key, ResultCode.OK)
-        return RecordStream.from_list([])
-
-    async def _execute_batch_touch(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-        bwp = self._make_batch_write_policy(spec)
-        touch_ops = [Operation.touch()]
-        ops_per_key = [touch_ops] * len(spec.keys)
-        try:
-            batch_records = await self._client.batch_operate(
-                batch_policy, bwp, spec.keys, ops_per_key)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="touch")
-
-    async def _execute_single_key_exists(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        key = spec.keys[0]
-        if self._read_policy is not None:
-            rp = self._read_policy
-        elif self._behavior is not None:
-            rp = self._apply_txn(to_read_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-        else:
-            rp = self._apply_txn(ReadPolicy())
-        if spec.filter_expression is not None:
-            rp.filter_expression = spec.filter_expression
-        try:
-            found = await self._client.exists(rp, key)
-        except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type="exists")
-        rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
-            return RecordStream.from_error(key, rc)
-        return RecordStream.from_list([])
-
-    async def _execute_batch_exists(
-        self, spec: _OperationSpec,
-        disp: _ErrorDisposition, handler: ErrorHandler | None,
-    ) -> RecordStream:
-        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
-        brp = self._make_batch_read_policy(spec)
-        try:
-            found_list = await self._client.batch_exists(
-                batch_policy, brp, spec.keys)
-        except Exception as e:
-            return self._handle_batch_error(spec.keys, e, disp, handler)
-        results = []
-        for key, found in zip(spec.keys, found_list):
-            rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if self._should_include_result(
-                rc, self._respond_all_keys, self._fail_on_filtered_out
-            ):
-                results.append(RecordResult(key, None, rc))
-        return RecordStream.from_list(results)
-
-    # -- Mixed-batch execution (multi-spec chains) ----------------------------
 
     def _spec_to_batch_ops(
         self, spec: _OperationSpec,
@@ -2563,6 +2730,733 @@ class QueryBuilder(_WriteVerbs):
             bwp.durable_delete = eff
         return bwp
 
+
+
+
+
+
+
+class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
+    """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
+
+    Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
+    :meth:`~aerospike_sdk.aio.client.Client.query`. Use :meth:`where`
+    or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
+    :meth:`bin` for projections, and transition methods such as :meth:`upsert`
+    for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
+
+    Example:
+        Set-wide read with filter and projection::
+
+            stream = await (
+                session.query(users)
+                    .where("$.status == 'active'")
+                    .bins(["user_id", "name"])
+                    .execute()
+            )
+            async for row in stream:
+                if row.is_ok and row.record:
+                    print(row.record.bins)
+
+        Point read on a key, then chain an upsert::
+
+            stream = await (
+                session.query(users.id("u1"))
+                    .bins(["name"])
+                    .upsert(users.id("u1"))
+                    .put({"last_seen": 123})
+                    .execute()
+            )
+
+    See Also:
+        :class:`WriteSegmentBuilder`: Bin writes after a write verb.
+        :class:`QueryBinBuilder`: Per-bin read operations.
+    """
+
+
+    async def _ensure_namespace_mode(self) -> None:
+        """Resolve AP vs SC once per builder so behavior scopes match the namespace."""
+        if self._namespace_mode is not None:
+            return
+        if self._namespace_mode_resolver is not None:
+            self._namespace_mode = await self._namespace_mode_resolver(self._namespace)
+        else:
+            self._namespace_mode = Mode.AP
+        if self._namespace_mode != Mode.AP:
+            self._base_read_policy = None
+            self._base_write_policy = None
+
+
+
+
+
+
+    
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    
+
+    # -- Chain-level defaults -------------------------------------------------
+
+
+
+
+
+
+
+
+    # -- Query stacking -------------------------------------------------------
+
+
+    # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
+
+
+
+
+
+    async def execute(
+        self, on_error: OnError | None = None,
+    ) -> RecordStream:
+        """Execute the query and return a :class:`RecordStream`.
+
+        Handles single-key, batch-key, and dataset queries.  When a chain
+        contains multiple operations, each operation is executed and results
+        are combined into a single stream.
+
+        Args:
+            on_error: Controls how per-record errors are surfaced.
+
+                - ``None`` (default): single-key operations raise on error;
+                  batch / multi-key operations embed errors in the stream.
+                - ``ErrorStrategy.IN_STREAM``: always embed errors in the
+                  stream as ``RecordResult`` entries.
+                - A callable ``(key, index, exception) -> None``: errors are
+                  dispatched to the callback and excluded from the stream.
+
+        Returns:
+            A :class:`~aerospike_sdk.record_stream.RecordStream` of
+            :class:`~aerospike_sdk.record_result.RecordResult` rows.
+
+        Raises:
+            AerospikeError: If the builder mixes dataset query with per-bin read
+                operations (unsupported combination).
+            AerospikeError: Typed subclasses for timeouts, connection failures, etc.
+                when the client raises instead of embedding errors.
+
+        Example:
+            Single-key read with default error handling::
+
+                stream = await session.query(key).bins(["x"]).execute()
+                row = await stream.first_or_raise()
+
+            Multi-key read, keep errors in the stream::
+
+                stream = await (
+                    session.query(k1, k2, k3)
+                        .execute(on_error=ErrorStrategy.IN_STREAM)
+                )
+                rows = await stream.collect()
+
+        See Also:
+            :class:`~aerospike_sdk.error_strategy.ErrorStrategy`: ``on_error`` options.
+        """
+        self._finalize_current_spec()
+        await self._ensure_namespace_mode()
+
+        if self._specs:
+            # Fast path for the common single-spec case: skip the
+            # sum/log overhead that only benefits multi-spec debugging.
+            if len(self._specs) == 1:
+                spec0 = self._specs[0]
+                is_single = len(spec0.keys) == 1
+
+                # Ultra-fast path: single-key operations with no spec-level
+                # overrides bypass the full _execute_spec → policy-build →
+                # RecordStream chain and call the PAC directly.
+                # Namespace mode is already resolved via _ensure_namespace_mode();
+                # the direct path applies _resolved_namespace_mode() in policy helpers.
+                # Durable-delete / record-delete specs are excluded below so SC delete
+                # semantics stay on the full _execute_spec path.
+                if (
+                    is_single
+                    and on_error is None
+                    and spec0.filter_expression is None
+                    and spec0.generation is None
+                    and spec0.ttl_seconds is None
+                    and spec0.durable_delete is None
+                    and spec0.durable_delete_command_default is None
+                    and not spec0.contains_record_delete_op
+                ):
+                    result = await self._execute_single_key_direct(spec0)
+                    if result is not None:
+                        return result
+
+                if __debug__ and log.isEnabledFor(logging.DEBUG):
+                    log.debug(
+                        "execute: %s.%s specs=1 keys=%d",
+                        self._namespace, self._set_name,
+                        len(spec0.keys),
+                    )
+                disp = _resolve_disposition(on_error, is_single)
+                handler = on_error if callable(on_error) else None
+                return await self._execute_spec(spec0, disp, handler)
+            total_keys = sum(len(s.keys) for s in self._specs)
+            log.debug(
+                "execute: %s.%s specs=%d keys=%d",
+                self._namespace, self._set_name,
+                len(self._specs), total_keys,
+            )
+            is_single = False
+            disp = _resolve_disposition(on_error, is_single)
+            handler = on_error if callable(on_error) else None
+            if self._specs_require_sequential_run():
+                sub_disp = _resolve_disposition(on_error, is_single_key=False)
+                streams: List[RecordStream] = []
+                for spec in self._specs:
+                    streams.append(
+                        await self._execute_spec(spec, sub_disp, handler))
+                return RecordStream.chain(streams)
+            batch_policy = self._batch_policy_for(
+                OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+            all_ops: list = []
+            all_keys: List[Key] = []
+            for spec in self._specs:
+                all_keys.extend(spec.keys)
+                all_ops.extend(self._spec_to_batch_ops(spec))
+            try:
+                batch_records = await self._client.batch(
+                    all_ops, batch_policy=batch_policy)
+            except Exception as e:
+                return self._handle_batch_error(all_keys, e, disp, handler)
+            return self._filtered_batch_stream(batch_records, disp, handler)
+
+        # Dataset query path (no keys were specified)
+        if self._operations:
+            raise AerospikeError(
+                "Bin-level read operations are not supported on dataset/index "
+                "queries (requires Advanced Bin Projection, not yet available)",
+                result_code=ResultCode.OP_NOT_APPLICABLE,
+            )
+        return await self._execute_dataset_query()
+
+
+
+    async def execute_background_task(self) -> ExecuteTask:
+        """Run a background write against all records matching this dataset query.
+
+        Returns a server task handle; poll with ``wait_till_complete`` or
+        ``query_status``. Requires :meth:`with_write_operations`; only scalar
+        ``Operation`` / expression writes are allowed.
+
+        Raises:
+            ValueError: If the builder targets keys or has no write operations.
+            AerospikeError: If unsupported operation types are present.
+        """
+        self._finalize_current_spec()
+        await self._ensure_namespace_mode()
+        if self._specs:
+            raise ValueError(
+                "Background task execution applies only to dataset queries.",
+            )
+        if not self._operations:
+            raise ValueError(
+                "At least one write operation is required; use "
+                "with_write_operations(...).",
+            )
+        self._reject_unsupported_background_write_ops(self._operations)
+        log.debug(
+            "background task: %s.%s ops=%d",
+            self._namespace, self._set_name, len(self._operations),
+        )
+        wp = self._make_background_write_policy()
+        statement = self._build_statement()
+        try:
+            return await self._client.query_operate(
+                statement, list(self._operations), write_policy=wp)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+    async def execute_udf_background_task(
+        self,
+        package_name: str,
+        function_name: str,
+        args: Optional[Sequence[Any]] = None,
+    ) -> ExecuteTask:
+        """Apply a registered UDF to matching records as a background task.
+
+        Do not use :meth:`with_write_operations` on the same builder.
+
+        Raises:
+            ValueError: If the builder targets keys or has write operations set.
+        """
+        self._finalize_current_spec()
+        await self._ensure_namespace_mode()
+        if self._specs:
+            raise ValueError(
+                "Background task execution applies only to dataset queries.",
+            )
+        if self._operations:
+            raise ValueError(
+                "Do not combine with_write_operations with "
+                "execute_udf_background_task.",
+            )
+        log.debug(
+            "background UDF: %s.%s %s.%s",
+            self._namespace, self._set_name, package_name, function_name,
+        )
+        wp = self._make_background_write_policy()
+        statement = self._build_statement()
+        py_args: Optional[List[Any]] = list(args) if args is not None else None
+        try:
+            return await self._client.query_execute_udf(
+                statement, package_name, function_name, py_args, write_policy=wp)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+
+
+    # -- Private helpers -------------------------------------------------------
+
+
+
+
+
+
+
+    async def _execute_spec(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> RecordStream:
+        """Execute a single :class:`_OperationSpec`."""
+        keys = spec.keys
+        op_type = spec.op_type
+        if __debug__ and log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "_execute_spec: op=%s keys=%d ops=%d",
+                op_type or "read", len(keys), len(spec.operations),
+            )
+
+        if op_type is None:
+            has_ops = bool(spec.operations)
+            if len(keys) == 1:
+                if has_ops:
+                    return await self._execute_single_key_operate(
+                        spec, disp, handler)
+                return await self._execute_single_key_read(
+                    spec, disp, handler)
+            if has_ops:
+                return await self._execute_batch_read_operate(
+                    spec, disp, handler)
+            return await self._execute_batch_read(spec, disp, handler)
+
+        if op_type == "udf":
+            if len(keys) == 1:
+                return await self._execute_single_key_udf(spec, disp, handler)
+            return await self._execute_batch_udf(spec, disp, handler)
+
+        if op_type == "delete":
+            if len(keys) == 1:
+                return await self._execute_single_key_delete(spec, disp, handler)
+            return await self._execute_batch_delete(spec, disp, handler)
+
+        if op_type == "touch":
+            if len(keys) == 1:
+                return await self._execute_single_key_touch(spec, disp, handler)
+            return await self._execute_batch_touch(spec, disp, handler)
+
+        if op_type == "exists":
+            if len(keys) == 1:
+                return await self._execute_single_key_exists(spec, disp, handler)
+            return await self._execute_batch_exists(spec, disp, handler)
+
+        if len(keys) == 1:
+            return await self._execute_single_key_write(spec, disp, handler)
+        return await self._execute_batch_write(spec, disp, handler)
+
+
+
+    async def _execute_single_key_udf(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        pkg = spec.udf_package
+        fn = spec.udf_function
+        if pkg is None or fn is None:
+            raise ValueError("UDF spec missing package or function name")
+        wp = self._make_udf_write_policy(spec)
+        try:
+            val = await self._client.execute_udf(
+                key, pkg, fn, spec.udf_args, policy=wp)
+        except Exception as e:
+            return self._handle_error(key, e, disp, handler, op_type="udf")
+        return RecordStream.from_list([
+            RecordResult(
+                key=key,
+                record=None,
+                result_code=ResultCode.OK,
+                index=0,
+                udf_result=val,
+            ),
+        ])
+
+    async def _execute_batch_udf(
+        self,
+        spec: _OperationSpec,
+        disp: _ErrorDisposition,
+        handler: ErrorHandler | None,
+    ) -> RecordStream:
+        pkg = spec.udf_package
+        fn = spec.udf_function
+        if pkg is None or fn is None:
+            raise ValueError("UDF spec missing package or function name")
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        udf_policy = self._make_batch_udf_policy(spec)
+        try:
+            batch_records = await self._client.batch_apply(
+                spec.keys,
+                pkg,
+                fn,
+                spec.udf_args,
+                batch_policy=batch_policy,
+                udf_policy=udf_policy,
+            )
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(
+            batch_records, disp, handler, op_type="udf")
+
+
+
+
+
+
+
+
+
+
+
+
+
+    async def _execute_single_key_direct(
+        self, spec: _OperationSpec,
+    ) -> Optional[RecordStream]:
+        """Ultra-fast path for single-key reads and writes.
+
+        Calls the PAC directly, bypassing _execute_spec, policy
+        construction, and full RecordStream wrapping.  Returns
+        ``None`` if the operation type is not supported by this path
+        (caller falls back to the normal chain).  On PAC exceptions,
+        uses the standard error disposition (single-key default = THROW).
+        """
+        key = spec.keys[0]
+        op_type = spec.op_type
+        has_ops = bool(spec.operations)
+
+        if op_type is None and not has_ops:
+            # Simple read — all bins or projected bins.
+            if self._base_read_policy is None and self._behavior is not None:
+                self._base_read_policy = self._apply_txn(to_read_policy(
+                    self._behavior.get_settings(
+                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+            rp = self._apply_txn(self._base_read_policy or ReadPolicy())
+            try:
+                record = await self._client.get(key, spec.bins, policy=rp)
+            except Exception as e:
+                return self._handle_error(
+                    key, e, _ErrorDisposition.THROW, None)
+            return RecordStream.from_single(key, record)
+
+        if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
+            # Write via operate — upsert or verb with REA override.
+            if self._base_write_policy is None and self._behavior is not None:
+                self._base_write_policy = self._apply_txn(to_write_policy(
+                    self._behavior.get_settings(
+                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                        self._resolved_namespace_mode())))
+            rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
+            if rea is not None:
+                if self._behavior is not None:
+                    wp = self._apply_txn(to_write_policy(
+                        self._behavior.get_settings(
+                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                            self._resolved_namespace_mode())))
+                else:
+                    wp = self._apply_txn(WritePolicy())
+                wp.record_exists_action = rea
+            else:
+                wp = self._apply_txn(self._base_write_policy or WritePolicy())
+            try:
+                record = await self._client.operate(key, spec.operations, policy=wp)
+            except Exception as e:
+                return self._handle_error(
+                    key, e, _ErrorDisposition.THROW, None,
+                    op_type=spec.op_type)
+            return RecordStream.from_single(key, record)
+
+        # Not a simple case — fall back to normal chain.
+        return None
+
+
+
+
+
+
+
+    async def _execute_single_key_read(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        read_policy = self._make_read_policy(spec)
+        try:
+            record = await self._client.get(key, spec.bins, policy=read_policy)
+        except Exception as e:
+            return self._handle_error(key, e, disp, handler)
+        return RecordStream.from_single(key, record)
+
+    async def _execute_single_key_operate(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        policy = self._apply_txn(WritePolicy())
+        if spec.filter_expression is not None:
+            policy.filter_expression = spec.filter_expression
+        try:
+            record = await self._client.operate(key, spec.operations, policy=policy)
+        except Exception as e:
+            return self._handle_error(key, e, disp, handler)
+        return RecordStream.from_single(key, record)
+
+    async def _execute_batch_read(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_read_policy = None
+        if self._behavior is not None:
+            settings = self._behavior.get_settings(
+                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
+            batch_read_policy = to_batch_read_policy(settings)
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        if spec.filter_expression is not None:
+            if batch_read_policy is None:
+                batch_read_policy = BatchReadPolicy()
+            batch_read_policy.filter_expression = spec.filter_expression
+        try:
+            batch_records = await self._client.batch_read(
+                spec.keys, spec.bins,
+                batch_policy=batch_policy, read_policy=batch_read_policy)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(batch_records, disp, handler)
+
+
+    async def _execute_batch_read_operate(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        ops_per_key = [spec.operations] * len(spec.keys)
+        bwp = None
+        if spec.filter_expression is not None:
+            bwp = BatchWritePolicy()
+            bwp.filter_expression = spec.filter_expression
+        try:
+            batch_records = await self._client.batch_operate(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(batch_records, disp, handler)
+
+    # -- Write execution helpers ----------------------------------------------
+
+
+
+
+
+
+    async def _execute_single_key_write(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        wp = self._make_write_policy(spec)
+        try:
+            record = await self._client.operate(key, spec.operations, policy=wp)
+        except Exception as e:
+            return self._handle_error(
+                key, e, disp, handler, op_type=spec.op_type)
+        return RecordStream.from_single(key, record)
+
+    async def _execute_single_key_delete(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        wp = self._make_write_policy(spec)
+        try:
+            existed = await self._client.delete(key, policy=wp)
+        except Exception as e:
+            return self._handle_error(
+                key, e, disp, handler, op_type="delete")
+        rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
+        if self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out
+        ):
+            return RecordStream.from_error(key, rc)
+        return RecordStream.from_list([])
+
+    async def _execute_batch_write(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bwp = self._make_batch_write_policy(spec)
+        ops_per_key = [spec.operations] * len(spec.keys)
+        try:
+            batch_records = await self._client.batch_operate(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(
+            batch_records, disp, handler, op_type=spec.op_type)
+
+    async def _execute_batch_delete(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bdp = self._make_batch_delete_policy(spec)
+        try:
+            batch_records = await self._client.batch_delete(
+                spec.keys, batch_policy=batch_policy, delete_policy=bdp)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(
+            batch_records, disp, handler, op_type="delete")
+
+
+
+
+    async def _execute_single_key_touch(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        wp = self._make_write_policy(spec)
+        try:
+            await self._client.touch(key, policy=wp)
+        except Exception as e:
+            return self._handle_error(key, e, disp, handler, op_type="touch")
+        if self._should_include_result(
+            ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out
+        ):
+            return RecordStream.from_error(key, ResultCode.OK)
+        return RecordStream.from_list([])
+
+    async def _execute_batch_touch(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        bwp = self._make_batch_write_policy(spec)
+        touch_ops = [Operation.touch()]
+        ops_per_key = [touch_ops] * len(spec.keys)
+        try:
+            batch_records = await self._client.batch_operate(
+                spec.keys, ops_per_key,
+                batch_policy=batch_policy, write_policy=bwp)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(
+            batch_records, disp, handler, op_type="touch")
+
+    async def _execute_single_key_exists(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        key = spec.keys[0]
+        if self._read_policy is not None:
+            rp = self._read_policy
+        elif self._behavior is not None:
+            rp = self._apply_txn(to_read_policy(
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+        else:
+            rp = self._apply_txn(ReadPolicy())
+        if spec.filter_expression is not None:
+            rp.filter_expression = spec.filter_expression
+        try:
+            found = await self._client.exists(key, policy=rp)
+        except Exception as e:
+            return self._handle_error(
+                key, e, disp, handler, op_type="exists")
+        rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
+        if self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out
+        ):
+            return RecordStream.from_error(key, rc)
+        return RecordStream.from_list([])
+
+    async def _execute_batch_exists(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+    ) -> RecordStream:
+        batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
+        brp = self._make_batch_read_policy(spec)
+        try:
+            found_list = await self._client.batch_exists(
+                spec.keys, batch_policy=batch_policy, read_policy=brp)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        results = []
+        for key, found in zip(spec.keys, found_list):
+            rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
+            if self._should_include_result(
+                rc, self._respond_all_keys, self._fail_on_filtered_out
+            ):
+                results.append(RecordResult(key, None, rc))
+        return RecordStream.from_list(results)
+
+    # -- Mixed-batch execution (multi-spec chains) ----------------------------
+
+
+
+
     async def _execute_dataset_query(self) -> RecordStream:
         log.debug(
             "dataset query: %s.%s filter=%s chunk=%s hint=%s",
@@ -2589,7 +3483,12 @@ class QueryBuilder(_WriteVerbs):
             policy.expected_duration = hint.query_duration
 
         if self._where_ael is not None and self._indexes_monitor is not None:
-            await self._indexes_monitor.wait_until_ready()
+            # Lazy start: the monitor's daemon thread only spins up on the
+            # first AEL ``where()`` query. ``start()`` is idempotent.
+            self._indexes_monitor.start(self._client)
+            # Offload the readiness wait so the event loop isn't pinned for
+            # the first-fetch case (subsequent calls return immediately).
+            await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
 
         self._resolve_index_context()
 
@@ -2602,7 +3501,7 @@ class QueryBuilder(_WriteVerbs):
 
         try:
             recordset = await self._client.query(
-                policy, partition_filter, statement)
+                statement, partition_filter, policy=policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
@@ -2610,7 +3509,7 @@ class QueryBuilder(_WriteVerbs):
             client = self._client
 
             async def _reexecute(pf: PartitionFilter) -> Any:
-                return await client.query(policy, pf, statement)
+                return await client.query(statement, pf, policy=policy)
 
             return RecordStream.from_chunked_recordset(
                 recordset,
@@ -2620,84 +3519,27 @@ class QueryBuilder(_WriteVerbs):
 
         return RecordStream.from_recordset(recordset)
 
-    def _resolve_index_context(self) -> None:
-        """Auto-populate ``_index_context`` from the monitor when not set.
-
-        The monitor's cached :class:`IndexContext` is at namespace granularity
-        and has no ``query_set``. We derive a per-query copy with
-        ``query_set=self._set_name`` so filter selection rejects indexes
-        defined on a different set; cross-set indexes (those without a
-        set name) remain eligible.
-        """
-        if self._index_context is not None:
-            return
-        if self._indexes_monitor is None:
-            return
-        ctx = self._indexes_monitor.get_index_context(self._namespace)
-        if ctx is None:
-            return
-        if self._set_name and ctx.query_set != self._set_name:
-            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
-            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
-        self._index_context = ctx
-
-    def _auto_generate_filters(
-        self,
-        hint: Optional[QueryHint],
-        policy: QueryPolicy,
-    ) -> None:
-        """Parse AEL with index context to generate Filter + Exp.
-
-        When a hint provides ``index_name`` or ``bin_name``, those overrides
-        are forwarded to the filter generation pipeline.
-        """
-        if self._where_ael is None or self._index_context is None:
-            return
-
-        hint_index = hint.index_name if hint is not None else None
-        hint_bin = hint.bin_name if hint is not None else None
-
-        result = parse_ael_with_index(
-            self._where_ael,
-            self._index_context,
-            hint_index_name=hint_index,
-            hint_bin_name=hint_bin,
-        )
-        if result.filter is not None:
-            self._filter_records.append(_FilterRecord(filter=result.filter))
-            log.debug(
-                "Auto-selected secondary index filter for query on %s.%s",
-                self._namespace,
-                self._set_name,
-            )
-        if result.exp is not None:
-            policy.filter_expression = result.exp
 
 
-class WriteSegmentBuilder(_WriteVerbs):
-    """Accumulate scalar and CDT writes for the current operation's key(s).
 
-    Obtained from :class:`QueryBuilder` after a write verb or from
-    :class:`WriteBinBuilder` when chaining. Call :meth:`put`, :meth:`bin`,
-    expression helpers, optional :meth:`where` / TTL / generation guards, then
-    :meth:`execute` on this object or transition with :meth:`query` /
-    another write verb on the mixin.
 
-    Example:
-        Upsert two bins, then read the stream of results::
+class _WriteSegmentBuilderBase:
+    """State + chaining shared by async and sync write-segment builders.
 
-            stream = await (
-                session.upsert(key)
-                    .put({"name": "Ada", "score": 100})
-                    .execute()
-            )
+    Holds the wrapped :class:`_QueryBuilderBase` reference (``_qb``) and the
+    chaining methods that mutate state on it. Concrete subclasses
+    (:class:`WriteSegmentBuilder` for async, ``SyncWriteSegmentBuilder`` for
+    sync) add their respective ``execute()`` paths.
 
-    See Also:
-        :meth:`QueryBuilder.execute`: Runs all chained operations.
+    Subclasses:
+        - :class:`WriteSegmentBuilder` (this file): async ``execute()``.
+        - :class:`~aerospike_sdk.sync.operations.query.SyncWriteSegmentBuilder`:
+          sync ``execute()`` via the inherited blocking dispatch.
+
+    End users never construct this base directly; they get a concrete
+    subclass by calling a write verb (``upsert``, ``insert``, etc.) on a
+    :class:`QueryBuilder` / ``SyncQueryBuilder`` or on a session.
     """
-
-    __slots__ = ("_qb",)
-
     def __init__(self, qb: QueryBuilder) -> None:
         self._qb = qb
 
@@ -2719,227 +3561,6 @@ class WriteSegmentBuilder(_WriteVerbs):
         """
         self._qb.with_txn(txn)
         return self
-
-    # -- Bin operations -------------------------------------------------------
-
-    def bin(self, bin_name: str) -> WriteBinBuilder:
-        """Start a bin-level write operation.
-
-        Args:
-            bin_name: The bin to operate on.
-
-        Returns:
-            A WriteBinBuilder for method chaining.
-        """
-        return WriteBinBuilder(self, bin_name)
-
-    def put(self, bins: dict) -> WriteSegmentBuilder:
-        """Apply ``Operation.put`` for each bin in the mapping.
-
-        Args:
-            bins: Map of bin name to value.
-
-        Returns:
-            This segment for chaining.
-
-        Example::
-            await session.upsert(key).put({"email": "a@b.com", "age": 30}).execute()
-
-        See Also:
-            :meth:`bin`: Per-bin CDT or scalar follow-ups.
-        """
-        for bin_name, value in bins.items():
-            self._qb._operations.append(Operation.put(bin_name, value))
-        return self
-
-    def set_bins(self, bins: dict) -> WriteSegmentBuilder:
-        """Alias for :meth:`put`."""
-        return self.put(bins)
-
-    def _add_op(self, op: Any) -> WriteSegmentBuilder:
-        self._qb._operations.append(op)
-        return self
-
-    def add_operation(self, op: Any) -> None:
-        """Append an operation (used by CDT action builders)."""
-        self._qb._operations.append(op)
-
-    # -- Scalar bin operations (direct on segment) ----------------------------
-
-    def set_to(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
-        """Set a bin to *value*."""
-        return self._add_op(Operation.put(bin_name, value))
-
-    def add(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
-        """Add a numeric *value* to a bin."""
-        return self._add_op(Operation.add(bin_name, value))
-
-    def increment_by(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
-        """Alias for :meth:`add`."""
-        return self.add(bin_name, value)
-
-    def get(self, bin_name: str) -> WriteSegmentBuilder:
-        """Read a bin value back within a write operate."""
-        return self._add_op(Operation.get_bin(bin_name))
-
-    def append(self, bin_name: str, value: str) -> WriteSegmentBuilder:
-        """Append a string to a bin."""
-        return self._add_op(Operation.append(bin_name, value))
-
-    def prepend(self, bin_name: str, value: str) -> WriteSegmentBuilder:
-        """Prepend a string to a bin."""
-        return self._add_op(Operation.prepend(bin_name, value))
-
-    def remove_bin(self, bin_name: str) -> WriteSegmentBuilder:
-        """Delete a bin from the record."""
-        return self._add_op(Operation.put(bin_name, None))
-
-    # -- Record-level operations ----------------------------------------------
-
-    def delete_record(self) -> WriteSegmentBuilder:
-        """Add a record-level delete to the current operate call.
-
-        Unlike :meth:`~_WriteVerbs.delete` which targets a different key,
-        this deletes the record being operated on as part of the same
-        atomic operation.
-
-        Example::
-
-            stream = await (
-                session.upsert(key)
-                    .bin("name").get()
-                    .delete_record()
-                    .execute()
-            )
-
-        Returns:
-            This segment for chaining.
-
-        See Also:
-            :meth:`~_WriteVerbs.delete`: Start a new delete segment for a key.
-        """
-        self._qb._record_delete_in_operations = True
-        return self._add_op(Operation.delete())
-
-    def touch_record(self) -> WriteSegmentBuilder:
-        """Add a record-level touch to the current operate call.
-
-        Resets the record's TTL as part of an atomic multi-operation call.
-        Combine with :meth:`expire_record_after_seconds` to set a new TTL.
-
-        Example::
-
-            stream = await (
-                session.upsert(key)
-                    .bin("score").get()
-                    .touch_record()
-                    .expire_record_after_seconds(120)
-                    .execute()
-            )
-
-        Returns:
-            This segment for chaining.
-
-        See Also:
-            :meth:`~_WriteVerbs.touch`: Start a new touch segment for a key.
-        """
-        return self._add_op(Operation.touch())
-
-    # -- Expression operations (direct on segment) ----------------------------
-
-    def select_from(
-        self,
-        bin_name: str,
-        expression: Union[str, FilterExpression],
-        *,
-        ignore_eval_failure: bool = False,
-    ) -> WriteSegmentBuilder:
-        """Read a computed value into a bin using an AEL expression."""
-        flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
-        return self._add_op(ExpOperation.read(bin_name, expr, flags))
-
-    def insert_from(
-        self,
-        bin_name: str,
-        expression: Union[str, FilterExpression],
-        *,
-        ignore_op_failure: bool = False,
-        ignore_eval_failure: bool = False,
-        delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
-        """Write expression result only if bin does not already exist."""
-        flags = _build_exp_write_flags(
-            ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
-            ignore_eval_failure, delete_if_null,
-        )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
-
-    def update_from(
-        self,
-        bin_name: str,
-        expression: Union[str, FilterExpression],
-        *,
-        ignore_op_failure: bool = False,
-        ignore_eval_failure: bool = False,
-        delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
-        """Write expression result only if bin already exists."""
-        flags = _build_exp_write_flags(
-            ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
-            ignore_eval_failure, delete_if_null,
-        )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
-
-    def upsert_from(
-        self,
-        bin_name: str,
-        expression: Union[str, FilterExpression],
-        *,
-        ignore_op_failure: bool = False,
-        ignore_eval_failure: bool = False,
-        delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
-        """Write expression result, creating or overwriting the bin."""
-        flags = _build_exp_write_flags(
-            ExpWriteFlags.DEFAULT, ignore_op_failure,
-            ignore_eval_failure, delete_if_null,
-        )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
-
-    # -- Transition methods ---------------------------------------------------
-
-    def query(
-        self,
-        arg1: Union[Key, List[Key]],
-        *more_keys: Key,
-    ) -> QueryBuilder:
-        """Finalize current write segment and start a read segment.
-
-        Args:
-            arg1: A single Key or List[Key].
-            *more_keys: Additional keys (varargs).
-
-        Returns:
-            The parent QueryBuilder for method chaining.
-        """
-        self._qb._finalize_current_spec()
-        self._qb._op_type = None
-        self._qb._set_current_keys(arg1, *more_keys)
-        return self._qb
-
-    def _start_write_verb(
-        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> WriteSegmentBuilder:
-        self._qb._finalize_current_spec()
-        self._qb._op_type = op_type
-        self._qb._set_current_keys(arg1, *more_keys)
-        return self
-
-    # -- Per-operation settings ------------------------------------------------
 
     @overload
     def where(self, expression: str) -> WriteSegmentBuilder: ...
@@ -3081,6 +3702,303 @@ class WriteSegmentBuilder(_WriteVerbs):
         """
         self._qb._op_type = "replace_if_exists"
         return self
+    def execute_blocking_fast_path(
+        self,
+        on_error: Optional[OnError] = None,
+    ) -> Optional[tuple]:
+        """Try the blocking single-key fast path via the parent QueryBuilder.
+
+        Mirrors :meth:`execute` but uses PAC ``_blocking``. Returns
+        ``(key, record)`` on success, ``None`` when the spec shape isn't
+        yet handled by the blocking dispatch. Raises a converted PAC
+        exception on failure.
+        """
+        return self._qb.execute_blocking_fast_path(on_error)
+    def bin(self, bin_name: str) -> WriteBinBuilder:
+        """Start a bin-level write operation.
+
+        Args:
+            bin_name: The bin to operate on.
+
+        Returns:
+            A WriteBinBuilder for method chaining.
+        """
+        return WriteBinBuilder(self, bin_name)
+
+    def put(self, bins: dict) -> WriteSegmentBuilder:
+        """Apply ``Operation.put`` for each bin in the mapping.
+
+        Args:
+            bins: Map of bin name to value.
+
+        Returns:
+            This segment for chaining.
+
+        Example::
+            await session.upsert(key).put({"email": "a@b.com", "age": 30}).execute()
+
+        See Also:
+            :meth:`bin`: Per-bin CDT or scalar follow-ups.
+        """
+        for bin_name, value in bins.items():
+            self._qb._operations.append(Operation.put(bin_name, value))
+        return self
+
+    def set_bins(self, bins: dict) -> WriteSegmentBuilder:
+        """Alias for :meth:`put`."""
+        return self.put(bins)
+
+    def _add_op(self, op: Any) -> WriteSegmentBuilder:
+        self._qb._operations.append(op)
+        return self
+
+    def add_operation(self, op: Any) -> None:
+        """Append an operation (used by CDT action builders)."""
+        self._qb._operations.append(op)
+
+    def set_to(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+        """Set a bin to *value*."""
+        return self._add_op(Operation.put(bin_name, value))
+
+    def add(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+        """Add a numeric *value* to a bin."""
+        return self._add_op(Operation.add(bin_name, value))
+
+    def increment_by(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+        """Alias for :meth:`add`."""
+        return self.add(bin_name, value)
+
+    def get(self, bin_name: str) -> WriteSegmentBuilder:
+        """Read a bin value back within a write operate."""
+        return self._add_op(Operation.get_bin(bin_name))
+
+    def append(self, bin_name: str, value: str) -> WriteSegmentBuilder:
+        """Append a string to a bin."""
+        return self._add_op(Operation.append(bin_name, value))
+
+    def prepend(self, bin_name: str, value: str) -> WriteSegmentBuilder:
+        """Prepend a string to a bin."""
+        return self._add_op(Operation.prepend(bin_name, value))
+
+    def remove_bin(self, bin_name: str) -> WriteSegmentBuilder:
+        """Delete a bin from the record."""
+        return self._add_op(Operation.put(bin_name, None))
+
+    def delete_record(self) -> WriteSegmentBuilder:
+        """Add a record-level delete to the current operate call.
+
+        Unlike :meth:`~_WriteVerbs.delete` which targets a different key,
+        this deletes the record being operated on as part of the same
+        atomic operation.
+
+        Example::
+
+            stream = await (
+                session.upsert(key)
+                    .bin("name").get()
+                    .delete_record()
+                    .execute()
+            )
+
+        Returns:
+            This segment for chaining.
+
+        See Also:
+            :meth:`~_WriteVerbs.delete`: Start a new delete segment for a key.
+        """
+        self._qb._record_delete_in_operations = True
+        return self._add_op(Operation.delete())
+
+    def touch_record(self) -> WriteSegmentBuilder:
+        """Add a record-level touch to the current operate call.
+
+        Resets the record's TTL as part of an atomic multi-operation call.
+        Combine with :meth:`expire_record_after_seconds` to set a new TTL.
+
+        Example::
+
+            stream = await (
+                session.upsert(key)
+                    .bin("score").get()
+                    .touch_record()
+                    .expire_record_after_seconds(120)
+                    .execute()
+            )
+
+        Returns:
+            This segment for chaining.
+
+        See Also:
+            :meth:`~_WriteVerbs.touch`: Start a new touch segment for a key.
+        """
+        return self._add_op(Operation.touch())
+
+    def select_from(
+        self,
+        bin_name: str,
+        expression: Union[str, FilterExpression],
+        *,
+        ignore_eval_failure: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Read a computed value into a bin using an AEL expression."""
+        flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
+        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        return self._add_op(ExpOperation.read(bin_name, expr, flags))
+
+    def insert_from(
+        self,
+        bin_name: str,
+        expression: Union[str, FilterExpression],
+        *,
+        ignore_op_failure: bool = False,
+        ignore_eval_failure: bool = False,
+        delete_if_null: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Write expression result only if bin does not already exist."""
+        flags = _build_exp_write_flags(
+            ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
+            ignore_eval_failure, delete_if_null,
+        )
+        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+
+    def update_from(
+        self,
+        bin_name: str,
+        expression: Union[str, FilterExpression],
+        *,
+        ignore_op_failure: bool = False,
+        ignore_eval_failure: bool = False,
+        delete_if_null: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Write expression result only if bin already exists."""
+        flags = _build_exp_write_flags(
+            ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
+            ignore_eval_failure, delete_if_null,
+        )
+        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+
+    def upsert_from(
+        self,
+        bin_name: str,
+        expression: Union[str, FilterExpression],
+        *,
+        ignore_op_failure: bool = False,
+        ignore_eval_failure: bool = False,
+        delete_if_null: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Write expression result, creating or overwriting the bin."""
+        flags = _build_exp_write_flags(
+            ExpWriteFlags.DEFAULT, ignore_op_failure,
+            ignore_eval_failure, delete_if_null,
+        )
+        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+
+    def query(
+        self,
+        arg1: Union[Key, List[Key]],
+        *more_keys: Key,
+    ) -> QueryBuilder:
+        """Finalize current write segment and start a read segment.
+
+        Args:
+            arg1: A single Key or List[Key].
+            *more_keys: Additional keys (varargs).
+
+        Returns:
+            The parent QueryBuilder for method chaining.
+        """
+        self._qb._finalize_current_spec()
+        self._qb._op_type = None
+        self._qb._set_current_keys(arg1, *more_keys)
+        return self._qb
+
+    def _start_write_verb(
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        self._qb._finalize_current_spec()
+        self._qb._op_type = op_type
+        self._qb._set_current_keys(arg1, *more_keys)
+        return self
+
+
+
+
+
+class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
+    """Accumulate scalar and CDT writes for the current operation's key(s).
+
+    Obtained from :class:`QueryBuilder` after a write verb or from
+    :class:`WriteBinBuilder` when chaining. Call :meth:`put`, :meth:`bin`,
+    expression helpers, optional :meth:`where` / TTL / generation guards, then
+    :meth:`execute` on this object or transition with :meth:`query` /
+    another write verb on the mixin.
+
+    Example:
+        Upsert two bins, then read the stream of results::
+
+            stream = await (
+                session.upsert(key)
+                    .put({"name": "Ada", "score": 100})
+                    .execute()
+            )
+
+    See Also:
+        :meth:`QueryBuilder.execute`: Runs all chained operations.
+    """
+
+    __slots__ = ("_qb",)
+
+
+
+    # -- Bin operations -------------------------------------------------------
+
+
+
+
+
+
+    # -- Scalar bin operations (direct on segment) ----------------------------
+
+
+
+
+
+
+
+
+    # -- Record-level operations ----------------------------------------------
+
+
+
+    # -- Expression operations (direct on segment) ----------------------------
+
+
+
+
+
+    # -- Transition methods ---------------------------------------------------
+
+
+
+    # -- Per-operation settings ------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # -- Execution ------------------------------------------------------------
 
@@ -3106,23 +4024,27 @@ class WriteSegmentBuilder(_WriteVerbs):
         return await self._qb.execute(on_error)
 
 
-class _SingleKeyWriteSegment(WriteSegmentBuilder):
-    """Lightweight single-key write path that bypasses QueryBuilder overhead.
 
-    On the hot path (put + execute), calls the PAC directly without
-    ``_finalize_current_spec``, ``_OperationSpec``, or ``execute()`` dispatch.
-    Advanced features (``where``, TTL, generation, chaining) trigger in-place
-    promotion: ``self._qb`` is populated so all inherited
-    ``WriteSegmentBuilder`` methods work naturally.
+class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
+    """Shared fast-path state + promote-delegate logic for single-key segments.
+
+    Holds the fast-path slot fields (``_client_fast``, ``_key``,
+    ``_op_type_fast``, ``_ops``, durable-delete overrides, MRT plumbing) and
+    the methods that toggle between fast-path mutation and promoted
+    delegation. The concrete ``_promote()`` implementation differs per
+    subclass: :class:`_SingleKeyWriteSegment` constructs a
+    :class:`QueryBuilder`; ``SyncSingleKeyWriteSegment`` constructs a
+    ``SyncQueryBuilder``.
+
+    Subclasses:
+        - :class:`_SingleKeyWriteSegment` (this file): ``_promote()``
+          constructs a :class:`QueryBuilder`; async ``execute()``.
+        - :class:`~aerospike_sdk.sync.operations.query.SyncSingleKeyWriteSegment`:
+          ``_promote()`` constructs a ``SyncQueryBuilder``; sync ``execute()``.
+
+    Private class — never seen by end users; constructed by the session
+    when a single-key write verb is invoked.
     """
-
-    __slots__ = (
-        "_client_fast", "_key", "_op_type_fast", "_ops",
-        "_write_policy", "_behavior_fast", "_read_policy",
-        "_txn", "_namespace_mode_resolver",
-        "_dd_command_default", "_dd_override", "_record_delete_in_fast_ops",
-    )
-
     def __init__(
         self,
         client: Client,
@@ -3133,6 +4055,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         read_policy: ReadPolicy | None = None,
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -3151,6 +4074,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._behavior_fast = behavior
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
+        self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
         self._dd_command_default: Optional[bool] = None
         self._dd_override: Optional[bool] = None
         self._record_delete_in_fast_ops = False
@@ -3172,10 +4096,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         if self._qb is not None:
             self._qb.with_txn(txn)
         return self
-
-    # -- Operation methods ---------------------------------------------------
-    # On the fast path (_qb is None) these use self._ops directly.
-    # After promotion (_qb is set) they delegate to the QB's list.
 
     def put(self, bins: dict) -> WriteSegmentBuilder:
         if self._qb is not None:
@@ -3234,30 +4154,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._dd_override = True
         return self
 
-    # -- In-place promotion --------------------------------------------------
-
-    def _promote(self) -> None:
-        """Populate ``self._qb`` so inherited WriteSegmentBuilder methods work."""
-        if self._qb is not None:
-            return
-        qb = QueryBuilder(
-            client=self._client_fast,
-            namespace=self._key.namespace,
-            set_name=self._key.set_name,
-            behavior=self._behavior_fast,
-            cached_write_policy=self._write_policy,
-            cached_read_policy=self._read_policy,
-            txn=self._txn,
-            namespace_mode_resolver=self._namespace_mode_resolver,
-        )
-        qb._op_type = self._op_type_fast
-        qb._single_key = self._key
-        qb._operations = self._ops
-        qb._durable_delete_command_default = self._dd_command_default
-        qb._durable_delete = self._dd_override
-        qb._record_delete_in_operations = self._record_delete_in_fast_ops
-        self._qb = qb
-
     def where(self, expression):
         self._promote()
         return super().where(expression)
@@ -3298,8 +4194,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         self._promote()
         return super()._start_write_verb(op_type, arg1, *more_keys)
 
-    # -- Error handling ------------------------------------------------------
-
     @staticmethod
     def _handle_fast_error(
         exc: Exception, op_type: str,
@@ -3313,8 +4207,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             raise pfc_exc from exc
         return RecordStream.from_list([])
 
-    # -- Policy helpers ------------------------------------------------------
-
     def _get_write_policy(self) -> WritePolicy:
         wp = self._write_policy
         if wp is None and self._behavior_fast is not None:
@@ -3323,8 +4215,104 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
             self._write_policy = wp
         return self._apply_txn(wp or WritePolicy())
+    def execute_blocking_fast_path(  # type: ignore[override]
+        self,
+        on_error: Optional[OnError] = None,
+    ) -> Optional[tuple]:
+        """Blocking fast path for ``_SingleKeyWriteSegment``.
+
+        Promotes to a full ``QueryBuilder`` first (so namespace-mode
+        resolution and the spec-shape eligibility checks work), then
+        defers to :meth:`QueryBuilder.execute_blocking_fast_path`.
+
+        Returns ``(key, record)`` on success; ``None`` when the spec
+        shape isn't eligible (caller falls back to runner-driven).
+        """
+        if on_error is not None:
+            # Fast path requires THROW disposition; bail.
+            return None
+        self._promote()
+        return self._qb.execute_blocking_fast_path(on_error)  # type: ignore[union-attr]
+
+
+
+
+class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
+    """Lightweight single-key write path that bypasses QueryBuilder overhead.
+
+    On the hot path (put + execute), calls the PAC directly without
+    ``_finalize_current_spec``, ``_OperationSpec``, or ``execute()`` dispatch.
+    Advanced features (``where``, TTL, generation, chaining) trigger in-place
+    promotion: ``self._qb`` is populated so all inherited
+    ``WriteSegmentBuilder`` methods work naturally.
+    """
+
+    __slots__ = (
+        "_client_fast", "_key", "_op_type_fast", "_ops",
+        "_write_policy", "_behavior_fast", "_read_policy",
+        "_txn", "_namespace_mode_resolver", "_namespace_mode_resolver_blocking",
+        "_dd_command_default", "_dd_override", "_record_delete_in_fast_ops",
+    )
+
+
+
+
+    # -- Operation methods ---------------------------------------------------
+    # On the fast path (_qb is None) these use self._ops directly.
+    # After promotion (_qb is set) they delegate to the QB's list.
+
+
+
+
+
+
+
+
+
+
+    # -- In-place promotion --------------------------------------------------
+
+    def _promote(self) -> None:
+        """Populate ``self._qb`` so inherited WriteSegmentBuilder methods work."""
+        if self._qb is not None:
+            return
+        qb = QueryBuilder(
+            client=self._client_fast,
+            namespace=self._key.namespace,
+            set_name=self._key.set_name,
+            behavior=self._behavior_fast,
+            cached_write_policy=self._write_policy,
+            cached_read_policy=self._read_policy,
+            txn=self._txn,
+            namespace_mode_resolver=self._namespace_mode_resolver,
+            namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+        )
+        qb._op_type = self._op_type_fast
+        qb._single_key = self._key
+        qb._operations = self._ops
+        qb._durable_delete_command_default = self._dd_command_default
+        qb._durable_delete = self._dd_override
+        qb._record_delete_in_operations = self._record_delete_in_fast_ops
+        self._qb = qb
+
+
+
+
+
+
+
+
+
+
+
+    # -- Error handling ------------------------------------------------------
+
+
+    # -- Policy helpers ------------------------------------------------------
+
 
     # -- Execution -----------------------------------------------------------
+
 
     async def execute(  # type: ignore[override]
         self, on_error: OnError | None = None,
@@ -3345,7 +4333,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         if op_type == "delete":
             wp = self._get_write_policy()
             try:
-                existed = await self._client_fast.delete(wp, key)
+                existed = await self._client_fast.delete(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "delete")
             if existed:
@@ -3356,7 +4344,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         if op_type == "touch":
             wp = self._get_write_policy()
             try:
-                await self._client_fast.touch(wp, key)
+                await self._client_fast.touch(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "touch")
             return RecordStream.from_error(key, ResultCode.OK)
@@ -3372,7 +4360,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             if rp is None:
                 rp = self._apply_txn(ReadPolicy())
             try:
-                found = await self._client_fast.exists(rp, key)
+                found = await self._client_fast.exists(key, policy=rp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "exists")
             if found:

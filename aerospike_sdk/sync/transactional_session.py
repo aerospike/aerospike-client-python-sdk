@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Synchronous multi-record transaction (MRT) session wrapper."""
+"""Synchronous multi-record transaction (MRT) session."""
 
 from __future__ import annotations
 
@@ -22,131 +22,82 @@ from typing import Optional, TYPE_CHECKING
 
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
-from aerospike_sdk.aio.transactional_session import TransactionalSession as AsyncTransactionalSession
-from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.session import SyncSession
 
 if TYPE_CHECKING:
     from aerospike_sdk.policy.behavior import Behavior
+    from aerospike_sdk.sync.client import SyncClient
 
 
 class SyncTransactionalSession(SyncSession):
-    """Sync context manager that groups operations into a multi-record transaction.
+    """Sync context manager grouping operations into a multi-record transaction.
 
-    Subclasses :class:`~aerospike_sdk.sync.session.SyncSession`, so every
-    session API (``query``, ``upsert``, ``insert``, ``batch``, ...) works
-    unchanged inside ``with``; the underlying async
-    :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-    threads the active :class:`~aerospike_async.Txn` onto every policy the
-    builders hand to the PAC — the user never touches a policy.
+    Every session API (``query``, ``upsert``, ``insert``, ``batch``, ...)
+    works unchanged inside ``with``; the active :class:`~aerospike_async.Txn`
+    is threaded onto every policy the builders hand to the PAC.
 
-    On clean exit the transaction is committed; if an exception propagates
-    out of the block the transaction is aborted. Explicit :meth:`commit`,
-    :meth:`abort`, and :meth:`rollback` (alias for ``abort``) are also
-    available for manual control.
+    On clean exit the transaction commits; if an exception propagates out
+    the transaction aborts. Explicit :meth:`commit`, :meth:`abort`, and
+    :meth:`rollback` (alias for ``abort``) are available for manual control.
 
     Example:
         >>> with client.create_session().begin_transaction() as tx:
         ...     tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
         ...     tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
-        # Auto-committed on clean exit; auto-aborted on exception.
 
     See Also:
-        :meth:`aerospike_sdk.sync.session.SyncSession.begin_transaction`
-        :meth:`aerospike_sdk.sync.cluster.Cluster.create_transactional_session`
-        :class:`aerospike_sdk.aio.transactional_session.TransactionalSession`
+        :meth:`SyncSession.begin_transaction`:
+            Preferred construction entry.
     """
 
-    def __init__(
-        self,
-        async_txn_session: AsyncTransactionalSession,
-        loop_manager: _EventLoopManager,
-    ) -> None:
-        """Wrap ``async_txn_session``; use :meth:`SyncSession.begin_transaction` instead.
-
-        Args:
-            async_txn_session: Underlying async
-                :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-                sharing the same client and behavior.
-            loop_manager: Loop manager shared with the parent
-                :class:`~aerospike_sdk.sync.client.SyncClient`.
-
-        Note:
-            Application code should not construct ``SyncTransactionalSession``
-            directly; call :meth:`SyncSession.begin_transaction` or
-            :meth:`Cluster.create_transactional_session` instead.
-
-        See Also:
-            :meth:`aerospike_sdk.sync.session.SyncSession.begin_transaction`
-        """
-        super().__init__(async_txn_session, loop_manager)
-
-    @property
-    def _async_txn_session(self) -> AsyncTransactionalSession:
-        # The underlying async session is always the transactional subtype
-        # once this class wraps it.
-        return self._async_session  # type: ignore[return-value]
+    def __init__(self, client: SyncClient, behavior: Behavior) -> None:
+        """Construct via :meth:`SyncSession.begin_transaction` rather than directly."""
+        super().__init__(client, behavior)
+        self._finalized = False
 
     @property
     def txn(self) -> Txn:
-        """Return the underlying :class:`~aerospike_async.Txn`.
+        """Return the active :class:`~aerospike_async.Txn`.
 
         Raises:
             RuntimeError: If the session has not been entered (no active txn).
-
-        Returns:
-            The active :class:`~aerospike_async.Txn`.
         """
-        return self._async_txn_session.txn
+        if self._txn is None:
+            raise RuntimeError("TransactionalSession is not active.")
+        return self._txn
 
     @property
     def active(self) -> bool:
-        """``True`` when a transaction has been started and not yet finalized.
-
-        Returns:
-            Whether a transaction is currently active on this session.
-        """
-        return self._async_txn_session.active
+        """``True`` when a transaction has been started and not yet finalized."""
+        return self._txn is not None and not self._finalized
 
     def commit(self) -> CommitStatus:
-        """Commit the transaction and return the server-reported status.
-
-        Raises:
-            RuntimeError: If the session has no active transaction.
-
-        Returns:
-            :class:`~aerospike_async.CommitStatus` reported by the server.
-
-        See Also:
-            :meth:`abort`: Undo the transaction instead of committing.
-        """
-        return self._loop_manager.run_async(self._async_txn_session.commit())
+        """Commit the transaction and return the server-reported status."""
+        if self._txn is None or self._finalized:
+            raise RuntimeError("No active transaction to commit.")
+        status = self._pac_client.commit_blocking(self._txn)
+        self._finalized = True
+        self._txn = None
+        return status
 
     def abort(self) -> AbortStatus:
-        """Abort the transaction and return the server-reported status.
-
-        Raises:
-            RuntimeError: If the session has no active transaction.
-
-        Returns:
-            :class:`~aerospike_async.AbortStatus` reported by the server.
-
-        See Also:
-            :meth:`commit`: Persist the transaction instead of aborting.
-            :meth:`rollback`: Alias for this method.
-        """
-        return self._loop_manager.run_async(self._async_txn_session.abort())
+        """Abort the transaction and return the server-reported status."""
+        if self._txn is None or self._finalized:
+            raise RuntimeError("No active transaction to abort.")
+        status = self._pac_client.abort_blocking(self._txn)
+        self._finalized = True
+        self._txn = None
+        return status
 
     def rollback(self) -> AbortStatus:
-        """Alias for :meth:`abort`.
-
-        Returns:
-            :class:`~aerospike_async.AbortStatus` reported by the server.
-        """
+        """Alias for :meth:`abort`."""
         return self.abort()
 
-    def __enter__(self) -> "SyncTransactionalSession":
-        self._loop_manager.run_async(self._async_txn_session.__aenter__())
+    def __enter__(self) -> SyncTransactionalSession:
+        if self._txn is not None:
+            raise RuntimeError("TransactionalSession is already active.")
+        self._txn = Txn()
+        self._finalized = False
         return self
 
     def __exit__(
@@ -155,6 +106,13 @@ class SyncTransactionalSession(SyncSession):
         exc_val: Optional[BaseException],
         exc_tb: Optional[types.TracebackType],
     ) -> None:
-        self._loop_manager.run_async(
-            self._async_txn_session.__aexit__(exc_type, exc_val, exc_tb)
-        )
+        if self._txn is None or self._finalized:
+            return
+        try:
+            if exc_type is None:
+                self.commit()
+            else:
+                self.abort()
+        finally:
+            self._finalized = True
+            self._txn = None

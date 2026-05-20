@@ -62,16 +62,12 @@ def _user_keys_from_stream(stream):
     return keys
 
 
-def _run_async(client: SyncClient, coro):
-    return client._loop_manager.run_async(coro)
+def _admin_drop(pac, ns: str, st: str, name: str) -> None:
+    pac.drop_index_blocking(ns, st, name)
 
 
-async def _admin_drop(pac, ns: str, st: str, name: str) -> None:
-    await pac.drop_index(ns, st, name)
-
-
-async def _admin_create_nested(pac) -> None:
-    await pac.create_index(
+def _admin_create_nested(pac) -> None:
+    pac.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -82,8 +78,8 @@ async def _admin_create_nested(pac) -> None:
     )
 
 
-async def _admin_create_flat(pac, index_name: str) -> None:
-    await pac.create_index(
+def _admin_create_flat(pac, index_name: str) -> None:
+    pac.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -110,7 +106,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
 
     _cleanup_records(session, keys)
     try:
-        _run_async(client, _admin_drop(pac, _NS, _SET, _INDEX))
+        _admin_drop(pac, _NS, _SET, _INDEX)
     except Exception:
         pass
 
@@ -134,7 +130,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
     )
 
     try:
-        _run_async(client, _admin_create_nested(pac))
+        _admin_create_nested(pac)
     except Exception as e:
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
@@ -162,7 +158,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
             stream2.close()
     finally:
         try:
-            _run_async(client, _admin_drop(pac, _NS, _SET, _INDEX))
+            _admin_drop(pac, _NS, _SET, _INDEX)
         except Exception:
             pass
         _cleanup_records(session, keys)
@@ -185,7 +181,7 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
 
     _cleanup_records(session, keys)
     try:
-        _run_async(client, _admin_drop(pac, _NS, _SET, index_name))
+        _admin_drop(pac, _NS, _SET, index_name)
     except Exception:
         pass
 
@@ -201,7 +197,7 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
     )
 
     try:
-        _run_async(client, _admin_create_flat(pac, index_name))
+        _admin_create_flat(pac, index_name)
     except Exception as e:
         pytest.skip(f"Could not create CDT-path numeric index: {e}")
 
@@ -216,7 +212,7 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
             stream.close()
     finally:
         try:
-            _run_async(client, _admin_drop(pac, _NS, _SET, index_name))
+            _admin_drop(pac, _NS, _SET, index_name)
         except Exception:
             pass
         _cleanup_records(session, keys)

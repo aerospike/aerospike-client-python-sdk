@@ -56,11 +56,19 @@ await session.index(users).named("users_age_idx").drop()
 
 ## Auto-Index Discovery
 
-The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a background task,
-periodically fetching secondary index metadata from the cluster. When you use
-`.where()` with an AEL expression, the client automatically generates an optimal
-secondary index `Filter` if a matching index exists.
+The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a daemon thread,
+periodically fetching secondary index metadata from the cluster via PAC's
+blocking info APIs. It works identically for the async
+{class}`~aerospike_sdk.aio.client.Client` and the synchronous
+{class}`~aerospike_sdk.SyncClient` — no event loop required.
 
+The monitor **starts lazily**: the daemon thread spins up the first time an
+AEL `.where()` query needs cached secondary-index metadata. Code paths that
+never use `.where()` (point reads/writes, batches, dataset scans without
+AEL filters) pay zero monitor overhead.
+
+When you use `.where()` with an AEL expression, the client automatically
+generates an optimal secondary index `Filter` if a matching index exists.
 This is transparent — no code changes needed:
 
 ```python

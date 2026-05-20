@@ -175,30 +175,11 @@ class BackgroundWriteBinBuilder:
         return self._parent
 
 
-class BackgroundOperationBuilder:
-    """Configure filters, TTL, and operations for ``query_operate``.
+class _BackgroundOperationBuilderBase:
+    """State + chaining shared by async and sync BackgroundOperationBuilder.
 
-    Not all query-policy knobs are wired through to PAC for background jobs;
-    ``records_per_second`` is stored for API parity but may not affect the
-    underlying call.
-
-    See Also:
-        :meth:`BackgroundTaskSession.update`: Typical construction path.
+    Methods migrate from :class:`BackgroundOperationBuilder` during Phase 4 collapse.
     """
-
-    __slots__ = (
-        "_session",
-        "_dataset",
-        "_op_type",
-        "_operations",
-        "_filter_expression",
-        "_index_filters",
-        "_ttl_seconds",
-        "_records_per_second",
-        "_durable_delete_command_default",
-        "_durable_delete_override",
-    )
-
     def __init__(
         self,
         session: Session,
@@ -348,6 +329,81 @@ class BackgroundOperationBuilder:
             return RecordExistsAction.UPDATE_ONLY
         return None
 
+    def execute_blocking(self) -> ExecuteTask:
+        """Sync counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``."""
+        ops = self._final_operations()
+        reject_unsupported_background_write_ops(ops)
+        mode = self._session._resolve_namespace_mode_blocking(
+            self._dataset.namespace)
+        policy_filter = (
+            None if self._index_filters else self._filter_expression
+        )
+        wp = make_background_write_policy(
+            self._session.behavior,
+            policy_filter,
+            self._ttl_seconds,
+            self._record_exists_action(),
+            namespace_mode=mode,
+            durable_delete_command_default=self._durable_delete_command_default,
+            durable_delete_override=self._durable_delete_override,
+        )
+        if self._op_type is not _OpType.DELETE:
+            wp.durable_delete = False
+        statement = dataset_statement(
+            self._dataset.namespace,
+            self._dataset.set_name,
+        )
+        if self._index_filters:
+            statement.filters = list(self._index_filters)
+        client = self._pac_client()
+        try:
+            return client.query_operate_blocking(statement, ops, write_policy=wp)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+
+
+class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
+    """Configure filters, TTL, and operations for ``query_operate``.
+
+    Not all query-policy knobs are wired through to PAC for background jobs;
+    ``records_per_second`` is stored for API parity but may not affect the
+    underlying call.
+
+    See Also:
+        :meth:`BackgroundTaskSession.update`: Typical construction path.
+    """
+
+    __slots__ = (
+        "_session",
+        "_dataset",
+        "_op_type",
+        "_operations",
+        "_filter_expression",
+        "_index_filters",
+        "_ttl_seconds",
+        "_records_per_second",
+        "_durable_delete_command_default",
+        "_durable_delete_override",
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     async def execute(self) -> ExecuteTask:
         """Start the server job and return an :class:`~aerospike_async.ExecuteTask`.
 
@@ -397,9 +453,10 @@ class BackgroundOperationBuilder:
             statement.filters = list(self._index_filters)
         client = self._pac_client()
         try:
-            return await client.query_operate(wp, statement, ops)
+            return await client.query_operate(statement, ops, write_policy=wp)
         except Exception as e:
             raise _convert_pac_exception(e) from e
+
 
 
 class BackgroundUdfFunctionBuilder:
@@ -440,21 +497,11 @@ class BackgroundUdfFunctionBuilder:
         )
 
 
-class BackgroundUdfBuilder:
-    """Arguments, optional filter, and execution for ``query_execute_udf``."""
+class _BackgroundUdfBuilderBase:
+    """State + chaining shared by async and sync BackgroundUdfBuilder.
 
-    __slots__ = (
-        "_session",
-        "_dataset",
-        "_package_name",
-        "_function_name",
-        "_args",
-        "_filter_expression",
-        "_records_per_second",
-        "_durable_delete_command_default",
-        "_durable_delete_override",
-    )
-
+    Methods migrate from :class:`BackgroundUdfBuilder` during Phase 4 collapse.
+    """
     def __init__(
         self,
         session: Session,
@@ -540,6 +587,68 @@ class BackgroundUdfBuilder:
             raise RuntimeError("Client is not connected")
         return fc._client
 
+    def execute_blocking(self) -> ExecuteTask:
+        """Sync counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``."""
+        mode = self._session._resolve_namespace_mode_blocking(
+            self._dataset.namespace)
+        wp = make_background_write_policy(
+            self._session.behavior,
+            self._filter_expression,
+            None,
+            None,
+            namespace_mode=mode,
+            durable_delete_command_default=self._durable_delete_command_default,
+            durable_delete_override=self._durable_delete_override,
+        )
+        statement = dataset_statement(
+            self._dataset.namespace,
+            self._dataset.set_name,
+        )
+        client = self._pac_client()
+        py_args: Optional[List[Any]] = (
+            list(self._args) if self._args is not None else None
+        )
+        try:
+            return client.query_execute_udf_blocking(
+                statement,
+                self._package_name,
+                self._function_name,
+                py_args,
+                write_policy=wp,
+            )
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+
+
+class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
+    """Arguments, optional filter, and execution for ``query_execute_udf``."""
+
+    __slots__ = (
+        "_session",
+        "_dataset",
+        "_package_name",
+        "_function_name",
+        "_args",
+        "_filter_expression",
+        "_records_per_second",
+        "_durable_delete_command_default",
+        "_durable_delete_override",
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     async def execute(self) -> ExecuteTask:
         """Start the background UDF job.
 
@@ -584,11 +693,12 @@ class BackgroundUdfBuilder:
         )
         try:
             return await client.query_execute_udf(
-                wp,
                 statement,
                 self._package_name,
                 self._function_name,
                 py_args,
+                write_policy=wp,
             )
         except Exception as e:
             raise _convert_pac_exception(e) from e
+

@@ -1366,8 +1366,8 @@ def _resolve_for_hll_list(expr: ExprOrDeferred) -> FilterExpression:
 
     - **Single HLL bin reference** — ``$.a``: passed through as
       ``hll_bin('a')``. The server's HLL ops treat a bare HLL value as an
-      implicit single-element list (matches the JSDK Javadoc example
-      ``HLLExp.getUnion(Exp.hllBin("a"), Exp.hllBin("b"))``).
+      implicit single-element list, so ``HLLExp.getUnion(hllBin('a'), hllBin('b'))``-style
+      composition works without an outer list wrapper.
     - **Literal byte-blob list** — ``[?0, ?1]`` or an inline list of bytes,
       packed by :meth:`visitListConstant` into ``list_val(...)``.
     - **Placeholder** bound to a Python list of bytes (``?0``).
@@ -1375,9 +1375,8 @@ def _resolve_for_hll_list(expr: ExprOrDeferred) -> FilterExpression:
     Not supported: ``[$.a, $.b]`` (list of bin references). The Aerospike
     server expression VM does not recursively dereference scalar bin
     expressions inside a composed list when that list is fed to an HLL op.
-    Both JSDK and the legacy Java client work around this the same way —
-    they pre-fetch HLL blobs via a separate read and pass them as a
-    literal value-list. (Confirmed May 2026.)
+    The workaround is to pre-fetch HLL blobs via a separate read and pass
+    them as a literal value-list.
     """
     if isinstance(expr, TypedExpr):
         if expr.type_hint in (InferredType.LIST, InferredType.UNKNOWN):

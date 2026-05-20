@@ -536,13 +536,14 @@ class TestQueryBuilderStacking:
 # ===================================================================
 
 class TestSyncQueryBuilderDelegation:
+    """SyncQueryBuilder is a native subclass of ``_QueryBuilderBase``; state
+    lives directly on the instance (no ``_qb`` wrapper)."""
 
     def _sync_builder(self, **qb_overrides) -> SyncQueryBuilder:
         return SyncQueryBuilder(
-            async_client=object(),
+            client=object(),
             namespace="test",
             set_name="unit",
-            loop_manager=object(),
         )
 
     def test_bin_returns_query_bin_builder(self):
@@ -550,30 +551,30 @@ class TestSyncQueryBuilderDelegation:
         qbb = sb.bin("mybin")
         assert isinstance(qbb, QueryBinBuilder)
 
-    def test_add_operation_delegates(self):
+    def test_add_operation_mutates_state(self):
         sb = self._sync_builder()
         sb.add_operation("sentinel_op")
-        assert "sentinel_op" in sb._qb._operations
+        assert "sentinel_op" in sb._operations
 
-    def test_bins_delegates(self):
+    def test_bins_mutates_state(self):
         sb = self._sync_builder()
         sb.bins(["a", "b"])
-        assert sb._qb._bins == ["a", "b"]
+        assert sb._bins == ["a", "b"]
 
-    def test_with_no_bins_delegates(self):
+    def test_with_no_bins_mutates_state(self):
         sb = self._sync_builder()
         sb.with_no_bins()
-        assert sb._qb._with_no_bins is True
+        assert sb._with_no_bins is True
 
-    def test_query_stacking_delegates(self):
+    def test_query_stacking_mutates_state(self):
         sb = self._sync_builder()
         k1, k2 = _make_key(1), _make_key(2)
-        sb._qb._single_key = k1
-        sb._qb._operations = ["op1"]
+        sb._single_key = k1
+        sb._operations = ["op1"]
         result = sb.query(k2)
         assert result is sb
-        assert len(sb._qb._specs) == 1
-        assert sb._qb._single_key == k2
+        assert len(sb._specs) == 1
+        assert sb._single_key == k2
 
     def test_query_on_dataset_raises(self):
         sb = self._sync_builder()

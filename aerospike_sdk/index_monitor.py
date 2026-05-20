@@ -16,26 +16,28 @@
 """Background monitor that caches secondary index metadata for transparent
 filter generation.
 
-The :class:`IndexesMonitor` periodically queries the cluster via
-``sindex-list`` and ``sindex-stat`` info commands, converts the responses into
-:class:`~aerospike_sdk.ael.filter_gen.Index` objects, and stores them in
-per-namespace :class:`~aerospike_sdk.ael.filter_gen.IndexContext` caches.
+The :class:`IndexesMonitor` runs a daemon thread that periodically queries
+the cluster via ``sindex-list`` and ``sindex-stat`` info commands, converts
+the responses into :class:`~aerospike_sdk.ael.filter_gen.Index` objects, and
+stores them in per-namespace
+:class:`~aerospike_sdk.ael.filter_gen.IndexContext` caches.
 
-This module is intentionally at the SDK layer (not in PAC or core) — index
-metadata is only needed by the AEL filter-generation pipeline.
+The thread uses PAC's blocking info APIs, so the monitor works identically
+for the async :class:`~aerospike_sdk.aio.client.Client` and the synchronous
+:class:`~aerospike_sdk.sync.client.SyncClient` — no event loop required.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from aerospike_async.exceptions import AerospikeError as PacError
 from aerospike_sdk.ael.filter_gen import Index, IndexContext, IndexTypeEnum
 
-if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
-    from aerospike_async import Client
+if TYPE_CHECKING:  # avoids circular import; used in type annotations only.
+    from aerospike_async import Client as PacClient
 
 log = logging.getLogger("aerospike_sdk.index_monitor")
 
@@ -113,11 +115,11 @@ def _parse_entries_per_bval(raw_response: Dict[str, str]) -> Optional[float]:
     return None
 
 
-async def _stat_entries_per_bval(
-    client: "Client", ns: str, indexname: str,
+def _stat_entries_per_bval_blocking(
+    pac_client: "PacClient", ns: str, indexname: str,
 ) -> Optional[float]:
     try:
-        stat_resp = await client.info(
+        stat_resp = pac_client.info_blocking(
             f"sindex-stat:namespace={ns};indexname={indexname}",
         )
         return _parse_entries_per_bval(stat_resp)
@@ -129,18 +131,15 @@ async def _stat_entries_per_bval(
         return None
 
 
-async def _fetch_indexes(client: "Client") -> Dict[str, IndexContext]:
+def _fetch_indexes_blocking(pac_client: "PacClient") -> Dict[str, IndexContext]:
     """Fetch all secondary indexes and return per-namespace ``IndexContext`` caches."""
-    raw = await client.info_on_all_nodes("sindex-list")
+    raw = pac_client.info_on_all_nodes_blocking("sindex-list")
     entries = _parse_sindex_list(raw)
 
-    bvals = await asyncio.gather(
-        *(_stat_entries_per_bval(client, e["ns"], e["indexname"]) for e in entries),
-    )
-
     indexes_by_ns: Dict[str, List[Index]] = {}
-    for entry, bval in zip(entries, bvals):
+    for entry in entries:
         ns = entry["ns"]
+        bval = _stat_entries_per_bval_blocking(pac_client, ns, entry["indexname"])
         idx_type = _SINDEX_TYPE_MAP.get(
             entry.get("type", "").lower(), IndexTypeEnum.NUMERIC,
         )
@@ -160,19 +159,26 @@ async def _fetch_indexes(client: "Client") -> Dict[str, IndexContext]:
 
 
 class IndexesMonitor:
-    """Async background task that caches secondary index metadata.
+    """Daemon-thread background monitor that caches secondary index metadata.
 
-    Start via :meth:`start` (typically called by ``Client.connect``).
-    Retrieve cached data with :meth:`get_index_context`. Stop via
-    :meth:`stop` (called by ``Client.close``).
+    Matches the JSDK ``IndexesMonitor`` design: a single daemon thread polls
+    the cluster's info APIs at a fixed interval and refreshes an in-memory
+    cache. Readers (sync or async builders) consult the cache through
+    :meth:`get_index_context`, which is non-blocking.
+
+    The monitor starts lazily: :meth:`start` is invoked by the query
+    builders on the first AEL ``where()`` query that needs cached metadata,
+    not by ``Client.connect``. Callers that never use AEL filters pay zero
+    daemon-thread cost. :meth:`stop` is called from the matching ``close``
+    paths and is a no-op when the monitor never started.
 
         Example::
 
             monitor = IndexesMonitor()
-            await monitor.start(client)
-            await monitor.wait_until_ready()
+            monitor.start(pac_client)   # idempotent; safe to call repeatedly
+            monitor.wait_until_ready()
             ctx = monitor.get_index_context("test")
-            await monitor.stop()
+            monitor.stop()
 
     Args:
         refresh_interval: Seconds between cache refreshes (default 5.0).
@@ -181,70 +187,85 @@ class IndexesMonitor:
     def __init__(self, refresh_interval: float = _DEFAULT_REFRESH_INTERVAL) -> None:
         self._refresh_interval = refresh_interval
         self._cache: Dict[str, IndexContext] = {}
-        self._task: Optional[asyncio.Task[None]] = None
-        self._initial_ready = asyncio.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._initial_ready = threading.Event()
 
-    async def start(self, client: "Client") -> None:
-        """Begin background refresh without blocking :meth:`Client.connect`.
+    def start(self, pac_client: "PacClient") -> None:
+        """Begin background refresh (idempotent; lazy-start friendly).
 
-        The first metadata fetch runs asynchronously. Callers that need index
-        metadata immediately (for example AEL ``where()`` filter generation on
-        a dataset query) should ``await`` :meth:`wait_until_ready` before
-        relying on :meth:`get_index_context`.
+        Safe to call from multiple builders on every AEL query — if the
+        daemon thread is already running, this is a no-op. The first
+        metadata fetch runs asynchronously on the daemon thread; callers
+        that need index metadata immediately (for example AEL ``where()``
+        filter generation on a dataset query) should call
+        :meth:`wait_until_ready` before relying on :meth:`get_index_context`.
         """
-        if self._task is not None:
+        if self._thread is not None and self._thread.is_alive():
             return
+        self._stop_event.clear()
         self._initial_ready.clear()
-        self._task = asyncio.create_task(self._run(client))
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(pac_client,),
+            name="aerospike-sdk-index-monitor",
+            daemon=True,
+        )
+        self._thread.start()
 
-    async def wait_until_ready(self, timeout: Optional[float] = None) -> None:
+    def wait_until_ready(self, timeout: Optional[float] = None) -> None:
         """Block until the first index refresh attempt has finished.
 
         After this returns, :meth:`get_index_context` reflects the latest fetch
         (possibly empty if the cluster reports no secondary indexes).
 
         Args:
-            timeout: Seconds to wait; ``None`` uses
-                ``_DEFAULT_READY_TIMEOUT``.
+            timeout: Seconds to wait; ``None`` uses ``_DEFAULT_READY_TIMEOUT``.
 
         Raises:
             RuntimeError: If :meth:`start` was not called.
-            asyncio.TimeoutError: If the first refresh does not complete in time.
+            TimeoutError: If the first refresh does not complete in time.
         """
-        if self._task is None:
+        if self._thread is None:
             raise RuntimeError("IndexesMonitor.start must be called first")
         limit = _DEFAULT_READY_TIMEOUT if timeout is None else timeout
-        await asyncio.wait_for(self._initial_ready.wait(), timeout=limit)
+        if not self._initial_ready.wait(limit):
+            raise TimeoutError(
+                f"IndexesMonitor first refresh did not complete in {limit:.1f}s",
+            )
 
-    async def stop(self) -> None:
-        """Cancel the background refresh task."""
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+    def stop(self) -> None:
+        """Stop the background refresh thread.
+
+        Idempotent: safe to call when not running. Joins the thread with a
+        short timeout so a stuck refresh doesn't block shutdown.
+        """
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=self._refresh_interval + 1.0)
+            self._thread = None
 
     def get_index_context(self, namespace: str) -> Optional[IndexContext]:
         """Return the cached ``IndexContext`` for *namespace*, or ``None``."""
         return self._cache.get(namespace)
 
-    async def _run(self, client: "Client") -> None:
-        """Periodic refresh loop."""
-        while True:
+    def _run(self, pac_client: "PacClient") -> None:
+        """Periodic refresh loop. Runs on the daemon thread."""
+        while not self._stop_event.is_set():
             try:
-                self._cache = await _fetch_indexes(client)
+                self._cache = _fetch_indexes_blocking(pac_client)
                 total = sum(len(ctx.indexes) for ctx in self._cache.values())
                 log.debug(
                     "Index cache refreshed: %d index(es) across %d namespace(s)",
                     total,
                     len(self._cache),
                 )
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 log.debug("Error refreshing index cache", exc_info=True)
             finally:
+                # Idempotent: only the first fetch completion signals readiness.
                 self._initial_ready.set()
-            await asyncio.sleep(self._refresh_interval)
+            # Sleep with stop awareness so shutdown is prompt.
+            if self._stop_event.wait(self._refresh_interval):
+                break

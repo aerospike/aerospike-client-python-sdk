@@ -21,10 +21,12 @@ from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.aio.info import InfoCommands
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
+from aerospike_sdk.aio.pool import AsyncPool
 from aerospike_sdk.aio.transactional_session import TransactionalSession
 from aerospike_sdk.aio.session import NamespaceScStatus, Session
 
 __all__ = [
+    "AsyncPool",
     "Cluster",
     "ClusterDefinition",
     "Client",

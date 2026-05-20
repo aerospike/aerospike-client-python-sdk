@@ -15,6 +15,8 @@
 
 """Unit tests for index-based list builders (whole-bin and nested CDT)."""
 
+from unittest.mock import MagicMock
+
 from aerospike_async import Key, ListOperation, ListReturnType
 
 from aerospike_sdk.aio.operations.cdt_read import CdtReadBuilder
@@ -25,7 +27,6 @@ from aerospike_sdk.aio.operations.query import (
     WriteBinBuilder,
     WriteSegmentBuilder,
 )
-from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder, SyncWriteSegmentBuilder
 
 
@@ -158,17 +159,21 @@ class TestQueryBinBuilderIndexListReads:
 class TestSyncWriteBinBuilderIndexListOps:
 
     def _build(self, bin_name: str = "L"):
-        qb = _make_qb()
+        from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        qb._op_type = "upsert"
         qb._single_key = _make_key()
-        wsb = WriteSegmentBuilder(qb)
-        sync_seg = SyncWriteSegmentBuilder(wsb, _EventLoopManager())
-        return SyncWriteBinBuilder(sync_seg, bin_name), wsb
+        sync_seg = SyncWriteSegmentBuilder(qb)
+        return SyncWriteBinBuilder(sync_seg, bin_name), qb
 
-    def test_list_insert_delegates_to_async_segment(self):
-        swb, wsb = self._build()
-        assert swb.list_insert(0, 1) is swb._sync_segment
-        assert len(wsb._qb._operations) == 1
-        assert isinstance(wsb._qb._operations[0], ListOperation)
+    def test_list_insert_appends_operation_to_segment_state(self):
+        swb, qb = self._build()
+        result = swb.list_insert(0, 1)
+        # SyncWriteBinBuilder is just WriteBinBuilder; methods return the
+        # parent segment for chaining.
+        assert result is swb._segment
+        assert len(qb._operations) == 1
+        assert isinstance(qb._operations[0], ListOperation)
 
 
 class TestCdtNestedIndexListOps:

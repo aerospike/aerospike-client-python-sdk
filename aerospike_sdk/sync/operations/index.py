@@ -23,7 +23,6 @@ from aerospike_async import CTX, CollectionIndexType, IndexType
 
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.operations.index import IndexBuilder
-from aerospike_sdk.sync.client import _EventLoopManager
 
 
 class SyncIndexBuilder:
@@ -42,13 +41,11 @@ class SyncIndexBuilder:
         async_client: Client,
         namespace: str,
         set_name: str,
-        loop_manager: _EventLoopManager,
     ) -> None:
-        """Pair with ``namespace``/``set`` and the parent's loop manager."""
+        """Pair with ``namespace``/``set`` from the parent SyncSession."""
         self._async_client = async_client
         self._namespace = namespace
         self._set_name = set_name
-        self._loop_manager = loop_manager
         self._bin_name: Optional[str] = None
         self._index_name: Optional[str] = None
         self._index_type: Optional[IndexType] = None
@@ -133,8 +130,25 @@ class SyncIndexBuilder:
             ValueError: Same validation as async :meth:`~aerospike_sdk.aio.operations.index.IndexBuilder.create`.
             AerospikeError: On failure from the cluster (typed when mapped).
         """
-        builder = self._get_async_builder()
-        self._loop_manager.run_async(builder.create())
+        if not self._bin_name:
+            raise ValueError("bin_name is required. Call on_bin() first.")
+        if not self._index_name:
+            raise ValueError("index_name is required. Call named() first.")
+        if not self._index_type:
+            raise ValueError("index_type is required. Call numeric() or string() first.")
+        from aerospike_sdk.exceptions import _convert_pac_exception
+        try:
+            self._async_client._async_client.create_index_blocking(
+                self._namespace,
+                self._set_name,
+                self._bin_name,
+                self._index_name,
+                self._index_type,
+                self._collection_index_type,
+                self._ctx,
+            )
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
 
     def drop(self) -> None:
         """Drop the index (blocks until the admin call completes).
@@ -143,6 +157,13 @@ class SyncIndexBuilder:
             ValueError: If the index name was not set via :meth:`named`.
             AerospikeError: On failure from the cluster.
         """
-        builder = self._get_async_builder()
-        self._loop_manager.run_async(builder.drop())
+        if not self._index_name:
+            raise ValueError("index_name is required. Call named() first.")
+        from aerospike_sdk.exceptions import _convert_pac_exception
+        try:
+            self._async_client._async_client.drop_index_blocking(
+                self._namespace, self._set_name, self._index_name,
+            )
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
 

@@ -20,8 +20,9 @@ import time
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, PartitionFilter, QueryPolicy
-from aerospike_sdk import DataSet, Exp, Client
+from aerospike_async import Filter, Key, PartitionFilter, QueryPolicy
+from aerospike_sdk import DataSet, Exp, Client, val
+from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 async def _wait_for_set_count(
@@ -52,6 +53,44 @@ async def _wait_for_set_count(
     raise AssertionError(
         f"set '{ns}.{set_name}' scan never reached {expected} records "
         f"within {timeout}s (last observed: {last_count})"
+    )
+
+
+def _namespace_query(client: Client, namespace: str) -> QueryBuilder:
+    return QueryBuilder(
+        client=client.underlying_client,
+        namespace=namespace,
+        set_name=None,
+        indexes_monitor=client._indexes_monitor,
+    )
+
+
+async def _collect_query_kinds(query_builder: QueryBuilder) -> set[str]:
+    stream = await query_builder.execute()
+    kinds = set()
+    try:
+        async for result in stream:
+            rec = result.record_or_raise()
+            kinds.add(rec.bins["kind"])
+    finally:
+        stream.close()
+    return kinds
+
+
+async def _wait_for_query_kinds(
+    query_factory, expected: set[str],
+    *, timeout: float = 5.0, interval: float = 0.05,
+) -> None:
+    deadline = time.monotonic() + timeout
+    last_kinds: set[str] = set()
+    while time.monotonic() < deadline:
+        last_kinds = await _collect_query_kinds(query_factory())
+        if last_kinds == expected:
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError(
+        f"query never returned {expected!r} within {timeout}s "
+        f"(last observed: {last_kinds!r})"
     )
 
 
@@ -407,6 +446,83 @@ async def test_query_record_size(client):
 
     stream.close()
     assert count == 10
+
+
+async def test_query_ael_set_name_matches_no_set_records(client):
+    """Test AEL filtering for records written without a set name."""
+    namespace = "test"
+    named_set = "query_set_name_no_set"
+    probe = "query-set-name-no-set-probe"
+    no_set_key = Key(namespace, "", "query-set-name-no-set-empty")
+    named_key = Key(namespace, named_set, "query-set-name-no-set-named")
+    session = client.create_session()
+
+    try:
+        for key in (no_set_key, named_key):
+            try:
+                await session.delete(key).execute()
+            except Exception:
+                pass
+
+        await session.upsert(no_set_key).put({"probe": probe, "kind": "no-set"}).execute()
+        await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
+
+        await _wait_for_query_kinds(
+            lambda: _namespace_query(client, namespace).where(f"$.probe == '{probe}'"),
+            {"no-set", "named-set"},
+        )
+        await _wait_for_query_kinds(
+            lambda: _namespace_query(client, namespace).where(
+                f"$.probe == '{probe}' and $.setName() == ''",
+            ),
+            {"no-set"},
+        )
+    finally:
+        for key in (no_set_key, named_key):
+            try:
+                await session.delete(key).execute()
+            except Exception:
+                pass
+
+
+async def test_query_exp_set_name_filters_out_no_set_records(client):
+    """Test Exp filtering for named-set-only records."""
+    namespace = "test"
+    named_set = "query_set_name_named_only"
+    probe = "query-set-name-named-only-probe"
+    no_set_key = Key(namespace, "", "query-set-name-named-only-empty")
+    named_key = Key(namespace, named_set, "query-set-name-named-only-named")
+    session = client.create_session()
+
+    try:
+        for key in (no_set_key, named_key):
+            try:
+                await session.delete(key).execute()
+            except Exception:
+                pass
+
+        await session.upsert(no_set_key).put({"probe": probe, "kind": "no-set"}).execute()
+        await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
+
+        await _wait_for_query_kinds(
+            lambda: _namespace_query(client, namespace).where(f"$.probe == '{probe}'"),
+            {"no-set", "named-set"},
+        )
+
+        named_set_only = Exp.and_([
+            Exp.eq(Exp.string_bin("probe"), val(probe)),
+            Exp.ne(Exp.set_name(), val("")),
+        ])
+        await _wait_for_query_kinds(
+            lambda: _namespace_query(client, namespace).filter_expression(named_set_only),
+            {"named-set"},
+        )
+    finally:
+        for key in (no_set_key, named_key):
+            try:
+                await session.delete(key).execute()
+            except Exception:
+                pass
 
 
 async def test_query_chunked_iteration(client):

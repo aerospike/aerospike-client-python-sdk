@@ -1,0 +1,14 @@
+[package]
+name = "rust-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aerospike-core = { git = "https://github.com/aerospike/aerospike-client-rust", branch = "v3", package = "aerospike-core", features = ["rt-tokio"] }
+tokio = { version = "1.40", features = ["full"] }
+rand = { version = "0.8", features = ["small_rng"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

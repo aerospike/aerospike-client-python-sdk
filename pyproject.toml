@@ -9,8 +9,8 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    #"aerospike-async==0.4.0a2",
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.4.0-alpha.2-rc1",
+    #"aerospike-async==0.5.0a1",
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.5.0-alpha.1",
     "antlr4-python3-runtime>=4.13.0",
 ]
 classifiers = [
@@ -75,6 +75,7 @@ log_cli = true
 log_cli_level = "WARNING"
 filterwarnings = [
     "ignore::DeprecationWarning:uvloop",
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
 ]
 
 [tool.basedpyright]

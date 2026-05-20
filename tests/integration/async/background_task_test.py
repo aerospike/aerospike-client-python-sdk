@@ -66,7 +66,7 @@ async def client(aerospike_host, client_policy):
         session = c.create_session()
         raw = c._client
         assert raw is not None
-        reg = await raw.register_udf(None, BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
+        reg = await raw.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
         await reg.wait_till_complete()
         for i in range(1, 60):
             try:

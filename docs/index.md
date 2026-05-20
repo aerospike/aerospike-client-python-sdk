@@ -130,5 +130,7 @@ guide/error-handling
 guide/background-udf
 guide/indexes
 guide/logging
+guide/performance
+guide/benchmarking
 api/index
 ```

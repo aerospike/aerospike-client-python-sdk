@@ -144,6 +144,42 @@ class Session:
         cache[namespace] = mode
         return mode
 
+    def _resolve_namespace_mode_blocking(self, namespace: str) -> Mode:
+        """Sync equivalent of :meth:`_resolve_namespace_mode`.
+
+        Routes through PAC's :meth:`info_blocking`. Shares the same
+        per-client cache so subsequent calls (sync or async) get the
+        cached value. Used by the ``execute_blocking`` family on builders
+        when the sync builder chain runs without an asyncio loop.
+        """
+        cache = self._client._namespace_mode_cache
+        if namespace in cache:
+            return cache[namespace]
+        # Mirror the parsing logic used by `namespace_sc_status` but inline
+        # against PAC blocking — we avoid the indirection of reusing the
+        # async helper through a runner.
+        pac = self._client._async_client
+        is_sc = False
+        try:
+            result = pac.info_blocking(f"namespace/{namespace}")
+            for node_result in result.values():
+                if not node_result:
+                    continue
+                exists, sc_opt = _parse_namespace_info_body(node_result)
+                if not exists:
+                    is_sc = False
+                    break
+                if sc_opt is not None:
+                    is_sc = bool(sc_opt)
+        except Exception:
+            # Conservative default: treat as AP. The cache miss path is
+            # rare (cache primes on first use); a transient info error
+            # here doesn't justify falling over the whole sync operation.
+            is_sc = False
+        mode = Mode.SC if is_sc else Mode.AP
+        cache[namespace] = mode
+        return mode
+
     def _bind_txn(self, builder):
         """Stamp the session's current txn onto a builder if one is active.
 
@@ -225,11 +261,11 @@ class Session:
         """
         if self._txn is None:
             return await self._pac_client.get(
-                self._cached_read_policy, key, bins)
+                key, bins, policy=self._cached_read_policy)
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
-        return await self._pac_client.get(policy, key, bins)
+        return await self._pac_client.get(key, bins, policy=policy)
 
     async def put(
         self, key: Key, bins: Dict[str, Any],
@@ -265,13 +301,13 @@ class Session:
         """
         if self._txn is None:
             await self._pac_client.put(
-                self._cached_write_policy, key, bins)
+                key, bins, policy=self._cached_write_policy)
             return
         policy = to_write_policy(
             self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
         policy.txn = self._txn
-        await self._pac_client.put(policy, key, bins)
+        await self._pac_client.put(key, bins, policy=policy)
 
     @property
     def behavior(self) -> Behavior:
@@ -331,6 +367,7 @@ class Session:
             self._behavior,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         )
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -417,6 +454,7 @@ class Session:
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -494,6 +532,7 @@ class Session:
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -509,6 +548,7 @@ class Session:
             read_policy=self._cached_read_policy,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -629,6 +669,7 @@ class Session:
                     self._client.query(
                         dataset=arg1, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     ))
             elif isinstance(arg1, Key):
                 all_keys = [arg1]
@@ -651,6 +692,7 @@ class Session:
                         cached_write_policy=self._cached_write_policy,
                         txn=self._txn,
                         namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     )
                     builder._single_key = arg1
                     return builder
@@ -658,6 +700,7 @@ class Session:
                     self._client.query(
                         keys=all_keys, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     ))
             elif isinstance(arg1, list):
                 if len(arg1) == 0:
@@ -668,12 +711,14 @@ class Session:
                     self._client.query(
                         keys=arg1, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     ))
             elif isinstance(arg1, str) and arg2 is not None:
                 return self._bind_txn(
                     self._client.query(
                         namespace=arg1, set_name=arg2, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     ))
 
         if keys:
@@ -686,6 +731,7 @@ class Session:
                 self._client.query(
                     keys=keys_list, behavior=b,
                     namespace_mode_resolver=self._resolve_namespace_mode,
+                    namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 ))
 
         return self._bind_txn(self._client.query(  # type: ignore[call-overload]
@@ -696,6 +742,7 @@ class Session:
             keys=keys_list,
             behavior=b,
             namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         ))
 
     @typing.overload

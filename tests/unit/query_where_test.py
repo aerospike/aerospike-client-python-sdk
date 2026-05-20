@@ -71,10 +71,9 @@ class TestSyncQueryBuilderWhere:
     def _sync_builder(self):
         """Return a SyncQueryBuilder with fake deps (no real connection)."""
         return SyncQueryBuilder(
-            async_client=object(),
+            client=object(),
             namespace="test",
             set_name="unit_test",
-            loop_manager=object(),
         )
 
     def test_where_ael_string_sets_filter_expression(self):
@@ -83,7 +82,7 @@ class TestSyncQueryBuilderWhere:
         expected = parse_ael("$.age > 20")
         result = builder.where("$.age > 20")
         assert result is builder
-        assert builder._qb._filter_expression == expected
+        assert builder._filter_expression == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(FilterExpression) stores the expression directly."""
@@ -91,4 +90,4 @@ class TestSyncQueryBuilderWhere:
         exp = Exp.gt(Exp.int_bin("a"), Exp.int_val(100))
         result = builder.where(exp)
         assert result is builder
-        assert builder._qb._filter_expression is exp
+        assert builder._filter_expression is exp

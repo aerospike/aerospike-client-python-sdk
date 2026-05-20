@@ -36,10 +36,8 @@ MODULE = "record_example"
 
 
 def _wait_task(client: SyncClient, task) -> bool:
-    async def _w():
-        return await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
-
-    return client._loop_manager.run_async(_w())
+    """Wait for ``task`` synchronously via PAC's blocking sibling."""
+    return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
 
 
 @pytest.fixture

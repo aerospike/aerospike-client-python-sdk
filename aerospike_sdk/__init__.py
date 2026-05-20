@@ -40,7 +40,7 @@ from aerospike_async import (
     TxnState,
 )
 
-from aerospike_sdk.aio import Client, Session, TransactionalSession, ClusterDefinition, Host
+from aerospike_sdk.aio import AsyncPool, Client, Session, TransactionalSession, ClusterDefinition, Host
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.ael.exceptions import AelParseException
@@ -79,6 +79,7 @@ __version__ = "0.1.0"
 __all__ = [
     "AbortStatus",
     "AerospikeError",
+    "AsyncPool",
     "AuthenticationError",
     "AuthMode",
     "AuthorizationError",

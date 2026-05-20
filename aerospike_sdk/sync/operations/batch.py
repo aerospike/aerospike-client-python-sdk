@@ -27,7 +27,6 @@ from aerospike_sdk.aio.operations.batch import (
     BatchOperationBuilder as AsyncBatchOperationBuilder,
 )
 from aerospike_sdk.hll_config import HllConfig
-from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 
 
@@ -38,35 +37,30 @@ class SyncBatchBinBuilder:
         :class:`~aerospike_sdk.aio.operations.batch.BatchBinBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBatchBinBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBatchBinBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def set_to(self, value: Any) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.set_to(value), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.set_to(value))
 
     def set_to_geo_json(self, geo_json: str) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.set_to_geo_json(geo_json), self._loop_manager,
+            self._inner.set_to_geo_json(geo_json),
         )
 
     def add(self, value: int) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.add(value), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.add(value))
 
     def increment_by(self, value: int) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.increment_by(value), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.increment_by(value))
 
     def append(self, value: str) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.append(value), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.append(value))
 
     def prepend(self, value: str) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.prepend(value), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.prepend(value))
 
     def select_from(
         self,
@@ -76,7 +70,6 @@ class SyncBatchBinBuilder:
     ) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
             self._inner.select_from(expression, ignore_eval_failure=ignore_eval_failure),
-            self._loop_manager,
         )
 
     def insert_from(
@@ -94,7 +87,6 @@ class SyncBatchBinBuilder:
                 ignore_eval_failure=ignore_eval_failure,
                 delete_if_null=delete_if_null,
             ),
-            self._loop_manager,
         )
 
     def update_from(
@@ -112,7 +104,6 @@ class SyncBatchBinBuilder:
                 ignore_eval_failure=ignore_eval_failure,
                 delete_if_null=delete_if_null,
             ),
-            self._loop_manager,
         )
 
     def upsert_from(
@@ -130,7 +121,6 @@ class SyncBatchBinBuilder:
                 ignore_eval_failure=ignore_eval_failure,
                 delete_if_null=delete_if_null,
             ),
-            self._loop_manager,
         )
 
     # -- HyperLogLog ----------------------------------------------------------
@@ -150,7 +140,6 @@ class SyncBatchBinBuilder:
                 create_only=create_only, update_only=update_only,
                 no_fail=no_fail, allow_fold=allow_fold,
             ),
-            self._loop_manager,
         )
 
     def hll_add(
@@ -169,7 +158,6 @@ class SyncBatchBinBuilder:
                 create_only=create_only, update_only=update_only,
                 no_fail=no_fail, allow_fold=allow_fold,
             ),
-            self._loop_manager,
         )
 
     def hll_set_union(
@@ -187,47 +175,46 @@ class SyncBatchBinBuilder:
                 create_only=create_only, update_only=update_only,
                 no_fail=no_fail, allow_fold=allow_fold,
             ),
-            self._loop_manager,
         )
 
     def hll_fold(self, index_bit_count: int) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_fold(index_bit_count), self._loop_manager,
+            self._inner.hll_fold(index_bit_count),
         )
 
     def hll_refresh_count(self) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_refresh_count(), self._loop_manager,
+            self._inner.hll_refresh_count(),
         )
 
     def hll_get_count(self) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_get_count(), self._loop_manager,
+            self._inner.hll_get_count(),
         )
 
     def hll_describe(self) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_describe(), self._loop_manager,
+            self._inner.hll_describe(),
         )
 
     def hll_get_union(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_get_union(hll_list), self._loop_manager,
+            self._inner.hll_get_union(hll_list),
         )
 
     def hll_get_union_count(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_get_union_count(hll_list), self._loop_manager,
+            self._inner.hll_get_union_count(hll_list),
         )
 
     def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_get_intersect_count(hll_list), self._loop_manager,
+            self._inner.hll_get_intersect_count(hll_list),
         )
 
     def hll_get_similarity(self, hll_list: Sequence[Any]) -> SyncBatchKeyOperationBuilder:
         return SyncBatchKeyOperationBuilder(
-            self._inner.hll_get_similarity(hll_list), self._loop_manager,
+            self._inner.hll_get_similarity(hll_list),
         )
 
 
@@ -238,43 +225,38 @@ class SyncBatchKeyOperationBuilder:
         :class:`~aerospike_sdk.aio.operations.batch.BatchKeyOperationBuilder`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBatchKeyOperationBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBatchKeyOperationBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def bin(self, bin_name: str) -> SyncBatchBinBuilder:
-        return SyncBatchBinBuilder(self._inner.bin(bin_name), self._loop_manager)
+        return SyncBatchBinBuilder(self._inner.bin(bin_name))
 
     def put(self, bins: Dict[str, Any]) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.put(bins), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.put(bins))
 
     def insert(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.insert(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.insert(key))
 
     def update(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.update(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.update(key))
 
     def upsert(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.upsert(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.upsert(key))
 
     def replace(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.replace(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.replace(key))
 
     def replace_if_exists(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.replace_if_exists(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.replace_if_exists(key))
 
     def delete(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.delete(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.delete(key))
 
     def execute(self) -> SyncRecordStream:
-        stream = self._loop_manager.run_async(self._inner.execute())
-        return SyncRecordStream(stream, self._loop_manager)
+        raw = self._inner.execute_blocking()
+        return SyncRecordStream.from_batch_records(raw)
 
 
 class SyncBatchOperationBuilder:
@@ -285,34 +267,29 @@ class SyncBatchOperationBuilder:
         :meth:`~aerospike_sdk.sync.session.SyncSession.batch`
     """
 
-    __slots__ = ("_inner", "_loop_manager")
+    __slots__ = ("_inner",)
 
-    def __init__(
-        self,
-        inner: AsyncBatchOperationBuilder,
-        loop_manager: _EventLoopManager,
-    ) -> None:
+    def __init__(self, inner: AsyncBatchOperationBuilder) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
 
     def insert(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.insert(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.insert(key))
 
     def update(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.update(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.update(key))
 
     def upsert(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.upsert(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.upsert(key))
 
     def replace(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.replace(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.replace(key))
 
     def replace_if_exists(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.replace_if_exists(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.replace_if_exists(key))
 
     def delete(self, key: Key) -> SyncBatchKeyOperationBuilder:
-        return SyncBatchKeyOperationBuilder(self._inner.delete(key), self._loop_manager)
+        return SyncBatchKeyOperationBuilder(self._inner.delete(key))
 
     def execute(self) -> SyncRecordStream:
-        stream = self._loop_manager.run_async(self._inner.execute())
-        return SyncRecordStream(stream, self._loop_manager)
+        raw = self._inner.execute_blocking()
+        return SyncRecordStream.from_batch_records(raw)

@@ -50,11 +50,15 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "cherry", 3, policy),
             MapOperation.put(BIN, "apple", 1, policy),
             MapOperation.put(BIN, "banana", 2, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -70,13 +74,17 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, 50, "fifty", policy),
             MapOperation.put(BIN, 10, "ten", policy),
             MapOperation.put(BIN, 30, "thirty", policy),
             MapOperation.put(BIN, 20, "twenty", policy),
             MapOperation.put(BIN, 40, "forty", policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -94,7 +102,7 @@ class TestKOrderedMapOrdering:
 
         keys_reversed = list(range(100, 0, -1))
         ops = [MapOperation.put(BIN, kk, kk * 10, policy) for kk in keys_reversed]
-        await pac.operate(WritePolicy(), k, ops)
+        await pac.operate(k, ops, policy=WritePolicy())
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -109,15 +117,23 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "b", 2, policy),
             MapOperation.put(BIN, "d", 4, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "a", 1, policy),
             MapOperation.put(BIN, "c", 3, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -132,16 +148,24 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "a", 1, policy),
             MapOperation.put(BIN, "b", 2, policy),
             MapOperation.put(BIN, "c", 3, policy),
             MapOperation.put(BIN, "d", 4, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.remove_by_key(BIN, "b", MapReturnType.NONE),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -156,17 +180,25 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "a", 100, policy),
             MapOperation.put(BIN, "b", 200, policy),
             MapOperation.put(BIN, "c", 100, policy),
             MapOperation.put(BIN, "d", 300, policy),
             MapOperation.put(BIN, "e", 200, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.remove_by_value(BIN, 200, MapReturnType.NONE),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -182,11 +214,15 @@ class TestKOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "z", 26, policy),
             MapOperation.put(BIN, "a", 1, policy),
             MapOperation.put(BIN, "m", 13, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -195,10 +231,14 @@ class TestKOrderedMapOrdering:
 
         # Clear and re-insert using MapOperation to preserve K-ordered policy
         items = list(original.items())
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.clear(BIN),
             MapOperation.put_items(BIN, items, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
         result2 = await (await session.query(k).execute()).first_or_raise()
         record2 = result2.record
         assert list(record2.bins[BIN].keys()) == ["a", "m", "z"]
@@ -215,11 +255,15 @@ class TestKVOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "cherry", 30, policy),
             MapOperation.put(BIN, "apple", 10, policy),
             MapOperation.put(BIN, "banana", 20, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -235,11 +279,15 @@ class TestKVOrderedMapOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, 50, "fifty", policy),
             MapOperation.put(BIN, 10, "ten", policy),
             MapOperation.put(BIN, 30, "thirty", policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -278,10 +326,14 @@ class TestNestedOrderedMaps:
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         inner = {"c": 3, "a": 1, "b": 2}
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "z_outer", inner, policy),
             MapOperation.put(BIN, "a_outer", inner, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -308,13 +360,17 @@ class TestEdgeCases:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "banana", "s2", policy),
             MapOperation.put(BIN, 99, "i3", policy),
             MapOperation.put(BIN, "apple", "s1", policy),
             MapOperation.put(BIN, 1, "i1", policy),
             MapOperation.put(BIN, 50, "i2", policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -335,11 +391,15 @@ class TestEdgeCases:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, b"\x03", "third", policy),
             MapOperation.put(BIN, b"\x01", "first", policy),
             MapOperation.put(BIN, b"\x02", "second", policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -354,12 +414,20 @@ class TestEdgeCases:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "a", 1, policy),
-        ])
-        await pac.operate(WritePolicy(), k, [
+        ],
+            policy=WritePolicy(),
+        )
+        await pac.operate(
+            k,
+            [
             MapOperation.remove_by_key(BIN, "a", MapReturnType.NONE),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -375,17 +443,25 @@ class TestEdgeCases:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "c", 300, policy),
             MapOperation.put(BIN, "a", 100, policy),
             MapOperation.put(BIN, "b", 200, policy),
             MapOperation.put(BIN, "d", 400, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         # Rank 0 = smallest value (100), get 3 entries by rank
-        record = await pac.operate(WritePolicy(), k, [
+        record = await pac.operate(
+            k,
+            [
             MapOperation.get_by_rank_range(BIN, 0, 3, MapReturnType.VALUE),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
         values = record.bins[BIN]
         assert values == [100, 200, 300]
 
@@ -402,9 +478,13 @@ class TestCdtOrdering:
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         # First create the bin as K-ordered
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "z", 1, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         # Now overwrite via set_to (which does Operation.put under the hood)
         await session.upsert(k).bin(BIN).set_to(
@@ -426,17 +506,25 @@ class TestCdtOrdering:
         pac = client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(WritePolicy(), k, [
+        await pac.operate(
+            k,
+            [
             MapOperation.put(BIN, "e", 5, policy),
             MapOperation.put(BIN, "c", 3, policy),
             MapOperation.put(BIN, "a", 1, policy),
             MapOperation.put(BIN, "d", 4, policy),
             MapOperation.put(BIN, "b", 2, policy),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
-        record = await pac.operate(WritePolicy(), k, [
+        record = await pac.operate(
+            k,
+            [
             MapOperation.get_by_key_range(BIN, "b", "e", MapReturnType.KEY),
-        ])
+        ],
+            policy=WritePolicy(),
+        )
 
         keys = record.bins[BIN]
         assert keys == ["b", "c", "d"]

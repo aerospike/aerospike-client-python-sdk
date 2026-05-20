@@ -28,8 +28,8 @@ python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
 # Multi-bin read/write mix (80% reads; 60% read-all; 30% write-all)
 python -m benchmarks.benchmark -o I1,S128 -w RU,80,60,30 -d 10
 
-# Sim-sync client (simulated sync via event loop per thread)
-python -m benchmarks.benchmark --mode sim-sync -w RU,50 --threads 4 -d 10
+# PSDK sync client (delegates to PAC `_blocking` per op, no per-op event loop)
+python -m benchmarks.benchmark --mode sync -w RU,50 --threads 4 -d 10
 
 # Batch commands (each operation touches 20 keys)
 python -m benchmarks.benchmark --batch-size 20 -w RU,50 -d 10
@@ -49,12 +49,12 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``-o`` | Bin spec: ``I1``, ``S128``, ``B1024``, combined with commas |
 | ``-w`` | Workload: ``I``, ``RU,50``, ``RU,80,60,30``, ``RR,20``, ``RMU``, ``RMI``, ``RMD`` |
 | ``-z`` / ``--async-tasks`` | Number of concurrent async tasks (default: 32) |
-| ``--threads`` | Number of OS threads for sim-sync mode (falls back to ``-z``) |
+| ``--threads`` | Number of OS threads for sync mode (falls back to ``-z``) |
 | ``-d`` | Duration in seconds |
 | ``-c`` | Stop after this many successful operations |
 | ``--batch-size`` | Keys per batch command (``0`` or ``1`` for single-record) |
 | ``--latency`` | ``COLUMNS,SHIFT`` histogram shape |
-| ``--mode`` | ``async`` (default) or ``sim-sync`` (simulated sync) |
+| ``--mode`` | ``async`` (default, PSDK), ``sync`` (PSDK SyncClient), ``pac-blocking`` (PAC sync direct), ``pac-async`` (PAC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
 | ``--warmup`` / ``--cooldown`` | Full-second intervals dropped from the summary |
 | ``--truncate`` | Truncate the set before running |
 | ``--truncate-after`` | Truncate the set after running |
@@ -69,7 +69,7 @@ Note: Python reserves ``-h`` for help; use ``-H`` for hosts.
 
 - ``make bench`` -- populate 100k keys then run a 10s ``RU,50`` async benchmark.
 - ``make bench-quick`` -- short smoke run (still requires a live cluster).
-- ``make bench-compare`` -- full comparison: PAC, PSDK async, PSDK sim-sync, and legacy client.
+- ``make bench-compare`` -- full comparison: PAC, PSDK async, PSDK sync, and legacy client.
 
 ## Comparison tool
 
@@ -79,7 +79,7 @@ side-by-side table with TPS, latency percentiles, and memory usage.
 ```bash
 python -m benchmarks.compare --help
 
-# Full comparison (PAC, PSDK async, sim-sync, legacy)
+# Full comparison (PAC, PSDK async, sync, legacy)
 python -m benchmarks.compare -k 100000 -z 32 --threads 4 -d 15
 
 # PSDK-only (skip legacy)
@@ -95,7 +95,7 @@ python -m benchmarks.compare -k 100000 -d 30 --runs 3 --csv results.csv
 |--------|-------------|-------------|
 | **PAC** | Raw Python Async Client (no SDK layer) | ``-z`` async tasks |
 | **PSDK async** | Full SDK with builder chain | ``-z`` async tasks |
-| **PSDK sim-sync** | SDK with simulated sync (event loop per thread) | ``--threads`` OS threads |
+| **PSDK sync** | SDK SyncClient via PAC `_blocking` (per-thread loop runner, no per-op event loop) | ``--threads`` OS threads |
 | **Legacy** | C-extension client (``get``/``operate``, same ops as PSDK) | Single-threaded (hardcoded) |
 
 ### Configuration

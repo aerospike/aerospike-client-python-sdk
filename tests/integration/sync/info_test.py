@@ -36,7 +36,8 @@ def test_info_creation(session):
     """Test creating a SyncInfoCommands instance."""
     info = session.info()
     assert info is not None
-    assert info._async_info is not None
+    # SyncInfoCommands holds a PAC client directly.
+    assert info._pac is not None
 
 
 def test_build(session):
