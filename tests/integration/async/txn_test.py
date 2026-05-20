@@ -450,7 +450,7 @@ async def test_txn_batch_abort(session, mrt_set):
 
 # ---------------------------------------------------------------------------
 # 17. txnMrtExpiredAfterDeadline: a write issued after the txn deadline must
-#     raise MRT_EXPIRED. JSDK parity (TxnTest.txnMrtExpiredAfterDeadline).
+#     raise MRT_EXPIRED.
 # ---------------------------------------------------------------------------
 async def test_txn_mrt_expired_after_deadline(session, mrt_set):
     """Write after the txn deadline must raise MRT_EXPIRED.
