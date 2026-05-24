@@ -87,7 +87,12 @@ class SyncClient:
 
         Args:
             seeds: Aerospike cluster seed addresses (e.g., "localhost:3000").
-            policy: Optional client policy. Defaults to a fresh ``ClientPolicy``.
+            policy: Optional client policy. When not supplied, defaults to a
+                fresh ``ClientPolicy`` with ``conn_pools_per_node = 8`` (PAC's
+                default of 4 is tuned for async; sync workloads driven from
+                many caller threads see real connection-pool mutex contention
+                at 4). Pass an explicit ``ClientPolicy`` to override either
+                this default or any other client-level setting.
             index_refresh_interval: Seconds between secondary index cache
                 refreshes (default 5.0). The monitor is a daemon thread that
                 starts lazily on the first AEL ``where()`` query — clients
@@ -104,6 +109,14 @@ class SyncClient:
         self._seeds = seeds
         if policy is None:
             policy = ClientPolicy()
+            # SyncClient drives PAC from many caller threads, so the
+            # per-node connection-pool mutex sees real contention that
+            # async (single- or per-Client-loop) workloads do not.
+            # py-spy traces at conn_pools_per_node=4 showed ~65% of
+            # lock-contended samples in put_back/get on a 32-thread
+            # builder cell; 8 cuts the p99 tail roughly in half with no
+            # TPS cost. User-supplied policies are respected as-is.
+            policy.conn_pools_per_node = 8
         if max_error_rate is not None:
             policy.max_error_rate = max_error_rate
         if error_rate_window is not None:

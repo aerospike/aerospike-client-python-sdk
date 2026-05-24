@@ -34,7 +34,9 @@ import asyncio
 import itertools
 import logging
 import os
+import sys
 import threading
+import warnings
 from typing import (
     Callable,
     Coroutine,
@@ -51,6 +53,17 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 X = TypeVar("X")
+
+
+def _gil_is_enabled() -> bool:
+    """Return True if Python's GIL is currently enabled.
+
+    On regular CPython (no free-threading build), ``sys._is_gil_enabled``
+    is absent and the GIL is always on. On free-threaded builds
+    (3.13t / 3.14t) the GIL state is dynamic and depends on the
+    ``PYTHON_GIL`` env var plus any C extensions that re-enable it.
+    """
+    return getattr(sys, "_is_gil_enabled", lambda: True)()
 
 
 class AsyncPool:
@@ -75,7 +88,14 @@ class AsyncPool:
     of ``loop_count``.  Tune via the ``index_refresh_interval`` kwarg
     on :class:`AsyncPool` itself.
 
-    **Tuning notes** (from 12-core measurement run, client+server colocated):
+    **Per-Client Tokio runtime.**  When ``loop_count >= 4``, AsyncPool
+    automatically configures each Client to use its own dedicated PAC
+    Tokio runtime instead of the shared global one. This eliminates the
+    cross-loop scheduler contention that previously caused throughput to
+    collapse beyond 4 loops. Controlled via the ``per_client_runtime``
+    kwarg; see its docstring for the threshold rationale and override.
+
+    **Tuning notes** (8-core remote-cluster measurement, FT 3.14t):
 
     * **Tasks-per-loop floor.**  Below ~16–32 concurrent asyncio tasks
       per loop, per-call dispatch overhead (``run_coroutine_threadsafe`` +
@@ -83,15 +103,17 @@ class AsyncPool:
       4-loop pool with 8 tasks/loop measured *slower* than a 1-loop client
       with 32 tasks total.  Keep tasks-per-loop in the same regime that
       saturates a single client.
-    * **Throughput vs tail latency.**  Adding loops trades p99 for TPS.
-      In one sample, going from 1 → 8 loops took p99 from 0.6 ms to 6.1 ms
-      while TPS rose then fell.  Latency-sensitive workloads should pick a
-      ``loop_count`` based on the p99 budget; throughput-only workloads can
-      push higher.
+    * **Throughput scales monotonically with loops** under per-Client
+      runtime (4×64 = 167K, 8×64 = 178K, 12×64 = 180K TPS measured).  TPS
+      ceiling on 8-core hardware is ~180K, capped by Python interpreter
+      self-time across loops.
+    * **Tail latency degrades with loops.**  4×64 has p99 = 4.3 ms; 12×64
+      has p99 = 15.5 ms. Latency-sensitive workloads should pick
+      ``loop_count`` based on the p99 budget; throughput-only workloads
+      can push higher.
     * **Sweet spot is hardware-dependent.**  With colocated client+server
-      the sweet spot is at 1–2 loops because they share CPU; with a remote
-      server on dedicated hardware the curve flattens later.  Always
-      validate against your target deployment.
+      the sweet spot shifts down because they share CPU; with more cores
+      the ceiling shifts up. Always validate against your target deployment.
 
     Example::
 
@@ -114,6 +136,7 @@ class AsyncPool:
         loop_count: Optional[int] = None,
         *,
         index_refresh_interval: float = 5.0,
+        per_client_runtime: Optional[bool] = None,
     ) -> None:
         """Configure the pool.  Call :meth:`start` or use ``async with``.
 
@@ -137,6 +160,19 @@ class AsyncPool:
                 monitor serves all pool clients — the per-Client monitor
                 each ``client_factory()`` would create is replaced before
                 connect, eliminating N×polling load.
+            per_client_runtime: Whether each pool Client should run on its
+                own dedicated PAC Tokio runtime (per-loop runtime isolation,
+                eliminates cross-loop scheduler contention).
+
+                * ``None`` (default): auto-enable when ``loop_count >= 4``.
+                  Below 4 loops the shared global runtime wins on the
+                  per-loop worker budget; at 4+ loops per-Client runtimes
+                  scale monotonically (measured: AsyncPool 8×64 lifts from
+                  ~59K TPS collapsed to ~184K with per-Client runtimes).
+                * ``True``: always enable. Worker count auto-sized to
+                  ``max(2, os.cpu_count() // loop_count)``.
+                * ``False``: never enable; use the shared global runtime
+                  regardless of ``loop_count``.
 
         Example::
 
@@ -153,6 +189,34 @@ class AsyncPool:
         """
         self._factory = client_factory
         self._n = loop_count or os.cpu_count() or 4
+        # Auto-decide per-Client runtime: enable at 4+ loops where it scales,
+        # leave alone below where the shared global runtime wins. ALSO gate
+        # on GIL being disabled — under GIL-on Python the per-Client Tokio
+        # workers all serialize on one GIL when delivering completions back
+        # to asyncio, which deadlocks (every worker stuck in futex_do_wait
+        # while the main loop blocks on epoll). Threshold + GIL check are
+        # both empirical (8-core measurements); revisit on other hardware.
+        if per_client_runtime is None:
+            per_client_runtime = self._n >= 4 and not _gil_is_enabled()
+        elif per_client_runtime and _gil_is_enabled():
+            # Explicit opt-in on GIL-on is a footgun — known to deadlock.
+            # Warn loudly but honor the user's choice; they may know
+            # something we don't (e.g., a tiny synthetic test).
+            warnings.warn(
+                "AsyncPool: per_client_runtime=True requested but the GIL is "
+                "enabled. This combination deadlocks under load — the "
+                "per-Client Tokio workers serialize on one GIL when delivering "
+                "completions. Either run on a free-threaded Python build with "
+                "PYTHON_GIL=0, or set per_client_runtime=False (or None for "
+                "the safe auto-decide).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        self._per_client_runtime = per_client_runtime
+        # Worker count: divide CPUs across loops, floor at 2 so each runtime
+        # has at least one extra worker to absorb tail-latency bursts.
+        n_cpu = os.cpu_count() or 4
+        self._per_client_runtime_workers = max(2, n_cpu // self._n)
         self._loops: List[Optional[asyncio.AbstractEventLoop]] = [None] * self._n
         self._threads: List[threading.Thread] = []
         self._clients: List[Client] = []
@@ -219,6 +283,14 @@ class AsyncPool:
             # monitor's lifecycle (stop on aclose).
             client._indexes_monitor = self._shared_monitor
             client._owns_monitor = False
+            # Per-Client Tokio runtime: must be set BEFORE connect() because
+            # PAC's new_client() reads this field at construction to decide
+            # whether to build a dedicated runtime. Mutation is safe — the
+            # ClientPolicy hasn't been handed to PAC yet.
+            if self._per_client_runtime:
+                client._policy.per_client_runtime_workers = (
+                    self._per_client_runtime_workers
+                )
             clients[i] = client
             loop = self._loops[i]
             assert loop is not None
