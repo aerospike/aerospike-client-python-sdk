@@ -15,6 +15,7 @@ dependencies = [
     # `dev` before merging
     "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@c7562562c7adf8be009b83c652cc6cca96b8b3af",
     "antlr4-python3-runtime>=4.13.0",
+    "typing_extensions>=4.0.0",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -41,7 +42,6 @@ dev = [
     "pytest-env>=1.1.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    "antlr4-python3-runtime>=4.13.0",
 ]
 docs = [
     "sphinx>=8.0",
