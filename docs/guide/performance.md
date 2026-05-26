@@ -196,14 +196,14 @@ Numbers from the [Benchmarking Guide](benchmarking.md) — 8-vCPU isolated clien
 
 | Mode | Threads / Tasks | Free-threaded TPS | Non-FT TPS |
 |---|---|---|---|
-| Sync fast-path (`session.get`/`put`) | 32 | **~201K** | ~45K |
-| Sync builder (`session.query(k).execute()`) | 32 | ~117K | ~21K |
-| Async fast-path, single client | 32 tasks | ~94K | ~66K |
-| Async fast-path, AsyncPool 4×64 | 256 tasks | **~170K** | ~49K (slower than single-loop) |
-| Async fast-path, AsyncPool 8×64 | 512 tasks | **~178K** | (FT only) |
+| Sync fast-path (`session.get`/`put`) | 32 | **~214K** | ~53K |
+| Sync builder (`session.query(k).execute()`) | 32 | ~153K | ~32K |
+| Async fast-path, single client | 32 tasks | ~113K | ~76K |
+| Async fast-path, AsyncPool 4×64 | 256 tasks | **~173K** | ~56K (slower than single-loop) |
+| Async fast-path, AsyncPool 8×64 | 512 tasks | **~182K** | (FT only) |
 | Async fast-path, AsyncPool 12×64 | 768 tasks | **~180K** | (FT only) |
-| Async builder, single client | 32 tasks | ~38K | ~32K |
-| Async builder, AsyncPool 4×64 | 256 tasks | ~98K | ~25K (slower than single-loop) |
+| Async builder, single client | 32 tasks | ~63K | ~50K |
+| Async builder, AsyncPool 4×64 | 256 tasks | ~147K | ~38K (slower than single-loop) |
 
 ### With batching (`--batch-size > 1`, free-threaded)
 
@@ -211,19 +211,19 @@ When the workload can group keys per call, the chained-builder API amortizes its
 
 | Mode | Batch size | Peak TPS |
 |---|---|---|
-| **Sync builder** | 128 | **~510K** |
-| AsyncPool builder, 4×64 | 64 | ~311K |
-| Async single-loop builder, 32 tasks | 128 | ~186K |
+| **Sync builder** | 128 | **~563K** |
+| AsyncPool builder, 4×64 | 64 | ~335K |
+| Async single-loop builder, 32 tasks | 128 | ~230K |
 
 **Practical reading:**
-- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales monotonically to ~510K TPS at batch=128, **76% above Rust-core async direct (~290K)**. Doubling the batch size keeps amortizing the per-call cost.
-- For single-key workloads, the **sync fast-path** (~201K) is the highest mode. If you need async, **AsyncPool fast-path** scales monotonically through 4–12 loops to ~180K (closing most of the gap to sync on the same hardware).
-- On regular Python (GIL on), *async single-client fast-path* (~66K) is the simplest high-throughput mode; sync fast-path (~45K) is slightly lower because of GIL contention across the 32 worker threads.
+- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales monotonically to ~563K TPS at batch=128, **94% above Rust-core async direct (~290K)**. Doubling the batch size keeps amortizing the per-call cost.
+- For single-key workloads, the **sync fast-path** (~214K) is the highest mode. If you need async, **AsyncPool fast-path** scales monotonically through 4–12 loops to ~180K (closing most of the gap to sync on the same hardware).
+- On regular Python (GIL on), *async single-client fast-path* (~76K) is the simplest high-throughput mode; sync fast-path (~53K) is slightly lower because of GIL contention across the 32 worker threads.
 
 ## Why sync and async perform so differently
 
 The cost stacks for sync and async are not the same. From the [benchmarking guide](benchmarking.md)'s stack analysis:
 
-- **Sync clients pay only the PyO3 boundary cost** (~13%). The SDK layer on top of PAC adds ~5%. PSDK sync builder routes through PAC's `_blocking` entries directly — no asyncio loop in the path.
-- **Async clients pay PyO3 + asyncio event-loop scheduling + a Tokio worker bounce on each op** — roughly a 65% drop vs Rust async direct. Every async op crosses Tokio ↔ asyncio twice (submit, then complete), which is the fundamental cost of bridging two async runtimes. `AsyncPool` recovers some of that by running multiple event loops on multiple OS threads in parallel, but only on free-threaded Python.
-- **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~510K TPS — *76% above* Rust-core async direct (~290K) and the highest single-loop number in the matrix. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.
+- **Sync clients pay only the PyO3 boundary cost** (~11%). The SDK layer on top of PAC adds ~3%. PSDK sync builder routes through PAC's `_blocking` entries directly — no asyncio loop in the path.
+- **Async clients pay PyO3 + asyncio event-loop scheduling + a Tokio worker bounce on each op** — roughly a 59% drop vs Rust async direct. Every async op crosses Tokio ↔ asyncio twice (submit, then complete), which is the fundamental cost of bridging two async runtimes. `AsyncPool` recovers some of that by running multiple event loops on multiple OS threads in parallel, but only on free-threaded Python.
+- **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~563K TPS — *94% above* Rust-core async direct (~290K) and the highest single-loop number in the matrix. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.

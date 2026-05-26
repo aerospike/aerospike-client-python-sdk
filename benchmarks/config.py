@@ -101,6 +101,13 @@ class WorkloadConfig:
     """When True, enable per-second TPS ticker, sampled latency histograms,
     and summary percentiles. Default is the lean path that runs straight to
     ``--duration`` and prints only a final TPS / errors / timeouts summary."""
+    prebuilt_keys: int = 0
+    """When >0, pre-generate this many Key objects at worker startup;
+    workers index them sequentially per op instead of constructing keys
+    via per-op `random.randint + str + Key()`. Eliminates the Python
+    stdlib RNG handicap (~5 µs/op vs Rust/Java's ~15 ns/op) so the bench
+    reveals the client's actual ceiling rather than the bench harness'
+    Python overhead. Sequential indexing — no per-op RNG."""
 
 
 def parse_latency_arg(value: str) -> tuple[int, int, str]:
@@ -390,6 +397,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "the lean path runs straight to --duration and prints only a final "
         "TPS / errors / timeouts summary.",
     )
+    p.add_argument(
+        "--prebuilt-keys",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Pre-generate N Key objects at startup; workers cycle through "
+        "them sequentially instead of paying per-op `random.randint` + "
+        "`str()` + `Key()` construction (~5 µs/op on Python). Eliminates "
+        "the bench's Python-stdlib RNG handicap and reveals the client's "
+        "true upper-bound ceiling. JSDK / Rust-core benches don't pay this "
+        "tax because their PRNGs are essentially free. 0 (default) keeps "
+        "per-op RNG.",
+    )
     return p
 
 
@@ -449,4 +469,5 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
             bool(getattr(ns, "with_telemetry", False))
             or getattr(ns, "latency_style", "columns") != "columns"
         ),
+        prebuilt_keys=max(0, int(getattr(ns, "prebuilt_keys", 0))),
     )

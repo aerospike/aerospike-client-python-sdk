@@ -29,14 +29,21 @@ from typing import Any, List, Optional, Sequence, Union
 
 from aerospike_async import ExecuteTask, Key
 
+from aerospike_async import ResultCode
+
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     WriteBinBuilder,
+    _OP_TYPE_TO_REA,
     _QueryBuilderBase,
     _SingleKeyWriteSegmentBase,
     _WriteSegmentBuilderBase,
     _WriteVerbs,
+    _to_expiration,
 )
+from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 
@@ -134,6 +141,54 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
         Tier 1b: multi-spec sequential dispatch via PAC ``batch_blocking``.
         Tier 2: dataset / SI / scan streams (returns Recordset; lazy).
         """
+        # Aggressive bypass: trivial single-key plain read with no per-op
+        # overrides → call PAC's get_blocking_with_overrides directly,
+        # skipping _finalize_current_spec / _OperationSpec /
+        # _execute_single_key_direct_blocking. Falls back to the full builder
+        # on any non-trivial case (filter expression, default filter, ops,
+        # multi-key, SI/dataset, on_error handler, transaction, etc.).
+        if (
+            on_error is None
+            and self._single_key is not None
+            and self._keys is None
+            and not self._operations
+            and not self._specs
+            and self._filter_expression is None
+            and self._default_filter_expression is None
+            and not self._filter_records
+            and self._op_type is None
+            and self._base_read_policy is not None
+            and self._read_policy is None
+        ):
+            try:
+                record = self._client.get_blocking_with_overrides(
+                    self._single_key,
+                    self._bins,
+                    self._base_read_policy,
+                    base_policy_sc=self._base_read_policy_sc,
+                    filter_expression=None,
+                    txn=self._txn,
+                )
+            except Exception as e:
+                pfc = _convert_pac_exception(e)
+                rc = pfc.result_code
+                # Mirror _is_actionable / _should_include_result semantics for
+                # the slow path: KEY_NOT_FOUND_ERROR on a plain read is
+                # idempotent — return an empty stream (or a not-found
+                # RecordResult when respond_all_keys is set) instead of
+                # raising. Anything else propagates.
+                if rc == ResultCode.KEY_NOT_FOUND_ERROR:
+                    if self._respond_all_keys:
+                        return SyncRecordStream.from_list([RecordResult(
+                            key=self._single_key, record=None,
+                            result_code=rc, exception=pfc, index=0,
+                        )])
+                    return SyncRecordStream.from_list([])
+                raise pfc from e
+            return SyncRecordStream.from_list([RecordResult(
+                key=self._single_key, record=record, result_code=ResultCode.OK,
+            )])
+
         fast = self.execute_blocking_fast_path(on_error)
         if fast is not None:
             return SyncRecordStream.from_list(fast)
@@ -262,6 +317,8 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
             behavior=self._behavior_fast,
             cached_write_policy=self._write_policy,
             cached_read_policy=self._read_policy,
+            cached_write_policy_sc=self._write_policy_sc,
+            cached_read_policy_sc=self._read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
@@ -278,6 +335,72 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
         self, on_error: Optional[OnError] = None,
     ) -> SyncRecordStream:
         """Run the single-key fast path synchronously."""
-        # Promote then defer to the SyncQueryBuilder's blocking fast path.
+        # Aggressive bypass: when the segment has accumulated put-style
+        # ops on a single key with no durable-delete overrides and on_error
+        # is the default (THROW), we can skip _promote()/QueryBuilder
+        # allocation entirely and call PAC's operate_blocking_with_overrides
+        # directly. Crucial guard: `self._ops` must be non-empty — the
+        # bypass dispatches via `operate` which requires at least one op.
+        # Delete/touch/exists single-key paths (no ops) fall through to the
+        # slow path which routes to delete_blocking / touch_blocking / etc.
+        # The op_type itself must be a write verb (upsert/insert/update/
+        # replace/replace_if_exists); other op types fall through too.
+        if (
+            on_error is None
+            and self._qb is None  # not yet promoted
+            and self._ops  # has accumulated ops — required by operate dispatch
+            and self._op_type_fast in (
+                "upsert", "insert", "update", "replace", "replace_if_exists",
+            )
+            and self._dd_command_default is None
+            and self._dd_override is None
+            and not self._record_delete_in_fast_ops
+            and (self._write_policy is not None or self._write_policy_sc is not None)
+        ):
+            # Hot path: when both AP + SC base policies are pre-built (the
+            # common no-txn case), hand them to PAC and let Rust resolve
+            # namespace mode and pick. Otherwise (txn nulled one of them),
+            # fall back to the Python-side resolver.
+            if self._write_policy is not None and self._write_policy_sc is not None:
+                wp_ap = self._write_policy
+                wp_sc = self._write_policy_sc
+            else:
+                mode = Mode.AP
+                if self._namespace_mode_resolver_blocking is not None:
+                    mode = self._namespace_mode_resolver_blocking(self._key.namespace)
+                wp_ap = self._write_policy_sc if mode == Mode.SC else self._write_policy
+                wp_sc = None
+                if wp_ap is None:
+                    # Neither AP nor SC available — fall through to slow path.
+                    self._promote()
+                    return SyncWriteSegmentBuilder.execute(self, on_error)
+            try:
+                record = self._client_fast.operate_blocking_with_overrides(
+                    self._key,
+                    self._ops,
+                    wp_ap,
+                    base_policy_sc=wp_sc,
+                    record_exists_action=_OP_TYPE_TO_REA.get(self._op_type_fast),
+                    durable_delete=False,
+                    txn=self._txn,
+                )
+            except Exception as e:
+                # Mirror slow-path semantics: KEY_NOT_FOUND_ERROR is only
+                # actionable for ops that REQUIRE an existing record
+                # (update, replace_if_exists). For upsert/insert/replace,
+                # it's idempotent. KEY_EXISTS_ERROR is always actionable
+                # (e.g. insert into existing record).
+                pfc = _convert_pac_exception(e)
+                rc = pfc.result_code
+                if (
+                    rc == ResultCode.KEY_NOT_FOUND_ERROR
+                    and self._op_type_fast not in ("update", "replace_if_exists")
+                ):
+                    return SyncRecordStream.from_list([])
+                raise pfc from e
+            return SyncRecordStream.from_list([RecordResult(
+                key=self._key, record=record, result_code=ResultCode.OK,
+            )])
+        # Slow path: promote then defer to the SyncQueryBuilder's blocking fast path.
         self._promote()
         return SyncWriteSegmentBuilder.execute(self, on_error)

@@ -64,11 +64,18 @@ class SyncSession:
         self._client = client
         self._behavior = behavior
         # Pre-compute base policies once per session so the fast-path
-        # get/put skip the policy_mapper for the common no-override case.
+        # get/put + builder bypasses skip the policy_mapper for the common
+        # no-override case. Cache both AP and SC variants so bypass paths
+        # can pick the right policy per resolved namespace mode without
+        # rebuilding. `_cached_*_policy` stays as the AP alias.
         self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT))
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
+        self._cached_read_policy_sc = to_read_policy(
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
+        self._cached_write_policy_sc = to_write_policy(
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
         # Cache the PAC client for fast-path methods.
         self._pac_client = client.underlying_client
         # Non-transactional sessions always return None;
@@ -281,6 +288,8 @@ class SyncSession:
                 indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
+                cached_read_policy_sc=self._cached_read_policy_sc,
+                cached_write_policy_sc=self._cached_write_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -299,6 +308,8 @@ class SyncSession:
                 indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
+                cached_read_policy_sc=self._cached_read_policy_sc,
+                cached_write_policy_sc=self._cached_write_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -322,6 +333,8 @@ class SyncSession:
             indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
+            cached_read_policy_sc=self._cached_read_policy_sc,
+            cached_write_policy_sc=self._cached_write_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -456,6 +469,8 @@ class SyncSession:
             behavior=self._behavior,
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
+            write_policy_sc=self._cached_write_policy_sc,
+            read_policy_sc=self._cached_read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,

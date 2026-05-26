@@ -24,7 +24,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, List, Tuple, Union
 
-from aerospike_async import Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
+from aerospike_async import FastRng, Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
 from aerospike_async.exceptions import RecordNotFound as _AsRecordNotFound
 
 from aerospike_sdk import AsyncPool
@@ -288,6 +288,28 @@ def _build_op_sync(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
+    # Per-op key construction uses PAC's Key.from_int_user_key fast path —
+    # skips Python str() conversion + PythonValue dispatch (~2 µs → ~500 ns
+    # per call). The bench's FastRng (xoshiro256++) supplies kid; key
+    # construction stays per-op (matches JSDK methodology).
+    ns_str = dataset.namespace
+    set_str = dataset.set_name
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        # Legacy A/B path: pre-build keys; opt-in via --prebuilt-keys.
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
+        _pk_counter = [0]
+        def pick_key(_rng):
+            i = _pk_counter[0]
+            _pk_counter[0] = (i + 1) & 0x7FFFFFFF
+            return _pk_pairs[i % pkn]
+    else:
+        def pick_key(rng):
+            kid = rng.randint(1, kc)
+            return (key_from_int(ns_str, set_str, kid), kid)
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             def op(rng):
@@ -322,8 +344,7 @@ def _build_op_sync(
         if bsz <= 1 and fp:
             if single_bin:
                 def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         session.get(key)
@@ -333,8 +354,7 @@ def _build_op_sync(
                 return op
 
             def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     session.get(key)
@@ -350,8 +370,7 @@ def _build_op_sync(
         if bsz <= 1:
             if single_bin:
                 def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         stream = session.query(key).execute()
@@ -362,8 +381,7 @@ def _build_op_sync(
                 return op
 
             def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     stream = session.query(key).execute()
@@ -379,7 +397,7 @@ def _build_op_sync(
 
         # batch RU
         def op(rng):
-            keys = [ds_id(str(rng.randint(1, kc))) for _ in range(bsz)]
+            keys = [pick_key(rng)[0] for _ in range(bsz)]
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)
@@ -435,6 +453,27 @@ def _build_op_async(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
+    # Per-op key construction uses PAC's Key.from_int_user_key fast path
+    # (skips Python str() + PythonValue dispatch, ~2 µs → ~500 ns per call).
+    # Bench's FastRng supplies kid; Key construction stays per-op (JSDK
+    # methodology). prebuilt_keys is legacy A/B path.
+    ns_str = dataset.namespace
+    set_str = dataset.set_name
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
+        _pk_counter = [0]
+        def pick_key(_rng):
+            i = _pk_counter[0]
+            _pk_counter[0] = (i + 1) & 0x7FFFFFFF
+            return _pk_pairs[i % pkn]
+    else:
+        def pick_key(rng):
+            kid = rng.randint(1, kc)
+            return (key_from_int(ns_str, set_str, kid), kid)
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             async def op(rng):
@@ -470,8 +509,7 @@ def _build_op_async(
         if bsz <= 1 and fp:
             if single_bin:
                 async def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         await session.get(key)
@@ -481,8 +519,7 @@ def _build_op_async(
                 return op
 
             async def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     await session.get(key)
@@ -498,8 +535,7 @@ def _build_op_async(
         if bsz <= 1:
             if single_bin:
                 async def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         stream = await session.query(key).execute()
@@ -511,8 +547,7 @@ def _build_op_async(
                 return op
 
             async def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     stream = await session.query(key).execute()
@@ -529,7 +564,7 @@ def _build_op_async(
 
         # batch RU
         async def op(rng):
-            keys = [ds_id(str(rng.randint(1, kc))) for _ in range(bsz)]
+            keys = [pick_key(rng)[0] for _ in range(bsz)]
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = await session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)
@@ -740,7 +775,7 @@ async def run_async(
 
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             decision = [False]
             has_limit = cfg.max_ops is not None
             sample_every = cfg.lat_sample_every
@@ -830,7 +865,7 @@ async def run_async_pool(
 
             async def worker(worker_id: int) -> None:
                 seed = (cfg.seed + loop_idx * cfg.async_tasks + worker_id + 1) % (2**32)
-                rng = random.Random(seed)
+                rng = FastRng(seed)
                 decision = [False]
                 has_limit = cfg.max_ops is not None
                 sample_every = cfg.lat_sample_every
@@ -913,7 +948,7 @@ def run_sync(
 
         def thread_main(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             fields = list(cfg.bin_fields)
             decision = [False]
             has_limit = cfg.max_ops is not None
@@ -990,18 +1025,28 @@ def run_pac_blocking(
     single_bin = len(fields_t) == 1
     b0_name = fields_t[0].name
 
+    # Pre-build keys (shared across threads) — see _build_op_sync.
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i)
+            for _ in range(pkn)
+        ]
+
     shared_client = new_client_blocking(policy, seeds)
     if connected is not None:
         connected.set()
 
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)
-        rng = random.Random(seed)
+        rng = FastRng(seed)
         has_limit = cfg.max_ops is not None
         sample_every = cfg.lat_sample_every
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
+        pk_counter = 0
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return
@@ -1013,9 +1058,13 @@ def run_pac_blocking(
                 payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                 verb = "put"
             else:  # READ_UPDATE
-                keys = _make_keys(dataset, cfg.key_count, rng, 1)
-                assert isinstance(keys, Key)
-                key = keys
+                if pkn > 0:
+                    key, kid = _pk_pairs[pk_counter % pkn]
+                    pk_counter += 1
+                else:
+                    keys = _make_keys(dataset, cfg.key_count, rng, 1)
+                    assert isinstance(keys, Key)
+                    key = keys
                 is_read = rng.randint(1, 100) > (100 - cfg.read_percent)
                 if is_read:
                     verb = "get"
@@ -1104,6 +1153,16 @@ async def run_pac_async(
     sample_every = cfg.lat_sample_every
     with_tel = cfg.with_telemetry
 
+    # Pre-build keys (shared across worker tasks) — see _build_op_sync.
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i)
+            for _ in range(pkn)
+        ]
+
     client = await new_client(policy, cfg.seeds)
     try:
         if connected is not None:
@@ -1111,10 +1170,11 @@ async def run_pac_async(
 
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             ws = stats.register_worker()
             has_limit = cfg.max_ops is not None
             local_count = 0
+            pk_counter = 0
             while not stop.is_set():
                 if has_limit and stats.total_ops() >= cfg.max_ops:
                     return
@@ -1122,12 +1182,16 @@ async def run_pac_async(
                 if cfg.workload == WorkloadKind.INSERT:
                     is_read = False
                     kid = bench_state.next_insert_key()
-                    k = Key(ns, set_name, str(kid))
+                    k = key_from_int(ns, set_name, kid)
                     payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                     verb = "put"
                 else:  # READ_UPDATE
-                    kid = rng.randint(1, kc)
-                    k = Key(ns, set_name, str(kid))
+                    if pkn > 0:
+                        k, kid = _pk_pairs[pk_counter % pkn]
+                        pk_counter += 1
+                    else:
+                        kid = rng.randint(1, kc)
+                        k = key_from_int(ns, set_name, kid)
                     is_read = rng.randint(1, 100) > (100 - read_pct)
                     if is_read:
                         verb = "get"
@@ -1243,17 +1307,27 @@ def run_legacy_sync(
     except Exception:
         record_not_found = None
 
+    # Pre-build legacy-style tuple keys (shared across threads).
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            ((ns, set_name, str(i := _pk_rng.randint(1, kc))), i)
+            for _ in range(pkn)
+        ]
+
     if connected is not None:
         connected.set()
 
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)
-        rng = random.Random(seed)
+        rng = FastRng(seed)
         has_limit = cfg.max_ops is not None
         sample_every = cfg.lat_sample_every
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
+        pk_counter = 0
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return
@@ -1265,8 +1339,12 @@ def run_legacy_sync(
                 payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                 verb = "put"
             else:  # READ_UPDATE
-                kid = rng.randint(1, kc)
-                key = (ns, set_name, str(kid))
+                if pkn > 0:
+                    key, kid = _pk_pairs[pk_counter % pkn]
+                    pk_counter += 1
+                else:
+                    kid = rng.randint(1, kc)
+                    key = (ns, set_name, str(kid))
                 is_read = rng.randint(1, 100) > (100 - read_pct)
                 if is_read:
                     verb = "get"

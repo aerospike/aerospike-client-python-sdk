@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
     #"aerospike-async==0.5.0a1",
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.5.0-alpha.1",
+    # For now - Pinned to PR #75 head (CLIENT-4796_2) — FastRng + Key.from_int_user_key
+    # + mode-aware *_with_overrides. Revert to a published PyPI version on
+    # `dev` before merging
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@c7562562c7adf8be009b83c652cc6cca96b8b3af",
     "antlr4-python3-runtime>=4.13.0",
 ]
 classifiers = [
