@@ -55,6 +55,74 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError)
 
 
+_SELF_TEST_KEY = "__bench_self_test__"
+_SELF_TEST_BIN = "b_st"
+_SELF_TEST_VAL = 0x5AFEC0DE
+
+
+def _self_test_fail(mode: str, detail: str) -> RuntimeError:
+    return RuntimeError(
+        f"bench self-test failed ({mode}): {detail}. "
+        "Aborting before the timed phase to avoid reporting phantom-success "
+        "TPS. The data path is silently no-op'ing — check for method-name "
+        "mismatches in proxies / broken bypass branches."
+    )
+
+
+def _self_test_psdk_sync(session: SyncSession, dataset: DataSet) -> None:
+    key = dataset.id(_SELF_TEST_KEY)
+    session.upsert(key).put({_SELF_TEST_BIN: _SELF_TEST_VAL}).execute().first()
+    rr = session.query(key).execute().first()
+    if rr is None or rr.record is None:
+        raise _self_test_fail("psdk-sync", "get returned no record after put")
+    got = rr.record.bins.get(_SELF_TEST_BIN)
+    if got != _SELF_TEST_VAL:
+        raise _self_test_fail(
+            "psdk-sync", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+        )
+
+
+async def _self_test_psdk_async(session: Session, dataset: DataSet) -> None:
+    key = dataset.id(_SELF_TEST_KEY)
+    s = await session.upsert(key).put({_SELF_TEST_BIN: _SELF_TEST_VAL}).execute()
+    await s.first()
+    s = await session.query(key).execute()
+    rr = await s.first()
+    if rr is None or rr.record is None:
+        raise _self_test_fail("psdk-async", "get returned no record after put")
+    got = rr.record.bins.get(_SELF_TEST_BIN)
+    if got != _SELF_TEST_VAL:
+        raise _self_test_fail(
+            "psdk-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+        )
+
+
+def _self_test_pac_blocking(client: Any, dataset: DataSet) -> None:
+    key = dataset.id(_SELF_TEST_KEY)
+    client.put_blocking(key, {_SELF_TEST_BIN: _SELF_TEST_VAL}, policy=WritePolicy())
+    rec = client.get_blocking(key, policy=ReadPolicy())
+    if rec is None:
+        raise _self_test_fail("pac-blocking", "get returned no record after put")
+    got = rec.bins.get(_SELF_TEST_BIN)
+    if got != _SELF_TEST_VAL:
+        raise _self_test_fail(
+            "pac-blocking", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+        )
+
+
+async def _self_test_pac_async(client: Any, dataset: DataSet) -> None:
+    key = dataset.id(_SELF_TEST_KEY)
+    await client.put(key, {_SELF_TEST_BIN: _SELF_TEST_VAL})
+    rec = await client.get(key)
+    if rec is None:
+        raise _self_test_fail("pac-async", "get returned no record after put")
+    got = rec.bins.get(_SELF_TEST_BIN)
+    if got != _SELF_TEST_VAL:
+        raise _self_test_fail(
+            "pac-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+        )
+
+
 def _is_not_found(exc: BaseException) -> bool:
     """A cache miss on a point read — counted as success-with-no-record,
     not as an error. PAC/PSDK fast-path raise ``RecordNotFound``; the
@@ -772,6 +840,7 @@ async def run_async(
         session = client.create_session(Behavior.DEFAULT)
         dataset = DataSet.of(cfg.namespace, cfg.set_name)
         fields = list(cfg.bin_fields)
+        await _self_test_psdk_async(session, dataset)
 
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
@@ -856,6 +925,14 @@ async def run_async_pool(
         if connected is not None:
             connected.set()
 
+        dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)
+
+        async def _do_self_test(client: Client) -> None:
+            session = client.create_session(Behavior.DEFAULT)
+            await _self_test_psdk_async(session, dataset_for_self_test)
+
+        await pool.run(_do_self_test)
+
         bridge_task = asyncio.create_task(_bridge_stop())
 
         async def loop_worker(client: Client, loop_idx: int) -> None:
@@ -938,13 +1015,21 @@ def run_sync(
     policy = client_policy_from_config(cfg)
     dataset = DataSet.of(cfg.namespace, cfg.set_name)
 
-    # One shared SyncClient + session across all worker threads. Per-thread
-    # clients would each spin up their own connection pool and Tokio
-    # runtime state, multiplying overhead for no gain.
-    with SyncClient(cfg.seeds, policy=policy) as shared_client:
+    # One SyncClient + session across all worker threads. When
+    # `cfg.current_thread_runtime` is True, the SyncClient internally
+    # installs a thread-local proxy: each worker thread gets its own PAC
+    # `LocalClient` (per-thread Tokio current_thread runtime + per-thread
+    # connection pool) on first op. The shared SyncClient is just a
+    # router; the actual PAC clients are thread-bound.
+    ct_runtime = bool(getattr(cfg, "current_thread_runtime", False))
+    with SyncClient(
+        cfg.seeds, policy=policy,
+        current_thread_runtime=ct_runtime,
+    ) as shared_client:
         if connected is not None:
             connected.set()
         shared_session = shared_client.create_session(Behavior.DEFAULT)
+        _self_test_psdk_sync(shared_session, dataset)
 
         def thread_main(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
@@ -1037,6 +1122,7 @@ def run_pac_blocking(
     shared_client = new_client_blocking(policy, seeds)
     if connected is not None:
         connected.set()
+    _self_test_pac_blocking(shared_client, dataset)
 
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)
@@ -1168,6 +1254,8 @@ async def run_pac_async(
         if connected is not None:
             connected.set()
 
+        await _self_test_pac_async(client, DataSet.of(ns, set_name))
+
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
             rng = FastRng(seed)
@@ -1282,9 +1370,11 @@ def run_legacy_sync(
         else:
             hosts.append((seed, 3000))
 
+    cli_alt = getattr(cfg, "services_alternate", None)
     use_services_alt = (
-        _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
-        or getattr(cfg, "services_alternate", False)
+        cli_alt
+        if cli_alt is not None
+        else _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
     )
     config: dict = {"hosts": hosts}
     if use_services_alt:
@@ -1318,6 +1408,21 @@ def run_legacy_sync(
 
     if connected is not None:
         connected.set()
+
+    legacy_st_key = (ns, set_name, _SELF_TEST_KEY)
+    try:
+        shared_client.put(legacy_st_key, {_SELF_TEST_BIN: _SELF_TEST_VAL})
+        _, _, got_bins = shared_client.get(legacy_st_key)
+        got = got_bins.get(_SELF_TEST_BIN) if got_bins is not None else None
+        if got != _SELF_TEST_VAL:
+            raise _self_test_fail(
+                "legacy-sync",
+                f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}",
+            )
+    except RuntimeError:
+        raise
+    except BaseException as exc:
+        raise _self_test_fail("legacy-sync", f"put/get raised {exc!r}") from exc
 
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)

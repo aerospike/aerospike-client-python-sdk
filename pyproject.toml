@@ -13,7 +13,7 @@ dependencies = [
     # For now - Pinned to PR #75 head (CLIENT-4796_2) — FastRng + Key.from_int_user_key
     # + mode-aware *_with_overrides. Revert to a published PyPI version on
     # `dev` before merging
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@c7562562c7adf8be009b83c652cc6cca96b8b3af",
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@f05e7b43758957c47f4b09feb3b6bfd8bb7a7bf6",
     "antlr4-python3-runtime>=4.13.0",
     "typing_extensions>=4.0.0",
 ]

@@ -115,11 +115,17 @@ class SyncSession:
     ) -> Optional[Record]:
         """Direct single-key read — no builder, no stream — synchronous.
 
-        Calls PAC ``get_blocking`` once with the session-cached
-        :class:`~aerospike_async.ReadPolicy`.
+        Routes through PAC's mode-aware ``get_blocking_with_overrides`` so
+        the right cached policy (AP or SC) is picked Rust-side based on
+        the key's namespace. Skips Python-side mode resolution.
         """
         if self._txn is None:
-            return self._pac_client.get_blocking(key, bins, policy=self._cached_read_policy)
+            return self._pac_client.get_blocking_with_overrides(
+                key, bins, self._cached_read_policy,
+                base_policy_sc=self._cached_read_policy_sc,
+            )
+        # Under MRT the cached policies are skipped (txn not stamped);
+        # rebuild a per-call policy from behavior and use plain entry.
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
@@ -128,11 +134,15 @@ class SyncSession:
     def put(self, key: Key, bins: Dict[str, Any]) -> None:
         """Direct single-key upsert — no builder, no stream — synchronous.
 
-        Calls PAC ``put_blocking`` once with the session-cached
-        :class:`~aerospike_async.WritePolicy`.
+        Routes through PAC's mode-aware ``put_blocking_with_overrides`` so
+        the right cached policy (AP or SC) is picked Rust-side based on
+        the key's namespace.
         """
         if self._txn is None:
-            self._pac_client.put_blocking(key, bins, policy=self._cached_write_policy)
+            self._pac_client.put_blocking_with_overrides(
+                key, bins, self._cached_write_policy,
+                base_policy_sc=self._cached_write_policy_sc,
+            )
             return
         policy = to_write_policy(
             self._behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))

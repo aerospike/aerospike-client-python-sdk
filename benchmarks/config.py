@@ -76,7 +76,7 @@ class WorkloadConfig:
     auth_mode: Optional[str] = None
     auth_user: Optional[str] = None
     auth_password: Optional[str] = None
-    services_alternate: bool = False
+    services_alternate: Optional[bool] = None
     latency_style: str = "columns"
     # Python allocation tracing. Off by default — `tracemalloc.start()` hooks
     # every PyObject alloc/free and walks the Python frame stack each time,
@@ -102,6 +102,12 @@ class WorkloadConfig:
     and summary percentiles. Default is the lean path that runs straight to
     ``--duration`` and prints only a final TPS / errors / timeouts summary."""
     prebuilt_keys: int = 0
+    current_thread_runtime: bool = False
+    """When True (sync mode only), SyncClient installs a thread-local proxy:
+    each bench worker thread gets its own PAC `LocalClient` backed by a
+    per-thread `current_thread` Tokio runtime. Eliminates cross-thread sync
+    per op vs the shared multi-thread runtime path. See
+    `aerospike_sdk.sync._threadlocal_client` for tend-load caveats."""
     """When >0, pre-generate this many Key objects at worker startup;
     workers index them sequentially per op instead of constructing keys
     via per-op `random.randint + str + Key()`. Eliminates the Python
@@ -346,8 +352,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--services-alternate",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use services-alternate for cluster discovery (default: False).",
+        default=None,
+        help="Use services-alternate for cluster discovery. When set, takes "
+        "precedence over AEROSPIKE_USE_SERVICES_ALTERNATE; when unset, falls "
+        "back to that env var (default: env or False).",
     )
     p.add_argument(
         "--tracemalloc",
@@ -396,6 +404,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "histograms, and the warmup / cooldown windowing. Off by default; "
         "the lean path runs straight to --duration and prints only a final "
         "TPS / errors / timeouts summary.",
+    )
+    p.add_argument(
+        "--current-thread-runtime",
+        action="store_true",
+        default=False,
+        help="(sync mode) Install a thread-local PAC LocalClient per worker "
+        "thread; each thread runs its own current_thread Tokio runtime + "
+        "connection pool. Eliminates the cross-thread worker hop the shared "
+        "multi-thread runtime imposes on every sync op. Recommended pairing: "
+        "ClientPolicy with conn_pools_per_node=1.",
     )
     p.add_argument(
         "--prebuilt-keys",
@@ -457,7 +475,7 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         auth_mode=auth_mode,
         auth_user=auth_user,
         auth_password=auth_password,
-        services_alternate=getattr(ns, "services_alternate", False),
+        services_alternate=getattr(ns, "services_alternate", None),
         latency_style=getattr(ns, "latency_style", "columns"),
         tracemalloc_enabled=bool(getattr(ns, "tracemalloc", False)),
         fast_path=bool(getattr(ns, "fast_path", False)),
@@ -470,4 +488,5 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
             or getattr(ns, "latency_style", "columns") != "columns"
         ),
         prebuilt_keys=max(0, int(getattr(ns, "prebuilt_keys", 0))),
+        current_thread_runtime=bool(getattr(ns, "current_thread_runtime", False)),
     )
