@@ -353,9 +353,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--services-alternate",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Use services-alternate for cluster discovery. When set, takes "
-        "precedence over AEROSPIKE_USE_SERVICES_ALTERNATE; when unset, falls "
-        "back to that env var (default: env or False).",
+        help="Use services-alternate (the alternate-access-address pathway) "
+        "for cluster discovery during tending. Only enable when the target "
+        "cluster has `alternate-access-address` configured on its nodes — "
+        "otherwise partition routing fails with 'Invalid cluster node' and "
+        "ops hang in PAC's retry loop. Pass `--services-alternate` to enable, "
+        "`--no-services-alternate` to force-disable (overrides "
+        "AEROSPIKE_USE_SERVICES_ALTERNATE from `aerospike.env` if set). "
+        "When neither form is passed, falls back to that env var (default: "
+        "env or False, matching JSDK's `--services-alternate` default of "
+        "false).",
     )
     p.add_argument(
         "--tracemalloc",
