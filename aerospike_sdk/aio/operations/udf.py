@@ -22,7 +22,6 @@ from typing import Any, List, Union, overload
 from aerospike_async import FilterExpression, Key
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
-from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.record_stream import RecordStream
 
@@ -139,7 +138,7 @@ class UdfBuilder:
             :meth:`QueryBuilder.where`: Same AEL for reads.
         """
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self

@@ -10,8 +10,52 @@ import logging
 import os
 import time
 
+
+def _bump_rlimit_nofile(min_soft: int = 8192) -> int:
+    """Raise ``RLIMIT_NOFILE`` soft limit toward *min_soft* when the hard limit allows.
+
+    macOS often defaults the soft limit to 256, which is too low for the full async
+    test suite (connections + event loops). Returns the resulting soft limit, or
+    ``-1`` if the ``resource`` module or ``getrlimit`` is unavailable.
+    """
+    try:
+        import resource
+    except ImportError:
+        return -1
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        infinity = getattr(resource, "RLIM_INFINITY", 2**63 - 1)
+        if hard == infinity:
+            desired = max(soft, min_soft)
+        else:
+            desired = min(min_soft, hard)
+        if soft < desired:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (desired, hard))
+        return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    except (ValueError, OSError):
+        try:
+            return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except Exception:
+            return -1
+
+
+# Run before importing PAC / heavy deps so early FD use benefits from a higher limit.
+_NOFILE_SOFT = _bump_rlimit_nofile(8192)
+
 import pytest
-import pytest_asyncio
+
+try:
+    import pytest_asyncio
+except ModuleNotFoundError as exc:
+    if getattr(exc, "name", None) == "pytest_asyncio":
+        raise ModuleNotFoundError(
+            "Missing pytest-asyncio. Install test deps, e.g. one of:\n"
+            "  pip install -e '.[test]'     # minimal (pytest + plugins)\n"
+            "  pip install -e '.[dev]'      # full dev (includes [test])\n"
+            "  pip install -r requirements-test.txt\n"
+            "(Requires a venv if your Python is PEP 668 / externally managed.)"
+        ) from exc
+    raise
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client
@@ -43,6 +87,13 @@ def load_env_file(env_file_path, *, override: bool = True) -> None:
 
 def pytest_configure(config):
     """Called after command line options have been parsed and all plugins and initial conftest files been loaded."""
+    if _NOFILE_SOFT >= 0 and _NOFILE_SOFT < 4096:
+        print(
+            "\nWARNING: RLIMIT_NOFILE (soft) is "
+            f"{_NOFILE_SOFT}; the full suite usually needs >= 4096 open files on macOS.\n"
+            "  Try: ulimit -n 8192   or: make test\n"
+        )
+
     root = Path(__file__).parent
     env_local = root / "aerospike.env"
     env_example = root / "aerospike.env.example"

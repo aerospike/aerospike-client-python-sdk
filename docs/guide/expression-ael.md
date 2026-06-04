@@ -207,3 +207,12 @@ op = CdtOperation.select_by_path(
 
 These constructs require Aerospike Server 8.1.1 or newer. A dedicated AEL
 surface is deferred until the DSL shape stabilizes across clients.
+
+## Server-compiled AEL (implementation plan)
+
+For sending **textual AEL** to the server as **`[128, "<dsl>"]`** on filter field 43
+(server ≥ 8.1.3), with **client parsing avoided on supported clusters** when index
+and filter handling are **server-side** (see plan for capability gates and fallback),
+read:
+
+[Server-compiled AEL implementation plan](server-compiled-ael-implementation-plan.md)

@@ -516,6 +516,13 @@ class SyncClient:
         """Check if the client is connected."""
         return self._connected
 
+    @property
+    def supports_server_compiled_filter_expression(self) -> bool:
+        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_filter_expression`."""
+        if not self._connected or self._async_client is None:
+            return False
+        return self._async_client.supports_server_compiled_filter_expression
+
     def _ensure_connected(self) -> Client:
         """Ensure the client is connected and return the async client."""
         if not self._connected or self._async_client is None:

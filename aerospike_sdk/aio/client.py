@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import types
 import typing
 from typing import List, Optional, Union, overload
 
@@ -25,6 +24,7 @@ from aerospike_async import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
+    FilterExpression,
     Key,
     RegisterTask,
     UDFLang,
@@ -32,6 +32,7 @@ from aerospike_async import (
     new_client,
 )
 
+from aerospike_sdk.ael.server_filter import forced_client_ael_parse
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -41,6 +42,20 @@ from aerospike_sdk.policy.behavior import Behavior
 if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
     from aerospike_sdk.aio.transactional_session import TransactionalSession
+
+
+def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
+    """Return whether *version_obj* reports server-compiled filter support (PAC API).
+
+    PAC versions that predate server-compiled AEL expose :class:`Version` without
+    :meth:`supports_server_compiled_filter_expression`; in that case return
+    ``False`` so the SDK uses client-side :func:`~aerospike_sdk.ael.parser.parse_ael`
+    for string predicates.
+    """
+    fn = getattr(version_obj, "supports_server_compiled_filter_expression", None)
+    if not callable(fn):
+        return False
+    return bool(fn())
 
 
 class Client:
@@ -95,6 +110,7 @@ class Client:
         self._client: Optional[AsyncClient] = None
         self._connected = False
         self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
+        self._supports_server_compiled_filter: Optional[bool] = None
 
     async def connect(self) -> None:
         """Open a connection to the cluster using the configured seeds and policy.
@@ -118,6 +134,7 @@ class Client:
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
         await self._indexes_monitor.start(self._client)
+        self._supports_server_compiled_filter = await self._compute_server_compiled_support()
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -132,6 +149,42 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
+        self._supports_server_compiled_filter = None
+
+    async def _compute_server_compiled_support(self) -> bool:
+        """True when every *active* node reports server-compiled filter support."""
+        if self._client is None:
+            return False
+        if forced_client_ael_parse():
+            return False
+        if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+            return False
+        nodes = await self._client.nodes()
+        if not nodes:
+            return False
+        saw_active = False
+        for n in nodes:
+            if not n.is_active:
+                continue
+            saw_active = True
+            ver = n.version
+            if not _pac_version_supports_server_compiled_filter(ver):
+                return False
+        return saw_active
+
+    @property
+    def supports_server_compiled_filter_expression(self) -> bool:
+        """Whether this client last computed all nodes as supporting server-compiled AEL filters.
+
+        Also requires the installed PAC to expose
+        :meth:`FilterExpression.from_server_compiled_ael`; otherwise this is
+        ``False`` even when nodes report a new enough build.
+
+        Returns ``False`` before :meth:`connect` completes or after :meth:`close`.
+        """
+        if self._supports_server_compiled_filter is None:
+            return False
+        return self._supports_server_compiled_filter
 
     async def __aenter__(self) -> Client:
         """Async context manager entry."""
@@ -351,6 +404,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
             )
             builder._single_key = key
             return builder
@@ -367,6 +421,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
             )
             builder._keys = keys
             return builder
@@ -393,6 +448,7 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
+            supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
         )
 
     @overload

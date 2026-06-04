@@ -1,4 +1,4 @@
-.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare
+.PHONY: antlr generate-ael clean-ael test test-deps dev docs docs-clean docs-serve examples bench bench-quick bench-compare
 
 # ANTLR JAR location - download if not present
 ANTLR_JAR ?= antlr-4.13.0-complete.jar
@@ -32,14 +32,19 @@ clean-ael:
 dev:
 	pip install -e ".[dev]"
 
+# Minimal pytest stack only (see pyproject.toml [project.optional-dependencies] test)
+test-deps:
+	pip install -e ".[test]"
+
+# macOS default soft FD limit (256) is too low for the full async suite; raise when the shell allows.
 test:
-	pytest tests
+	bash -c 'ulimit -n 8192 2>/dev/null || true; exec pytest tests'
 
 test-unit:
-	pytest tests/unit
+	bash -c 'ulimit -n 8192 2>/dev/null || true; exec pytest tests/unit'
 
 test-int:
-	pytest tests/integration
+	bash -c 'ulimit -n 8192 2>/dev/null || true; exec pytest tests/integration'
 
 examples:
 	@for f in examples/*_example.py examples/operation_differences.py; do \

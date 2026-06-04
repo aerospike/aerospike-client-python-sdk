@@ -56,7 +56,10 @@ Or adjust and use `requirements-local.txt` (gitignored path example).
 Use the interpreter from your pyenv environment (see `.cursor/rules/guiding-principles.mdc` for the usual env name), then:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]"          # SDK + everything needed for tests, lint, and type-check
+# or, for running pytest only (lighter than [dev]):
+pip install -e ".[test]"
+# or: pip install -e . && pip install -r requirements-test.txt
 ```
 
 ## Configuration
@@ -80,13 +83,16 @@ make test-int      # integration tests only (requires running Aerospike server)
 
 ### macOS File Descriptor Limit
 
-On macOS, you may encounter `OSError: [Errno 24] Too many open files` when running the full test suite. The default limit (256) is not enough for the concurrent async connections created during testing.
+On macOS, you may encounter `OSError: [Errno 24] Too many open files` when running the full test suite. The default soft limit (often 256) is not enough for concurrent async connections and event loops.
+
+The repo bumps ``RLIMIT_NOFILE`` in ``conftest.py`` where the OS allows, and ``make test`` runs ``ulimit -n 8192`` before ``pytest``. If you still see **Errno 24**, raise the limit manually:
 
 ```bash
-ulimit -n 4096
+ulimit -n 8192
+pytest
 ```
 
-To make this permanent, add it to your shell profile (`~/.zshrc` or `~/.bash_profile`).
+To make a higher limit permanent, add ``ulimit -n 8192`` (or higher) to your shell profile (`~/.zshrc` or `~/.bash_profile`).
 
 ## Documentation
 
