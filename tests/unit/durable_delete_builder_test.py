@@ -46,7 +46,7 @@ from aerospike_sdk.aio.operations.udf import UdfBuilder
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
-from aerospike_sdk.sync.operations.query import SyncWriteSegmentBuilder
+from aerospike_sdk.sync.operations.query import SyncQueryBuilder, SyncWriteSegmentBuilder
 
 
 def _key(val: int = 1) -> Key:
@@ -268,7 +268,6 @@ class TestSyncWriteSegmentBuilder:
 
     @staticmethod
     def _make():
-        from aerospike_sdk.sync.operations.query import SyncQueryBuilder
         qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
         qb._op_type = "upsert"
         qb._single_key = _key()

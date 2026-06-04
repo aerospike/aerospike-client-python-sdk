@@ -21,10 +21,10 @@ Each Python OS thread that touches this proxy gets its own
 cross-thread worker hop that the shared multi-thread runtime imposes on
 the standard ``Client.*_blocking`` methods.
 
-The proxy duck-types as a PAC ``Client`` for the ``*_blocking`` /
-``*_blocking_with_overrides`` surface PSDK's sync hot path uses, so
-:class:`SyncSession` and its builder/segment children can use either the
-shared client or this thread-local proxy without code changes.
+The proxy duck-types as a PAC ``Client`` for the ``*_blocking`` surface
+PSDK's sync hot path uses, so :class:`SyncSession` and its builder /
+segment children can use either the shared client or this thread-local
+proxy without code changes.
 
 Documented caveats:
 
@@ -89,12 +89,6 @@ class _ThreadLocalLocalClient:
 
     def exists_blocking(self, *args: Any, **kwargs: Any) -> Any:
         return self._get().exists_blocking(*args, **kwargs)
-
-    def get_blocking_with_overrides(self, *args: Any, **kwargs: Any) -> Any:
-        return self._get().get_blocking_with_overrides(*args, **kwargs)
-
-    def operate_blocking_with_overrides(self, *args: Any, **kwargs: Any) -> Any:
-        return self._get().operate_blocking_with_overrides(*args, **kwargs)
 
     def info_blocking(self, *args: Any, **kwargs: Any) -> Any:
         return self._get().info_blocking(*args, **kwargs)

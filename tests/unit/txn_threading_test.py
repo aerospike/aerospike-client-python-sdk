@@ -30,16 +30,21 @@ from aerospike_async import (
     Key,
     QueryPolicy,
     ReadPolicy,
+    ResultCode,
     Txn,
     WritePolicy,
 )
 
+from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
 from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteSegmentBuilder,
     _SingleKeyWriteSegment,
 )
+from aerospike_sdk.aio.session import Session
+from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy.behavior import Behavior
 
 
 class _FakePac:
@@ -239,7 +244,6 @@ def test_batch_builder_with_txn_roundtrip() -> None:
 # -- Session -> builder propagation ------------------------------------------
 
 def test_session_bind_txn_helper_applies_to_builder() -> None:
-    from aerospike_sdk.aio.session import Session
 
     session = Session.__new__(Session)
     session._txn = Txn()
@@ -251,7 +255,6 @@ def test_session_bind_txn_helper_applies_to_builder() -> None:
 
 
 def test_session_bind_txn_noop_when_no_active_txn() -> None:
-    from aerospike_sdk.aio.session import Session
 
     session = Session.__new__(Session)
     session._txn = None
@@ -271,7 +274,6 @@ class _FakePacClient:
     satisfy TransactionalSession.commit / abort."""
 
     def __init__(self) -> None:
-        from aerospike_sdk import AbortStatus, CommitStatus
         self.commit_calls: list = []
         self.abort_calls: list = []
         self._commit_ok = CommitStatus.OK
@@ -295,13 +297,10 @@ class _FakeSdkClientForRetry:
         self._indexes_monitor = None
 
     def transaction_session(self, behavior=None):
-        from aerospike_sdk import TransactionalSession
         return TransactionalSession(client=self, behavior=behavior)
 
 
 def _make_session_for_retry() -> "object":
-    from aerospike_sdk.aio.session import Session
-    from aerospike_sdk.policy.behavior import Behavior
 
     client = _FakeSdkClientForRetry()
     return Session(client=client, behavior=Behavior.DEFAULT)  # type: ignore[arg-type]
@@ -324,8 +323,6 @@ async def test_do_in_transaction_returns_value_on_success() -> None:
 
 
 async def test_do_in_transaction_retries_on_transient() -> None:
-    from aerospike_async import ResultCode
-    from aerospike_sdk.exceptions import AerospikeError
 
     session = _make_session_for_retry()
     attempts = {"n": 0}
@@ -348,8 +345,6 @@ async def test_do_in_transaction_retries_on_transient() -> None:
 
 
 async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
-    from aerospike_async import ResultCode
-    from aerospike_sdk.exceptions import AerospikeError
 
     session = _make_session_for_retry()
     attempts = {"n": 0}
@@ -370,8 +365,6 @@ async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
 
 
 async def test_do_in_transaction_does_not_retry_on_non_transient() -> None:
-    from aerospike_async import ResultCode
-    from aerospike_sdk.exceptions import AerospikeError
 
     session = _make_session_for_retry()
     attempts = {"n": 0}

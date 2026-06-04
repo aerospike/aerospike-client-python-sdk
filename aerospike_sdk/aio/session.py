@@ -23,7 +23,6 @@ from typing import (
     Awaitable,
     Dict,
     List,
-    NamedTuple,
     Optional,
     overload,
     TYPE_CHECKING,
@@ -51,15 +50,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-
-
-class NamespaceScStatus(NamedTuple):
-    """Result of :meth:`Session.namespace_sc_status`."""
-
-    is_sc: bool
-    """True when the namespace exists and ``strong-consistency`` is enabled."""
-    detail: str
-    """Empty when ``is_sc`` is true; otherwise a short explanation for logging or skips."""
+from aerospike_sdk.session_shared import NamespaceScStatus
 
 
 def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
@@ -269,7 +260,10 @@ class Session:
         """
         if self._txn is None:
             return await self._pac_client.get(
-                key, bins, policy=self._cached_read_policy)
+                key, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
+            )
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
@@ -309,7 +303,10 @@ class Session:
         """
         if self._txn is None:
             await self._pac_client.put(
-                key, bins, policy=self._cached_write_policy)
+                key, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
+            )
             return
         policy = to_write_policy(
             self._behavior.get_settings(

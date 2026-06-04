@@ -250,3 +250,52 @@ await (
 
 Mixed operations across different keys are handled automatically when you chain
 multiple write segments.
+
+### `execute()` vs `execute_stream()`
+
+The batch builder exposes two terminal methods with different result-delivery
+semantics:
+
+- **`execute()`** — buffered. Awaits every per-key result, then returns a
+  `RecordStream` backed by a fully-materialized list. Writes are guaranteed to
+  have completed server-side by the time this method returns; subsequent reads
+  observe the new state without races. Safe for "fire-and-forget" use (await
+  the call and discard the returned stream). Use this for most workloads.
+
+- **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
+  `RecordResult` per `__anext__` (`__next__` on sync) as the cluster responds.
+  First record arrives at first-RTT, not after all keys complete. Peak memory
+  is bounded — useful for large batches where buffering the full result list
+  would be expensive.
+
+  **Caveats** for `execute_stream()`:
+
+  - **Yields completion order, not input order.** Each `RecordResult` carries
+    its originating op's input position in `.index`. Sort after collecting if
+    you need positional results.
+  - **No writes-complete-on-return guarantee.** If you discard the returned
+    stream without iterating, per-node tasks may still be in-flight when
+    subsequent code runs — subsequent reads can race against pending writes.
+  - **Per-key errors land inline** on `RecordResult` (`.is_ok=False`,
+    `.exception`); cluster-level errors raise mid-iteration.
+
+```python
+# Lazy streaming — process records as they arrive
+stream = await (
+    session.batch()
+        .upsert(key1).bin("v").set_to(1)
+        .upsert(key2).bin("v").set_to(2)
+        .execute_stream()
+)
+async for result in stream:
+    print(result.index, result.is_ok, result.key.value)
+
+# When positional ordering is needed, collect + sort
+stream = await (...).execute_stream()
+results = await stream.collect()
+results.sort(key=lambda r: r.index)
+```
+
+Sync siblings: `SyncBatchOperationBuilder.execute()` and `.execute_stream()`
+have the same contract; iterate the latter with `for result in stream` (rather
+than `async for`).

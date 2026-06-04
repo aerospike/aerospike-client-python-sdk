@@ -24,7 +24,7 @@ pip install aerospike-sdk
 Pin to a specific release if you need reproducible builds:
 
 ```bash
-pip install aerospike-sdk==0.9.0a1
+pip install aerospike-sdk==0.9.0a2
 ```
 
 This installs the SDK plus its dependency on the Aerospike Python Async Client
@@ -51,7 +51,7 @@ async def main():
         # Filtered query with AEL — streams results memory-efficiently
         results = await (
             session.query(users)
-            .where("$.age > %s and $.country == '%s'", 25, "US")
+            .where("$.age > 25 and $.country == 'US'")
             .execute()
         )
         async for row in results:
@@ -87,7 +87,7 @@ def main():
         # Filtered query with AEL — same builder API as async
         results = (
             session.query(users)
-            .where("$.age > %s and $.country == '%s'", 25, "US")
+            .where("$.age > 25 and $.country == 'US'")
             .execute()
         )
         for row in results:
@@ -112,7 +112,7 @@ PSDK offers two API shapes — pick based on what your code needs.
 
 | API | Use when | Trade-off |
 |---|---|---|
-| **Chained builder** (`session.query(k).execute()`, `session.upsert(k).put(...).execute()`) | You need filters (`where(...)`), batch ops, error handlers, secondary-index queries, TTL overrides, generation checks, etc. Same shape as the Aerospike Java SDK. | Builder + stream wrapping costs ~80 µs/op of Python overhead. |
+| **Chained builder** (`session.query(k).execute()`, `session.upsert(k).put(...).execute()`) | You need filters (`where(...)`), batch ops, error handlers, secondary-index queries, TTL overrides, generation checks, etc. Same shape as the Aerospike Java SDK. | Builder + stream wrapping costs ~60 µs/op of Python overhead. |
 | **Fast-path** (`session.get(key)`, `session.put(key, bins)`) | Single-key reads/writes where you want the lowest per-op overhead. | Single-key only; no filters, no error-handler callbacks, no batch semantics. Errors raise directly. |
 
 Both shapes work in sync and async modes. Use whichever fits each call site — they share the same `Session` and `Behavior`.
@@ -195,12 +195,10 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 - **Python** 3.10 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
-  Note: free-threaded targets (`cp314t` ABI) require building PAC from source today —
-  see "Local PAC checkout" below. `aerospike-async` does not yet publish FT wheels
-  to PyPI.
+  Free-threaded wheels (`cp313t` / `cp314t`) ship across the same platform
+  matrix as the regular CPython wheels starting with `aerospike-async` v0.5.0-alpha.1.
 - **Aerospike server** — required for integration tests
-- **Rust toolchain** (`rustc` + `cargo`) — required for building the Aerospike Python Async Client from source
-  (always required on free-threaded Python until FT wheels ship)
+- **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
 - **Java 11+** — required for the one-time AEL parser build (`make generate-ael`)
 
 ### Setting up a dev environment
@@ -212,16 +210,11 @@ pip install -e ".[dev]"    # install with dev extras
 
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
-### Local PAC checkout (required for free-threaded Python today)
+### Local PAC checkout
 
 To test against a sibling Aerospike Python Async Client working tree (e.g. for
 a feature not yet on PyPI), install it editable first and pass `--no-deps` to
 this SDK so pip doesn't try to re-resolve PAC from PyPI:
-
-If you're on free-threaded Python (`cp314t` ABI), this is currently the only
-way to install PAC — `aerospike-async` does not yet publish FT wheels to PyPI,
-and the `pip install -e ".[dev]"` flow above will fail with a "no supported
-wheel on this platform" error.
 
 ```bash
 pip install -e /path/to/aerospike-client-python-async

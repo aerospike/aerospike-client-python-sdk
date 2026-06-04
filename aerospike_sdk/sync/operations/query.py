@@ -34,14 +34,15 @@ from aerospike_async import ResultCode
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     WriteBinBuilder,
-    _OP_TYPE_TO_REA,
     _QueryBuilderBase,
+)
+from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.operations_shared import (
+    _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
     _WriteSegmentBuilderBase,
     _WriteVerbs,
-    _to_expiration,
 )
-from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError
@@ -142,8 +143,8 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
         Tier 2: dataset / SI / scan streams (returns Recordset; lazy).
         """
         # Aggressive bypass: trivial single-key plain read with no per-op
-        # overrides → call PAC's get_blocking_with_overrides directly,
-        # skipping _finalize_current_spec / _OperationSpec /
+        # overrides → call PAC's get_blocking directly, skipping
+        # _finalize_current_spec / _OperationSpec /
         # _execute_single_key_direct_blocking. Falls back to the full builder
         # on any non-trivial case (filter expression, default filter, ops,
         # multi-key, SI/dataset, on_error handler, transaction, etc.).
@@ -161,11 +162,11 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
             and self._read_policy is None
         ):
             try:
-                record = self._client.get_blocking_with_overrides(
+                record = self._client.get_blocking(
                     self._single_key,
                     self._bins,
-                    self._base_read_policy,
-                    base_policy_sc=self._base_read_policy_sc,
+                    policy=self._base_read_policy,
+                    policy_sc=self._base_read_policy_sc,
                     filter_expression=None,
                     txn=self._txn,
                 )
@@ -223,11 +224,10 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     :class:`SyncWriteSegmentBuilder`.
     """
 
-    # -- Bin entry point ------------------------------------------------------
-
-    def bin(self, bin_name: str) -> WriteBinBuilder:
-        """Open a per-bin write builder targeting this segment."""
-        return WriteBinBuilder(self, bin_name)
+    # `bin()` is inherited from `_WriteSegmentBuilderBase`, which instantiates
+    # the tier-neutral `WriteBinBuilder` via the class-attribute hook set in
+    # `aio/operations/query.py`. Both async and sync subclasses share the
+    # same `WriteBinBuilder`, so no override is needed here.
 
     # -- Write transition (chained writes) ------------------------------------
 
@@ -338,9 +338,9 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
         # Aggressive bypass: when the segment has accumulated put-style
         # ops on a single key with no durable-delete overrides and on_error
         # is the default (THROW), we can skip _promote()/QueryBuilder
-        # allocation entirely and call PAC's operate_blocking_with_overrides
-        # directly. Crucial guard: `self._ops` must be non-empty — the
-        # bypass dispatches via `operate` which requires at least one op.
+        # allocation entirely and call PAC's operate_blocking directly.
+        # Crucial guard: `self._ops` must be non-empty — the bypass
+        # dispatches via `operate` which requires at least one op.
         # Delete/touch/exists single-key paths (no ops) fall through to the
         # slow path which routes to delete_blocking / touch_blocking / etc.
         # The op_type itself must be a write verb (upsert/insert/update/
@@ -375,11 +375,11 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                     self._promote()
                     return SyncWriteSegmentBuilder.execute(self, on_error)
             try:
-                record = self._client_fast.operate_blocking_with_overrides(
+                record = self._client_fast.operate_blocking(
                     self._key,
                     self._ops,
-                    wp_ap,
-                    base_policy_sc=wp_sc,
+                    policy=wp_ap,
+                    policy_sc=wp_sc,
                     record_exists_action=_OP_TYPE_TO_REA.get(self._op_type_fast),
                     durable_delete=False,
                     txn=self._txn,

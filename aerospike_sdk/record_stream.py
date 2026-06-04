@@ -26,6 +26,7 @@ from aerospike_async.exceptions import ResultCode
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
+    from aerospike_sdk.error_strategy import ErrorHandler
     from aerospike_sdk.exceptions import AerospikeError
 
 log = logging.getLogger(__name__)
@@ -126,6 +127,57 @@ class RecordStream:
             stream = RecordStream.from_batch_records(batch_records)
         """
         return cls.from_list(batch_records_to_results(list(batch_records)))
+
+    @classmethod
+    def from_pac_batch_stream(
+        cls, pac_stream: Any, on_error: ErrorHandler | None = None,
+    ) -> RecordStream:
+        """Lazy-feed adapter over a PAC ``BatchRecordStream``.
+
+        The PAC stream yields ``(idx, BatchRecord)`` tuples in completion
+        order (the node that responds first yields first), not input order.
+        ``idx`` is the position of the originating op in the input ops list;
+        it's mapped to :attr:`RecordResult.index` so positional consumers
+        can still recover input order via ``stream.collect()`` followed by
+        ``results.sort(key=lambda r: r.index)`` if needed.
+
+        Per-key errors land on each ``BatchRecord.result_code`` and surface
+        as :class:`RecordResult` with ``is_ok=False``. Cluster-level errors
+        raise from ``__anext__`` and are converted to PSDK exceptions via
+        :func:`_convert_pac_exception`.
+
+        Args:
+            pac_stream: PAC ``BatchRecordStream`` to drain.
+            on_error: Optional ``(key, index, exception) -> None`` callback.
+                When set, per-key failures are dispatched to the handler
+                and excluded from the returned stream; cluster-level
+                errors still raise from ``__anext__``.
+        """
+        from aerospike_sdk.exceptions import _convert_pac_exception, _result_code_to_exception
+
+        async def _iter() -> AsyncIterator[RecordResult]:
+            try:
+                async for idx, br in pac_stream:
+                    rc = (
+                        br.result_code
+                        if br.result_code is not None
+                        else ResultCode.OK
+                    )
+                    if on_error is not None and rc != ResultCode.OK:
+                        on_error(br.key, idx, _result_code_to_exception(
+                            rc, str(rc), br.in_doubt))
+                        continue
+                    yield RecordResult(
+                        key=br.key,
+                        record=br.record,
+                        result_code=rc,
+                        in_doubt=br.in_doubt,
+                        index=idx,
+                    )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
+
+        return cls(_iter())
 
     @classmethod
     def from_recordset(cls, recordset) -> RecordStream:

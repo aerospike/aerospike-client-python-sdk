@@ -24,10 +24,9 @@ Covers:
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from aerospike_async import (
-    ExpOperation,
     ExpReadFlags,
     ExpWriteFlags,
     FilterExpression,
@@ -35,12 +34,15 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.operations.query import (
-    QueryBinBuilder,
-    QueryBuilder,
-    _build_exp_write_flags,
+from aerospike_sdk.aio.operations.batch import (
+    BatchBinBuilder,
+    BatchKeyOperationBuilder,
+    BatchOperationBuilder,
 )
+from aerospike_sdk.aio.operations.query import QueryBinBuilder, QueryBuilder
+from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.operations_shared import BatchOpType, _build_exp_write_flags
 
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT
 _EXP_READ_EVAL_NO_FAIL = ExpReadFlags.EVAL_NO_FAIL
@@ -117,7 +119,6 @@ class TestBuildWriteFlags:
 class TestParseAel:
 
     def test_string_converted_via_parse_ael(self):
-        from aerospike_sdk.ael.parser import parse_ael
         result = parse_ael("$.age + 1")
         assert isinstance(result, FilterExpression)
 
@@ -136,7 +137,6 @@ class TestQueryBinBuilderSelectFrom:
         assert len(collector.operations) == 1
 
     def test_select_from_filter_expression(self):
-        from aerospike_sdk.ael.parser import parse_ael
         expr = parse_ael("$.A + 4")
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
@@ -177,9 +177,6 @@ class TestDatasetQueryGuard:
 class TestBatchBinBuilderExpression:
 
     def _make_batch_builder(self, bin_name: str = "ev"):
-        from aerospike_sdk.aio.operations.batch import (
-            BatchBinBuilder, BatchKeyOperationBuilder, BatchOperationBuilder, BatchOpType,
-        )
         batch = BatchOperationBuilder(client=MagicMock())
         key_op = BatchKeyOperationBuilder(batch, Key("test", "s", "k1"), BatchOpType.UPDATE)
         return BatchBinBuilder(key_op, bin_name), key_op
@@ -214,9 +211,6 @@ class TestBatchBinBuilderExpression:
         assert len(key_op._operations) == 1
 
     def test_chaining_set_to_and_expression(self):
-        from aerospike_sdk.aio.operations.batch import (
-            BatchBinBuilder, BatchKeyOperationBuilder, BatchOperationBuilder, BatchOpType,
-        )
         batch = BatchOperationBuilder(client=MagicMock())
         key_op = BatchKeyOperationBuilder(batch, Key("test", "s", "k1"), BatchOpType.UPSERT)
         key_op.bin("name").set_to("Alice").bin("computed").upsert_from("$.age * 2")

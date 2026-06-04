@@ -77,6 +77,10 @@ class WorkloadConfig:
     auth_user: Optional[str] = None
     auth_password: Optional[str] = None
     services_alternate: Optional[bool] = None
+    seed_only_cluster: bool = False
+    """Testing-only. Skip cluster tend and route every op via the seed
+    address(es). Eliminates tend-load confound on ct_runtime cells and
+    speeds unit-test cluster setup. Unsafe under topology changes."""
     latency_style: str = "columns"
     # Python allocation tracing. Off by default — `tracemalloc.start()` hooks
     # every PyObject alloc/free and walks the Python frame stack each time,
@@ -365,6 +369,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "false).",
     )
     p.add_argument(
+        "--seed-only",
+        dest="seed_only_cluster",
+        action="store_true",
+        default=False,
+        help="Testing-only. Skip cluster tend entirely; route every op via "
+        "the seed address(es). Removes tend-load from ct_runtime / pool "
+        "measurements. Unsafe under node restart / failover / rebalance — "
+        "do not enable against production-class clusters.",
+    )
+    p.add_argument(
         "--tracemalloc",
         dest="tracemalloc",
         action=argparse.BooleanOptionalAction,
@@ -483,6 +497,7 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         auth_user=auth_user,
         auth_password=auth_password,
         services_alternate=getattr(ns, "services_alternate", None),
+        seed_only_cluster=bool(getattr(ns, "seed_only_cluster", False)),
         latency_style=getattr(ns, "latency_style", "columns"),
         tracemalloc_enabled=bool(getattr(ns, "tracemalloc", False)),
         fast_path=bool(getattr(ns, "fast_path", False)),

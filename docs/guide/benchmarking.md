@@ -5,8 +5,8 @@ This guide documents the architecture, setup, and measured TPS / latency for the
 ## Architecture
 
 ```
-┌─────────────────────────┐         VPC (10.138.0.0/20)        ┌─────────────────────────┐
-│      bench-client       │◄──────────── TCP :3100 ────────────►│       bench-asd         │
+┌─────────────────────────┐                                     ┌─────────────────────────┐
+│      bench-client       │◄──────────── TCP :3100 ────────────►│   bench-asd × 3 nodes   │
 │   c3-standard-8 (8 vCPU)│                                     │   c3-standard-8 (8 vCPU)│
 │   32 GB RAM, 30 GB disk │                                     │   32 GB RAM, 30 GB disk │
 │   Ubuntu 24.04 LTS      │                                     │   Ubuntu 24.04 LTS      │
@@ -15,11 +15,10 @@ This guide documents the architecture, setup, and measured TPS / latency for the
 │     threaded, no GIL)   │                                     │   8.1.1.1               │
 │   Rust 1.95.0           │                                     │   in-memory storage     │
 │   PAC, PSDK from source │                                     │   (4 GB, namespace test)│
-│   10.138.0.4            │                                     │   10.138.0.3            │
 └─────────────────────────┘                                     └─────────────────────────┘
 ```
 
-Both VMs run in `us-west1-b` within the same VPC, giving sub-millisecond network RTT. They use `c3-standard-8` machine types (Intel Sapphire Rapids, 8 vCPUs, 32 GB RAM) to provide dedicated, non-shared compute.
+`bench-asd` is a 3-node Aerospike cluster (each node a separate `c3-standard-8` VM). All four VMs (1 client + 3 server nodes) run within the same VPC/subnet, giving sub-millisecond network RTT. They use `c3-standard-8` machine types (Intel Sapphire Rapids, 8 vCPUs, 32 GB RAM each) to provide dedicated, non-shared compute.
 
 ### Why dedicated, isolated VMs?
 
@@ -41,8 +40,8 @@ Dedicated VMs on isolated CPU cores with direct, low-latency networking between 
 | Rust | 1.95.0 |
 | PAC | `aerospike-async` 0.4.0a2 (built from source with `mimalloc` global allocator) |
 | PSDK | `aerospike-sdk` 0.9.0a2 (built from source) |
-| Legacy Python client | `aerospike` 19.2.1 (published PyPI wheel) |
-| Aerospike server | Enterprise 8.1.1.1, in-memory, 4 GB, RF=1 |
+| Legacy Python client | `aerospike` 19.2.1 (single-threaded, sync, C client; published PyPI wheel) |
+| Aerospike server | Enterprise 8.1.1.1, 3-node cluster, in-memory, 4 GB per node, RF=1 |
 
 ## Workload
 
@@ -75,42 +74,42 @@ The framework bench (`python -m benchmarks.benchmark`) carries all the modes for
 ```bash
 # PSDK sync — fast-path (session.get / session.put) by default
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode sync --threads 32 --fast-path
 
 # Same harness, builder API (session.query / upsert chained)
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode sync --threads 32 --no-fast-path
 
 # PSDK async — single client, N concurrent tasks
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode async -z 32 --fast-path
 
 # PSDK async — AsyncPool (N loops × M tasks per loop), free-threaded only
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode async --pool-loops 4 -z 64 --fast-path
 
 # PAC sync direct — bypasses PSDK, calls PAC `_blocking` entries
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode pac-blocking --threads 32
 
 # PAC async direct — bypasses PSDK, calls PAC async entries
 PYTHON_GIL=0 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode pac-async -z 32
@@ -119,7 +118,7 @@ PYTHON_GIL=0 python -m benchmarks.benchmark \
 # multi-threaded fan-out; importing it on a free-threaded build also auto-
 # re-enables the GIL because the C extension hasn't declared FT-safety).
 python -m benchmarks.benchmark \
-  -H 10.138.0.3:3100 --services-alternate \
+  -H <bench-asd>:3100 --services-alternate \
   -n test -s test -k 100000 -o I8 -w RU,50 \
   -d 15 --warmup 3 --cooldown 0 \
   --mode legacy-sync --threads 1
@@ -133,11 +132,11 @@ The Rust core (no Python) is benched via a standalone Rust binary that talks to 
 ```bash
 cargo build --release --manifest-path benchmarks/rust-core/Cargo.toml
 MODE=async TASKS=32 DURATION=15 WARMUP=3 \
-  AEROSPIKE_HOST=10.138.0.3:3100 \
+  AEROSPIKE_HOST=<bench-asd>:3100 \
   benchmarks/rust-core/target/release/rust-core
 ```
 
-Every cell in the matrix below was produced by `python -m benchmarks.benchmark --mode ...` against bench-asd (`10.138.0.3:3100`), except the Rust-core rows, which use the dedicated Rust binary at `benchmarks/rust-core/`.
+Every cell in the matrix below was produced by `python -m benchmarks.benchmark --mode ...` against bench-asd (`<bench-asd>:3100`), except the Rust-core rows, which use the dedicated Rust binary at `benchmarks/rust-core/`.
 
 ## Cross-client TPS — single-key (batch size 1)
 

@@ -28,8 +28,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
 from aerospike_async import Key, Record, Txn
 
-from aerospike_sdk.aio.session import NamespaceScStatus
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.session_shared import NamespaceScStatus
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
@@ -115,17 +115,17 @@ class SyncSession:
     ) -> Optional[Record]:
         """Direct single-key read — no builder, no stream — synchronous.
 
-        Routes through PAC's mode-aware ``get_blocking_with_overrides`` so
-        the right cached policy (AP or SC) is picked Rust-side based on
-        the key's namespace. Skips Python-side mode resolution.
+        Passes the AP + SC cached policies; PAC picks the right one based
+        on the key's namespace mode (from the in-memory partition map).
         """
         if self._txn is None:
-            return self._pac_client.get_blocking_with_overrides(
-                key, bins, self._cached_read_policy,
-                base_policy_sc=self._cached_read_policy_sc,
+            return self._pac_client.get_blocking(
+                key, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
             )
         # Under MRT the cached policies are skipped (txn not stamped);
-        # rebuild a per-call policy from behavior and use plain entry.
+        # rebuild a per-call policy from behavior.
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
@@ -134,14 +134,14 @@ class SyncSession:
     def put(self, key: Key, bins: Dict[str, Any]) -> None:
         """Direct single-key upsert — no builder, no stream — synchronous.
 
-        Routes through PAC's mode-aware ``put_blocking_with_overrides`` so
-        the right cached policy (AP or SC) is picked Rust-side based on
-        the key's namespace.
+        Passes the AP + SC cached policies; PAC picks the right one based
+        on the key's namespace mode.
         """
         if self._txn is None:
-            self._pac_client.put_blocking_with_overrides(
-                key, bins, self._cached_write_policy,
-                base_policy_sc=self._cached_write_policy_sc,
+            self._pac_client.put_blocking(
+                key, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
             )
             return
         policy = to_write_policy(

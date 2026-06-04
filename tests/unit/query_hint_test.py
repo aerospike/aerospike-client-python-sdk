@@ -18,7 +18,14 @@
 import pytest
 from aerospike_async import Filter, QueryDuration
 
-from aerospike_sdk import QueryHint
+from aerospike_sdk import (
+    Exp,
+    Index,
+    IndexContext,
+    IndexTypeEnum,
+    QueryHint,
+    parse_ael_with_index,
+)
 from aerospike_sdk.aio.operations.query import QueryBuilder, _FilterRecord
 
 
@@ -67,8 +74,13 @@ class TestQueryHintValidation:
 
     def test_frozen(self):
         hint = QueryHint(index_name="idx")
+        # `setattr` instead of direct `hint.index_name = ...` to bypass static
+        # analyzers (PyCharm `PyDataclass`, mypy `misc`) that flag the
+        # intentional frozen-dataclass mutation. Runtime behavior is
+        # identical: any attribute assignment raises `FrozenInstanceError`
+        # (which is an `AttributeError` subclass).
         with pytest.raises(AttributeError):
-            hint.index_name = "other"  # type: ignore[misc]
+            setattr(hint, "index_name", "other")
 
 
 class TestWithHint:
@@ -104,7 +116,6 @@ class TestWithHint:
         assert builder._where_ael == "$.age > 30"
 
     def test_where_filter_expression_clears_ael_string(self):
-        from aerospike_sdk import Exp
         builder = _query_builder()
         builder.where("$.age > 30")
         builder.where(Exp.gt(Exp.int_bin("age"), Exp.int_val(30)))
@@ -173,12 +184,6 @@ class TestFilterGenHintOverrides:
     """parse_ael_with_index with hint_index_name and hint_bin_name overrides."""
 
     def test_hint_index_name_produces_by_index_filter(self):
-        from aerospike_sdk import (
-            Index,
-            IndexContext,
-            IndexTypeEnum,
-            parse_ael_with_index,
-        )
         ctx = IndexContext.of("test", [
             Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
                   namespace="test", bin_values_ratio=1),
@@ -191,12 +196,6 @@ class TestFilterGenHintOverrides:
         assert str(result.filter) == str(expected)
 
     def test_hint_bin_name_overrides_filter_bin(self):
-        from aerospike_sdk import (
-            Index,
-            IndexContext,
-            IndexTypeEnum,
-            parse_ael_with_index,
-        )
         ctx = IndexContext.of("test", [
             Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
                   namespace="test", bin_values_ratio=1),
@@ -209,12 +208,6 @@ class TestFilterGenHintOverrides:
         assert str(result.filter) == str(expected)
 
     def test_no_hint_uses_default_bin(self):
-        from aerospike_sdk import (
-            Index,
-            IndexContext,
-            IndexTypeEnum,
-            parse_ael_with_index,
-        )
         ctx = IndexContext.of("test", [
             Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
                   namespace="test", bin_values_ratio=1),
@@ -225,12 +218,6 @@ class TestFilterGenHintOverrides:
         assert str(result.filter) == str(expected)
 
     def test_hint_index_name_range_ge(self):
-        from aerospike_sdk import (
-            Index,
-            IndexContext,
-            IndexTypeEnum,
-            parse_ael_with_index,
-        )
         ctx = IndexContext.of("test", [
             Index(bin="score", index_type=IndexTypeEnum.NUMERIC,
                   namespace="test", bin_values_ratio=1),

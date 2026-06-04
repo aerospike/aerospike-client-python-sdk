@@ -17,12 +17,15 @@
 
 from aerospike_async import GeoJSON, Key
 
+from aerospike_sdk.sync.operations.batch import SyncBatchBinBuilder
+from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
+
 from aerospike_sdk.aio.operations.batch import (
     BatchBinBuilder,
     BatchKeyOperationBuilder,
     BatchOperationBuilder,
-    BatchOpType,
 )
+from aerospike_sdk.operations_shared import BatchOpType
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteBinBuilder,
@@ -76,7 +79,6 @@ class TestSyncWriteBinBuilderSetToGeoJson:
         # SyncWriteBinBuilder wraps the async builder; just verify the
         # method exists and is callable. Behavior is covered by the
         # async test above plus the integration test.
-        from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
         assert hasattr(SyncWriteBinBuilder, "set_to_geo_json")
         assert callable(SyncWriteBinBuilder.set_to_geo_json)
 
@@ -99,6 +101,5 @@ class TestBatchBinBuilderSetToGeoJson:
 class TestSyncBatchBinBuilderSetToGeoJson:
 
     def test_method_exists_and_is_callable(self):
-        from aerospike_sdk.sync.operations.batch import SyncBatchBinBuilder
         assert hasattr(SyncBatchBinBuilder, "set_to_geo_json")
         assert callable(SyncBatchBinBuilder.set_to_geo_json)
