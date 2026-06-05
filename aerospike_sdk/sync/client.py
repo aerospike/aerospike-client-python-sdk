@@ -517,11 +517,11 @@ class SyncClient:
         return self._connected
 
     @property
-    def supports_server_compiled_filter_expression(self) -> bool:
-        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_filter_expression`."""
+    def supports_server_compiled_ael(self) -> bool:
+        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`."""
         if not self._connected or self._async_client is None:
             return False
-        return self._async_client.supports_server_compiled_filter_expression
+        return self._async_client.supports_server_compiled_ael
 
     def _ensure_connected(self) -> Client:
         """Ensure the client is connected and return the async client."""

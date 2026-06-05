@@ -40,16 +40,34 @@ make dev
 
 See the [Aerospike Python Async Client README](https://github.com/aerospike/aerospike-client-python-async/blob/rust-async/README.md) for detailed Rust setup instructions.
 
-### Local PAC checkout (temporary)
+### Local PAC and Rust core (sibling repos)
 
-To test against an **unreleased** sibling PAC tree, install it explicitly, then install this SDK without re-resolving PAC from git:
+Use this when you are changing **PAC** and/or **aerospike-client-rust** and want this SDK to run against those trees without waiting for a tagged release.
+
+**Layout** (same parent directory, names as below):
+
+| Directory | Role |
+|-----------|------|
+| `aerospike-client-python-sdk/` | This repo |
+| `aerospike-client-python-async/` | PAC (PyO3 / maturin). In its `Cargo.toml`, point `aerospike-core` at `../aerospike-client-rust/aerospike-core` (or your fork path). |
+| `aerospike-client-rust/` | Rust client (`aerospike-core` crate) |
+
+**Install** (from this repo root, in a virtualenv):
 
 ```bash
-pip install -e /path/to/aerospike-client-python-async
-pip install -e ".[dev]" --no-deps
+cd /path/to/aerospike-client-python-async
+pip install -r requirements.txt   # if PAC lists any; optional
+maturin develop --features tls    # or your PAC feature set; builds the extension
+
+cd /path/to/aerospike-client-python-sdk
+pip install -r requirements-local.txt
+pip install -r requirements-dev.txt
+pip install -e . --no-deps
 ```
 
-Or adjust and use `requirements-local.txt` (gitignored path example).
+`--no-deps` avoids pip replacing your editable PAC with the git pin from `pyproject.toml`.
+
+To go back to released PAC only: `pip uninstall aerospike-client-python-async` then `pip install -e ".[dev]"` (resolves PAC from git).
 
 ## Install this package
 

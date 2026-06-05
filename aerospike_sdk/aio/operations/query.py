@@ -466,7 +466,7 @@ class QueryBuilder(_WriteVerbs):
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
-        supports_server_compiled_filter: bool = False,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -486,7 +486,7 @@ class QueryBuilder(_WriteVerbs):
                 means no transaction participation. Callers rarely pass
                 this directly — transactional sessions thread it through
                 automatically.
-            supports_server_compiled_filter: When ``True``, string :meth:`where`
+            supports_server_compiled_ael: When ``True``, string :meth:`where`
                 uses server-compiled AEL wire form (requires server ≥ 8.1.3 on
                 all nodes). Set from :class:`~aerospike_sdk.aio.client.Client`.
         """
@@ -528,7 +528,7 @@ class QueryBuilder(_WriteVerbs):
         # reused under MRT because they were pre-computed without a txn, so
         # we null them out to force re-derivation from behavior.
         self._txn: Optional[Txn] = txn
-        self._supports_server_compiled_filter = supports_server_compiled_filter
+        self._supports_server_compiled_ael = supports_server_compiled_ael
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -537,10 +537,9 @@ class QueryBuilder(_WriteVerbs):
             self._base_write_policy = None
 
     def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
-        """Resolve an AEL string to a ``FilterExpression`` (client parse vs server-compiled)."""
         return filter_expression_from_ael_string(
             ael,
-            supports_server_compiled_filter_expression=self._supports_server_compiled_filter,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
         )
 
     def _apply_txn(self, policy: Any) -> Any:
@@ -2379,7 +2378,7 @@ class QueryBuilder(_WriteVerbs):
         partition_filter = self._partition_filter or PartitionFilter.all()
 
         if self._where_ael is not None and self._index_context is not None and (
-            not self._supports_server_compiled_filter
+            not self._supports_server_compiled_ael
         ):
             self._auto_generate_filters(hint, policy)
 
@@ -2534,6 +2533,25 @@ class WriteSegmentBuilder(_WriteVerbs):
         self._qb._operations.append(op)
         return self
 
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression]
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression ops using the same path as :meth:`where`."""
+        if not isinstance(expression, str):
+            return expression
+        # Normal segment: flag lives on QueryBuilder. _SingleKeyWriteSegment keeps
+        # ``_qb`` unset on the fast path until promotion; use its cached flag then.
+        if self._qb is not None:
+            supports = self._qb._supports_server_compiled_ael
+        else:
+            supports = bool(
+                getattr(self, "_supports_server_compiled_filter", False)
+            )
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=supports,
+        )
+
     def add_operation(self, op: Any) -> None:
         """Append an operation (used by CDT action builders)."""
         self._qb._operations.append(op)
@@ -2629,7 +2647,7 @@ class WriteSegmentBuilder(_WriteVerbs):
     ) -> WriteSegmentBuilder:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.read(bin_name, expr, flags))
 
     def insert_from(
@@ -2646,7 +2664,7 @@ class WriteSegmentBuilder(_WriteVerbs):
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
@@ -2663,7 +2681,7 @@ class WriteSegmentBuilder(_WriteVerbs):
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
@@ -2680,7 +2698,7 @@ class WriteSegmentBuilder(_WriteVerbs):
             ExpWriteFlags.DEFAULT, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     # -- Transition methods ---------------------------------------------------
@@ -2972,7 +2990,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             cached_write_policy=self._write_policy,
             cached_read_policy=self._read_policy,
             txn=self._txn,
-            supports_server_compiled_filter=self._supports_server_compiled_filter,
+            supports_server_compiled_ael=self._supports_server_compiled_filter,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key
@@ -5041,6 +5059,18 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
         self._parent = parent
         self._bin = bin_name
 
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression]
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression reads using the same path as :meth:`where`."""
+        if not isinstance(expression, str):
+            return expression
+        qb = self._parent  # type: ignore[union-attr]
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=qb._supports_server_compiled_ael,
+        )
+
     # -- Simple read ----------------------------------------------------------
 
     def get(self) -> _T:
@@ -5355,7 +5385,7 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
             The parent builder for method chaining.
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
         return self._parent
 

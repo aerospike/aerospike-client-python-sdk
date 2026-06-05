@@ -39,18 +39,19 @@ def forced_client_ael_parse() -> bool:
 def filter_expression_from_ael_string(
     ael: str,
     *,
-    supports_server_compiled_filter_expression: bool,
+    supports_server_compiled_ael: bool,
 ) -> FilterExpression:
     """Return a ``FilterExpression`` for *ael*, using server-compiled wire form when allowed.
 
-    When ``supports_server_compiled_filter_expression`` is true and
+    When ``supports_server_compiled_ael`` is true and
     :envvar:`AEROSPIKE_SDK_FORCE_CLIENT_AEL_PARSE` is not set to a truthy value,
     and the installed PAC exposes :meth:`FilterExpression.from_server_compiled_ael`,
     returns that (MessagePack ``[128, "<utf-8 ael>"]``). Otherwise parses on the
     client via :func:`~aerospike_sdk.ael.parser.parse_ael`.
     """
-    if supports_server_compiled_filter_expression and not _force_client_parse():
+    if supports_server_compiled_ael and not _force_client_parse():
         factory = getattr(FilterExpression, "from_server_compiled_ael", None)
         if callable(factory):
+            print("doing server side", flush=True)
             return factory(ael)
     return parse_ael(ael)

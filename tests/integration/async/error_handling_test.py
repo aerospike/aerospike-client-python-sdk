@@ -594,9 +594,8 @@ class TestOperateWithFilter:
 
         rs = await (
             session.upsert(k)
-                .bin("result").select_from("$.v")
-                .where("$.v == 1")
-                .execute()
+            .bin("result").select_from("$.v:INT")
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok

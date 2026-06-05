@@ -48,11 +48,11 @@ def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
     """Return whether *version_obj* reports server-compiled filter support (PAC API).
 
     PAC versions that predate server-compiled AEL expose :class:`Version` without
-    :meth:`supports_server_compiled_filter_expression`; in that case return
+    :meth:`supports_server_compiled_ael`; in that case return
     ``False`` so the SDK uses client-side :func:`~aerospike_sdk.ael.parser.parse_ael`
     for string predicates.
     """
-    fn = getattr(version_obj, "supports_server_compiled_filter_expression", None)
+    fn = getattr(version_obj, "supports_server_compiled_ael", None)
     if not callable(fn):
         return False
     return bool(fn())
@@ -134,7 +134,7 @@ class Client:
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
         await self._indexes_monitor.start(self._client)
-        self._supports_server_compiled_filter = await self._compute_server_compiled_support()
+        self._supports_server_compiled_filter = await self._compute_server_compiled_ael_support()
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -151,8 +151,8 @@ class Client:
             self._connected = False
         self._supports_server_compiled_filter = None
 
-    async def _compute_server_compiled_support(self) -> bool:
-        """True when every *active* node reports server-compiled filter support."""
+    async def _compute_server_compiled_ael_support(self) -> bool:
+        """True when every *active* node reports server-compiled ael support."""
         if self._client is None:
             return False
         if forced_client_ael_parse():
@@ -173,7 +173,7 @@ class Client:
         return saw_active
 
     @property
-    def supports_server_compiled_filter_expression(self) -> bool:
+    def supports_server_compiled_ael(self) -> bool:
         """Whether this client last computed all nodes as supporting server-compiled AEL filters.
 
         Also requires the installed PAC to expose
@@ -404,7 +404,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
-                supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -421,7 +421,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
-                supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -448,7 +448,7 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
-            supports_server_compiled_filter=self.supports_server_compiled_filter_expression,
+            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload

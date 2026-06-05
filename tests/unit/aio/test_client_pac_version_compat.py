@@ -13,12 +13,12 @@ class _VersionWithoutMethod:
 
 
 class _VersionSupportsTrue:
-    def supports_server_compiled_filter_expression(self) -> bool:
+    def supports_server_compiled_ael(self) -> bool:
         return True
 
 
 class _VersionSupportsFalse:
-    def supports_server_compiled_filter_expression(self) -> bool:
+    def supports_server_compiled_ael(self) -> bool:
         return False
 
 

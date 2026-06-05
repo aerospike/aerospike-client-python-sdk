@@ -231,8 +231,8 @@ class BackgroundOperationBuilder:
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
                 expression,
-                supports_server_compiled_filter_expression=(
-                    self._session._client.supports_server_compiled_filter_expression
+                supports_server_compiled_ael=(
+                    self._session._client.supports_server_compiled_ael
                 ),
             )
         else:
@@ -429,8 +429,8 @@ class BackgroundUdfBuilder:
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
                 expression,
-                supports_server_compiled_filter_expression=(
-                    self._session._client.supports_server_compiled_filter_expression
+                supports_server_compiled_ael=(
+                    self._session._client.supports_server_compiled_ael
                 ),
             )
         else:

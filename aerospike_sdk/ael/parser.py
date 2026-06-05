@@ -159,11 +159,8 @@ def parse_ael(expression: str, *args: Any) -> FilterExpression:
         expr = parse_ael("$.age > 30")
         expr = parse_ael("$.age > ?0 and $.name == ?1", 30, "John")
     """
-    global _parser
-    if _parser is None:
-        _parser = AELParser()
-    placeholder_values = PlaceholderValues(*args) if args else None
-    return _parser.parse(expression, placeholder_values)
+    print("doing client side", flush=True)
+    raise RuntimeError("client-side AEL parse intentionally disabled for debugging")
 
 
 def parse_ctx(path: str) -> List[CTX]:
