@@ -1164,56 +1164,19 @@ class TestAdvancedListAel:
     async def test_list_index_range(self, client_with_list_data):
         """Test $.list.[1:3] to get a range of indices."""
         # [1:3] gets indices 1 and 2 (count=2)
-        # All 4 seeded records have ≥3-element `values` lists, so the filter
-        # ``$.values.[1:3].count() == 2`` matches every record.
-        #
-        # Brief retry absorbs a CI race observed 2026-06-05 on 3.13t where
-        # the filter returned 0 records on the first attempt and passed on
-        # rerun. Cause is suspected to be a server-side timing gap between
-        # set-scan visibility (which the fixture's wait_for_set_visible
-        # confirms) and CDT-bin readiness for filter eval. If the retry also
-        # fails, the diagnostic dump below fires so a real bug — should it
-        # ever become deterministic — surfaces with actionable detail.
-        async def _run_filter():
-            stream = await (
-                client_with_list_data.query("test", "list_ael_test")
-                .where("$.values.[1:3].count() == 2")
-                .execute()
-            )
-            out = []
-            async for result in stream:
-                out.append(result.record)
-            stream.close()
-            return out
+        # We can't directly compare the returned list in AEL,
+        # but we can verify it parses and executes without error
+        stream = await (
+            client_with_list_data.query("test", "list_ael_test")
+            .where("$.values.[1:3].count() == 2")
+            .execute()
+        )
+        records = []
+        async for result in stream:
+            records.append(result.record)
+        stream.close()
 
-        records = await _run_filter()
-        if len(records) != 4:
-            import asyncio
-            await asyncio.sleep(0.5)
-            records = await _run_filter()
-
-        if len(records) != 4:
-            # Diagnostic dump: snapshot actual set contents so we can tell
-            # whether the fixture didn't seed (set empty / partial), the
-            # filter ran but matched nothing on well-formed records (real
-            # filter-eval bug), or the set is polluted with records that
-            # don't have a list-typed `values` bin.
-            all_stream = await (
-                client_with_list_data.query("test", "list_ael_test").execute()
-            )
-            all_recs = []
-            async for r in all_stream:
-                all_recs.append(r)
-            all_stream.close()
-            import sys
-            print(
-                f"\nDEBUG test_list_index_range: filter returned {len(records)} "
-                f"records (after one retry); set scan sees {len(all_recs)}:",
-                file=sys.stderr, flush=True,
-            )
-            for r in all_recs:
-                bins = r.record.bins if r.record else None
-                print(f"  key={r.key} bins={bins}", file=sys.stderr, flush=True)
+        # All records should have at least 3 elements, so [1:3] returns 2 items
         assert len(records) == 4
 
     async def test_list_index_range_from_start(self, client_with_list_data):
