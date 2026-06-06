@@ -52,6 +52,5 @@ def filter_expression_from_ael_string(
     if supports_server_compiled_ael and not _force_client_parse():
         factory = getattr(FilterExpression, "from_server_compiled_ael", None)
         if callable(factory):
-            print("doing server side", flush=True)
             return factory(ael)
     return parse_ael(ael)
