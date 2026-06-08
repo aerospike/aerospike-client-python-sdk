@@ -763,7 +763,6 @@ class TestExpWithAel:
             async for result in stream:
                 pass
 
-
 # CDT Path Access Tests
 
 @pytest.fixture

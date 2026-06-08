@@ -69,6 +69,14 @@ class TestQueryBuilderWhere:
         assert result is builder
         assert builder._filter_expression is exp
 
+    def test_where_filter_expression_chains(self):
+        """where(Exp) can be chained with other builder methods."""
+        builder = _query_builder()
+        exp = Exp.eq(Exp.string_bin("name"), Exp.string_val("Bob"))
+        builder.where(exp).bins(["name"])
+        assert builder._filter_expression is exp
+        assert builder._bins == ["name"]
+
     def test_where_server_compiled_when_supported(self) -> None:
         """where(str) uses server-compiled path when builder flag is set."""
         builder = _query_builder(supports_server_compiled_ael=True)

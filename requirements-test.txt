@@ -1,7 +1,0 @@
-# Minimal packages to run the test suite (pytest + asyncio + env plugin).
-# After installing the SDK (e.g. pip install -e .), run:
-#   pip install -r requirements-test.txt
-# Or install both in one step: pip install -e ".[test]"
-pytest>=8.0.0
-pytest-asyncio>=0.21.0
-pytest-env>=1.1.0
