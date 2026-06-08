@@ -466,6 +466,7 @@ class QueryBuilder(_WriteVerbs):
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
+        *,
         supports_server_compiled_ael: bool = False,
     ) -> None:
         """
@@ -486,9 +487,11 @@ class QueryBuilder(_WriteVerbs):
                 means no transaction participation. Callers rarely pass
                 this directly — transactional sessions thread it through
                 automatically.
-            supports_server_compiled_ael: When ``True``, string :meth:`where`
-                uses server-compiled AEL wire form (requires server ≥ 8.1.3 on
-                all nodes). Set from :class:`~aerospike_sdk.aio.client.Client`.
+            supports_server_compiled_ael: When true (typically from
+                :attr:`~aerospike_sdk.aio.client.Client.supports_server_compiled_ael`),
+                string :meth:`where` uses server-compiled AEL. ``False`` in tests
+                or PAC-only use defaults to client-side AEL parsing for string
+                predicates.
         """
         self._client = client
         self._namespace = namespace
@@ -2907,14 +2910,15 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         write_policy: WritePolicy | None,
         read_policy: ReadPolicy | None = None,
         txn: Optional[Txn] = None,
-        supports_server_compiled_filter: bool = False,
+        *,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
         self._key = key
         self._op_type_fast = op_type
         self._ops: list[Any] = []
-        self._supports_server_compiled_filter = supports_server_compiled_filter
+        self._supports_server_compiled_filter = supports_server_compiled_ael
         # Under MRT we can't reuse the session's cached write/read policies
         # (they were built without a txn), so null them here and force the
         # fast path to derive fresh policies from behavior on each execute.

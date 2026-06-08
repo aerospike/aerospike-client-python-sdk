@@ -454,7 +454,7 @@ class Session:
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
             txn=self._txn,
-            supports_server_compiled_filter=self._client.supports_server_compiled_ael,
+            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -593,8 +593,8 @@ class Session:
                         cached_read_policy=self._cached_read_policy,
                         cached_write_policy=self._cached_write_policy,
                         txn=self._txn,
-                        supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-                    )
+            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+        )
                     builder._single_key = arg1
                     return builder
                 return self._bind_txn(

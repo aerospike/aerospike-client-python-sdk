@@ -69,7 +69,7 @@ class TestQueryBuilderWhere:
     def test_where_server_compiled_when_supported(self) -> None:
         """where(str) uses server-compiled path when builder flag is set."""
         skip_if_pac_lacks_from_server_compiled_ael()
-        builder = _query_builder(supports_server_compiled_filter=True)
+        builder = _query_builder(supports_server_compiled_ael=True)
         expected_parse = parse_ael("$.age > 20")
         builder.where("$.age > 20")
         assert builder._filter_expression != expected_parse
