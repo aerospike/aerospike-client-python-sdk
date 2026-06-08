@@ -34,6 +34,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.pac_sdk_client_attr import PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_monitor import IndexesMonitor
@@ -151,6 +152,11 @@ class Client:
         self._cached_supports_server_compiled_ael = (
             await self._compute_server_compiled_ael_support()
         )
+        setattr(
+            self._client,
+            PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL,
+            self._cached_supports_server_compiled_ael,
+        )
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -162,6 +168,10 @@ class Client:
         """
         await self._indexes_monitor.stop()
         if self._client is not None:
+            try:
+                delattr(self._client, PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL)
+            except AttributeError:
+                pass
             await self._client.close()
             self._client = None
             self._connected = False
@@ -172,7 +182,9 @@ class Client:
 
         Requires (1) PAC :meth:`FilterExpression.from_server_compiled_ael` and
         (2) every **active** node's ``version.supports_server_compiled_ael()`` to
-        be true.
+        be true — same criteria the PAC exposes per node; the SDK only aggregates
+        and caches the result on :meth:`connect` (see
+        :attr:`supports_server_compiled_ael`).
         """
         if self._client is None:
             return False
@@ -187,7 +199,9 @@ class Client:
         **Source of truth:** PAC ``Version.supports_server_compiled_ael()`` on each
         **active** node (the Rust client keeps version on the node object). The SDK
         does **not** re-walk the node list on every read of this property; it
-        returns the boolean computed at the last successful :meth:`connect`.
+        returns the boolean computed at the last successful :meth:`connect`
+        (the same value is mirrored on the PAC client under
+        ``_aerospike_sdk_cached_supports_server_compiled_ael`` for query builders).
 
         Also requires the installed PAC to expose
         :meth:`FilterExpression.from_server_compiled_ael`; otherwise this is
@@ -417,7 +431,6 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
-                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -434,7 +447,6 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
-                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -461,7 +473,6 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
-            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload

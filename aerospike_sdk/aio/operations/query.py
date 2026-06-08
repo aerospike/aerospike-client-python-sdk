@@ -91,12 +91,18 @@ from aerospike_sdk.aio.operations.cdt_write import (
     _resolve_list_policy,
     _resolve_map_policy,
 )
+from aerospike_sdk.pac_sdk_client_attr import PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL
 
 log = logging.getLogger("aerospike_sdk.query")
 
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
 _bitwise_or = BitOperation.or_
+
+
+def _sdk_supports_server_compiled_ael_from_pac(pac: Client) -> bool:
+    """Read connect-time server-compiled AEL gate stamped on the PAC client by the SDK."""
+    return bool(getattr(pac, PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL, False))
 
 
 def _bit_policy_or_default(policy: Optional[Any]) -> Any:
@@ -466,8 +472,6 @@ class QueryBuilder(_WriteVerbs):
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
-        *,
-        supports_server_compiled_ael: bool = False,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -487,11 +491,11 @@ class QueryBuilder(_WriteVerbs):
                 means no transaction participation. Callers rarely pass
                 this directly — transactional sessions thread it through
                 automatically.
-            supports_server_compiled_ael: When true (typically from
-                :attr:`~aerospike_sdk.aio.client.Client.supports_server_compiled_ael`),
-                string :meth:`where` uses server-compiled AEL. ``False`` in tests
-                or PAC-only use defaults to client-side AEL parsing for string
-                predicates.
+
+        Note:
+            Whether string :meth:`where` uses server-compiled AEL follows the
+            boolean stamped on *client* at SDK connect time (see
+            :attr:`~aerospike_sdk.aio.client.Client.supports_server_compiled_ael`).
         """
         self._client = client
         self._namespace = namespace
@@ -531,7 +535,9 @@ class QueryBuilder(_WriteVerbs):
         # reused under MRT because they were pre-computed without a txn, so
         # we null them out to force re-derivation from behavior.
         self._txn: Optional[Txn] = txn
-        self._supports_server_compiled_ael = supports_server_compiled_ael
+        self._supports_server_compiled_ael = _sdk_supports_server_compiled_ael_from_pac(
+            client
+        )
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -2547,9 +2553,7 @@ class WriteSegmentBuilder(_WriteVerbs):
         if self._qb is not None:
             supports = self._qb._supports_server_compiled_ael
         else:
-            supports = bool(
-                getattr(self, "_supports_server_compiled_filter", False)
-            )
+            supports = getattr(self, "_supports_server_compiled_ael", False)
         return filter_expression_from_ael_string(
             expression,
             supports_server_compiled_ael=supports,
@@ -2898,7 +2902,7 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
     __slots__ = (
         "_client_fast", "_key", "_op_type_fast", "_ops",
         "_write_policy", "_behavior_fast", "_read_policy",
-        "_txn", "_supports_server_compiled_filter",
+        "_txn", "_supports_server_compiled_ael",
     )
 
     def __init__(
@@ -2910,15 +2914,15 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
         write_policy: WritePolicy | None,
         read_policy: ReadPolicy | None = None,
         txn: Optional[Txn] = None,
-        *,
-        supports_server_compiled_ael: bool = False,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
         self._key = key
         self._op_type_fast = op_type
         self._ops: list[Any] = []
-        self._supports_server_compiled_filter = supports_server_compiled_ael
+        self._supports_server_compiled_ael = _sdk_supports_server_compiled_ael_from_pac(
+            client
+        )
         # Under MRT we can't reuse the session's cached write/read policies
         # (they were built without a txn), so null them here and force the
         # fast path to derive fresh policies from behavior on each execute.
@@ -2994,7 +2998,6 @@ class _SingleKeyWriteSegment(WriteSegmentBuilder):
             cached_write_policy=self._write_policy,
             cached_read_policy=self._read_policy,
             txn=self._txn,
-            supports_server_compiled_ael=self._supports_server_compiled_filter,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

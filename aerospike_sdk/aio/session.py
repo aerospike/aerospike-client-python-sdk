@@ -362,7 +362,6 @@ class Session:
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -439,7 +438,6 @@ class Session:
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             txn=self._txn,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -454,7 +452,6 @@ class Session:
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
             txn=self._txn,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -593,8 +590,7 @@ class Session:
                         cached_read_policy=self._cached_read_policy,
                         cached_write_policy=self._cached_write_policy,
                         txn=self._txn,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-        )
+                    )
                     builder._single_key = arg1
                     return builder
                 return self._bind_txn(
