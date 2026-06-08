@@ -45,17 +45,31 @@ if typing.TYPE_CHECKING:
 
 
 def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
-    """Return whether *version_obj* reports server-compiled filter support (PAC API).
+    """Delegate to PAC :class:`~aerospike_async.Version` server-compiled AEL support.
 
-    PAC versions that predate server-compiled AEL expose :class:`Version` without
-    :meth:`supports_server_compiled_ael`; in that case return
-    ``False`` so the SDK uses client-side :func:`~aerospike_sdk.ael.parser.parse_ael`
-    for string predicates.
+    Calls :meth:`~aerospike_async.Version.supports_server_compiled_ael` when present.
+    Older PAC builds omit that method; then return ``False`` so the SDK keeps
+    client-side :func:`~aerospike_sdk.ael.parser.parse_ael` for string predicates.
     """
     fn = getattr(version_obj, "supports_server_compiled_ael", None)
     if not callable(fn):
         return False
     return bool(fn())
+
+
+async def _all_active_nodes_support_server_compiled_ael(pac: AsyncClient) -> bool:
+    """True iff every **active** node reports support (PAC ``Version`` API only)."""
+    nodes = await pac.nodes()
+    if not nodes:
+        return False
+    saw_active = False
+    for n in nodes:
+        if not n.is_active:
+            continue
+        saw_active = True
+        if not _pac_version_supports_server_compiled_filter(n.version):
+            return False
+    return saw_active
 
 
 class Client:
@@ -110,7 +124,7 @@ class Client:
         self._client: Optional[AsyncClient] = None
         self._connected = False
         self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
-        self._supports_server_compiled_filter: Optional[bool] = None
+        self._cached_supports_server_compiled_ael: Optional[bool] = None
 
     async def connect(self) -> None:
         """Open a connection to the cluster using the configured seeds and policy.
@@ -134,7 +148,9 @@ class Client:
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
         await self._indexes_monitor.start(self._client)
-        self._supports_server_compiled_filter = await self._compute_server_compiled_ael_support()
+        self._cached_supports_server_compiled_ael = (
+            await self._compute_server_compiled_ael_support()
+        )
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -149,40 +165,39 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
-        self._supports_server_compiled_filter = None
+        self._cached_supports_server_compiled_ael = None
 
     async def _compute_server_compiled_ael_support(self) -> bool:
-        """True when every *active* node reports server-compiled ael support."""
+        """End-to-end gate for server-compiled string ``where()`` (computed once per connect).
+
+        Requires (1) PAC :meth:`FilterExpression.from_server_compiled_ael` and
+        (2) every **active** node's ``version.supports_server_compiled_ael()`` to
+        be true.
+        """
         if self._client is None:
             return False
         if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
             return False
-        nodes = await self._client.nodes()
-        if not nodes:
-            return False
-        saw_active = False
-        for n in nodes:
-            if not n.is_active:
-                continue
-            saw_active = True
-            ver = n.version
-            if not _pac_version_supports_server_compiled_filter(ver):
-                return False
-        return saw_active
+        return await _all_active_nodes_support_server_compiled_ael(self._client)
 
     @property
     def supports_server_compiled_ael(self) -> bool:
-        """Whether this client last computed all nodes as supporting server-compiled AEL filters.
+        """Whether server-compiled AEL filters are usable on this connection.
+
+        **Source of truth:** PAC ``Version.supports_server_compiled_ael()`` on each
+        **active** node (the Rust client keeps version on the node object). The SDK
+        does **not** re-walk the node list on every read of this property; it
+        returns the boolean computed at the last successful :meth:`connect`.
 
         Also requires the installed PAC to expose
         :meth:`FilterExpression.from_server_compiled_ael`; otherwise this is
-        ``False`` even when nodes report a new enough build.
+        ``False`` even when every node reports support.
 
         Returns ``False`` before :meth:`connect` completes or after :meth:`close`.
         """
-        if self._supports_server_compiled_filter is None:
+        if self._cached_supports_server_compiled_ael is None:
             return False
-        return self._supports_server_compiled_filter
+        return self._cached_supports_server_compiled_ael
 
     async def __aenter__(self) -> Client:
         """Async context manager entry."""

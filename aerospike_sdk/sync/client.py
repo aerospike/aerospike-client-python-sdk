@@ -518,7 +518,11 @@ class SyncClient:
 
     @property
     def supports_server_compiled_ael(self) -> bool:
-        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`."""
+        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`.
+
+        Value is the connect-time snapshot on the underlying async client (PAC
+        ``Version.supports_server_compiled_ael`` aggregate plus PAC API checks).
+        """
         if not self._connected or self._async_client is None:
             return False
         return self._async_client.supports_server_compiled_ael
