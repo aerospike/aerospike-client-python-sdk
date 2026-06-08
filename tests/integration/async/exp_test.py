@@ -19,13 +19,18 @@ Tests expression building and usage with actual database operations.
 """
 
 import asyncio
+import inspect
 
 import pytest
+import pytest_asyncio
 from aerospike_async import FilterExpression
 from aerospike_async.exceptions import InvalidRequest
 
 from aerospike_sdk import AelParseException, Exp, Client, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
+
+from tests.cluster_version import min_active_server_version_tuple
+from tests.version_xfail import ServerVersionGte, ServerVersionLt, server_version_gte
 
 
 class TestExpAlias:
@@ -380,31 +385,61 @@ class TestBinExpressions:
 # Integration tests with actual database operations
 
 @pytest.fixture
-async def client_with_data(aerospike_host, client_policy, enterprise):
+async def client(aerospike_host, client_policy):
+    """Connected SDK client (shared by data fixtures; used by version-xfail autouse)."""
+    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+        yield c
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _runtime_server_version_xfail(
+    request: pytest.FixtureRequest,
+    client: Client,
+) -> None:
+    """Apply ``@pytest.mark.xfail(condition=server_version_*(...))`` before async DB tests.
+
+    ``client`` is a declared dependency so pytest-asyncio does not call
+    ``getfixturevalue("client")`` from inside this async autouse (that nests
+    ``asyncio.Runner`` and fails on Python 3.14 + uvloop).
+    """
+    if not inspect.iscoroutinefunction(request.function):
+        return
+    mark = request.node.get_closest_marker("xfail")
+    if mark is None:
+        return
+    cond = mark.kwargs.get("condition")
+    if not isinstance(cond, (ServerVersionLt, ServerVersionGte)):
+        return
+    cluster_min = await min_active_server_version_tuple(client)
+    if cond.should_xfail(cluster_min):
+        pytest.xfail(reason=mark.kwargs.get("reason", "server version xfail"))
+
+
+@pytest.fixture
+async def client_with_data(client, enterprise):
     """Setup test data for expression tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "exp_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "exp_test")
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
+    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
 
-        await asyncio.sleep(0.5 if not enterprise else 0.01)
+    await asyncio.sleep(0.5 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestExpWithQuery:
@@ -680,8 +715,12 @@ class TestExpWithAel:
 
         assert len(records) == 3
 
-    @pytest.mark.xfail(reason="Server-side asInt() cast emits invalid msgpack (ParameterError at eval time) "
-                              "— server bug, pending fix", strict=True)
+    @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
+        reason="Server-side asInt() cast emits invalid msgpack (ParameterError at eval time) "
+        "— server bug, pending fix",
+        strict=True,
+    )
     async def test_where_explicit_cast_still_works(self, client_with_data):
         """Test that asInt() casts a float bin to int for comparison."""
         stream = await (
@@ -728,46 +767,45 @@ class TestExpWithAel:
 # CDT Path Access Tests
 
 @pytest.fixture
-async def client_with_cdt_data(aerospike_host, client_policy, enterprise):
+async def client_with_cdt_data(client, enterprise):
     """Setup test data with lists and maps for CDT path tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "cdt_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "cdt_test")
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "numbers": [10, 20, 30, 40, 50],
-            "names": ["alice", "bob", "charlie"],
-            "info": {"name": "Alice", "age": 30, "city": "NYC"},
-            "nested": [{"id": 1, "value": 100}, {"id": 2, "value": 200}],
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "numbers": [5, 15, 25, 35, 45],
-            "names": ["dave", "eve"],
-            "info": {"name": "Bob", "age": 25, "city": "LA"},
-            "nested": [{"id": 3, "value": 300}],
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "numbers": [100, 200, 300],
-            "names": ["frank"],
-            "info": {"name": "Charlie", "age": 40, "city": "NYC"},
-            "nested": [{"id": 4, "value": 400}, {"id": 5, "value": 500}],
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "numbers": [10, 20, 30, 40, 50],
+        "names": ["alice", "bob", "charlie"],
+        "info": {"name": "Alice", "age": 30, "city": "NYC"},
+        "nested": [{"id": 1, "value": 100}, {"id": 2, "value": 200}],
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "numbers": [5, 15, 25, 35, 45],
+        "names": ["dave", "eve"],
+        "info": {"name": "Bob", "age": 25, "city": "LA"},
+        "nested": [{"id": 3, "value": 300}],
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "numbers": [100, 200, 300],
+        "names": ["frank"],
+        "info": {"name": "Charlie", "age": 40, "city": "NYC"},
+        "nested": [{"id": 4, "value": 400}, {"id": 5, "value": 500}],
+    }).execute()
 
-        await asyncio.sleep(0.5 if not enterprise else 0.01)
+    await asyncio.sleep(0.5 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestCdtPathWithExp:
@@ -957,6 +995,7 @@ class TestExistsAndCount:
         assert len(records) == 3
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -978,6 +1017,7 @@ class TestExistsAndCount:
             assert len(rec.bins["numbers"]) > 3
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -999,6 +1039,7 @@ class TestExistsAndCount:
         assert len(records[0].bins["numbers"]) == 3
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -1036,6 +1077,7 @@ class TestExistsAndCount:
         assert records[0].bins["info"]["age"] > 30
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -1058,44 +1100,43 @@ class TestExistsAndCount:
 
 
 @pytest.fixture
-async def client_with_list_data(aerospike_host, client_policy, enterprise):
+async def client_with_list_data(client, enterprise):
     """Setup test data with various lists for advanced list AEL tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "list_ael_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "list_ael_test")
 
-        for key in ["rec1", "rec2", "rec3", "rec4"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3", "rec4"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "values": [10, 20, 30, 40, 50],
-            "tags": ["alpha", "beta", "gamma"],
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "values": [5, 15, 25, 35, 45],
-            "tags": ["alpha", "delta"],
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "values": [100, 30, 200],
-            "tags": ["beta", "epsilon"],
-        }).execute()
-        await session.upsert(ds.id("rec4")).put({
-            "values": [1, 2, 3, 4, 5],
-            "tags": ["zeta"],
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "values": [10, 20, 30, 40, 50],
+        "tags": ["alpha", "beta", "gamma"],
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "values": [5, 15, 25, 35, 45],
+        "tags": ["alpha", "delta"],
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "values": [100, 30, 200],
+        "tags": ["beta", "epsilon"],
+    }).execute()
+    await session.upsert(ds.id("rec4")).put({
+        "values": [1, 2, 3, 4, 5],
+        "tags": ["zeta"],
+    }).execute()
 
-        await asyncio.sleep(0.5 if not enterprise else 0.01)
+    await asyncio.sleep(0.5 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["rec1", "rec2", "rec3", "rec4"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3", "rec4"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedListAel:
@@ -1136,6 +1177,7 @@ class TestAdvancedListAel:
         assert min(records[0].bins["values"]) < 5
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1227,6 +1269,7 @@ class TestAdvancedListAel:
         assert len(records) == 4
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1249,47 +1292,50 @@ class TestAdvancedListAel:
 
 
 @pytest.fixture
-async def client_with_map_data(aerospike_host, client_policy, enterprise):
+async def client_with_map_data(client, enterprise):
     """Setup test data with maps for advanced map AEL tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "map_ael_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "map_ael_test")
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "scores": {"alice": 90, "bob": 85, "charlie": 95},
-            "metadata": {"type": "premium", "level": 3},
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "scores": {"dave": 75, "eve": 80},
-            "metadata": {"type": "basic", "level": 1},
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "scores": {"frank": 100, "grace": 70, "heidi": 88},
-            "metadata": {"type": "premium", "level": 2},
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "scores": {"alice": 90, "bob": 85, "charlie": 95},
+        "metadata": {"type": "premium", "level": 3},
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "scores": {"dave": 75, "eve": 80},
+        "metadata": {"type": "basic", "level": 1},
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "scores": {"frank": 100, "grace": 70, "heidi": 88},
+        "metadata": {"type": "premium", "level": 2},
+    }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+    await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedMapAel:
     """Test advanced map AEL features."""
 
-    @pytest.mark.xfail(reason="Server-side count() cast emits invalid msgpack (ParameterError at eval time) "
-                              "— server bug, pending fix", strict=True)
+    @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
+        reason="Server-side count() cast emits invalid msgpack (ParameterError at eval time) "
+        "— server bug, pending fix",
+        strict=True,
+    )
     async def test_map_by_value(self, client_with_map_data):
         """Test $.map.{=value} to find entries with specific value."""
         # Find records where scores contains value 100
@@ -1361,44 +1407,43 @@ class TestAdvancedMapAel:
 # =============================================================================
 
 @pytest.fixture
-async def client_with_nested_data(aerospike_host, client_policy, enterprise):
+async def client_with_nested_data(client, enterprise):
     """Setup test data with deeply nested structures."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "nested_ael_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "nested_ael_test")
 
-        for key in ["rec1", "rec2"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
-            "nested_map": {
-                "a": {"aa": 100, "ab": 200},
-                "b": {"ba": 300, "bb": 400},
-            },
-            "simple_list": [1, 2, 3, 4, 5],
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "nested_list": [[5, 10], [15, 20], [25, 30]],
-            "nested_map": {
-                "a": {"aa": 50, "ab": 60},
-                "b": {"ba": 70, "bb": 80},
-            },
-            "simple_list": [10, 20, 30],
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
+        "nested_map": {
+            "a": {"aa": 100, "ab": 200},
+            "b": {"ba": 300, "bb": 400},
+        },
+        "simple_list": [1, 2, 3, 4, 5],
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "nested_list": [[5, 10], [15, 20], [25, 30]],
+        "nested_map": {
+            "a": {"aa": 50, "ab": 60},
+            "b": {"ba": 70, "bb": 80},
+        },
+        "simple_list": [10, 20, 30],
+    }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+    await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["rec1", "rec2"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestNestedCdtAel:
@@ -1452,8 +1497,12 @@ class TestNestedCdtAel:
         assert len(records) == 1
         assert len(records[0].bins["nested_list"][0]) == 3
 
-    @pytest.mark.xfail(reason="Server-side bin.count() emits invalid msgpack (ParameterError at eval time) "
-                              "— server bug, pending fix", strict=True)
+    @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
+        reason="Server-side bin.count() emits invalid msgpack (ParameterError at eval time) "
+        "— server bug, pending fix",
+        strict=True,
+    )
     async def test_list_size_simple(self, client_with_nested_data):
         """Test $.list.count() - basic list size."""
         stream = await (
@@ -1504,6 +1553,7 @@ class TestMapKeyOperationsAel:
         assert len(records) == 1
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1526,40 +1576,39 @@ class TestMapKeyOperationsAel:
 
 
 @pytest.fixture
-async def client_with_relative_range_data(aerospike_host, client_policy, enterprise):
+async def client_with_relative_range_data(client, enterprise):
     """Setup test data for relative range operations."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "rel_range_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "rel_range_test")
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "numbers": [0, 4, 5, 9, 11, 15],
-            "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "numbers": [1, 3, 7, 12, 20],
-            "scores": {"alice": 60, "bob": 75, "charlie": 85},
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "numbers": [2, 6, 10, 14, 18],
-            "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "numbers": [0, 4, 5, 9, 11, 15],
+        "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "numbers": [1, 3, 7, 12, 20],
+        "scores": {"alice": 60, "bob": 75, "charlie": 85},
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "numbers": [2, 6, 10, 14, 18],
+        "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
+    }).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+    await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-        yield client
+    yield client
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestRelativeRangeAel:
@@ -1734,36 +1783,35 @@ class TestAelErrorHandling:
 # =============================================================================
 
 @pytest.fixture
-async def filter_session(aerospike_host, client_policy, enterprise):
+async def filter_session(client, enterprise):
     """Session with test data matching JFC FilterExpTest setUp.
 
     Key "A": A=1, B=1.1, C="abcde",      D=1, E=-1
     Key "B": A=2, B=2.2, C="abcdeabcde",  D=1, E=-2
     Key "C": A=0, B=-1.0, C="1"
     """
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
-        ds = DataSet.of("test", "filter_exp_test")
+    session = client.create_session()
+    ds = DataSet.of("test", "filter_exp_test")
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
+    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
 
-        await asyncio.sleep(0.25 if not enterprise else 0.01)
+    await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-        yield session, ds
+    yield session, ds
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedExpFilters:
@@ -1817,6 +1865,7 @@ class TestAdvancedExpFilters:
         await self._assert_matches(session, key, "countOneBits($.A) == 1", "A", 1)
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="findBitLeft() emits invalid msgpack (ParameterError at eval time) — server codegen bug, pending fix",
         strict=True,
     )
@@ -1828,6 +1877,7 @@ class TestAdvancedExpFilters:
         await self._assert_matches(session, key, "findBitLeft($.A, true) == 0", "A", 1)
 
     @pytest.mark.xfail(
+        condition=server_version_gte("8.1.2"),
         reason="findBitRight() emits invalid msgpack (ParameterError at eval time) — server codegen bug, pending fix",
         strict=True,
     )

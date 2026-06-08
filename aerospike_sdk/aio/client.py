@@ -32,7 +32,6 @@ from aerospike_async import (
     new_client,
 )
 
-from aerospike_sdk.ael.server_filter import forced_client_ael_parse
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -154,8 +153,6 @@ class Client:
     async def _compute_server_compiled_ael_support(self) -> bool:
         """True when every *active* node reports server-compiled ael support."""
         if self._client is None:
-            return False
-        if forced_client_ael_parse():
             return False
         if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
             return False

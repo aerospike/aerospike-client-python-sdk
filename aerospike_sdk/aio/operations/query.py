@@ -140,7 +140,7 @@ from aerospike_sdk.background_shared import (
     make_background_write_policy,
     reject_unsupported_background_write_ops,
 )
-from aerospike_sdk.ael.parser import parse_ael, parse_ael_with_index
+from aerospike_sdk.ael.parser import parse_ael_with_index
 from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,

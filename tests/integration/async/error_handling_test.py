@@ -32,6 +32,8 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError
 
+from tests.pac_compat import requires_server_compiled_ael
+
 
 @pytest.fixture
 async def client(aerospike_host, client_policy):
@@ -586,6 +588,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_read_with_matching_where(self, session, ds):
         """Query + bin.select_from() with matching where() returns result."""
         k = ds.id("op_rd_ok")

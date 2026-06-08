@@ -53,6 +53,9 @@ include = ["aerospike_sdk*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "-s"
+markers = [
+    "requires_server_compiled_ael: needs connected client with server-compiled AEL (see tests/integration/conftest.py)",
+]
 testpaths = ["tests"]
 python_files = ["*_test.py"]
 python_classes = ["Test*"]
