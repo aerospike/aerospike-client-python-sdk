@@ -18,9 +18,9 @@
 Pytest evaluates ``condition`` for ``xfail`` at import/collection time for plain
 booleans. Aerospike version is only known after the ``client`` fixture connects,
 so these objects always compare **false** at import time and integrate with
-``tests/integration/async/exp_test.py`` (module autouse), which evaluates them
-before each **async** integration test in that module and calls
-:func:`pytest.xfail` when the bound applies.
+``tests/integration/async/exp_test.py`` (module autouse), which adds an
+unconditional ``xfail`` marker when the bound applies so the test **runs** and
+normal xfail / ``strict`` semantics apply.
 
 Use :func:`server_version_lt` when a feature or bug applies only **below** a build
 (for example ``server_version_lt(\"8.1.4\")`` once a fix ships in 8.1.4). Use

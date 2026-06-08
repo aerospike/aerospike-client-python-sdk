@@ -19,13 +19,21 @@ from __future__ import annotations
 
 import pytest
 
-from tests.pac_compat import skip_if_lacks_server_compiled_ael
+from tests.pac_compat import (
+    skip_if_lacks_server_compiled_ael,
+    skip_if_server_compiled_ael_available,
+)
 
 
 @pytest.fixture(autouse=True)
-def _skip_unless_server_compiled_ael(request: pytest.FixtureRequest) -> None:
-    """Honor ``@pytest.mark.requires_server_compiled_ael`` using the real ``client`` fixture."""
-    if request.node.get_closest_marker("requires_server_compiled_ael") is None:
+def _honor_ael_path_markers(request: pytest.FixtureRequest) -> None:
+    """Honor AEL path markers using the real ``client`` fixture (see ``tests/pac_compat``)."""
+    need_server = request.node.get_closest_marker("requires_server_compiled_ael") is not None
+    need_client = request.node.get_closest_marker("requires_client_side_ael") is not None
+    if not (need_server or need_client):
         return
     client = request.getfixturevalue("client")
-    skip_if_lacks_server_compiled_ael(client)
+    if need_server:
+        skip_if_lacks_server_compiled_ael(client)
+    if need_client:
+        skip_if_server_compiled_ael_available(client)

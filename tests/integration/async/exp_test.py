@@ -20,7 +20,7 @@ Tests expression building and usage with actual database operations.
 
 import asyncio
 import inspect
-
+import base64
 import pytest
 import pytest_asyncio
 from aerospike_async import FilterExpression
@@ -31,6 +31,8 @@ from aerospike_sdk.dataset import DataSet
 
 from tests.cluster_version import min_active_server_version_tuple
 from tests.version_xfail import ServerVersionGte, ServerVersionLt, server_version_gte
+
+from tests.pac_compat import requires_server_compiled_ael, requires_client_side_ael
 
 
 class TestExpAlias:
@@ -396,7 +398,12 @@ async def _runtime_server_version_xfail(
     request: pytest.FixtureRequest,
     client: Client,
 ) -> None:
-    """Apply ``@pytest.mark.xfail(condition=server_version_*(...))`` before async DB tests.
+    """Turn ``xfail(condition=server_version_*...)`` into a real xfail after connect.
+
+    ``ServerVersion*.__bool__`` is false at collection so pytest does not skip early.
+    Once the cluster version is known, we **add** an unconditional ``xfail`` marker
+    when the bound applies so the **test body still runs** and outcomes follow normal
+    xfail rules (failure → XFAIL, unexpected pass + ``strict`` → error).
 
     ``client`` is a declared dependency so pytest-asyncio does not call
     ``getfixturevalue("client")`` from inside this async autouse (that nests
@@ -411,8 +418,16 @@ async def _runtime_server_version_xfail(
     if not isinstance(cond, (ServerVersionLt, ServerVersionGte)):
         return
     cluster_min = await min_active_server_version_tuple(client)
-    if cond.should_xfail(cluster_min):
-        pytest.xfail(reason=mark.kwargs.get("reason", "server version xfail"))
+    if not cond.should_xfail(cluster_min):
+        return
+    xfail_kw = {
+        k: mark.kwargs[k]
+        for k in ("reason", "strict", "raises", "run")
+        if k in mark.kwargs
+    }
+    if "reason" not in xfail_kw:
+        xfail_kw["reason"] = "server version xfail"
+    request.node.add_marker(pytest.mark.xfail(**xfail_kw))
 
 
 @pytest.fixture
@@ -716,7 +731,7 @@ class TestExpWithAel:
         assert len(records) == 3
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="Server-side asInt() cast emits invalid msgpack (ParameterError at eval time) "
         "— server bug, pending fix",
         strict=True,
@@ -752,6 +767,17 @@ class TestExpWithAel:
         for rec in records:
             assert rec.bins["B"] > 1.0
 
+    @requires_client_side_ael
+    async def test_where_invalid_ael(self, client_with_data):
+        """Test that invalid AEL raises AelParseException."""
+        with pytest.raises(AelParseException):
+            await (
+                client_with_data.query("test", "exp_test")
+                .where("this is not valid AEL !!!")
+                .execute()
+            )
+
+    @requires_server_compiled_ael
     async def test_where_invalid_ael(self, client_with_data):
         """Test that invalid AEL raises ParameterError."""
         stream = await (
@@ -994,7 +1020,7 @@ class TestExistsAndCount:
         assert len(records) == 3
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1016,7 +1042,7 @@ class TestExistsAndCount:
             assert len(rec.bins["numbers"]) > 3
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -1038,7 +1064,7 @@ class TestExistsAndCount:
         assert len(records[0].bins["numbers"]) == 3
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -1076,7 +1102,7 @@ class TestExistsAndCount:
         assert records[0].bins["info"]["age"] > 30
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
         raises=InvalidRequest,
@@ -1176,7 +1202,7 @@ class TestAdvancedListAel:
         assert min(records[0].bins["values"]) < 5
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1268,7 +1294,7 @@ class TestAdvancedListAel:
         assert len(records) == 4
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1330,7 +1356,7 @@ class TestAdvancedMapAel:
     """Test advanced map AEL features."""
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="Server-side count() cast emits invalid msgpack (ParameterError at eval time) "
         "— server bug, pending fix",
         strict=True,
@@ -1497,7 +1523,7 @@ class TestNestedCdtAel:
         assert len(records[0].bins["nested_list"][0]) == 3
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="Server-side bin.count() emits invalid msgpack (ParameterError at eval time) "
         "— server bug, pending fix",
         strict=True,
@@ -1552,7 +1578,7 @@ class TestMapKeyOperationsAel:
         assert len(records) == 1
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
@@ -1752,29 +1778,70 @@ class TestRelativeRangeAel:
 class TestAelErrorHandling:
     """Tests for AEL error handling."""
 
-    async def test_invalid_ael_syntax(self, client_with_cdt_data):
-        """Test that invalid AEL raises AelParseException."""
-        stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
-            .where("this is not valid AEL !!!")
-            .execute()
-        )
-        with pytest.raises(InvalidRequest, match="ParameterError"):
+    @pytest.mark.parametrize(
+        "expected_exc,match",
+        [
+            pytest.param(
+                AelParseException,
+                None,
+                id="client-side",
+                marks=requires_client_side_ael,
+            ),
+            pytest.param(
+                InvalidRequest,
+                "ParameterError",
+                id="server-side",
+                marks=requires_server_compiled_ael,
+            ),
+        ],
+    )
+    async def test_invalid_ael_syntax(self, client_with_cdt_data, expected_exc, match):
+        """Invalid AEL raises AelParseException (client) or InvalidRequest (server).
+
+        Client path: parser raises in :meth:`where` before ``execute`` returns a stream.
+        Server path: filter may build, then the cluster rejects it while reading rows.
+        """
+        with pytest.raises(expected_exc, match=match):
+            stream = await (
+                client_with_cdt_data.query("test", "cdt_test")
+                .where("this is not valid AEL !!!")
+                .execute()
+            )
             async for result in stream:
                 pass
 
-    async def test_invalid_list_syntax(self, client_with_cdt_data):
-        """Test invalid list syntax raises AelParseException."""
-        # [stringValue] is not valid - should be [=stringValue] or ["stringValue"]
-        stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
-            .where("$.numbers.[invalidSyntax] == 100")
-            .execute()
-        )
-        with pytest.raises(InvalidRequest, match="ParameterError"):
+    @pytest.mark.parametrize(
+        "expected_exc,match",
+        [
+            pytest.param(
+                AelParseException,
+                None,
+                id="client-side",
+                marks=requires_client_side_ael,
+            ),
+            pytest.param(
+                InvalidRequest,
+                "ParameterError",
+                id="server-side",
+                marks=requires_server_compiled_ael,
+            ),
+        ],
+    )
+    async def test_invalid_list_syntax(self, client_with_cdt_data, expected_exc, match):
+        """Invalid list path ``[stringValue]`` — client parse error or server ParameterError.
+
+        ``[stringValue]`` is not valid; use ``[=stringValue]`` or ``[\"stringValue\"]``.
+        Client path: often raises in :meth:`where` during parse; server path may fail
+        when evaluating the filter on the cluster.
+        """
+        with pytest.raises(expected_exc, match=match):
+            stream = await (
+                client_with_cdt_data.query("test", "cdt_test")
+                .where("$.numbers.[invalidSyntax] == 100")
+                .execute()
+            )
             async for result in stream:
                 pass
-
 
 
 # =============================================================================
@@ -1863,20 +1930,35 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session, key, "not (countOneBits($.A) == 1)")
         await self._assert_matches(session, key, "countOneBits($.A) == 1", "A", 1)
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
-        reason="findBitLeft() emits invalid msgpack (ParameterError at eval time) — server codegen bug, pending fix",
-        strict=True,
-    )
-    async def test_filter_lscan(self, filter_session):
-        """Left scan: findBitLeft($.A, true) == 0 for key A (integer 1, MSB is at position 0)."""
+    @pytest.mark.parametrize("expected_pos", [
+        pytest.param(
+            0,
+            id="server-side",
+            marks=[
+                requires_server_compiled_ael,
+                pytest.mark.xfail(
+                    condition=server_version_gte("8.1.3"),
+                    reason="findBitLeft() emits invalid msgpack (ParameterError at eval time) — server codegen bug",
+                    strict=True,
+                ),
+            ],
+        ),
+        pytest.param(
+            63,
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+    ])
+    async def test_filter_lscan(self, filter_session, expected_pos):
+        """Left scan: findBitLeft($.A, true) == <expected_pos> for key A."""
         session, ds = filter_session
         key = ds.id("A")
-        await self._assert_filtered_out(session, key, "not (findBitLeft($.A, true) == 0)")
-        await self._assert_matches(session, key, "findBitLeft($.A, true) == 0", "A", 1)
+        expr = f"findBitLeft($.A, true) == {expected_pos}"
+        await self._assert_filtered_out(session, key, f"not ({expr})")
+        await self._assert_matches(session, key, expr, "A", 1)
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.2"),
+        condition=server_version_gte("8.1.3"),
         reason="findBitRight() emits invalid msgpack (ParameterError at eval time) — server codegen bug, pending fix",
         strict=True,
     )
@@ -1901,7 +1983,23 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session, key, "not (max($.A, $.D, $.E) == 1)")
         await self._assert_matches(session, key, "max($.A, $.D, $.E) == 1", "A", 1)
 
+    @requires_client_side_ael
     async def test_filter_cond(self, filter_session):
+        """Conditional: when A==1 => D-E == 2 for key A."""
+        session, ds = filter_session
+        key = ds.id("A")
+        when_expr = (
+            "when($.A == 0 => $.D + $.E, "
+            "$.A == 1 => $.D - $.E, "
+            "$.A == 2 => $.D * $.E, "
+            "default => -1)"
+        )
+        cond_ael = f"({when_expr}) == 2"
+        await self._assert_filtered_out(session, key, f"not ({cond_ael})")
+        await self._assert_matches(session, key, cond_ael, "A", 1)
+
+    @requires_server_compiled_ael
+    async def test_filter_cond_server(self, filter_session):
         """Conditional: when A==1 => D-E == 2 for key A."""
         session, ds = filter_session
         key = ds.id("A")
@@ -2084,6 +2182,15 @@ class TestConvenienceWrappers:
         assert len(records) == 3
 
 
+def _hex_blob_expr(payload: bytes) -> str:
+    return f"$.payload:BLOB == X'{payload.hex()}'"
+
+
+def _b64_blob_expr(payload: bytes) -> str:
+    enc = base64.b64encode(payload).decode("ascii")
+    return f'$.payload.get(type: BLOB) == "{enc}"'
+
+
 class TestAelMapBlobIntegrationQueries:
     """Extra map and blob AEL filters exercised against a live server."""
 
@@ -2117,17 +2224,34 @@ class TestAelMapBlobIntegrationQueries:
         assert "alice" in records[0].bins["scores"]
         assert "bob" in records[0].bins["scores"]
 
-    async def test_blob_bin_ael_equality_on_server(
-            self,
-            aerospike_host,
-            client_policy,
-            enterprise,
+    @pytest.mark.parametrize(
+        "make_expr",
+        [
+            pytest.param(
+                _hex_blob_expr,
+                id="server-side-hex",
+                marks=requires_server_compiled_ael,
+            ),
+            pytest.param(
+                _b64_blob_expr,
+                id="client-side-b64",
+                marks=requires_client_side_ael,
+            ),
+        ],
+    )
+    async def test_blob_bin_ael_equality(
+        self,
+        aerospike_host,
+        client_policy,
+        enterprise,
+        make_expr,
     ):
-        """BLOB bin filter using a hex blob literal in AEL."""
+        """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
         async with Client(seeds=aerospike_host, policy=client_policy) as client:
             session = client.create_session()
             k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
             payload = bytes([1, 2, 254])
+
             try:
                 await session.delete(k).execute()
             except Exception:
@@ -2136,14 +2260,14 @@ class TestAelMapBlobIntegrationQueries:
             await session.upsert(k).put({"payload": payload}).execute()
             await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-            hex_str = payload.hex()  # '0102fe'
             stream = await (
                 session.query("test", "ael_blob_srv_it")
-                .where(f"$.payload:BLOB == X'{hex_str}'")
+                .where(make_expr(payload))
                 .execute()
             )
             rows = [r.record async for r in stream]
             stream.close()
+
             assert len(rows) == 1
             assert rows[0].bins["payload"] == payload
 

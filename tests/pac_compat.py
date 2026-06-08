@@ -16,7 +16,9 @@
 """PAC capability checks shared by unit and integration tests.
 
 Integration tests that need server-compiled AEL on the wire can use
-:data:`requires_server_compiled_ael` (see ``tests/integration/conftest.py``).
+:data:`requires_server_compiled_ael`; tests that assume the **client-side**
+string-AEL path (no server compilation for ``where(str)``) can use
+:data:`requires_client_side_ael` (see ``tests/integration/conftest.py``).
 """
 
 from __future__ import annotations
@@ -52,5 +54,21 @@ def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None
     )
 
 
+def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> None:
+    """Skip when the SDK would use server-compiled AEL for string ``where()`` predicates.
+
+    Use for integration tests that only apply to the client-side
+    :func:`~aerospike_sdk.ael.parser.parse_ael` path (``Client.supports_server_compiled_ael``
+    is false: missing PAC API, old server build, or pre-connect client).
+    """
+    if not client.supports_server_compiled_ael:
+        return
+    pytest.skip(
+        "Requires client-side AEL parsing for string predicates: "
+        "Client.supports_server_compiled_ael is true (server-compiled path in use)."
+    )
+
+
 # Integration tests: use with tests/integration/conftest.py autouse gate (resolves ``client``).
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
+requires_client_side_ael = pytest.mark.requires_client_side_ael
