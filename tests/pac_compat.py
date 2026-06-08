@@ -39,36 +39,18 @@ def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
     Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`:
-    PAC must expose ``FilterExpression.from_server_compiled_ael``, and every active
-    node must report server-compiled AEL support via PAC's ``Version`` API.
+    PAC must expose ``FilterExpression.from_server_compiled_ael``, and the
+    **first active** node's ``Version`` must report server-compiled AEL support
+    (homogeneous cluster: all nodes same build).
     """
     if client.supports_server_compiled_ael:
         return
     pytest.skip(
         "Requires server-compiled AEL: PAC FilterExpression.from_server_compiled_ael "
-        "and every active node Version.supports_server_compiled_ael "
-        "(Client.supports_server_compiled_ael)."
+        "and first active node Version.supports_server_compiled_ael "
+        "(Client.supports_server_compiled_ael; homogeneous cluster assumption)."
     )
 
 
 # Integration tests: use with tests/integration/conftest.py autouse gate (resolves ``client``).
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
-
-
-def skip_if_pac_lacks_from_server_compiled_ael() -> None:
-    """Skip when the installed ``aerospike_async`` predates ``from_server_compiled_ael``."""
-    import aerospike_async
-
-    factory = getattr(FilterExpression, "from_server_compiled_ael", None)
-    if callable(factory):
-        return
-    loc = getattr(aerospike_async, "__file__", "?")
-    pytest.skip(
-        "PAC lacks FilterExpression.from_server_compiled_ael "
-        f"(imported aerospike_async from {loc}). "
-        "Rebuild PAC from your checkout: "
-        "`cd ../aerospike-client-python-async && maturin develop --features tls`. "
-        "Then reinstall this SDK without overwriting PAC: "
-        "`pip install -r requirements-local.txt && pip install -e . --no-deps`. "
-        "See README.md \"Local PAC and Rust core\"."
-    )

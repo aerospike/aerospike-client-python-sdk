@@ -521,7 +521,8 @@ class SyncClient:
         """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`.
 
         Value is the connect-time snapshot on the underlying async client (PAC
-        ``Version.supports_server_compiled_ael`` aggregate plus PAC API checks).
+        ``Version.supports_server_compiled_ael`` on the first active node plus PAC
+        API checks; homogeneous cluster assumption).
         """
         if not self._connected or self._async_client is None:
             return False

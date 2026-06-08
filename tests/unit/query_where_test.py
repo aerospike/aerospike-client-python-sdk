@@ -23,25 +23,20 @@ from aerospike_async import FilterExpression
 
 from aerospike_sdk import Exp, parse_ael
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.pac_sdk_client_attr import PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
-
-from tests.pac_compat import skip_if_pac_lacks_from_server_compiled_ael
 
 
 def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
     client = kwargs.pop("client", None)
-    if kwargs.pop("supports_server_compiled_ael", False):
-        if client is None:
-            client = object()
-        setattr(client, PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL, True)
-    elif client is None:
+    supports_server_compiled_ael = kwargs.pop("supports_server_compiled_ael", False)
+    if client is None:
         client = object()
     return QueryBuilder(
         client=client,
         namespace="test",
         set_name="unit_test",
+        supports_server_compiled_ael=supports_server_compiled_ael,
         **kwargs,
     )
 
@@ -76,7 +71,6 @@ class TestQueryBuilderWhere:
 
     def test_where_server_compiled_when_supported(self) -> None:
         """where(str) uses server-compiled path when builder flag is set."""
-        skip_if_pac_lacks_from_server_compiled_ael()
         builder = _query_builder(supports_server_compiled_ael=True)
         expected_parse = parse_ael("$.age > 20")
         builder.where("$.age > 20")

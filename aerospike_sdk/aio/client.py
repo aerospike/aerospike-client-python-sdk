@@ -34,7 +34,6 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.pac_sdk_client_attr import PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_monitor import IndexesMonitor
@@ -58,19 +57,18 @@ def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
     return bool(fn())
 
 
-async def _all_active_nodes_support_server_compiled_ael(pac: AsyncClient) -> bool:
-    """True iff every **active** node reports support (PAC ``Version`` API only)."""
+async def _first_active_node_supports_server_compiled_ael(pac: AsyncClient) -> bool:
+    """Whether the first **active** node's version reports server-compiled AEL support.
+
+    Assumes **homogeneous** cluster builds (all nodes same server version); only
+    the first active node is consulted. Returns ``False`` if there are no active
+    nodes.
+    """
     nodes = await pac.nodes()
-    if not nodes:
-        return False
-    saw_active = False
     for n in nodes:
-        if not n.is_active:
-            continue
-        saw_active = True
-        if not _pac_version_supports_server_compiled_filter(n.version):
-            return False
-    return saw_active
+        if n.is_active:
+            return _pac_version_supports_server_compiled_filter(n.version)
+    return False
 
 
 class Client:
@@ -152,11 +150,6 @@ class Client:
         self._cached_supports_server_compiled_ael = (
             await self._compute_server_compiled_ael_support()
         )
-        setattr(
-            self._client,
-            PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL,
-            self._cached_supports_server_compiled_ael,
-        )
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -168,10 +161,6 @@ class Client:
         """
         await self._indexes_monitor.stop()
         if self._client is not None:
-            try:
-                delattr(self._client, PAC_CLIENT_ATTR_SDK_SUPPORTS_SERVER_COMPILED_AEL)
-            except AttributeError:
-                pass
             await self._client.close()
             self._client = None
             self._connected = False
@@ -181,31 +170,28 @@ class Client:
         """End-to-end gate for server-compiled string ``where()`` (computed once per connect).
 
         Requires (1) PAC :meth:`FilterExpression.from_server_compiled_ael` and
-        (2) every **active** node's ``version.supports_server_compiled_ael()`` to
-        be true — same criteria the PAC exposes per node; the SDK only aggregates
-        and caches the result on :meth:`connect` (see
-        :attr:`supports_server_compiled_ael`).
+        (2) the **first active** node's ``version.supports_server_compiled_ael()``
+        (homogeneous cluster assumption — all nodes same build). Cached on
+        :meth:`connect`; see :attr:`supports_server_compiled_ael`.
         """
         if self._client is None:
             return False
         if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
             return False
-        return await _all_active_nodes_support_server_compiled_ael(self._client)
+        return await _first_active_node_supports_server_compiled_ael(self._client)
 
     @property
     def supports_server_compiled_ael(self) -> bool:
         """Whether server-compiled AEL filters are usable on this connection.
 
-        **Source of truth:** PAC ``Version.supports_server_compiled_ael()`` on each
-        **active** node (the Rust client keeps version on the node object). The SDK
-        does **not** re-walk the node list on every read of this property; it
-        returns the boolean computed at the last successful :meth:`connect`
-        (the same value is mirrored on the PAC client under
-        ``_aerospike_sdk_cached_supports_server_compiled_ael`` for query builders).
+        **Source of truth:** PAC ``Version.supports_server_compiled_ael()`` on the
+        **first active** node only (homogeneous cluster: all nodes same build). The
+        SDK does **not** re-walk the node list on every read; it returns the boolean
+        computed at the last successful :meth:`connect`.
 
         Also requires the installed PAC to expose
         :meth:`FilterExpression.from_server_compiled_ael`; otherwise this is
-        ``False`` even when every node reports support.
+        ``False`` even when the sampled node reports support.
 
         Returns ``False`` before :meth:`connect` completes or after :meth:`close`.
         """
@@ -431,6 +417,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -447,6 +434,7 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -473,6 +461,7 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
+            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload
