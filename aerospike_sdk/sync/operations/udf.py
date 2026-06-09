@@ -27,7 +27,6 @@ from aerospike_sdk.aio.operations.udf import (
     UdfFunctionBuilder as AsyncUdfFunctionBuilder,
 )
 from aerospike_sdk.error_strategy import OnError
-from aerospike_sdk.sync.client import _EventLoopManager
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder, SyncWriteSegmentBuilder
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 
@@ -42,22 +41,20 @@ class SyncUdfFunctionBuilder:
         session.execute_udf(key).function("pkg", "fn")
     """
 
-    __slots__ = ("_inner", "_loop_manager", "_sdk_client")
+    __slots__ = ("_inner", "_sdk_client")
 
     def __init__(
         self,
         inner: AsyncUdfFunctionBuilder,
-        loop_manager: _EventLoopManager,
         sdk_client: Client,
     ) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
         self._sdk_client = sdk_client
 
     def function(self, package: str, function_name: str) -> SyncUdfBuilder:
         """Select the UDF package and Lua function."""
-        b = self._inner.function(package, function_name)
-        return SyncUdfBuilder(b, self._loop_manager, self._sdk_client)
+        async_udf_builder = self._inner.function(package, function_name)
+        return SyncUdfBuilder(async_udf_builder, self._sdk_client)
 
 
 class SyncUdfBuilder:
@@ -71,16 +68,14 @@ class SyncUdfBuilder:
         session.execute_udf(key).function("pkg", "fn").query(key).where("true").execute()
     """
 
-    __slots__ = ("_inner", "_loop_manager", "_sdk_client")
+    __slots__ = ("_inner", "_sdk_client")
 
     def __init__(
         self,
         inner: AsyncUdfBuilder,
-        loop_manager: _EventLoopManager,
         sdk_client: Client,
     ) -> None:
         self._inner = inner
-        self._loop_manager = loop_manager
         self._sdk_client = sdk_client
 
     def passing(self, *args: Any) -> SyncUdfBuilder:
@@ -113,76 +108,74 @@ class SyncUdfBuilder:
 
     def execute_udf(self, *keys: Key) -> SyncUdfFunctionBuilder:
         """Finalize this UDF spec and start another on *keys*."""
-        fb = self._inner.execute_udf(*keys)
-        return SyncUdfFunctionBuilder(fb, self._loop_manager, self._sdk_client)
+        async_function_builder = self._inner.execute_udf(*keys)
+        return SyncUdfFunctionBuilder(async_function_builder, self._sdk_client)
 
     def query(
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
     ) -> SyncQueryBuilder:
+        # The inner UdfBuilder's _qb is a SyncQueryBuilder (set up by
+        # :meth:`SyncSession.execute_udf`); the inner ``query`` transition
+        # returns it directly.
         qb = self._inner.query(arg1, *more_keys)
-        return SyncQueryBuilder(
-            async_client=self._sdk_client,
-            namespace=qb._namespace,
-            set_name=qb._set_name,
-            loop_manager=self._loop_manager,
-            query_builder=qb,
-        )
+        assert isinstance(qb, SyncQueryBuilder)
+        return qb
 
     def upsert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start an upsert write segment."""
         wsb = self._inner.upsert(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def insert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start an insert-only write segment."""
         wsb = self._inner.insert(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def update(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         wsb = self._inner.update(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def replace(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start a replace write segment."""
         wsb = self._inner.replace(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def replace_if_exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         wsb = self._inner.replace_if_exists(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def delete(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start a delete segment."""
         wsb = self._inner.delete(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def touch(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start a touch segment."""
         wsb = self._inner.touch(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> SyncWriteSegmentBuilder:
         """Finalize the UDF spec and start an exists-check segment."""
         wsb = self._inner.exists(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb, self._loop_manager)
+        return SyncWriteSegmentBuilder(wsb)
 
     def execute(self, on_error: OnError | None = None) -> SyncRecordStream:
         """Run the UDF and return a :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
@@ -195,9 +188,35 @@ class SyncUdfBuilder:
             :meth:`~aerospike_sdk.aio.operations.udf.UdfBuilder.execute`
         """
         inner = self._inner
+        if inner._qb._udf_function is None:
+            raise ValueError(
+                "function(package, name) must be called before execute()",
+            )
+        inner._qb._finalize_udf_spec()
+        qb = inner._qb
 
-        async def _run():
-            return await inner.execute(on_error)
+        # Tier 1: list-returning blocking dispatch (single + multi-key UDF
+        # land here via "udf" op_type → execute_udf_blocking / batch_apply_blocking).
+        fast = qb.execute_blocking_fast_path(on_error)
+        if fast is not None:
+            return SyncRecordStream.from_list(fast)
 
-        stream = self._loop_manager.run_async(_run())
-        return SyncRecordStream(stream, self._loop_manager)
+        # Tier 1b: multi-spec blocking dispatch.
+        multispec = qb.execute_multispec_blocking(on_error)
+        if multispec is not None:
+            return SyncRecordStream.from_list(multispec)
+
+        # Every reachable shape is handled by Tier 1 or 1b. If we land here
+        # a new code path slipped through without a blocking dispatcher —
+        # raise loudly so the gap is identifiable.
+        specs = getattr(qb, "_specs", [])
+        shape = (
+            f"specs={len(specs)}: " + ", ".join(
+                f"spec{i}(op_type={s.op_type!r} keys={len(s.keys)} "
+                f"ops={len(s.operations)})"
+                for i, s in enumerate(specs)
+            )
+        ) if specs else f"keyless ns={qb._namespace!r} set={qb._set_name!r}"
+        raise NotImplementedError(
+            f"sync UDF builder shape not yet covered by a blocking dispatcher: "
+            f"{shape}")

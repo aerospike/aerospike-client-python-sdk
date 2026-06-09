@@ -1,0 +1,31 @@
+# Read the Docs configuration -- Aerospike Python SDK
+# Reference: https://docs.readthedocs.com/platform/stable/config-file/v2.html
+
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.12"
+  # Java is required by `make generate-ael`. The ANTLR-generated parser lives
+  # under aerospike_sdk/ael/antlr4/generated/ and is gitignored, so it must be
+  # regenerated on every RTD build for autodoc to import the package cleanly.
+  apt_packages:
+    - default-jre-headless
+  jobs:
+    pre_install:
+      - make generate-ael
+
+# `pip install . --extra docs` resolves the runtime deps from pyproject.toml
+# (notably aerospike-async==0.4.0a1 from PyPI) plus the Sphinx toolchain
+# declared under [project.optional-dependencies].docs.
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
+
+sphinx:
+  configuration: docs/conf.py
+  fail_on_warning: false

@@ -79,15 +79,23 @@ def _substitute_placeholders(text: str, placeholder_values: Any) -> str:
 
 
 class IndexTypeEnum(Enum):
-    """Index type for filter generation matching."""
+    """Index type for filter generation matching.
+
+    ``INTEGER`` is the preferred name for an integer-valued index — that is
+    the wording used by the Aerospike server from version 8.1.2 onward and
+    by other Aerospike SDKs. ``NUMERIC`` is retained as a back-compat alias
+    that maps to the same wire type and is interchangeable with ``INTEGER``
+    in :meth:`to_aerospike`.
+    """
     NUMERIC = "NUMERIC"
+    INTEGER = "INTEGER"
     STRING = "STRING"
     GEO2D_SPHERE = "GEO2D_SPHERE"
     BLOB = "BLOB"
 
     def to_aerospike(self) -> IndexType:
         """Convert to aerospike_async IndexType."""
-        if self == IndexTypeEnum.NUMERIC:
+        if self in (IndexTypeEnum.NUMERIC, IndexTypeEnum.INTEGER):
             return IndexType.NUMERIC
         elif self == IndexTypeEnum.STRING:
             return IndexType.STRING
@@ -111,6 +119,9 @@ class Index:
             Used to choose optimal index when multiple are available.
         collection_index_type: Collection index type for list/map indexes.
         ctx: Array of CTX representing context of the index.
+        set_name: Aerospike set this index is defined on, when known. ``None``
+            means the index is not bound to a specific set (cross-set / null
+            set). Blank strings are normalized to ``None``.
     """
     bin: str
     index_type: IndexTypeEnum
@@ -119,6 +130,17 @@ class Index:
     bin_values_ratio: Optional[float] = None
     collection_index_type: Optional[CollectionIndexType] = None
     ctx: Optional[List[CTX]] = None
+    set_name: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.set_name is not None and (not isinstance(self.set_name, str) or not self.set_name.strip()):
+            self.set_name = None
+        # Collapse INTEGER → NUMERIC for storage so user-facing INTEGER (the
+        # modern server 8.1.2+ wording) and the historical NUMERIC are
+        # interchangeable. Filter selection compares enum members for
+        # equality, so a single canonical form keeps that loop simple.
+        if self.index_type == IndexTypeEnum.INTEGER:
+            self.index_type = IndexTypeEnum.NUMERIC
 
 
 @dataclass
@@ -128,14 +150,54 @@ class IndexContext:
     Attributes:
         namespace: Namespace to match with index namespaces.
         indexes: Collection of Index objects for filter generation.
+        query_set: Aerospike set name for the current query. When set, the
+            filter generator restricts secondary-index selection to indexes
+            whose :attr:`Index.set_name` matches (or is unset, i.e. a
+            cross-set index). When ``None`` or blank, no set-based filtering
+            applies. Blank strings are normalized to ``None``.
     """
     namespace: str
     indexes: List[Index] = field(default_factory=list)
+    query_set: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.query_set is not None and (not isinstance(self.query_set, str) or not self.query_set.strip()):
+            self.query_set = None
 
     @classmethod
     def of(cls, namespace: str, indexes: List[Index]) -> "IndexContext":
         """Create IndexContext with namespace and indexes."""
         return cls(namespace=namespace, indexes=indexes)
+
+    @classmethod
+    def with_query_set(
+        cls,
+        namespace: str,
+        query_set: Optional[str],
+        indexes: List[Index],
+    ) -> "IndexContext":
+        """Create IndexContext that restricts index selection to ``query_set``.
+
+        Indexes whose :attr:`Index.set_name` is ``None`` (cross-set) remain
+        eligible regardless of ``query_set``.
+        """
+        return cls(namespace=namespace, indexes=indexes, query_set=query_set)
+
+    @staticmethod
+    def index_matches_query_set(index: Index, query_set: Optional[str]) -> bool:
+        """Whether ``index`` is eligible for filter selection under ``query_set``.
+
+        Returns ``True`` when ``query_set`` is ``None`` (no filtering), the
+        index has no set name (cross-set), or the index's set name equals
+        ``query_set``. Mirrors the semantics used by reference clients so
+        cross-set indexes remain shared by per-set queries.
+        """
+        if query_set is None:
+            return True
+        idx_set = index.set_name
+        if idx_set is None or not idx_set.strip():
+            return True
+        return idx_set == query_set
 
 
 @dataclass
@@ -221,15 +283,25 @@ class FilterGenerator:
         self._validate_comparison_types(node.right)
 
     def _build_index_map(self) -> None:
-        """Build map of bin name to matching indexes."""
+        """Build map of bin name to matching indexes.
+
+        Indexes are filtered by namespace, then by ``query_set`` when the
+        context carries one — see :meth:`IndexContext.index_matches_query_set`
+        for the cross-set semantics. Indexes that fail the set check are
+        excluded so an index defined on set ``A`` is never used to plan a
+        filter on set ``B``.
+        """
         if not self.index_context:
             return
 
+        query_set = self.index_context.query_set
         for index in self.index_context.indexes:
             # Index namespace must match context namespace
             # - Index with no namespace doesn't match context with namespace
             # - Index with different namespace doesn't match
             if index.namespace != self.index_context.namespace:
+                continue
+            if not IndexContext.index_matches_query_set(index, query_set):
                 continue
             if index.bin not in self._indexes_by_bin:
                 self._indexes_by_bin[index.bin] = []

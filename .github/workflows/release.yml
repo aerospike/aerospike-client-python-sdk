@@ -1,3 +1,5 @@
+# NOTE: This workflow will be retired once the new release pipeline lands
+# (CI-driven build + branch promotion + publish workflows). Do not extend.
 name: Release
 
 on:
@@ -19,9 +21,6 @@ on:
 
 permissions:
   contents: write
-
-env:
-  PAC_REPO: "aerospike/aerospike-client-python-async"
 
 jobs:
   validate:
@@ -52,34 +51,54 @@ jobs:
           fi
           echo "Tag v${{ inputs.version }} is available"
 
-      - name: Enforce stable releases from main
+      - name: Enforce branch gate
         run: |
           VERSION="${{ inputs.version }}"
           BRANCH="${{ github.ref_name }}"
-          if echo "$VERSION" | grep -q -E "\-alpha|\-beta|\-rc"; then
-            echo "Pre-release ($VERSION) — allowed from any branch ($BRANCH)"
-          elif [ "$BRANCH" != "main" ]; then
-            echo "::error::Stable releases must be cut from the main branch (current: $BRANCH)"
-            exit 1
-          else
-            echo "Stable release ($VERSION) from main — OK"
-          fi
+          case "$VERSION" in
+            *-alpha.*|*-beta.*)
+              if [ "$BRANCH" != "dev" ]; then
+                echo "::error::alpha/beta releases must be cut from 'dev' (current: $BRANCH)"
+                exit 1
+              fi
+              echo "alpha/beta release ($VERSION) from $BRANCH — OK"
+              ;;
+            *-rc.*)
+              if [ "$BRANCH" != "stage" ]; then
+                echo "::error::RC releases must be cut from 'stage' (current: $BRANCH)"
+                exit 1
+              fi
+              echo "RC release ($VERSION) from $BRANCH — OK"
+              ;;
+            *)
+              if [ "$BRANCH" != "main" ]; then
+                echo "::error::Stable releases must be cut from 'main' (current: $BRANCH)"
+                exit 1
+              fi
+              echo "Stable release ($VERSION) from $BRANCH — OK"
+              ;;
+          esac
 
       - name: Resolve and validate PAC dependency
         id: pac
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          PAC_VERSION=$(grep 'aerospike-client-python-async' pyproject.toml | grep -oP '@\Kv[^"]+')
+          PAC_VERSION=$(grep -oE 'aerospike-async==[^"]+' pyproject.toml \
+                          | sed 's/aerospike-async==//')
+          if [ -z "$PAC_VERSION" ]; then
+            echo "::error::Could not extract PAC (aerospike-async==<ver>) from pyproject.toml"
+            exit 1
+          fi
           echo "PAC dependency version: $PAC_VERSION"
           echo "version=$PAC_VERSION" >> "$GITHUB_OUTPUT"
 
-          echo "Checking PAC release exists..."
-          if ! gh release view "$PAC_VERSION" --repo "$PAC_REPO" > /dev/null 2>&1; then
-            echo "::error::PAC release $PAC_VERSION not found — cannot release PFC without a published PAC"
+          echo "Checking PAC release exists on PyPI..."
+          if ! curl -fsSL -H 'Accept: application/vnd.pypi.simple.v1+json' \
+                 "https://pypi.org/simple/aerospike-async/" \
+               | python3 -c "import sys,json; d=json.load(sys.stdin); v='$PAC_VERSION'; sys.exit(0 if v in d.get('versions',[]) else 1)"; then
+            echo "::error::PAC version $PAC_VERSION not found on PyPI"
             exit 1
           fi
-          echo "PAC release $PAC_VERSION found — OK"
+          echo "PAC release $PAC_VERSION found on PyPI — OK"
 
   test:
     needs: validate
@@ -96,11 +115,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install build tools
-        run: pip install build
+      - name: Generate ANTLR parser
+        run: make generate-ael
 
       - name: Build sdist and wheel
-        run: python -m build --sdist --wheel --outdir dist
+        run: bash scripts/ci/build-artifacts.sh
 
       - name: Verify wheel contents
         run: |
@@ -153,7 +172,33 @@ jobs:
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate release notes
+      # Contract: this workflow creates new releases, OR promotes a pre-existing
+      # draft (one-time hand-curated notes pattern). Any other pre-existing
+      # release at the target tag is an error -- we will not silently clobber
+      # a published release.
+      - name: Detect existing draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          if RELEASE_JSON=$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft 2>/dev/null); then
+            IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.isDraft')
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "Found existing DRAFT release at $TAG; will promote it as-is and skip auto-generated notes."
+            else
+              echo "::error::A non-draft release already exists at $TAG. Refusing to overwrite. Delete the release first if you want a fresh one."
+              exit 1
+            fi
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No release at $TAG; will auto-generate notes and create fresh."
+          fi
+
+      # Auto-generate path: no pre-existing draft, build notes from PRs since last tag.
+      - name: Generate release notes (auto)
+        if: steps.draft.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -168,7 +213,8 @@ jobs:
           echo "--- release_notes.md ---"
           cat release_notes.md
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (auto-generated)
+        if: steps.draft.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ inputs.version }}"
@@ -177,6 +223,18 @@ jobs:
           body_path: release_notes.md
           generate_release_notes: false
           files: dist/*
+
+      # Promote-existing-draft path: leave name + body alone, attach artifacts, flip draft=false.
+      - name: Promote existing draft release
+        if: steps.draft.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
+          gh release edit "$TAG" --repo "${{ github.repository }}" \
+            --draft=false \
+            --prerelease=${{ steps.prerelease.outputs.is_prerelease }}
 
   publish:
     if: inputs.publish_pypi != 'no'

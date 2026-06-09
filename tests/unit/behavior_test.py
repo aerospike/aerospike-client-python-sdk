@@ -58,6 +58,17 @@ class TestSettingsMerge:
         assert merged.total_timeout is None
         assert merged.max_retries is None
 
+    def test_compression_threshold_merges(self):
+        # Override takes precedence; base value carries through when
+        # override leaves the field unset.
+        base = Settings(compression_threshold=128)
+        override = Settings(compression_threshold=4096)
+        merged = Settings.merge(base, override)
+        assert merged.compression_threshold == 4096
+
+        merged_keep_base = Settings.merge(base, Settings())
+        assert merged_keep_base.compression_threshold == 128
+
 
 class TestResolutionOrder:
     """Verify that resolution_order() returns the correct scope chain

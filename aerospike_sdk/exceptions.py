@@ -30,6 +30,7 @@ from aerospike_async.exceptions import (
     AerospikeError as PacAerospikeError,
     ConnectionError as PacConnectionError,
     InvalidNodeError as PacInvalidNodeError,
+    MaxErrorRate as PacMaxErrorRate,
     ServerError as PacServerError,
     TimeoutError as PacTimeoutError,
     UDFBadResponse as PacUDFBadResponse,
@@ -265,6 +266,26 @@ class BackoffError(AerospikeError):
     """
 
 
+class MaxErrorRate(BackoffError):
+    """Raised when the client's per-node circuit breaker trips.
+
+    The breaker is governed by ``Client(...)``'s ``max_error_rate`` and
+    ``error_rate_window`` keywords (or :class:`~aerospike_async.ClientPolicy`
+    fields of the same name). Once a node's error count crosses
+    ``max_error_rate`` within the current window, subsequent commands routed
+    to that node fail fast with this exception until the next window resets.
+    Catch :class:`BackoffError` to handle this together with other server-side
+    backoff signals.
+
+    Example::
+
+        try:
+            await session.read(key).execute()
+        except MaxErrorRate:
+            ...  # node is in cooldown; route around it or wait
+    """
+
+
 class CommitError(AerospikeError):
     """Raised when a multi-record transaction commit does not complete successfully.
 
@@ -352,6 +373,9 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
     """
     if isinstance(exc, PacServerError):
         return _result_code_to_exception(exc.result_code, str(exc), exc.in_doubt)
+
+    if isinstance(exc, PacMaxErrorRate):
+        return MaxErrorRate(str(exc))
 
     if isinstance(exc, PacTimeoutError):
         return TimeoutError(str(exc))

@@ -17,9 +17,10 @@
 
 from __future__ import annotations
 
+import logging
 import types
 import typing
-from typing import List, Optional, Union, overload
+from typing import Awaitable, Callable, Dict, List, Optional, Union, overload
 
 from aerospike_async import (
     AdminPolicy,
@@ -31,6 +32,7 @@ from aerospike_async import (
     UDFLang,
     UdfRemoveTask,
     new_client,
+    new_client_blocking,
 )
 
 from aerospike_sdk.dataset import DataSet
@@ -38,10 +40,13 @@ from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
 
 if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
     from aerospike_sdk.aio.transactional_session import TransactionalSession
+
+log = logging.getLogger(__name__)
 
 
 def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
@@ -69,6 +74,30 @@ async def _first_active_node_supports_server_compiled_ael(pac: AsyncClient) -> b
         if n.is_active:
             return _pac_version_supports_server_compiled_filter(n.version)
     return False
+
+
+def _first_active_node_supports_server_compiled_ael_blocking(pac: AsyncClient) -> bool:
+    """Blocking counterpart of :func:`_first_active_node_supports_server_compiled_ael`.
+
+    Uses :meth:`~aerospike_async.Client.nodes_blocking` so ``new_client_blocking()``
+    clients never call async-only PAC APIs (which raise at runtime).
+    """
+    nodes = pac.nodes_blocking()
+    for n in nodes:
+        if n.is_active:
+            return _pac_version_supports_server_compiled_filter(n.version)
+    return False
+
+
+def _compute_server_compiled_ael_support_blocking(pac: AsyncClient) -> bool:
+    """Gate for server-compiled string ``where()`` on a blocking PAC client.
+
+    Same rules as :meth:`Client._compute_server_compiled_ael_support`, but uses
+    :func:`_first_active_node_supports_server_compiled_ael_blocking` — no asyncio.
+    """
+    if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+        return False
+    return _first_active_node_supports_server_compiled_ael_blocking(pac)
 
 
 class Client:
@@ -99,6 +128,10 @@ class Client:
         seeds: str,
         policy: Optional[ClientPolicy] = None,
         index_refresh_interval: float = 5.0,
+        *,
+        max_error_rate: Optional[int] = None,
+        error_rate_window: Optional[int] = None,
+        indexes_monitor: Optional[IndexesMonitor] = None,
     ) -> None:
         """Store cluster seeds and policy; connection starts in :meth:`connect` or ``async with``.
 
@@ -108,9 +141,27 @@ class Client:
             policy: Optional :class:`~aerospike_async.ClientPolicy`; defaults to a
                 new client policy when omitted.
             index_refresh_interval: Seconds between secondary index cache refreshes
-                (default 5.0). The monitor periodically fetches index metadata from
-                the cluster so that AEL-based ``where()`` calls can transparently
-                generate secondary index filters.
+                (default 5.0). The monitor is a daemon thread that starts lazily
+                on the first AEL ``where()`` query and periodically refreshes
+                cached index metadata so subsequent queries can transparently
+                generate secondary index filters. Clients that never use
+                ``where()`` never start the monitor thread.
+            max_error_rate: Per-node circuit-breaker threshold. When a node's
+                error count crosses this value within ``error_rate_window``
+                tend iterations, subsequent commands routed to that node fail
+                fast with :class:`~aerospike_sdk.MaxErrorRate` until the
+                window resets. ``0`` disables the breaker. Defaults to the
+                underlying :class:`ClientPolicy` default (``100``).
+            error_rate_window: Number of cluster tend iterations after which
+                each node's error counter is reset. Defaults to the underlying
+                :class:`ClientPolicy` default (``1``).
+            indexes_monitor: Optional pre-constructed :class:`IndexesMonitor`
+                to share across Clients (for example, all clients in an
+                :class:`~aerospike_sdk.AsyncPool`). When provided, this
+                Client uses it for AEL filter generation but does not
+                start or stop it — the caller that constructed the monitor
+                owns its lifecycle. When ``None`` (default), the Client
+                owns and manages a private monitor.
 
         Note:
             No network I/O occurs here. The client connects when you ``await
@@ -119,10 +170,22 @@ class Client:
         self._seeds = seeds
         if policy is None:
             policy = ClientPolicy()
+        if max_error_rate is not None:
+            policy.max_error_rate = max_error_rate
+        if error_rate_window is not None:
+            policy.error_rate_window = error_rate_window
         self._policy = policy
         self._client: Optional[AsyncClient] = None
         self._connected = False
-        self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
+        if indexes_monitor is not None:
+            self._indexes_monitor = indexes_monitor
+            self._owns_monitor = False
+        else:
+            self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
+            self._owns_monitor = True
+        # Shared by all Session instances from this client; avoids repeated
+        # namespace/<ns> info probes when callers use multiple sessions.
+        self._namespace_mode_cache: Dict[str, Mode] = {}
         self._cached_supports_server_compiled_ael: Optional[bool] = None
 
     async def connect(self) -> None:
@@ -144,9 +207,28 @@ class Client:
         if self._connected and self._client is not None:
             return
 
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
-        await self._indexes_monitor.start(self._client)
+        if log.isEnabledFor(logging.DEBUG):
+            try:
+                build_by_node = await self._client.info("build")
+                log.debug(
+                    "Connected seeds=%r; build info by node=%s",
+                    self._seeds,
+                    build_by_node,
+                )
+            except Exception as exc:
+                log.debug(
+                    "Connected seeds=%r but build probe failed: %s",
+                    self._seeds,
+                    exc,
+                    exc_info=True,
+                )
+        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
+        # Sync benches and callers that never touch the AEL filter-generation
+        # path pay zero daemon-thread cost.
         self._cached_supports_server_compiled_ael = (
             await self._compute_server_compiled_ael_support()
         )
@@ -159,12 +241,14 @@ class Client:
         See Also:
             :meth:`connect`.
         """
-        await self._indexes_monitor.stop()
+        if self._owns_monitor:
+            self._indexes_monitor.stop()
         if self._client is not None:
             await self._client.close()
             self._client = None
             self._connected = False
         self._cached_supports_server_compiled_ael = None
+        self._namespace_mode_cache.clear()
 
     async def _compute_server_compiled_ael_support(self) -> bool:
         """End-to-end gate for server-compiled string ``where()`` (computed once per connect).
@@ -198,6 +282,55 @@ class Client:
         if self._cached_supports_server_compiled_ael is None:
             return False
         return self._cached_supports_server_compiled_ael
+
+    def connect_blocking(self) -> None:
+        """Synchronously open a connection without requiring an asyncio loop.
+
+        Uses :func:`aerospike_async.new_client_blocking` to construct the
+        underlying PAC client and sets ``_connected = True``. The
+        :class:`IndexesMonitor` daemon thread is not started here; it
+        lazy-starts on the first AEL ``where()`` query that needs cached
+        secondary-index metadata.
+
+        Idempotent: returns early if already connected.
+
+        Raises:
+            ConnectionError: When the PAC blocking connect cannot reach the
+                cluster.
+
+        Example::
+
+            client = Client("localhost:3000")
+            client.connect_blocking()
+            try:
+                ...
+            finally:
+                client.close_blocking()
+        """
+        if self._connected and self._client is not None:
+            return
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
+        self._client = new_client_blocking(self._policy, self._seeds)
+        self._connected = True
+        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
+        self._cached_supports_server_compiled_ael = (
+            _compute_server_compiled_ael_support_blocking(self._client)
+        )
+
+    def close_blocking(self) -> None:
+        """Synchronously close the underlying client. Pair with :meth:`connect_blocking`.
+
+        Safe to call when already closed.
+        """
+        if self._owns_monitor:
+            self._indexes_monitor.stop()
+        if self._client is not None:
+            self._client.close_blocking()
+            self._client = None
+            self._connected = False
+        self._cached_supports_server_compiled_ael = None
+        self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:
         """Async context manager entry."""
@@ -266,6 +399,8 @@ class Client:
         *,
         dataset: DataSet,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """Create a query builder from a DataSet."""
         ...
@@ -276,6 +411,8 @@ class Client:
         *,
         key: Key,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """Create a query builder for a single Key (point read)."""
         ...
@@ -286,6 +423,8 @@ class Client:
         *,
         keys: List[Key],
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """Create a query builder for multiple Keys (batch read)."""
         ...
@@ -295,6 +434,8 @@ class Client:
         self,
         *keys: Key,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """Create a query builder for multiple Keys (varargs)."""
         ...
@@ -306,6 +447,8 @@ class Client:
         set_name: str,
         *,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """Create a query builder with explicit namespace/set."""
         ...
@@ -320,6 +463,8 @@ class Client:
         key: Optional[Key] = None,
         keys: Optional[List[Key]] = None,
         behavior: Optional[Behavior] = None,
+        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> QueryBuilder:
         """
         Create a query builder.
@@ -417,6 +562,8 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
@@ -434,6 +581,8 @@ class Client:
                 set_name=set_name,
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
+                namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
@@ -461,6 +610,8 @@ class Client:
             set_name=set_name,
             behavior=behavior,
             indexes_monitor=self._indexes_monitor,
+            namespace_mode_resolver=namespace_mode_resolver,
+            namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
             supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
@@ -652,7 +803,7 @@ class Client:
             await task.wait_till_complete()
         """
         return await self._async_client.register_udf(
-            policy, body, server_path, language)
+            body, server_path, language, policy=policy)
 
     async def register_udf_from_file(
         self,
@@ -687,7 +838,7 @@ class Client:
             await task.wait_till_complete()
         """
         return await self._async_client.register_udf_from_file(
-            policy, client_path, server_path, language)
+            client_path, server_path, language, policy=policy)
 
     async def remove_udf(
         self,
@@ -713,5 +864,5 @@ class Client:
             task = await client.remove_udf("my_module")
             await task.wait_till_complete()
         """
-        return await self._async_client.remove_udf(policy, server_path)
+        return await self._async_client.remove_udf(server_path, policy=policy)
 

@@ -23,7 +23,7 @@ import resource
 import threading
 import tracemalloc
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional, Tuple
 
 try:
     import psutil
@@ -163,8 +163,130 @@ class IntervalSnapshot:
     write_gt: List[int] = field(default_factory=list)
 
 
+class WorkerStats:
+    """Per-worker counters updated lock-free in the hot loop.
+
+    Only the owning worker writes; the collector aggregates by reading at
+    interval boundaries. Counter writes are not atomic under free-threading,
+    but the collector only reads at second boundaries, so any briefly
+    inconsistent multi-field state self-heals across intervals.
+
+    Latencies use a per-worker lock because the collector swaps the list
+    at interval boundaries to harvest accumulated samples without copying.
+    """
+
+    __slots__ = (
+        "reads", "writes",
+        "read_timeouts", "write_timeouts",
+        "read_errors", "write_errors",
+        "read_le1", "write_le1",
+        "read_gt", "write_gt",
+        "_thresholds",
+        "_lat_lock", "_lat_pairs",
+    )
+
+    def __init__(self, columns: int, thresholds: Tuple[float, ...]) -> None:
+        self.reads = 0
+        self.writes = 0
+        self.read_timeouts = 0
+        self.write_timeouts = 0
+        self.read_errors = 0
+        self.write_errors = 0
+        self.read_le1 = 0
+        self.write_le1 = 0
+        ncols = max(0, columns - 1)
+        self.read_gt = [0] * ncols
+        self.write_gt = [0] * ncols
+        self._thresholds = thresholds
+        self._lat_lock = threading.Lock()
+        self._lat_pairs: List[Tuple[float, bool]] = []
+
+    def record(
+        self,
+        is_read: bool,
+        is_timeout: bool,
+        is_error: bool,
+        latency_ms: Optional[float],
+    ) -> None:
+        if is_read:
+            self.reads += 1
+            if is_timeout:
+                self.read_timeouts += 1
+            elif is_error:
+                self.read_errors += 1
+            elif latency_ms is not None:
+                if latency_ms <= 1.0:
+                    self.read_le1 += 1
+                r_gt = self.read_gt
+                for j, thresh in enumerate(self._thresholds):
+                    if latency_ms > thresh:
+                        r_gt[j] += 1
+        else:
+            self.writes += 1
+            if is_timeout:
+                self.write_timeouts += 1
+            elif is_error:
+                self.write_errors += 1
+            elif latency_ms is not None:
+                if latency_ms <= 1.0:
+                    self.write_le1 += 1
+                w_gt = self.write_gt
+                for j, thresh in enumerate(self._thresholds):
+                    if latency_ms > thresh:
+                        w_gt[j] += 1
+        if latency_ms is not None and not is_error and not is_timeout:
+            with self._lat_lock:
+                self._lat_pairs.append((latency_ms, is_read))
+
+    def bulk_record(
+        self,
+        is_read: bool,
+        n_success: int,
+        n_error: int,
+        latency_ms: Optional[float],
+    ) -> None:
+        """Record N records from a single batch op in one update.
+
+        Used for batch operations where one ``execute()`` touches N keys.
+        Each key counts as a separate op for TPS purposes; per-record
+        ``RecordResult.is_ok=False`` outcomes increment the error counter.
+        Sampled batch latency (one timing for the whole ``execute()``)
+        applies to one of the successful records, since per-record latency
+        isn't available from the stream API.
+        """
+        if is_read:
+            self.reads += n_success + n_error
+            self.read_errors += n_error
+            if latency_ms is not None and n_success > 0:
+                if latency_ms <= 1.0:
+                    self.read_le1 += 1
+                r_gt = self.read_gt
+                for j, thresh in enumerate(self._thresholds):
+                    if latency_ms > thresh:
+                        r_gt[j] += 1
+        else:
+            self.writes += n_success + n_error
+            self.write_errors += n_error
+            if latency_ms is not None and n_success > 0:
+                if latency_ms <= 1.0:
+                    self.write_le1 += 1
+                w_gt = self.write_gt
+                for j, thresh in enumerate(self._thresholds):
+                    if latency_ms > thresh:
+                        w_gt[j] += 1
+        if latency_ms is not None and n_success > 0:
+            with self._lat_lock:
+                self._lat_pairs.append((latency_ms, is_read))
+
+    def swap_latencies(self) -> List[Tuple[float, bool]]:
+        with self._lat_lock:
+            cur = self._lat_pairs
+            self._lat_pairs = []
+            return cur
+
+
 class StatsCollector:
-    """Thread-safe counters and histograms for benchmark workers."""
+    """Per-worker counter registry; aggregates at interval boundaries."""
 
     def __init__(
         self,
@@ -180,26 +302,22 @@ class StatsCollector:
         self._warmup = warmup_intervals
         self._cooldown = cooldown_intervals
         self._latency_style = latency_style
-        self._lock = threading.Lock()
-        self._reads = 0
-        self._writes = 0
-        self._rtimeouts = 0
-        self._wtimeouts = 0
-        self._rerrs = 0
-        self._werrs = 0
-        self._r_le1 = 0
-        self._w_le1 = 0
-        self._r_gt = [0] * max(0, columns - 1)
-        self._w_gt = [0] * max(0, columns - 1)
         self._thresholds = tuple(
             latency_threshold_ms(j + 1, shift) for j in range(max(0, columns - 1))
         )
+        self._workers: List[WorkerStats] = []
+        self._workers_lock = threading.Lock()
+        ncols = max(0, columns - 1)
         self._prev_reads = 0
         self._prev_writes = 0
         self._prev_rt = 0
         self._prev_wt = 0
         self._prev_re = 0
         self._prev_we = 0
+        self._prev_r_le1 = 0
+        self._prev_w_le1 = 0
+        self._prev_r_gt = [0] * ncols
+        self._prev_w_gt = [0] * ncols
         self._interval_idx = 0
         self._intervals: List[IntervalSnapshot] = []
         self._lat_summary: array.array[float] = array.array("f")
@@ -208,74 +326,33 @@ class StatsCollector:
         self._cpu_samples: List[float] = []
         self._current_interval = 0
         self._planned_intervals = 0
-        # YCSB per-op-type trackers
         self._ycsb_read = _YcsbTracker()
         self._ycsb_write = _YcsbTracker()
 
+    def register_worker(self) -> WorkerStats:
+        ws = WorkerStats(self._columns, self._thresholds)
+        with self._workers_lock:
+            self._workers.append(ws)
+        return ws
+
     def set_planned_intervals(self, n: int) -> None:
-        with self._lock:
-            self._planned_intervals = max(0, n)
+        self._planned_intervals = max(0, n)
 
     def set_interval(self, idx: int) -> None:
-        with self._lock:
-            self._current_interval = idx
+        self._current_interval = idx
 
     def include_latency_sample(self) -> bool:
-        with self._lock:
-            if self._planned_intervals <= 0:
-                return False
-            hi = self._planned_intervals - self._cooldown
-            return self._warmup <= self._current_interval < hi
+        return self._in_summary_window()
+
+    def _in_summary_window(self) -> bool:
+        if self._planned_intervals <= 0:
+            return False
+        hi = self._planned_intervals - self._cooldown
+        return self._warmup <= self._current_interval < hi
 
     def total_ops(self) -> int:
-        with self._lock:
-            return self._reads + self._writes
-
-    def record(
-        self,
-        *,
-        is_read: bool,
-        latency_ms: float,
-        is_timeout: bool,
-        is_error: bool,
-        include_in_summary_latency: bool,
-    ) -> None:
-        thresholds = self._thresholds
-        with self._lock:
-            if is_read:
-                self._reads += 1
-                if is_timeout:
-                    self._rtimeouts += 1
-                elif is_error:
-                    self._rerrs += 1
-                else:
-                    if latency_ms <= 1.0:
-                        self._r_le1 += 1
-                    r_gt = self._r_gt
-                    for j, thresh in enumerate(thresholds):
-                        if latency_ms > thresh:
-                            r_gt[j] += 1
-            else:
-                self._writes += 1
-                if is_timeout:
-                    self._wtimeouts += 1
-                elif is_error:
-                    self._werrs += 1
-                else:
-                    if latency_ms <= 1.0:
-                        self._w_le1 += 1
-                    w_gt = self._w_gt
-                    for j, thresh in enumerate(thresholds):
-                        if latency_ms > thresh:
-                            w_gt[j] += 1
-            if not is_error and not is_timeout:
-                latency_us = int(latency_ms * 1000.0)
-                if is_read:
-                    self._ycsb_read.add(latency_us)
-                else:
-                    self._ycsb_write.add(latency_us)
-                if include_in_summary_latency:
-                    self._lat_summary.append(latency_ms)
+        with self._workers_lock:
+            return sum(w.reads + w.writes for w in self._workers)
 
     def sample_cpu(self) -> None:
         ru = resource.getrusage(resource.RUSAGE_SELF)
@@ -287,31 +364,73 @@ class StatsCollector:
 
     def end_interval(self) -> IntervalSnapshot:
         """Close the current 1-second window and return its deltas."""
-        with self._lock:
-            snap = IntervalSnapshot(index=self._interval_idx)
-            snap.reads = self._reads - self._prev_reads
-            snap.writes = self._writes - self._prev_writes
-            snap.read_timeouts = self._rtimeouts - self._prev_rt
-            snap.write_timeouts = self._wtimeouts - self._prev_wt
-            snap.read_errors = self._rerrs - self._prev_re
-            snap.write_errors = self._werrs - self._prev_we
-            snap.read_le1 = self._r_le1
-            snap.write_le1 = self._w_le1
-            snap.read_gt = list(self._r_gt)
-            snap.write_gt = list(self._w_gt)
-            self._prev_reads = self._reads
-            self._prev_writes = self._writes
-            self._prev_rt = self._rtimeouts
-            self._prev_wt = self._wtimeouts
-            self._prev_re = self._rerrs
-            self._prev_we = self._werrs
-            self._r_le1 = 0
-            self._w_le1 = 0
-            self._r_gt = [0] * max(0, self._columns - 1)
-            self._w_gt = [0] * max(0, self._columns - 1)
-            self._interval_idx += 1
-            self._intervals.append(snap)
-            return snap
+        ncols = max(0, self._columns - 1)
+        cur_reads = 0
+        cur_writes = 0
+        cur_rt = 0
+        cur_wt = 0
+        cur_re = 0
+        cur_we = 0
+        cur_r_le1 = 0
+        cur_w_le1 = 0
+        cur_r_gt = [0] * ncols
+        cur_w_gt = [0] * ncols
+        harvested: List[Tuple[float, bool]] = []
+        with self._workers_lock:
+            for w in self._workers:
+                cur_reads += w.reads
+                cur_writes += w.writes
+                cur_rt += w.read_timeouts
+                cur_wt += w.write_timeouts
+                cur_re += w.read_errors
+                cur_we += w.write_errors
+                cur_r_le1 += w.read_le1
+                cur_w_le1 += w.write_le1
+                wr_gt = w.read_gt
+                ww_gt = w.write_gt
+                for j in range(ncols):
+                    cur_r_gt[j] += wr_gt[j]
+                    cur_w_gt[j] += ww_gt[j]
+                pairs = w.swap_latencies()
+                if pairs:
+                    harvested.extend(pairs)
+
+        snap = IntervalSnapshot(index=self._interval_idx)
+        snap.reads = cur_reads - self._prev_reads
+        snap.writes = cur_writes - self._prev_writes
+        snap.read_timeouts = cur_rt - self._prev_rt
+        snap.write_timeouts = cur_wt - self._prev_wt
+        snap.read_errors = cur_re - self._prev_re
+        snap.write_errors = cur_we - self._prev_we
+        snap.read_le1 = cur_r_le1 - self._prev_r_le1
+        snap.write_le1 = cur_w_le1 - self._prev_w_le1
+        snap.read_gt = [cur_r_gt[j] - self._prev_r_gt[j] for j in range(ncols)]
+        snap.write_gt = [cur_w_gt[j] - self._prev_w_gt[j] for j in range(ncols)]
+
+        self._prev_reads = cur_reads
+        self._prev_writes = cur_writes
+        self._prev_rt = cur_rt
+        self._prev_wt = cur_wt
+        self._prev_re = cur_re
+        self._prev_we = cur_we
+        self._prev_r_le1 = cur_r_le1
+        self._prev_w_le1 = cur_w_le1
+        self._prev_r_gt = cur_r_gt
+        self._prev_w_gt = cur_w_gt
+
+        in_summary = self._in_summary_window()
+        for lat_ms, is_read in harvested:
+            lat_us = int(lat_ms * 1000.0)
+            if is_read:
+                self._ycsb_read.add(lat_us)
+            else:
+                self._ycsb_write.add(lat_us)
+            if in_summary:
+                self._lat_summary.append(lat_ms)
+
+        self._interval_idx += 1
+        self._intervals.append(snap)
+        return snap
 
     def rss_mb_macos_linux(self) -> float:
         """Peak RSS from ``getrusage`` in megabytes (platform-specific unit)."""
@@ -351,11 +470,10 @@ class StatsCollector:
 
         if self._latency_style == "ycsb":
             lines = [tps_line]
-            with self._lock:
-                lines.append(self._ycsb_write.format_period_total("write"))
-                lines.append(self._ycsb_read.format_period_total("read"))
-                self._ycsb_write.reset_window()
-                self._ycsb_read.reset_window()
+            lines.append(self._ycsb_write.format_period_total("write"))
+            lines.append(self._ycsb_read.format_period_total("read"))
+            self._ycsb_write.reset_window()
+            self._ycsb_read.reset_window()
             return "\n".join(lines)
 
         lines = [
@@ -411,6 +529,15 @@ class StatsCollector:
         r_tps = [x.reads for x in mid]
         w_tps = [x.writes for x in mid]
         t_tps = [x.reads + x.writes for x in mid]
+        r_err = sum(x.read_errors for x in mid)
+        w_err = sum(x.write_errors for x in mid)
+        r_to = sum(x.read_timeouts for x in mid)
+        w_to = sum(x.write_timeouts for x in mid)
+        total_ops = sum(t_tps)
+        total_err = r_err + w_err
+        total_to = r_to + w_to
+        err_pct = (100.0 * total_err / total_ops) if total_ops else 0.0
+        to_pct = (100.0 * total_to / total_ops) if total_ops else 0.0
 
         lat = sorted(self._lat_summary.tolist())
         pct_lines: List[str] = []
@@ -431,6 +558,8 @@ class StatsCollector:
             f"  Read  TPS: avg={avg(r_tps):.0f}  median={median(r_tps):.0f}",
             f"  Write TPS: avg={avg(w_tps):.0f}  median={median(w_tps):.0f}",
             f"  Total TPS: avg={avg(t_tps):.0f}  median={median(t_tps):.0f}",
+            f"  Errors:    {total_err} ({err_pct:.2f}% of ops) — reads={r_err} writes={w_err}",
+            f"  Timeouts:  {total_to} ({to_pct:.2f}% of ops) — reads={r_to} writes={w_to}",
             *pct_lines,
             f"  Peak RSS: {self.rss_mb_macos_linux():.1f} MB",
         ]

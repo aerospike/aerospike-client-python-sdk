@@ -30,8 +30,8 @@ from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
-from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
-from aerospike_sdk.policy.policy_mapper import to_write_policy
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
+from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_write_policy
 
 _TTL_NEVER_EXPIRE = -1
 _TTL_DONT_UPDATE = -2
@@ -68,14 +68,28 @@ def make_background_write_policy(
     filter_expression: Optional[FilterExpression],
     ttl_seconds: Optional[int],
     record_exists_action: Optional[RecordExistsAction] = None,
+    *,
+    namespace_mode: Mode = Mode.AP,
+    durable_delete_command_default: Optional[bool] = None,
+    durable_delete_override: Optional[bool] = None,
 ) -> WritePolicy:
     """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``."""
     if behavior is not None:
-        wp = to_write_policy(
-            behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY))
+        settings = behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
+        wp = to_write_policy(settings)
+        wp.durable_delete = resolve_durable_delete(
+            settings.durable_delete,
+            durable_delete_command_default,
+            durable_delete_override,
+        )
     else:
         wp = WritePolicy()
+        wp.durable_delete = resolve_durable_delete(
+            None,
+            durable_delete_command_default,
+            durable_delete_override,
+        )
     if filter_expression is not None:
         wp.filter_expression = filter_expression
     if ttl_seconds is not None:

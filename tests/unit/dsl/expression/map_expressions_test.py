@@ -677,3 +677,15 @@ class TestMapExpressions:
         )
         result = parse_ael("$.mapBin1.a.get(type: INT, return: RANK) == 5")
         assert result == expected_rank
+
+        # UNORDERED_MAP — the unordered counterpart of ORDERED_MAP. Both are
+        # PAC v3 additions and must round-trip through the AEL pipeline.
+        expected_unordered = Exp.map_get_by_key(
+            MapReturnType.UNORDERED_MAP,
+            ExpType.STRING,
+            Exp.string_val("a"),
+            Exp.map_bin("mapBin1"),
+            [],
+        )
+        result = parse_ael("$.mapBin1.a.get(return: UNORDERED_MAP)")
+        assert result == expected_unordered

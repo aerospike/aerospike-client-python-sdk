@@ -90,6 +90,7 @@ class Settings:
     read_mode_sc: Optional[ReadModeSC] = None
 
     use_compression: Optional[bool] = None
+    compression_threshold: Optional[int] = None
 
     max_concurrent_nodes: Optional[int] = None
     record_queue_size: Optional[int] = None
@@ -113,6 +114,7 @@ class Settings:
             read_mode_ap=_pick(override.read_mode_ap, base.read_mode_ap),
             read_mode_sc=_pick(override.read_mode_sc, base.read_mode_sc),
             use_compression=_pick(override.use_compression, base.use_compression),
+            compression_threshold=_pick(override.compression_threshold, base.compression_threshold),
             max_concurrent_nodes=_pick(override.max_concurrent_nodes, base.max_concurrent_nodes),
             record_queue_size=_pick(override.record_queue_size, base.record_queue_size),
             allow_inline=_pick(override.allow_inline, base.allow_inline),

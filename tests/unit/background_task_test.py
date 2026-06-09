@@ -18,7 +18,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import Expiration, Key, MapOperation, MapPolicy, Operation
+from aerospike_async import Expiration, Filter, Key, MapOperation, MapPolicy, Operation
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder,
@@ -34,11 +34,14 @@ from aerospike_sdk.policy.behavior import Behavior
 
 
 def _session_mock() -> MagicMock:
+    from aerospike_sdk.policy.behavior_settings import Mode
+
     s = MagicMock()
     s.behavior = Behavior.DEFAULT
     fc = MagicMock()
     fc._client = MagicMock()
     s.client = fc
+    s._resolve_namespace_mode = AsyncMock(return_value=Mode.AP)
     return s
 
 
@@ -64,7 +67,7 @@ async def test_delete_auto_adds_delete_op():
     s.client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.DELETE).execute()
-    _wp, _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s.client._client.query_operate.call_args[0]
     assert len(ops) == 1
     assert ops[0] is not None
 
@@ -74,7 +77,7 @@ async def test_touch_auto_adds_touch_op():
     s.client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.TOUCH).execute()
-    _wp, _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s.client._client.query_operate.call_args[0]
     assert len(ops) == 1
 
 
@@ -91,6 +94,52 @@ def test_where_sets_filter_expression():
     b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
     b.where("$.age > 30")
     assert b._filter_expression is not None
+
+
+def test_index_filters_stores_filters():
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    b.index_filters(Filter.range("bgval", 9, 10))
+    assert len(b._index_filters) == 1
+
+
+def test_index_filters_empty_raises():
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    with pytest.raises(ValueError, match="at least one"):
+        b.index_filters()
+
+
+def test_where_mutex_with_index_filters():
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    b.index_filters(Filter.range("bgval", 9, 10))
+    with pytest.raises(ValueError, match="index_filters"):
+        b.where("$.bgval > 8")
+
+
+def test_index_filters_mutex_with_where():
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    b.where("$.bgval > 8")
+    with pytest.raises(ValueError, match="where"):
+        b.index_filters(Filter.range("bgval", 9, 10))
+
+
+async def test_delete_execute_passes_statement_index_filters():
+    s = _session_mock()
+    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    b.index_filters(Filter.range("n", 1, 3))
+    await b.execute()
+    stmt, ops = s.client._client.query_operate.call_args[0]
+    assert stmt.filters is not None
+    assert len(ops) == 1
 
 
 def test_expire_record_after_seconds_wired():

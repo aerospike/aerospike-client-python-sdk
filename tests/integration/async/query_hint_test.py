@@ -16,6 +16,7 @@
 """Integration tests for QueryHint with index_name, bin_name, and query_duration."""
 
 import pytest
+import pytest_asyncio
 from aerospike_async import Filter, QueryDuration
 
 from aerospike_sdk import (
@@ -29,8 +30,11 @@ SET_NAME = "query_hint_test"
 INDEX_NAME = "pfc_qhint_age_idx"
 
 
-@pytest.fixture
-async def client(aerospike_host, client_policy, enterprise, wait_for_index):
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def client(
+    aerospike_host, client_policy, enterprise,
+    wait_for_index, wait_for_set_visible,
+):
     """Setup client, data, and a secondary index for hint tests."""
     async with Client(
         seeds=aerospike_host,
@@ -52,6 +56,12 @@ async def client(aerospike_host, client_policy, enterprise, wait_for_index):
                 .put({"id": i, "age": 20 + i, "name": f"User{i}"})
                 .execute()
             )
+
+        # Wait for the 10 writes to be visible to a set scan before creating
+        # the SI — otherwise a still-populating index can be flagged "readable"
+        # before all records have indexed entries, causing range queries to
+        # return short and flaky-fail tests that assert exact counts.
+        await wait_for_set_visible(session, "test", SET_NAME, 10)
 
         try:
             await (

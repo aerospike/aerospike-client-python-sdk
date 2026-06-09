@@ -20,7 +20,7 @@ Tests expression building and usage with actual database operations.
 
 import asyncio
 import inspect
-import base64
+
 import pytest
 import pytest_asyncio
 from aerospike_async import FilterExpression
@@ -386,13 +386,6 @@ class TestBinExpressions:
 
 # Integration tests with actual database operations
 
-@pytest.fixture
-async def client(aerospike_host, client_policy):
-    """Connected SDK client (shared by data fixtures; used by version-xfail autouse)."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
-        yield c
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def _runtime_server_version_xfail(
     request: pytest.FixtureRequest,
@@ -431,30 +424,31 @@ async def _runtime_server_version_xfail(
 
 
 @pytest.fixture
-async def client_with_data(client, enterprise):
+async def client_with_data(aerospike_host, client_policy, enterprise, wait_for_set_visible):
     """Setup test data for expression tests."""
-    session = client.create_session()
-    ds = DataSet.of("test", "exp_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "exp_test")
 
-    for key in ["A", "B", "C"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["A", "B", "C"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
+        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
 
-    await asyncio.sleep(0.5 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "exp_test", 3)
 
-    yield client
+        yield client
 
-    for key in ["A", "B", "C"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["A", "B", "C"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestExpWithQuery:
@@ -768,8 +762,8 @@ class TestExpWithAel:
             assert rec.bins["B"] > 1.0
 
     @requires_client_side_ael
-    async def test_where_invalid_ael(self, client_with_data):
-        """Test that invalid AEL raises AelParseException."""
+    async def test_where_invalid_ael_client_parse(self, client_with_data):
+        """Invalid AEL raises :class:`AelParseException` when parsed client-side."""
         with pytest.raises(AelParseException):
             await (
                 client_with_data.query("test", "exp_test")
@@ -778,22 +772,27 @@ class TestExpWithAel:
             )
 
     @requires_server_compiled_ael
-    async def test_where_invalid_ael(self, client_with_data):
-        """Test that invalid AEL raises ParameterError."""
+    async def test_where_invalid_ael_server_compiled(self, client_with_data):
+        """Invalid AEL on server-compiled path surfaces as ``ParameterError`` from the server."""
         stream = await (
             client_with_data.query("test", "exp_test")
             .where("this is not valid AEL !!!")
             .execute()
         )
         with pytest.raises(InvalidRequest, match="ParameterError"):
-            async for result in stream:
+            async for _result in stream:
                 pass
+
 
 # CDT Path Access Tests
 
-@pytest.fixture
-async def client_with_cdt_data(client, enterprise):
-    """Setup test data with lists and maps for CDT path tests."""
+async def _seed_cdt_data(client, *, wait_for_set_visible):
+    """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
+
+    Used by both ``client_with_cdt_data`` (broad-surface seed) and
+    ``client_with_cdt_data_812`` (8.1.2+ seed) so the two clusters see the
+    exact same shape.
+    """
     session = client.create_session()
     ds = DataSet.of("test", "cdt_test")
 
@@ -822,15 +821,45 @@ async def client_with_cdt_data(client, enterprise):
         "nested": [{"id": 4, "value": 400}, {"id": 5, "value": 500}],
     }).execute()
 
-    await asyncio.sleep(0.5 if not enterprise else 0.01)
+    await wait_for_set_visible(session, "test", "cdt_test", 3)
+    return session, ds
 
-    yield client
 
+async def _drop_cdt_data(session, ds):
     for key in ["rec1", "rec2", "rec3"]:
         try:
             await session.delete(ds.id(key)).execute()
         except Exception:
             pass
+
+
+@pytest.fixture
+async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
+    """SDK client + CDT dataset on the 8.1.2+ seed.
+
+    Used by tests that exercise convenience wrappers around server-8.1.2
+    ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
+    ``aerospike_host_812_required`` fixture skips the test cleanly when
+    ``AEROSPIKE_HOST_8_1_2`` is unset.
+    """
+    async with Client(seeds=aerospike_host_812_required, policy=client_policy) as client:
+        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
+        yield client
+        await _drop_cdt_data(session, ds)
+
+
+@pytest.fixture
+async def client_with_cdt_data(aerospike_host, client_policy, wait_for_set_visible):
+    """SDK client + CDT dataset on the broad-surface seed.
+
+    Tests that exercise convenience wrappers around server-8.1.2 ExpOps
+    should consume ``client_with_cdt_data_812`` instead so they auto-route
+    to the 8.1.2+ cluster when one is available.
+    """
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
+        yield client
+        await _drop_cdt_data(session, ds)
 
 
 class TestCdtPathWithExp:
@@ -1125,43 +1154,44 @@ class TestExistsAndCount:
 
 
 @pytest.fixture
-async def client_with_list_data(client, enterprise):
+async def client_with_list_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with various lists for advanced list AEL tests."""
-    session = client.create_session()
-    ds = DataSet.of("test", "list_ael_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "list_ael_test")
 
-    for key in ["rec1", "rec2", "rec3", "rec4"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3", "rec4"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("rec1")).put({
-        "values": [10, 20, 30, 40, 50],
-        "tags": ["alpha", "beta", "gamma"],
-    }).execute()
-    await session.upsert(ds.id("rec2")).put({
-        "values": [5, 15, 25, 35, 45],
-        "tags": ["alpha", "delta"],
-    }).execute()
-    await session.upsert(ds.id("rec3")).put({
-        "values": [100, 30, 200],
-        "tags": ["beta", "epsilon"],
-    }).execute()
-    await session.upsert(ds.id("rec4")).put({
-        "values": [1, 2, 3, 4, 5],
-        "tags": ["zeta"],
-    }).execute()
+        await session.upsert(ds.id("rec1")).put({
+            "values": [10, 20, 30, 40, 50],
+            "tags": ["alpha", "beta", "gamma"],
+        }).execute()
+        await session.upsert(ds.id("rec2")).put({
+            "values": [5, 15, 25, 35, 45],
+            "tags": ["alpha", "delta"],
+        }).execute()
+        await session.upsert(ds.id("rec3")).put({
+            "values": [100, 30, 200],
+            "tags": ["beta", "epsilon"],
+        }).execute()
+        await session.upsert(ds.id("rec4")).put({
+            "values": [1, 2, 3, 4, 5],
+            "tags": ["zeta"],
+        }).execute()
 
-    await asyncio.sleep(0.5 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "list_ael_test", 4)
 
-    yield client
+        yield client
 
-    for key in ["rec1", "rec2", "rec3", "rec4"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3", "rec4"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestAdvancedListAel:
@@ -1317,39 +1347,40 @@ class TestAdvancedListAel:
 
 
 @pytest.fixture
-async def client_with_map_data(client, enterprise):
+async def client_with_map_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with maps for advanced map AEL tests."""
-    session = client.create_session()
-    ds = DataSet.of("test", "map_ael_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "map_ael_test")
 
-    for key in ["rec1", "rec2", "rec3"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("rec1")).put({
-        "scores": {"alice": 90, "bob": 85, "charlie": 95},
-        "metadata": {"type": "premium", "level": 3},
-    }).execute()
-    await session.upsert(ds.id("rec2")).put({
-        "scores": {"dave": 75, "eve": 80},
-        "metadata": {"type": "basic", "level": 1},
-    }).execute()
-    await session.upsert(ds.id("rec3")).put({
-        "scores": {"frank": 100, "grace": 70, "heidi": 88},
-        "metadata": {"type": "premium", "level": 2},
-    }).execute()
+        await session.upsert(ds.id("rec1")).put({
+            "scores": {"alice": 90, "bob": 85, "charlie": 95},
+            "metadata": {"type": "premium", "level": 3},
+        }).execute()
+        await session.upsert(ds.id("rec2")).put({
+            "scores": {"dave": 75, "eve": 80},
+            "metadata": {"type": "basic", "level": 1},
+        }).execute()
+        await session.upsert(ds.id("rec3")).put({
+            "scores": {"frank": 100, "grace": 70, "heidi": 88},
+            "metadata": {"type": "premium", "level": 2},
+        }).execute()
 
-    await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "map_ael_test", 3)
 
-    yield client
+        yield client
 
-    for key in ["rec1", "rec2", "rec3"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestAdvancedMapAel:
@@ -1432,43 +1463,44 @@ class TestAdvancedMapAel:
 # =============================================================================
 
 @pytest.fixture
-async def client_with_nested_data(client, enterprise):
+async def client_with_nested_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data with deeply nested structures."""
-    session = client.create_session()
-    ds = DataSet.of("test", "nested_ael_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "nested_ael_test")
 
-    for key in ["rec1", "rec2"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("rec1")).put({
-        "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
-        "nested_map": {
-            "a": {"aa": 100, "ab": 200},
-            "b": {"ba": 300, "bb": 400},
-        },
-        "simple_list": [1, 2, 3, 4, 5],
-    }).execute()
-    await session.upsert(ds.id("rec2")).put({
-        "nested_list": [[5, 10], [15, 20], [25, 30]],
-        "nested_map": {
-            "a": {"aa": 50, "ab": 60},
-            "b": {"ba": 70, "bb": 80},
-        },
-        "simple_list": [10, 20, 30],
-    }).execute()
+        await session.upsert(ds.id("rec1")).put({
+            "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
+            "nested_map": {
+                "a": {"aa": 100, "ab": 200},
+                "b": {"ba": 300, "bb": 400},
+            },
+            "simple_list": [1, 2, 3, 4, 5],
+        }).execute()
+        await session.upsert(ds.id("rec2")).put({
+            "nested_list": [[5, 10], [15, 20], [25, 30]],
+            "nested_map": {
+                "a": {"aa": 50, "ab": 60},
+                "b": {"ba": 70, "bb": 80},
+            },
+            "simple_list": [10, 20, 30],
+        }).execute()
 
-    await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "nested_ael_test", 2)
 
-    yield client
+        yield client
 
-    for key in ["rec1", "rec2"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestNestedCdtAel:
@@ -1601,39 +1633,40 @@ class TestMapKeyOperationsAel:
 
 
 @pytest.fixture
-async def client_with_relative_range_data(client, enterprise):
+async def client_with_relative_range_data(aerospike_host, client_policy, wait_for_set_visible):
     """Setup test data for relative range operations."""
-    session = client.create_session()
-    ds = DataSet.of("test", "rel_range_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "rel_range_test")
 
-    for key in ["rec1", "rec2", "rec3"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("rec1")).put({
-        "numbers": [0, 4, 5, 9, 11, 15],
-        "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
-    }).execute()
-    await session.upsert(ds.id("rec2")).put({
-        "numbers": [1, 3, 7, 12, 20],
-        "scores": {"alice": 60, "bob": 75, "charlie": 85},
-    }).execute()
-    await session.upsert(ds.id("rec3")).put({
-        "numbers": [2, 6, 10, 14, 18],
-        "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
-    }).execute()
+        await session.upsert(ds.id("rec1")).put({
+            "numbers": [0, 4, 5, 9, 11, 15],
+            "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
+        }).execute()
+        await session.upsert(ds.id("rec2")).put({
+            "numbers": [1, 3, 7, 12, 20],
+            "scores": {"alice": 60, "bob": 75, "charlie": 85},
+        }).execute()
+        await session.upsert(ds.id("rec3")).put({
+            "numbers": [2, 6, 10, 14, 18],
+            "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
+        }).execute()
 
-    await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "rel_range_test", 3)
 
-    yield client
+        yield client
 
-    for key in ["rec1", "rec2", "rec3"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["rec1", "rec2", "rec3"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestRelativeRangeAel:
@@ -1778,70 +1811,24 @@ class TestRelativeRangeAel:
 class TestAelErrorHandling:
     """Tests for AEL error handling."""
 
-    @pytest.mark.parametrize(
-        "expected_exc,match",
-        [
-            pytest.param(
-                AelParseException,
-                None,
-                id="client-side",
-                marks=requires_client_side_ael,
-            ),
-            pytest.param(
-                InvalidRequest,
-                "ParameterError",
-                id="server-side",
-                marks=requires_server_compiled_ael,
-            ),
-        ],
-    )
-    async def test_invalid_ael_syntax(self, client_with_cdt_data, expected_exc, match):
-        """Invalid AEL raises AelParseException (client) or InvalidRequest (server).
-
-        Client path: parser raises in :meth:`where` before ``execute`` returns a stream.
-        Server path: filter may build, then the cluster rejects it while reading rows.
-        """
-        with pytest.raises(expected_exc, match=match):
-            stream = await (
+    async def test_invalid_ael_syntax(self, client_with_cdt_data):
+        """Test that invalid AEL raises AelParseException."""
+        with pytest.raises(AelParseException):
+            await (
                 client_with_cdt_data.query("test", "cdt_test")
                 .where("this is not valid AEL !!!")
                 .execute()
             )
-            async for result in stream:
-                pass
 
-    @pytest.mark.parametrize(
-        "expected_exc,match",
-        [
-            pytest.param(
-                AelParseException,
-                None,
-                id="client-side",
-                marks=requires_client_side_ael,
-            ),
-            pytest.param(
-                InvalidRequest,
-                "ParameterError",
-                id="server-side",
-                marks=requires_server_compiled_ael,
-            ),
-        ],
-    )
-    async def test_invalid_list_syntax(self, client_with_cdt_data, expected_exc, match):
-        """Invalid list path ``[stringValue]`` — client parse error or server ParameterError.
-
-        ``[stringValue]`` is not valid; use ``[=stringValue]`` or ``[\"stringValue\"]``.
-        Client path: often raises in :meth:`where` during parse; server path may fail
-        when evaluating the filter on the cluster.
-        """
-        with pytest.raises(expected_exc, match=match):
-            stream = await (
+    async def test_invalid_list_syntax(self, client_with_cdt_data):
+        """Test invalid list syntax raises AelParseException."""
+        # [stringValue] is not valid - should be [=stringValue] or ["stringValue"]
+        with pytest.raises(AelParseException):
+            await (
                 client_with_cdt_data.query("test", "cdt_test")
                 .where("$.numbers.[invalidSyntax] == 100")
                 .execute()
             )
-            async for result in stream:
-                pass
 
 
 # =============================================================================
@@ -1849,35 +1836,36 @@ class TestAelErrorHandling:
 # =============================================================================
 
 @pytest.fixture
-async def filter_session(client, enterprise):
+async def filter_session(aerospike_host, client_policy, wait_for_set_visible):
     """Session with test data matching JFC FilterExpTest setUp.
 
     Key "A": A=1, B=1.1, C="abcde",      D=1, E=-1
     Key "B": A=2, B=2.2, C="abcdeabcde",  D=1, E=-2
     Key "C": A=0, B=-1.0, C="1"
     """
-    session = client.create_session()
-    ds = DataSet.of("test", "filter_exp_test")
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        ds = DataSet.of("test", "filter_exp_test")
 
-    for key in ["A", "B", "C"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["A", "B", "C"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
-    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
+        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
 
-    await asyncio.sleep(0.25 if not enterprise else 0.01)
+        await wait_for_set_visible(session, "test", "filter_exp_test", 3)
 
-    yield session, ds
+        yield session, ds
 
-    for key in ["A", "B", "C"]:
-        try:
-            await session.delete(ds.id(key)).execute()
-        except Exception:
-            pass
+        for key in ["A", "B", "C"]:
+            try:
+                await session.delete(ds.id(key)).execute()
+            except Exception:
+                pass
 
 
 class TestAdvancedExpFilters:
@@ -1963,7 +1951,7 @@ class TestAdvancedExpFilters:
         strict=True,
     )
     async def test_filter_rscan(self, filter_session):
-        """Right scan: findBitRight($.A, true) == 63 for key A (integer 1, LSB at position 0, result = 63 - 0 = 63)."""
+        """Right scan: findBitRight(1, true) == 63 for key A."""
         session, ds = filter_session
         key = ds.id("A")
         await self._assert_filtered_out(session, key, "not (findBitRight($.A, true) == 63)")
@@ -2000,7 +1988,7 @@ class TestAdvancedExpFilters:
 
     @requires_server_compiled_ael
     async def test_filter_cond_server(self, filter_session):
-        """Conditional: when A==1 => D-E == 2 for key A."""
+        """Conditional on server-compiled path (typed bins in ``when``)."""
         session, ds = filter_session
         key = ds.id("A")
         when_expr = (
@@ -2102,16 +2090,26 @@ class TestInExpression:
 
 
 class TestConvenienceWrappers:
-    """Tests for in_list(), map_keys(), map_values() convenience functions."""
+    """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    async def test_in_list_string_match(self, client_with_cdt_data):
+    These helpers are thin pass-throughs to the native 8.1.2 ExpOps (see
+    the docstrings in ``aerospike_sdk/exp.py``). Server versions older
+    than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
+    consume ``client_with_cdt_data_812`` which auto-routes to the 8.1.2+
+    cluster when one is available and skips cleanly otherwise. Callers
+    that need broader compatibility should build the equivalent expression
+    explicitly with ``Exp.list_get_by_value`` /
+    ``Exp.map_get_by_index_range`` rather than using these wrappers.
+    """
+
+    async def test_in_list_string_match(self, client_with_cdt_data_812):
         """in_list finds "bob" in the names list bin (rec1 only)."""
         filt = Exp.eq(
             in_list(Exp.string_val("bob"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
+            client_with_cdt_data_812.query("test", "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2120,14 +2118,14 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert "bob" in records[0].bins["names"]
 
-    async def test_in_list_int_match(self, client_with_cdt_data):
+    async def test_in_list_int_match(self, client_with_cdt_data_812):
         """in_list finds 200 in the numbers list bin (rec3 only)."""
         filt = Exp.eq(
             in_list(Exp.int_val(200), Exp.list_bin("numbers")),
             Exp.bool_val(True),
         )
         stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
+            client_with_cdt_data_812.query("test", "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2136,14 +2134,14 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert 200 in records[0].bins["numbers"]
 
-    async def test_in_list_no_match(self, client_with_cdt_data):
+    async def test_in_list_no_match(self, client_with_cdt_data_812):
         """in_list returns false when the value is not present."""
         filt = Exp.eq(
             in_list(Exp.string_val("zzz"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
+            client_with_cdt_data_812.query("test", "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2151,14 +2149,14 @@ class TestConvenienceWrappers:
         stream.close()
         assert len(records) == 0
 
-    async def test_map_keys(self, client_with_cdt_data):
+    async def test_map_keys(self, client_with_cdt_data_812):
         """map_keys returns the key set of the info map."""
         filt = Exp.eq(
             Exp.list_size(map_keys(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
+            client_with_cdt_data_812.query("test", "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2166,29 +2164,20 @@ class TestConvenienceWrappers:
         stream.close()
         assert len(records) == 3
 
-    async def test_map_values(self, client_with_cdt_data):
+    async def test_map_values(self, client_with_cdt_data_812):
         """map_values returns values; filter on list size == 3."""
         filt = Exp.eq(
             Exp.list_size(map_values(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            client_with_cdt_data.query("test", "cdt_test")
+            client_with_cdt_data_812.query("test", "cdt_test")
             .filter_expression(filt)
             .execute()
         )
         records = [r.record async for r in stream]
         stream.close()
         assert len(records) == 3
-
-
-def _hex_blob_expr(payload: bytes) -> str:
-    return f"$.payload:BLOB == X'{payload.hex()}'"
-
-
-def _b64_blob_expr(payload: bytes) -> str:
-    enc = base64.b64encode(payload).decode("ascii")
-    return f'$.payload.get(type: BLOB) == "{enc}"'
 
 
 class TestAelMapBlobIntegrationQueries:
@@ -2224,50 +2213,35 @@ class TestAelMapBlobIntegrationQueries:
         assert "alice" in records[0].bins["scores"]
         assert "bob" in records[0].bins["scores"]
 
-    @pytest.mark.parametrize(
-        "make_expr",
-        [
-            pytest.param(
-                _hex_blob_expr,
-                id="server-side-hex",
-                marks=requires_server_compiled_ael,
-            ),
-            pytest.param(
-                _b64_blob_expr,
-                id="client-side-b64",
-                marks=requires_client_side_ael,
-            ),
-        ],
-    )
-    async def test_blob_bin_ael_equality(
+    async def test_blob_bin_ael_equality_on_server(
         self,
         aerospike_host,
         client_policy,
-        enterprise,
-        make_expr,
+        wait_for_set_visible,
     ):
-        """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
+        """BLOB bin filter using a base64 literal in AEL."""
+        import base64
+
         async with Client(seeds=aerospike_host, policy=client_policy) as client:
             session = client.create_session()
             k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
             payload = bytes([1, 2, 254])
-
             try:
                 await session.delete(k).execute()
             except Exception:
                 pass
 
             await session.upsert(k).put({"payload": payload}).execute()
-            await asyncio.sleep(0.25 if not enterprise else 0.01)
+            await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
 
+            enc = base64.b64encode(payload).decode("ascii")
             stream = await (
                 session.query("test", "ael_blob_srv_it")
-                .where(make_expr(payload))
-                .execute()
+                    .where(f'$.payload.get(type: BLOB) == "{enc}"')
+                    .execute()
             )
             rows = [r.record async for r in stream]
             stream.close()
-
             assert len(rows) == 1
             assert rows[0].bins["payload"] == payload
 

@@ -54,6 +54,76 @@ await (
 )
 ```
 
+## GeoJSON Bins
+
+Use `set_to_geo_json(...)` to write a bin as a GeoJSON value. The bin's
+server-side particle type is GEOJSON, not STRING, which makes it eligible for
+GEO2DSPHERE indexing and `geoCompare(...)` queries.
+
+```python
+places = DataSet.of("test", "places")
+
+await (
+    session.upsert(places.id("space_needle"))
+    .bin("loc").set_to_geo_json('{"type":"Point","coordinates":[-122.349,47.620]}')
+    .execute()
+)
+```
+
+AeroCircle and Polygon values use the same method — only the GeoJSON string
+differs.
+
+## HyperLogLog Bins
+
+[`HllConfig`](../api/hll-config.md) describes a sketch's precision
+(`index_bit_count` + optional `min_hash_bit_count`). Initialize a new sketch
+with `hll_init(...)`, then accumulate elements with `hll_add(...)`:
+
+```python
+from aerospike_sdk import HllConfig
+
+visitors = DataSet.of("test", "visitors")
+
+await (
+    session.upsert(visitors.id("day_1"))
+    .bin("h").hll_init(HllConfig.of(14))
+    .bin("h").hll_add(["user-1", "user-2", "user-3"])
+    .execute()
+)
+```
+
+Each write method (`hll_init`, `hll_add`, `hll_set_union`) accepts four
+keyword-only flags:
+
+| Flag | Effect |
+|---|---|
+| `create_only` | Fail with `BIN_EXISTS_ERROR` if the bin already exists. Mutually exclusive with `update_only`. |
+| `update_only` | Fail with `BIN_NOT_FOUND` if the bin does not already exist. Mutually exclusive with `create_only`. |
+| `no_fail` | Suppress the mode-constraint error from `create_only` / `update_only` and silently no-op instead of raising. Has no effect on other server-side errors. |
+| `allow_fold` | (`hll_set_union` only) Allow union sources at differing precisions — the server folds higher-precision inputs down to the target's `index_bit_count`. Rejected with `PARAMETER_ERROR` on `hll_init`. |
+
+Passing both `create_only=True` and `update_only=True` raises `ValueError`
+immediately at the call site (before the wire request).
+
+```python
+# Create the sketch only if it doesn't exist; don't error if it does.
+await (
+    session.upsert(visitors.id("day_2"))
+    .bin("h").hll_init(HllConfig.of(14), create_only=True, no_fail=True)
+    .execute()
+)
+```
+
+To inspect a sketch's bit widths, call `hll_describe()` and decode the
+two-element list result via `RecordResult.get_hll_config(bin_name)`:
+
+```python
+rs = await session.query(visitors.id("day_1")).bin("h").hll_describe().execute()
+result = await rs.first_or_raise()
+config = result.get_hll_config("h")
+# config == HllConfig.of(14)
+```
+
 ## Insert (Fail if Exists)
 
 ```python
@@ -84,9 +154,38 @@ await session.delete(users.id(1)).execute()
 
 # Multiple keys
 await session.delete(*users.ids(1, 2, 3)).execute()
+```
 
-# Durable delete
-await session.delete(users.id(5)).durably_delete().execute()
+### Durable delete
+
+Aerospike supports two delete modes:
+
+* a normal delete that removes the record (and its lineage) outright, and
+* a *durable* delete that leaves a tombstone so a strongly-consistent (SC)
+  cluster can resolve the deletion across partitions.
+
+The SDK exposes both *per-operation overrides* and *builder defaults*:
+
+| Method | Scope | Effect |
+|---|---|---|
+| `with_durable_delete()` | one operation | Force durable delete for this delete only |
+| `without_durable_delete()` | one operation | Force a non-durable delete for this delete only |
+| `default_with_durable_delete()` | builder | Prefer durable when resolving Behavior defaults — typical for SC namespaces |
+| `default_without_durable_delete()` | builder | Prefer non-durable when resolving Behavior defaults |
+
+The override (`with_*` / `without_*`) wins over the default; the default
+folds into [`Behavior`](../api/behavior.md) settings resolution.
+
+```python
+# Force durable on this single delete (per-op override)
+await session.delete(users.id(5)).with_durable_delete().execute()
+
+# Use durable as the default for every delete in this segment (SC-friendly)
+await (
+    session.delete(*users.ids(1, 2, 3))
+    .default_with_durable_delete()
+    .execute()
+)
 ```
 
 ## Conditional Writes

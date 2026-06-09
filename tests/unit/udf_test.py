@@ -62,7 +62,8 @@ async def test_passing_accumulates_args():
     await b.execute()
     qb._client.execute_udf.assert_awaited()
     call = qb._client.execute_udf.await_args
-    assert call[0][4] == ["a", 1]
+    # call.args is (key, server_path, function_name, args)
+    assert call[0][3] == ["a", 1]
 
 
 async def test_single_key_routing():
@@ -110,5 +111,5 @@ async def test_where_sets_filter_on_builder():
         .where("$.x == 1")
         .execute()
     )
-    wp = qb._client.execute_udf.await_args[0][0]
+    wp = qb._client.execute_udf.await_args.kwargs["policy"]
     assert wp.filter_expression is not None

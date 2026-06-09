@@ -2,13 +2,17 @@
 
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "Aerospike Python SDK"
 copyright = "2025-2026, Aerospike, Inc."
 author = "Aerospike, Inc."
-release = "0.1.0"
+# Single source of truth: the top-level VERSION file (also consumed by
+# `bin/get-version` and `[tool.setuptools.dynamic]` in pyproject.toml).
+release = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+version = release
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -59,9 +63,14 @@ intersphinx_mapping = {
 
 # -- Theme ---------------------------------------------------------------
 html_theme = "furo"
+# When RTD is building a tag, point furo's "Edit on GitHub" links at the tag
+# itself (READTHEDOCS_GIT_IDENTIFIER is the ref RTD checked out). For local
+# dev builds and branch-driven RTD builds, fall back to the active integration
+# branch.
+_source_branch = os.environ.get("READTHEDOCS_GIT_IDENTIFIER", "dev")
 html_theme_options = {
     "source_repository": "https://github.com/aerospike/aerospike-client-python-sdk",
-    "source_branch": "develop",
+    "source_branch": _source_branch,
     "source_directory": "docs/",
 }
 html_title = "Aerospike Python SDK"

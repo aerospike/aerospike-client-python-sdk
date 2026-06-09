@@ -206,3 +206,48 @@ class TestBatchRecordsToResults:
         results = batch_records_to_results(brs)
         assert results[0].key is brs[0].key
         assert results[1].key is brs[1].key
+
+
+# ---------------------------------------------------------------------------
+# get_hll_config
+# ---------------------------------------------------------------------------
+
+class TestGetHllConfig:
+
+    def test_returns_config_from_two_element_list(self):
+        from aerospike_sdk import HllConfig
+        rr = RecordResult(
+            key=_key(), record=_record(h=[14, -1]), result_code=ResultCode.OK,
+        )
+        assert rr.get_hll_config("h") == HllConfig.of(14)
+
+    def test_returns_config_with_minhash(self):
+        from aerospike_sdk import HllConfig
+        rr = RecordResult(
+            key=_key(), record=_record(h=[12, 20]), result_code=ResultCode.OK,
+        )
+        assert rr.get_hll_config("h") == HllConfig.of(12, 20)
+
+    def test_returns_none_when_record_is_none(self):
+        rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK)
+        assert rr.get_hll_config("h") is None
+
+    def test_returns_none_when_bin_absent(self):
+        rr = RecordResult(
+            key=_key(), record=_record(other=1), result_code=ResultCode.OK,
+        )
+        assert rr.get_hll_config("h") is None
+
+    def test_raises_when_bin_is_not_a_list(self):
+        rr = RecordResult(
+            key=_key(), record=_record(h="not a list"), result_code=ResultCode.OK,
+        )
+        with pytest.raises(TypeError, match="not a 2-element list"):
+            rr.get_hll_config("h")
+
+    def test_raises_when_list_has_wrong_length(self):
+        rr = RecordResult(
+            key=_key(), record=_record(h=[1, 2, 3]), result_code=ResultCode.OK,
+        )
+        with pytest.raises(TypeError, match="not a 2-element list"):
+            rr.get_hll_config("h")

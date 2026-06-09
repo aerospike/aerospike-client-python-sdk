@@ -67,7 +67,9 @@ def test_latency_labels_shift_3() -> None:
 
 
 def test_parse_latency_arg() -> None:
-    assert parse_latency_arg("7,1") == (7, 1)
+    assert parse_latency_arg("7,1") == (7, 1, "columns")
+    assert parse_latency_arg("ycsb") == (7, 1, "ycsb")
+    assert parse_latency_arg("YCSB") == (7, 1, "ycsb")
     with pytest.raises(argparse.ArgumentTypeError):
         parse_latency_arg("1")
 

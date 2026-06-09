@@ -13,10 +13,16 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Unit tests for index_monitor: info parsing and IndexesMonitor lifecycle."""
+"""Unit tests for index_monitor: info parsing and IndexesMonitor lifecycle.
 
-import asyncio
-from unittest.mock import AsyncMock
+The monitor now drives a daemon thread that polls PAC's blocking info APIs
+(`info_on_all_nodes_blocking`, `info_blocking`) — no asyncio. Tests use
+`MagicMock` to stand in for the PAC client and `time.sleep` to let the
+background thread make progress between assertions.
+"""
+
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -111,8 +117,8 @@ class TestIndexesMonitorLifecycle:
 
     @pytest.fixture
     def mock_client(self):
-        client = AsyncMock()
-        client.info_on_all_nodes.return_value = {
+        client = MagicMock()
+        client.info_on_all_nodes_blocking.return_value = {
             "node1": {
                 "sindex-list": (
                     "ns=test:indexname=age_idx:set=users:bin=age:type=numeric:state=RW;"
@@ -121,15 +127,15 @@ class TestIndexesMonitorLifecycle:
                 )
             }
         }
-        client.info.return_value = {
+        client.info_blocking.return_value = {
             "sindex-stat": "entries_per_bval=2.5"
         }
         return client
 
-    @pytest.mark.asyncio
-    async def test_start_populates_cache(self, mock_client):
+    def test_start_populates_cache(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
@@ -138,12 +144,53 @@ class TestIndexesMonitorLifecycle:
             bins = {idx.bin for idx in ctx.indexes}
             assert bins == {"age", "name"}
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_different_namespaces(self, mock_client):
+    def test_index_set_name_plumbed_from_sindex_list(self, mock_client):
+        """``set`` from sindex-list is wired into ``Index.set_name`` so query-set
+        filtering can exclude indexes defined on a different set."""
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            sets = {idx.bin: idx.set_name for idx in ctx.indexes}
+            assert sets == {"age": "users", "name": "users"}
+
+            prod_ctx = monitor.get_index_context("prod")
+            assert prod_ctx is not None
+            assert prod_ctx.indexes[0].set_name == "orders"
+        finally:
+            monitor.stop()
+
+    def test_blank_set_normalizes_to_none(self):
+        """An sindex-list entry with an empty/missing ``set`` produces a
+        cross-set Index (set_name=None)."""
+        client = MagicMock()
+        client.info_on_all_nodes_blocking.return_value = {
+            "node1": {
+                "sindex-list": (
+                    "ns=test:indexname=cross_idx:set=:bin=val:type=numeric:state=RW"
+                )
+            }
+        }
+        client.info_blocking.return_value = {"sindex-stat": "entries_per_bval=1.0"}
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        monitor.start(client)
+        monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            assert len(ctx.indexes) == 1
+            assert ctx.indexes[0].set_name is None
+        finally:
+            monitor.stop()
+
+    def test_different_namespaces(self, mock_client):
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
             test_ctx = monitor.get_index_context("test")
             prod_ctx = monitor.get_index_context("prod")
@@ -153,38 +200,39 @@ class TestIndexesMonitorLifecycle:
             assert len(prod_ctx.indexes) == 1
             assert prod_ctx.indexes[0].bin == "total"
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_nonexistent_namespace_returns_none(self, mock_client):
+    def test_nonexistent_namespace_returns_none(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
             assert monitor.get_index_context("nonexistent") is None
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_stop_cancels_task(self, mock_client):
+    def test_stop_joins_thread(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
-        assert monitor._task is not None
-        await monitor.stop()
-        assert monitor._task is None
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
+        assert monitor._thread is not None
+        assert monitor._thread.is_alive()
+        monitor.stop()
+        assert monitor._thread is None
 
-    @pytest.mark.asyncio
-    async def test_start_is_idempotent(self, mock_client):
+    def test_start_is_idempotent(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
-        task1 = monitor._task
-        await monitor.start(mock_client)
-        assert monitor._task is task1
-        await monitor.stop()
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
+        thread1 = monitor._thread
+        monitor.start(mock_client)
+        assert monitor._thread is thread1
+        monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_index_type_mapping(self, mock_client):
+    def test_index_type_mapping(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
@@ -192,37 +240,62 @@ class TestIndexesMonitorLifecycle:
             assert type_map["age"] == IndexTypeEnum.NUMERIC
             assert type_map["name"] == IndexTypeEnum.STRING
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_bin_values_ratio_populated(self, mock_client):
+    def test_server_integer_type_maps_to_numeric(self):
+        """Server 8.1.2+ may emit ``type=integer``; older servers emit
+        ``type=numeric``. Both must collapse to ``IndexTypeEnum.NUMERIC``
+        so filter selection is wire-version-agnostic."""
+        client = MagicMock()
+        client.info_on_all_nodes_blocking.return_value = {
+            "node1": {
+                "sindex-list": (
+                    "ns=test:indexname=age_idx:set=users:bin=age:type=integer:state=RW;"
+                    "ns=test:indexname=score_idx:set=users:bin=score:type=numeric:state=RW"
+                )
+            }
+        }
+        client.info_blocking.return_value = {"sindex-stat": "entries_per_bval=1.0"}
         monitor = IndexesMonitor(refresh_interval=60.0)
-        await monitor.start(mock_client)
+        monitor.start(client)
+        monitor.wait_until_ready()
+        try:
+            ctx = monitor.get_index_context("test")
+            assert ctx is not None
+            type_map = {idx.bin: idx.index_type for idx in ctx.indexes}
+            assert type_map["age"] == IndexTypeEnum.NUMERIC
+            assert type_map["score"] == IndexTypeEnum.NUMERIC
+        finally:
+            monitor.stop()
+
+    def test_bin_values_ratio_populated(self, mock_client):
+        monitor = IndexesMonitor(refresh_interval=60.0)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
             ctx = monitor.get_index_context("test")
             assert ctx is not None
             for idx in ctx.indexes:
                 assert idx.bin_values_ratio == 2.5
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_cache_refreshes_on_interval(self, mock_client):
+    def test_cache_refreshes_on_interval(self, mock_client):
         monitor = IndexesMonitor(refresh_interval=0.1)
-        await monitor.start(mock_client)
+        monitor.start(mock_client)
+        monitor.wait_until_ready()
         try:
-            initial_count = mock_client.info_on_all_nodes.call_count
-            await asyncio.sleep(0.35)
-            assert mock_client.info_on_all_nodes.call_count > initial_count
+            initial_count = mock_client.info_on_all_nodes_blocking.call_count
+            time.sleep(0.35)
+            assert mock_client.info_on_all_nodes_blocking.call_count > initial_count
         finally:
-            await monitor.stop()
+            monitor.stop()
 
-    @pytest.mark.asyncio
-    async def test_survives_fetch_error(self):
-        client = AsyncMock()
+    def test_survives_fetch_error(self):
+        client = MagicMock()
         call_count = 0
 
-        async def flaky_info(*args, **kwargs):
+        def flaky_info(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -236,14 +309,15 @@ class TestIndexesMonitorLifecycle:
                 }
             }
 
-        client.info_on_all_nodes.side_effect = flaky_info
-        client.info.return_value = {"sindex-stat": "entries_per_bval=1.0"}
+        client.info_on_all_nodes_blocking.side_effect = flaky_info
+        client.info_blocking.return_value = {"sindex-stat": "entries_per_bval=1.0"}
 
         monitor = IndexesMonitor(refresh_interval=0.1)
-        await monitor.start(client)
+        monitor.start(client)
+        monitor.wait_until_ready()
         try:
-            await asyncio.sleep(0.35)
+            time.sleep(0.35)
             ctx = monitor.get_index_context("test")
             assert ctx is not None
         finally:
-            await monitor.stop()
+            monitor.stop()

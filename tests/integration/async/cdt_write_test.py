@@ -16,6 +16,7 @@
 """Integration tests for CDT write operations: list_add, append, pop, trim, remove, exists."""
 
 import pytest
+import pytest_asyncio
 from aerospike_async import ListOrderType, ListSortFlags, MapOrder
 from aerospike_async.exceptions import ResultCode
 
@@ -76,7 +77,7 @@ def _assert_list_get_relative_batch(raw_bin):
         assert [int(x) for x in got] == exp
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy):
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
         session = c.create_session()

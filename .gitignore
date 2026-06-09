@@ -38,6 +38,15 @@ ENV/
 # Cursor (editor-local rules, plans, and per-developer state)
 .cursor/
 
+# Claude Code (editor-local config and worktrees)
+.claude/
+
+# Local notes and one-off tooling (perf inventories, bench harness)
+# Everything in scripts/ is ignored by default; CI tooling under
+# scripts/ci/ is the explicit exception.
+scripts/*
+!scripts/ci/
+
 # Docs
 docs/_build/
 

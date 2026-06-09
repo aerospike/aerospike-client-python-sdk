@@ -1,7 +1,7 @@
 # Runtime dependencies for aerospike-sdk-python
 #
-# PAC is declared in pyproject.toml (git URL). For a local PAC tree, see README
-# "Local PAC checkout" or requirements-local.txt.
+# PAC is declared in pyproject.toml (PyPI version pin: aerospike-async==X.Y.Za...).
+# For a local PAC tree, see README "Local PAC checkout" or requirements-local.txt.
 
 # ANTLR runtime for string-based AEL parsing
 antlr4-python3-runtime>=4.13.0

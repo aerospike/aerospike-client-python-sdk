@@ -13,104 +13,157 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""SyncInfoCommands - Synchronous wrapper for InfoCommands."""
+"""SyncInfoCommands — synchronous info-command helpers using PAC ``_blocking``.
+
+Never touches asyncio. Each call routes through PAC's ``info_blocking`` /
+``info_on_all_nodes_blocking`` and parses the responses the same way the async
+:class:`~aerospike_sdk.aio.info.InfoCommands` does.
+"""
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+import logging
+from typing import Any, Dict, List, Optional, Set
 
-from aerospike_sdk.aio.info import InfoCommands as AsyncInfoCommands
-from aerospike_sdk.sync.client import _EventLoopManager
+log = logging.getLogger("aerospike_sdk.sync.info")
+
+
+def _merge_set_values(responses: Dict[str, Dict[str, str]]) -> Set[str]:
+    """Flatten ``{node: {key: 'a;b;c'}}`` responses into a set of items."""
+    out: Set[str] = set()
+    for node_response in responses.values():
+        for value in node_response.values():
+            if isinstance(value, str) and value:
+                out.update(s.strip() for s in value.split(";") if s.strip())
+    return out
 
 
 class SyncInfoCommands:
+    """Synchronous high-level info-command helpers.
+
+    Constructed by :meth:`SyncSession.info` (no args). Calls PAC's
+    ``info_blocking`` / ``info_on_all_nodes_blocking`` directly — no
+    asyncio loop is involved.
     """
-    Synchronous wrapper for InfoCommands.
 
-    Provides the same API as the async InfoCommands but executes operations
-    synchronously by running them on an event loop.
-    """
-
-    def __init__(self, async_info: AsyncInfoCommands, loop_manager: _EventLoopManager) -> None:
-        """
-        Initialize a SyncInfoCommands.
-
-        Args:
-            async_info: The async InfoCommands to wrap.
-            loop_manager: The event loop manager for executing async operations.
-        """
-        self._async_info = async_info
-        self._loop_manager = loop_manager
+    def __init__(self, pac_client: Any) -> None:
+        """Pair with the PAC ``aerospike_async.Client`` from the session."""
+        self._pac = pac_client
 
     def build(self) -> Set[str]:
-        """Get the build information from all nodes in the cluster (synchronous)."""
-        async def _build():
-            return await self._async_info.build()
-
-        return self._loop_manager.run_async(_build())
+        """Build strings from every node."""
+        responses = self._pac.info_on_all_nodes_blocking("build")
+        out: Set[str] = set()
+        for node_response in responses.values():
+            for value in node_response.values():
+                if isinstance(value, str) and value:
+                    out.add(value.strip())
+        return out
 
     def namespaces(self) -> Set[str]:
-        """Get the list of namespaces from all nodes in the cluster (synchronous)."""
-        async def _namespaces():
-            return await self._async_info.namespaces()
-
-        return self._loop_manager.run_async(_namespaces())
+        """Namespace names across the cluster."""
+        responses = self._pac.info_on_all_nodes_blocking("namespaces")
+        return _merge_set_values(responses)
 
     def namespace_details(self, namespace: str) -> Optional[Dict[str, str]]:
-        """Get detailed information about a specific namespace (synchronous)."""
-        async def _namespace_details():
-            return await self._async_info.namespace_details(namespace)
-
-        return self._loop_manager.run_async(_namespace_details())
+        """Per-namespace info; ``None`` when the namespace is unknown."""
+        try:
+            response = self._pac.info_blocking(f"namespace/{namespace}")
+        except Exception:
+            log.debug("namespace_details(%s) failed", namespace, exc_info=True)
+            return None
+        if not response:
+            return None
+        expected_key = f"namespace/{namespace}"
+        if expected_key in response and str(response[expected_key]).strip() == "type=unknown":
+            return None
+        return response
 
     def sets(self, namespace: str) -> List[str]:
-        """Get the list of sets in a specific namespace (synchronous)."""
-        async def _sets():
-            return await self._async_info.sets(namespace)
-
-        return self._loop_manager.run_async(_sets())
+        """Set names in ``namespace``."""
+        responses = self._pac.info_on_all_nodes_blocking(f"sets/{namespace}")
+        out: Set[str] = set()
+        for node_response in responses.values():
+            for value in node_response.values():
+                if isinstance(value, str) and value:
+                    out.update(s.strip() for s in value.split(",") if s.strip())
+        return sorted(out)
 
     def secondary_indexes(self, namespace: Optional[str] = None) -> List[Dict[str, str]]:
-        """Get information about all secondary indexes (synchronous)."""
-        async def _secondary_indexes():
-            return await self._async_info.secondary_indexes(namespace)
-
-        return self._loop_manager.run_async(_secondary_indexes())
+        """All secondary indexes (optionally filtered by namespace)."""
+        responses = self._pac.info_on_all_nodes_blocking("sindex-list")
+        index_map: Dict[str, Dict[str, str]] = {}
+        for node_response in responses.values():
+            for value in node_response.values():
+                if not isinstance(value, str) or not value:
+                    continue
+                for entry in value.split(";"):
+                    entry = entry.strip()
+                    if not entry:
+                        continue
+                    fields: Dict[str, str] = {}
+                    for token in entry.split(":"):
+                        if "=" in token:
+                            k, v = token.split("=", 1)
+                            fields[k] = v
+                    index_name = fields.get("indexname", "")
+                    ns = fields.get("ns", "")
+                    if not index_name or not ns:
+                        continue
+                    if namespace and ns != namespace:
+                        continue
+                    if index_name not in index_map:
+                        entry_map = {
+                            "namespace": ns,
+                            "set": fields.get("set", ""),
+                            "bin": fields.get("bin", ""),
+                            "name": index_name,
+                        }
+                        if "type" in fields:
+                            entry_map["type"] = fields["type"]
+                        if "state" in fields:
+                            entry_map["state"] = fields["state"]
+                        index_map[index_name] = entry_map
+        return list(index_map.values())
 
     def secondary_index_details(
         self, namespace: str, index_name: str
     ) -> Optional[Dict[str, str]]:
-        """Get detailed information about a specific secondary index (synchronous)."""
-        async def _secondary_index_details():
-            return await self._async_info.secondary_index_details(namespace, index_name)
-
-        return self._loop_manager.run_async(_secondary_index_details())
+        """Details for one secondary index; ``None`` when missing."""
+        try:
+            response = self._pac.info_blocking(f"sindex/{namespace}/{index_name}")
+        except Exception:
+            log.debug(
+                "secondary_index_details(%s, %s) failed",
+                namespace, index_name, exc_info=True,
+            )
+            return None
+        if not response:
+            return None
+        expected_key = f"sindex/{namespace}/{index_name}"
+        if expected_key in response and "ERROR:201:no index" in str(response[expected_key]):
+            return None
+        return response
 
     def is_cluster_stable(self) -> bool:
-        """Check if all nodes agree on the current cluster state (synchronous)."""
-        async def _is_cluster_stable():
-            return await self._async_info.is_cluster_stable()
-
-        return self._loop_manager.run_async(_is_cluster_stable())
+        """``True`` when every node reports ``cluster-stable=true``."""
+        responses = self._pac.info_on_all_nodes_blocking("cluster-stable")
+        if not responses:
+            return False
+        for node_response in responses.values():
+            for value in node_response.values():
+                if isinstance(value, str) and value.lower() != "true":
+                    return False
+        return True
 
     def get_cluster_size(self) -> int:
-        """Get the number of nodes in the cluster (synchronous)."""
-        async def _get_cluster_size():
-            return await self._async_info.get_cluster_size()
-
-        return self._loop_manager.run_async(_get_cluster_size())
+        """Number of cluster nodes."""
+        return len(self._pac.node_names_blocking())
 
     def info(self, command: str) -> Dict[str, str]:
-        """Execute a raw info command against the cluster (synchronous)."""
-        async def _info():
-            return await self._async_info.info(command)
-
-        return self._loop_manager.run_async(_info())
+        """Raw info command against one random node."""
+        return self._pac.info_blocking(command)
 
     def info_on_all_nodes(self, command: str) -> Dict[str, Dict[str, str]]:
-        """Execute a raw info command against all nodes in the cluster (synchronous)."""
-        async def _info_on_all_nodes():
-            return await self._async_info.info_on_all_nodes(command)
-
-        return self._loop_manager.run_async(_info_on_all_nodes())
-
+        """Raw info command against every node."""
+        return self._pac.info_on_all_nodes_blocking(command)

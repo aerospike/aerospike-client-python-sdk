@@ -16,8 +16,10 @@
 """Integration tests for automatic secondary index discovery via IndexesMonitor."""
 
 import asyncio
+import uuid
 
 import pytest
+import pytest_asyncio
 
 from aerospike_sdk import DataSet, Client
 
@@ -27,7 +29,27 @@ INDEX_NAME = "pfc_auto_idx_age"
 NAMESPACE = "test"
 
 
-@pytest.fixture
+async def _wait_for_monitor_cache(
+    client, namespace: str, index_name: str, *, present: bool,
+    timeout: float = 5.0, interval: float = 0.1,
+) -> bool:
+    """Poll the monitor cache until *index_name* is (or isn't) discovered.
+
+    Returns ``True`` when the desired state is reached before *timeout*.
+    Avoids the fixed-sleep pattern that races on enterprise clusters when
+    the refresh interval has been overridden for tests.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        ctx = client._indexes_monitor.get_index_context(namespace)
+        names = {idx.name for idx in ctx.indexes} if ctx is not None else set()
+        if (index_name in names) == present:
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def client(aerospike_host, client_policy, enterprise):
     """Client with seed data and a numeric secondary index on 'age'."""
     async with Client(
@@ -143,9 +165,9 @@ class TestAutoIndexDiscovery:
 class TestIndexLifecycle:
     """Verify the cache updates when indexes are created/dropped."""
 
-    async def test_new_index_discovered(self, client, enterprise):
+    async def test_new_index_discovered(self, client):
         """Creating a new index should appear in the cache after refresh."""
-        new_idx = "pfc_auto_idx_name"
+        new_idx = f"pfc_auto_idx_name_{uuid.uuid4().hex[:10]}"
         try:
             await (
                 client.index(NAMESPACE, SET_NAME)
@@ -154,24 +176,21 @@ class TestIndexLifecycle:
                 .string()
                 .create()
             )
-        except Exception:
-            pass
+            assert await _wait_for_monitor_cache(
+                client, NAMESPACE, new_idx, present=True,
+            ), f"Monitor never discovered {new_idx!r}"
+        finally:
+            try:
+                await client.index(NAMESPACE, SET_NAME).named(new_idx).drop()
+            except Exception:
+                pass
+            await _wait_for_monitor_cache(
+                client, NAMESPACE, new_idx, present=False,
+            )
 
-        await asyncio.sleep(0.75 if not enterprise else 0.4)
-
-        ctx = client._indexes_monitor.get_index_context(NAMESPACE)
-        assert ctx is not None
-        names = {idx.name for idx in ctx.indexes}
-        assert new_idx in names
-
-        try:
-            await client.index(NAMESPACE, SET_NAME).named(new_idx).drop()
-        except Exception:
-            pass
-
-    async def test_dropped_index_evicted(self, client, enterprise):
+    async def test_dropped_index_evicted(self, client):
         """Dropping an index should remove it from the cache after refresh."""
-        temp_idx = "pfc_auto_idx_temp"
+        temp_idx = f"pfc_auto_idx_temp_{uuid.uuid4().hex[:10]}"
         try:
             await (
                 client.index(NAMESPACE, SET_NAME)
@@ -180,22 +199,17 @@ class TestIndexLifecycle:
                 .numeric()
                 .create()
             )
-        except Exception:
-            pass
+            assert await _wait_for_monitor_cache(
+                client, NAMESPACE, temp_idx, present=True,
+            ), f"Monitor never discovered {temp_idx!r}"
 
-        await asyncio.sleep(0.75 if not enterprise else 0.4)
-
-        ctx = client._indexes_monitor.get_index_context(NAMESPACE)
-        assert ctx is not None
-        assert temp_idx in {idx.name for idx in ctx.indexes}
-
-        try:
             await client.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
-        except Exception:
-            pass
 
-        await asyncio.sleep(0.75 if not enterprise else 0.4)
-
-        ctx = client._indexes_monitor.get_index_context(NAMESPACE)
-        if ctx is not None:
-            assert temp_idx not in {idx.name for idx in ctx.indexes}
+            assert await _wait_for_monitor_cache(
+                client, NAMESPACE, temp_idx, present=False,
+            ), f"Monitor never evicted {temp_idx!r} after drop"
+        finally:
+            try:
+                await client.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
+            except Exception:
+                pass

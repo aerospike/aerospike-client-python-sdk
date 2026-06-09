@@ -22,10 +22,12 @@ from aerospike_sdk import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 
+from .durable_delete_support import delete_keys_durable
+
 
 @pytest.fixture
 async def client(aerospike_host, client_policy):
-    """Setup SDK client for testing."""
+    """Function-scoped: many tests reuse ``test/test`` user key ``1`` and assume a fresh record."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session = client.create_session()
         test_ds = DataSet.of("test", "test")
@@ -263,10 +265,14 @@ async def test_operate_put_and_get(client):
 
     await session.upsert(k).put({"bin1": 7, "bin2": "string value"}).execute()
 
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         Operation.put("bin2", "new string"),
         Operation.get(),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -298,10 +304,14 @@ async def test_operate_list_append(client):
     await session.upsert(k).put({"listbin": [1, 2, 3]}).execute()
 
     list_policy = ListPolicy(ListOrderType.ORDERED, None)
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         ListOperation.append("listbin", 4, list_policy),
         ListOperation.size("listbin"),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -320,10 +330,14 @@ async def test_operate_map_put_and_get(client):
     await session.upsert(k).put({"mapbin": {"key1": "value1"}}).execute()
 
     map_policy = MapPolicy(None, None)
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         MapOperation.put("mapbin", "key2", "value2", map_policy),
         MapOperation.get_by_key("mapbin", "key2", MapReturnType.VALUE),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -341,10 +355,14 @@ async def test_operate_map_clear(client):
 
     await session.upsert(k).put({"mapbin": {"key1": "value1", "key2": "value2"}}).execute()
 
-    record = await pac.operate(WritePolicy(), k, [
+    record = await pac.operate(
+        k,
+        [
         MapOperation.clear("mapbin"),
         MapOperation.size("mapbin"),
-    ])
+    ],
+        policy=WritePolicy(),
+    )
 
     assert record is not None
     assert record.bins is not None
@@ -420,22 +438,38 @@ async def test_set_bins_execute(client):
     assert first.record_or_raise().bins == {"name": "Tim", "age": 1, "gender": "male"}
 
 
-async def test_durably_delete(client, enterprise):
-    """Test durably method for delete operations."""
+async def test_with_durable_delete(client, enterprise):
+    """Test ``with_durable_delete()`` on delete operations."""
     if not enterprise:
         pytest.skip("Requires Enterprise Edition")
     session = client.create_session()
     k = DataSet.of("test", "test").id(1)
 
     await session.upsert(k).put({"name": "Tim"}).execute()
+    gen_before_delete = (
+        (await (await session.query(k).execute()).first_or_raise()).record.generation
+    )
 
-    result = await session.delete(k).durably_delete().execute()
+    result = await session.delete(k).with_durable_delete().execute()
     first = await result.first_or_raise()
     assert first.is_ok
 
     query_result = await session.query(k).execute()
     first = await query_result.first()
     assert first is None or not first.is_ok
+
+    await session.upsert(k).put({"name": "Tim"}).execute()
+    gen_after_reinsert = (
+        (await (await session.query(k).execute()).first_or_raise()).record.generation
+    )
+    try:
+        if await session.is_namespace_sc(k.namespace):
+            assert gen_before_delete == 1
+            assert gen_after_reinsert == 3
+    except Exception:
+        pass
+
+    await delete_keys_durable(session, [k])
 
 
 async def test_insert_creates_new_record(client):

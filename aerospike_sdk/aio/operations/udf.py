@@ -72,29 +72,11 @@ class UdfFunctionBuilder:
         return UdfBuilder(self._qb)
 
 
-class UdfBuilder:
-    """Supply UDF arguments, optional filter, then execute or chain another operation.
+class _UdfBuilderBase:
+    """State + chaining shared by async and sync UdfBuilder.
 
-    After :meth:`UdfFunctionBuilder.function`, call :meth:`passing` with values
-    passed to Lua (after the implicit record argument). Use :meth:`execute_udf`
-    to append another UDF segment, or :meth:`query` / write verbs to switch
-    operation type. Await :meth:`execute` to run the accumulated chain.
-
-    Example::
-
-        stream = await (
-            session.execute_udf(key)
-                .function("my_pkg", "my_func")
-                .passing(1, "x")
-                .execute()
-        )
-
-    See Also:
-        :meth:`~aerospike_sdk.aio.session.Session.execute_udf`: Entry point.
+    Methods migrate from :class:`UdfBuilder` during Phase 4 collapse.
     """
-
-    __slots__ = ("_qb",)
-
     def __init__(self, qb: QueryBuilder) -> None:
         self._qb = qb
 
@@ -141,6 +123,26 @@ class UdfBuilder:
             self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
+        return self
+
+    def default_with_durable_delete(self) -> UdfBuilder:
+        """Prefer durable deletes when resolving policy defaults."""
+        self._qb._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> UdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._qb._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> UdfBuilder:
+        """Force durable delete for this UDF invocation."""
+        self._qb._durable_delete = True
+        return self
+
+    def without_durable_delete(self) -> UdfBuilder:
+        """Force non-durable delete for this UDF invocation."""
+        self._qb._durable_delete = False
         return self
 
     def respond_all_keys(self) -> UdfBuilder:
@@ -279,6 +281,51 @@ class UdfBuilder:
         """
         self._qb._finalize_udf_spec()
         return self._qb._start_write_verb("exists", arg1, *more_keys)
+
+
+
+class UdfBuilder(_UdfBuilderBase):
+    """Supply UDF arguments, optional filter, then execute or chain another operation.
+
+    After :meth:`UdfFunctionBuilder.function`, call :meth:`passing` with values
+    passed to Lua (after the implicit record argument). Use :meth:`execute_udf`
+    to append another UDF segment, or :meth:`query` / write verbs to switch
+    operation type. Await :meth:`execute` to run the accumulated chain.
+
+    Example::
+
+        stream = await (
+            session.execute_udf(key)
+                .function("my_pkg", "my_func")
+                .passing(1, "x")
+                .execute()
+        )
+
+    See Also:
+        :meth:`~aerospike_sdk.aio.session.Session.execute_udf`: Entry point.
+    """
+
+    __slots__ = ("_qb",)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     async def execute(self, on_error: OnError | None = None) -> RecordStream:
         """Run the current builder state and return a :class:`~aerospike_sdk.record_stream.RecordStream`.

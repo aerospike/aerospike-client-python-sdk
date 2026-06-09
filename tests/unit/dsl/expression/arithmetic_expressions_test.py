@@ -688,7 +688,7 @@ class TestGenericFunctionDispatch:
 
     def test_unknown_function_raises(self):
         with pytest.raises(AelParseException, match="Unknown function"):
-            parse_ael("unknown($.a) == 5")
+            parse_ael("nonExistentFn($.a) == 5")
 
     def test_abs_wrong_arg_count(self):
         with pytest.raises(AelParseException, match="expects 1 argument"):

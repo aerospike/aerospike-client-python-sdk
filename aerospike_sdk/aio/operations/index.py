@@ -29,30 +29,11 @@ from aerospike_async import (
 from aerospike_sdk.exceptions import _convert_pac_exception
 
 
-class IndexBuilder:
-    """Configure a secondary index, then :meth:`create` or :meth:`drop` it.
+class _IndexBuilderBase:
+    """State + chaining shared by async and sync IndexBuilder.
 
-    Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
-    :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
-    :meth:`context` → ``await`` :meth:`create`.
-
-    For removal, only :meth:`named` (and namespace/set from construction) is
-    required before ``await`` :meth:`drop`.
-
-    Example::
-
-            await (
-                client.index(namespace="test", set_name="users")
-                .on_bin("email")
-                .named("email_idx")
-                .string()
-                .create()
-            )
-
-    See Also:
-        :meth:`~aerospike_sdk.aio.client.Client.index`
+    Methods migrate from :class:`IndexBuilder` during Phase 4 collapse.
     """
-
     def __init__(
         self,
         client: Client,
@@ -122,6 +103,18 @@ class IndexBuilder:
         self._index_type = IndexType.STRING
         return self
 
+    def geo2dsphere(self) -> IndexBuilder:
+        """Set the secondary index type to GEO2DSPHERE (for GeoJSON bin values).
+
+        Call this before :meth:`create` to index a bin containing GeoJSON Points,
+        Polygons, or AeroCircles for spatial query via ``geoCompare(...)``.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        self._index_type = IndexType.GEO2D_SPHERE
+        return self
+
     def collection(
         self, collection_index_type: CollectionIndexType
     ) -> IndexBuilder:
@@ -166,6 +159,40 @@ class IndexBuilder:
         """
         self._ctx = ctx
         return self
+
+
+
+class IndexBuilder(_IndexBuilderBase):
+    """Configure a secondary index, then :meth:`create` or :meth:`drop` it.
+
+    Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
+    :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
+    :meth:`context` → ``await`` :meth:`create`.
+
+    For removal, only :meth:`named` (and namespace/set from construction) is
+    required before ``await`` :meth:`drop`.
+
+    Example::
+
+            await (
+                client.index(namespace="test", set_name="users")
+                .on_bin("email")
+                .named("email_idx")
+                .string()
+                .create()
+            )
+
+    See Also:
+        :meth:`~aerospike_sdk.aio.client.Client.index`
+    """
+
+
+
+
+
+
+
+
 
     async def create(self) -> None:
         """Create the index on the cluster.

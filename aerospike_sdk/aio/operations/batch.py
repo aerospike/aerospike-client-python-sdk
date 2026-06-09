@@ -18,28 +18,44 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+    Union,
+)
 
 from aerospike_async import (
+    BatchDeletePolicy,
     Client,
     ExpOperation,
     ExpReadFlags,
     ExpWriteFlags,
     FilterExpression,
+    GeoJSON,
+    HllOperation,
     Key,
     Operation,
     Txn,
 )
 
-from aerospike_sdk.aio.operations.query import _build_exp_write_flags
+from aerospike_sdk.aio.operations.query import _build_exp_write_flags, _resolve_hll_flags
 from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import _convert_pac_exception
-from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
-from aerospike_sdk.policy.policy_mapper import to_batch_policy
+from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
+from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_batch_policy
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.policy.behavior import Behavior
+
+NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
 
 
 class BatchOpType(Enum):
@@ -67,17 +83,34 @@ class BatchBinBuilder:
     def set_to(self, value: Any) -> BatchKeyOperationBuilder:
         """
         Set a bin value.
-        
+
         Args:
             value: The value to set.
-        
+
         Returns:
             The parent BatchKeyOperationBuilder for chaining.
         """
         self._key_op._bins[self._bin_name] = value
         self._key_op._operations.append(Operation.put(self._bin_name, value))
         return self._key_op
-    
+
+    def set_to_geo_json(self, geo_json: str) -> BatchKeyOperationBuilder:
+        """Set the bin to a GeoJSON value from its string form.
+
+        The bin's server-side particle type is GEOJSON, not STRING. Equivalent
+        to ``set_to(GeoJSON(geo_json))`` but reads naturally for spatial data.
+
+        Args:
+            geo_json: A GeoJSON string (e.g. a Point, Polygon, or AeroCircle).
+
+        Returns:
+            The parent :class:`BatchKeyOperationBuilder`.
+        """
+        value = GeoJSON(geo_json)
+        self._key_op._bins[self._bin_name] = value
+        self._key_op._operations.append(Operation.put(self._bin_name, value))
+        return self._key_op
+
     def add(self, value: int) -> BatchKeyOperationBuilder:
         """Add *value* to the bin (numeric increment)."""
         self._key_op._operations.append(Operation.add(self._bin_name, value))
@@ -215,19 +248,132 @@ class BatchBinBuilder:
         self._key_op._operations.append(ExpOperation.write(self._bin_name, expr, flags))
         return self._key_op
 
+    # -- HyperLogLog ----------------------------------------------------------
 
-class BatchKeyOperationBuilder:
+    def hll_init(
+        self,
+        config: HllConfig,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Initialize an empty HyperLogLog sketch in this bin.
+
+        Semantics match
+        :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_init`.
+        """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        self._key_op._operations.append(HllOperation.init(
+            self._bin_name, config.index_bit_count, config.min_hash_bit_count, flags,
+        ))
+        return self._key_op
+
+    def hll_add(
+        self,
+        values: Sequence[Any],
+        *,
+        config: Optional[HllConfig] = None,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Add distinct values to the HyperLogLog sketch in this bin.
+
+        Semantics match
+        :meth:`aerospike_sdk.aio.operations.query.WriteBinBuilder.hll_add`.
+        """
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        index_bit_count = config.index_bit_count if config is not None else -1
+        min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
+        self._key_op._operations.append(HllOperation.add(
+            self._bin_name, list(values), index_bit_count, min_hash_bit_count, flags,
+        ))
+        return self._key_op
+
+    def hll_set_union(
+        self,
+        hll_list: Sequence[Any],
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        allow_fold: bool = False,
+    ) -> BatchKeyOperationBuilder:
+        """Merge other HyperLogLog sketches into this bin (destructive union)."""
+        flags = _resolve_hll_flags(
+            create_only=create_only, update_only=update_only,
+            no_fail=no_fail, allow_fold=allow_fold,
+        )
+        self._key_op._operations.append(
+            HllOperation.set_union(self._bin_name, list(hll_list), flags),
+        )
+        return self._key_op
+
+    def hll_fold(self, index_bit_count: int) -> BatchKeyOperationBuilder:
+        """Reduce sketch precision to a lower ``index_bit_count``."""
+        self._key_op._operations.append(
+            HllOperation.fold(self._bin_name, index_bit_count),
+        )
+        return self._key_op
+
+    def hll_refresh_count(self) -> BatchKeyOperationBuilder:
+        """Refresh the cached cardinality estimate."""
+        self._key_op._operations.append(HllOperation.refresh_count(self._bin_name))
+        return self._key_op
+
+    def hll_get_count(self) -> BatchKeyOperationBuilder:
+        """Read the estimated cardinality of the sketch."""
+        self._key_op._operations.append(HllOperation.get_count(self._bin_name))
+        return self._key_op
+
+    def hll_describe(self) -> BatchKeyOperationBuilder:
+        """Read the sketch's index and minhash bit widths."""
+        self._key_op._operations.append(HllOperation.describe(self._bin_name))
+        return self._key_op
+
+    def hll_get_union(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the union of this sketch with other sketches (non-destructive)."""
+        self._key_op._operations.append(
+            HllOperation.get_union(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_union_count(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the estimated cardinality of the union with other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_union_count(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read the estimated intersection cardinality with other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_intersect_count(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+    def hll_get_similarity(self, hll_list: Sequence[Any]) -> BatchKeyOperationBuilder:
+        """Read Jaccard similarity between this sketch and other sketches."""
+        self._key_op._operations.append(
+            HllOperation.get_similarity(self._bin_name, list(hll_list)),
+        )
+        return self._key_op
+
+
+class _BatchKeyOperationBuilderBase:
+    """State + chaining shared by async and sync BatchKeyOperationBuilder.
+
+    Methods migrate from :class:`BatchKeyOperationBuilder` during Phase 4 collapse.
     """
-    Builder for a single key's operation within a batch.
-    
-    This class allows chaining bin operations and then continuing
-    to add more keys to the batch.
-    
-    Example:
-        batch.insert(key1).bin("name").set_to("Alice") \\
-             .update(key2).bin("counter").add(1)
-    """
-    
     def __init__(
         self,
         batch: BatchOperationBuilder,
@@ -239,7 +385,7 @@ class BatchKeyOperationBuilder:
         self._op_type = op_type
         self._bins: Dict[str, Any] = {}
         self._operations: List[Union[Operation, ExpOperation]] = []
-    
+
     def bin(self, bin_name: str) -> BatchBinBuilder:
         """
         Start a bin operation chain.
@@ -254,7 +400,7 @@ class BatchKeyOperationBuilder:
             batch.insert(key).bin("name").set_to("Alice").bin("age").set_to(25)
         """
         return BatchBinBuilder(self, bin_name)
-    
+
     def put(self, bins: Dict[str, Any]) -> BatchKeyOperationBuilder:
         """
         Set multiple bins at once.
@@ -272,62 +418,78 @@ class BatchKeyOperationBuilder:
         for bin_name, value in bins.items():
             self._operations.append(Operation.put(bin_name, value))
         return self
-    
-    # Methods to continue chaining to more keys (delegate to batch)
-    
+
     def insert(self, key: Key) -> BatchKeyOperationBuilder:
         """Add an insert operation for another key."""
         return self._batch.insert(key)
-    
+
     def update(self, key: Key) -> BatchKeyOperationBuilder:
         """Add an update operation for another key."""
         return self._batch.update(key)
-    
+
     def upsert(self, key: Key) -> BatchKeyOperationBuilder:
         """Add an upsert operation for another key."""
         return self._batch.upsert(key)
-    
+
     def replace(self, key: Key) -> BatchKeyOperationBuilder:
         """Add a replace operation for another key."""
         return self._batch.replace(key)
-    
+
     def replace_if_exists(self, key: Key) -> BatchKeyOperationBuilder:
         """Add a replace-if-exists operation for another key."""
         return self._batch.replace_if_exists(key)
-    
+
     def delete(self, key: Key) -> BatchKeyOperationBuilder:
         """Add a delete operation for another key."""
         return self._batch.delete(key)
+
+    def execute_blocking(self) -> list:
+        """Sync execute; returns the raw PAC ``BatchRecord`` list."""
+        return self._batch.execute_blocking()
+
+
+
+class BatchKeyOperationBuilder(_BatchKeyOperationBuilderBase):
+    """
+    Builder for a single key's operation within a batch.
+    
+    This class allows chaining bin operations and then continuing
+    to add more keys to the batch.
+    
+    Example:
+        batch.insert(key1).bin("name").set_to("Alice") \\
+             .update(key2).bin("counter").add(1)
+    """
+    
+    
+    
+    
+    # Methods to continue chaining to more keys (delegate to batch)
+    
+    
+    
+    
+    
+    
     
     async def execute(self) -> RecordStream:
         """Execute all batch operations."""
         return await self._batch.execute()
 
 
-class BatchOperationBuilder:
-    """
-    Builder for chaining operations across multiple keys.
-    
-    This class enables method chaining of operations on different keys,
-    which are then executed as a single batch operation.
-    
-    Example::
 
-            results = await session.batch() \\
-                .insert(key1).bin("name").set_to("Alice").bin("age").set_to(25) \\
-                .update(key2).bin("counter").add(1) \\
-                .delete(key3) \\
-                .execute()
-    
-    The operations are collected and executed together using the async
-    client's batch_operate method for optimal performance.
+class _BatchOperationBuilderBase:
+    """State + chaining shared by async and sync BatchOperationBuilder.
+
+    Methods migrate from :class:`BatchOperationBuilder` during Phase 4 collapse.
     """
-    
     def __init__(
         self,
         client: Client,
         behavior: Optional[Behavior] = None,
         txn: Optional[Txn] = None,
+        namespace_mode_resolver: NamespaceModeResolver = None,
+        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
     ) -> None:
         """
         Initialize a BatchOperationBuilder.
@@ -338,11 +500,17 @@ class BatchOperationBuilder:
             txn: Optional active :class:`~aerospike_async.Txn` captured from
                 a transactional session; stamped on the outer batch policy
                 at execute. ``None`` means no transaction participation.
+            namespace_mode_resolver: Optional async callable ``namespace -> Mode``
+                used to apply AP vs SC behavior scopes before policies are built.
+            namespace_mode_resolver_blocking: Optional sync callable for the
+                same purpose, used by :meth:`execute_blocking`.
         """
         self._client = client
         self._behavior = behavior
         self._key_operations: List[BatchKeyOperationBuilder] = []
         self._txn: Optional[Txn] = txn
+        self._namespace_mode_resolver = namespace_mode_resolver
+        self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on the outer batch policy."""
@@ -365,7 +533,7 @@ class BatchOperationBuilder:
         """
         self._txn = txn
         return self
-    
+
     def insert(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add an insert (create only) operation for a key.
@@ -382,7 +550,7 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.INSERT)
         self._key_operations.append(op)
         return op
-    
+
     def update(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add an update (update only) operation for a key.
@@ -399,7 +567,7 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.UPDATE)
         self._key_operations.append(op)
         return op
-    
+
     def upsert(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add an upsert (create or update) operation for a key.
@@ -416,7 +584,7 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.UPSERT)
         self._key_operations.append(op)
         return op
-    
+
     def replace(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add a replace (create or replace) operation for a key.
@@ -433,7 +601,7 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.REPLACE)
         self._key_operations.append(op)
         return op
-    
+
     def replace_if_exists(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add a replace-if-exists operation for a key.
@@ -452,7 +620,7 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.REPLACE_IF_EXISTS)
         self._key_operations.append(op)
         return op
-    
+
     def delete(self, key: Key) -> BatchKeyOperationBuilder:
         """
         Add a delete operation for a key.
@@ -469,6 +637,140 @@ class BatchOperationBuilder:
         op = BatchKeyOperationBuilder(self, key, BatchOpType.DELETE)
         self._key_operations.append(op)
         return op
+
+    def _resolved_mode_for_keys_blocking(self, keys: List[Key]) -> Mode:
+        """Sync counterpart of :meth:`_resolved_mode_for_keys`."""
+        if self._namespace_mode_resolver_blocking is None:
+            return Mode.AP
+        seen: set[str] = set()
+        for key in keys:
+            namespace = key.namespace
+            if namespace in seen:
+                continue
+            seen.add(namespace)
+            if self._namespace_mode_resolver_blocking(namespace) == Mode.SC:
+                return Mode.SC
+        return Mode.AP
+
+    def execute_blocking(self) -> list:
+        """Synchronously execute all batch operations; returns raw PAC ``BatchRecord`` list.
+
+        Caller wraps in :class:`SyncRecordStream` (or any other sync
+        iterator). Mirrors :meth:`execute` semantics — same prep, same
+        delete-vs-operate split, same policy building — but the dispatch
+        is PAC ``batch_delete_blocking`` / ``batch_operate_blocking`` and
+        no asyncio loop is involved.
+        """
+        if not self._key_operations:
+            raise ValueError("No operations to execute. Add operations with insert(), update(), etc.")
+
+        delete_keys: List[Key] = []
+        operate_keys: List[Key] = []
+        operate_ops: List[List[Union[Operation, ExpOperation]]] = []
+
+        for key_op in self._key_operations:
+            if key_op._op_type == BatchOpType.DELETE:
+                delete_keys.append(key_op._key)
+            else:
+                operate_keys.append(key_op._key)
+                ops = key_op._operations.copy()
+                if not ops and key_op._bins:
+                    for bin_name, value in key_op._bins.items():
+                        ops.append(Operation.put(bin_name, value))
+                if not ops:
+                    ops.append(Operation.touch())
+                operate_ops.append(ops)
+
+        raw_results: list = []
+
+        all_keys = [key_op._key for key_op in self._key_operations]
+        batch_mode = self._resolved_mode_for_keys_blocking(all_keys)
+
+        batch_policy = None
+        if self._behavior is not None:
+            batch_policy = to_batch_policy(
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, batch_mode))
+        if self._txn is not None and batch_policy is None:
+            from aerospike_async import BatchPolicy
+            batch_policy = BatchPolicy()
+        self._apply_txn(batch_policy)
+
+        try:
+            delete_policy: Optional[BatchDeletePolicy] = None
+            if delete_keys and self._behavior is not None:
+                bs = self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE,
+                    OpShape.BATCH,
+                    self._resolved_mode_for_keys_blocking(delete_keys),
+                )
+                if resolve_durable_delete(bs.durable_delete, None, None):
+                    delete_policy = BatchDeletePolicy()
+                    delete_policy.durable_delete = True
+
+            if delete_keys:
+                delete_results = self._client.batch_delete_blocking(
+                    delete_keys,
+                    batch_policy=batch_policy,
+                    delete_policy=delete_policy,
+                )
+                raw_results.extend(delete_results)
+
+            if operate_keys:
+                operate_results = self._client.batch_operate_blocking(
+                    operate_keys,
+                    operate_ops,
+                    batch_policy=batch_policy,
+                )
+                raw_results.extend(operate_results)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+        return raw_results
+
+
+
+class BatchOperationBuilder(_BatchOperationBuilderBase):
+    """
+    Builder for chaining operations across multiple keys.
+    
+    This class enables method chaining of operations on different keys,
+    which are then executed as a single batch operation.
+    
+    Example::
+
+            results = await session.batch() \\
+                .insert(key1).bin("name").set_to("Alice").bin("age").set_to(25) \\
+                .update(key2).bin("counter").add(1) \\
+                .delete(key3) \\
+                .execute()
+    
+    The operations are collected and executed together using the async
+    client's batch_operate method for optimal performance.
+    """
+    
+
+
+
+    async def _resolved_mode_for_keys(self, keys: List[Key]) -> Mode:
+        """Return SC when any key belongs to an SC namespace."""
+        if self._namespace_mode_resolver is None:
+            return Mode.AP
+        seen: set[str] = set()
+        for key in keys:
+            namespace = key.namespace
+            if namespace in seen:
+                continue
+            seen.add(namespace)
+            if await self._namespace_mode_resolver(namespace) == Mode.SC:
+                return Mode.SC
+        return Mode.AP
+    
+    
+    
+    
+    
+    
     
     async def execute(self) -> RecordStream:
         """Execute all batch operations.
@@ -520,10 +822,14 @@ class BatchOperationBuilder:
 
         raw_results: list = []
 
+        all_keys = [key_op._key for key_op in self._key_operations]
+        batch_mode = await self._resolved_mode_for_keys(all_keys)
+
         batch_policy = None
         if self._behavior is not None:
             batch_policy = to_batch_policy(
-                self._behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH))
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, batch_mode))
         # Under MRT the PAC rejects a null BatchPolicy, so materialize one
         # just to carry the txn reference when the behavior path didn't.
         if self._txn is not None and batch_policy is None:
@@ -532,23 +838,35 @@ class BatchOperationBuilder:
         self._apply_txn(batch_policy)
 
         try:
+            delete_policy: Optional[BatchDeletePolicy] = None
+            if delete_keys and self._behavior is not None:
+                bs = self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE,
+                    OpShape.BATCH,
+                    await self._resolved_mode_for_keys(delete_keys),
+                )
+                if resolve_durable_delete(bs.durable_delete, None, None):
+                    delete_policy = BatchDeletePolicy()
+                    delete_policy.durable_delete = True
+
             if delete_keys:
                 delete_results = await self._client.batch_delete(
-                    batch_policy,
-                    None,
                     delete_keys,
+                    batch_policy=batch_policy,
+                    delete_policy=delete_policy,
                 )
                 raw_results.extend(delete_results)
 
             if operate_keys:
                 operate_results = await self._client.batch_operate(
-                    batch_policy,
-                    None,
                     operate_keys,
                     operate_ops,
+                    batch_policy=batch_policy,
                 )
                 raw_results.extend(operate_results)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
         return RecordStream.from_batch_records(raw_results)
+
+

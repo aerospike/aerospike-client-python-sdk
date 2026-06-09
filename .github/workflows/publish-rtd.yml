@@ -1,0 +1,68 @@
+# SKELETON — not yet wired into the live release pipeline.
+#
+# Implements Gate 4 (Product GA, owner: Product) — triggers a
+# ReadTheDocs build for the given version. Single curl POST against
+# the RTD v3 API.
+#
+# Status: skeleton. Will not trigger anything until the RTD project
+# is created and a token is provisioned (Phase 0.9 + §0.11 secrets
+# matrix). When `vars.RTD_PROJECT` or `secrets.RTD_TOKEN` is unset
+# the workflow logs and exits 0.
+
+name: Publish docs to ReadTheDocs (Gate 4)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "RTD version slug to build (e.g. v0.1.0-alpha.1, latest, stable)"
+        type: string
+        required: true
+      dry-run:
+        description: "Dry-run (skip the actual RTD API call)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-rtd:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Skip if RTD not provisioned (skeleton phase)
+        id: gate
+        run: |
+          if [[ -z "${{ vars.RTD_PROJECT }}" ]]; then
+            echo "RTD_PROJECT unset — skeleton phase, skipping trigger."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Harden the runner
+        if: steps.gate.outputs.skip != 'true'
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: audit
+
+      - name: Trigger RTD build
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
+          RTD_VERSION: ${{ inputs.version }}
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [[ -z "$RTD_TOKEN" ]]; then
+            echo "::warning::secrets.RTD_TOKEN is not set — skipping RTD trigger."
+            exit 0
+          fi
+          API="https://readthedocs.org/api/v3/projects/${RTD_PROJECT}/versions/${RTD_VERSION}/builds/"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "DRY-RUN: would POST $API"
+            exit 0
+          fi
+          curl -fSsL -X POST -H "Authorization: Token ${RTD_TOKEN}" "$API"
+          echo
+          echo "Triggered RTD build: project=$RTD_PROJECT version=$RTD_VERSION"

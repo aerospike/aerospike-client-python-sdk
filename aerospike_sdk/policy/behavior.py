@@ -159,6 +159,7 @@ class Behavior:
         retry_delay: Optional[timedelta] = None,
         send_key: Optional[bool] = None,
         use_compression: Optional[bool] = None,
+        compression_threshold: Optional[int] = None,
     ) -> Behavior:
         """Create a child Behavior with the specified overrides.
 
@@ -183,6 +184,7 @@ class Behavior:
             retry_delay=retry_delay,
             send_key=send_key,
             use_compression=use_compression,
+            compression_threshold=compression_threshold,
         )
         if flat is not None:
             if all is not None:
@@ -323,9 +325,18 @@ def _flat_to_settings(
     retry_delay: Optional[timedelta] = None,
     send_key: Optional[bool] = None,
     use_compression: Optional[bool] = None,
+    compression_threshold: Optional[int] = None,
 ) -> Optional[Settings]:
     """Convert flat keyword arguments to a Settings, or None if all are None."""
-    values = (total_timeout, socket_timeout, max_retries, retry_delay, send_key, use_compression)
+    values = (
+        total_timeout,
+        socket_timeout,
+        max_retries,
+        retry_delay,
+        send_key,
+        use_compression,
+        compression_threshold,
+    )
     if all(v is None for v in values):
         return None
     return Settings(
@@ -335,6 +346,7 @@ def _flat_to_settings(
         retry_delay=retry_delay,
         send_key=send_key,
         use_compression=use_compression,
+        compression_threshold=compression_threshold,
     )
 
 

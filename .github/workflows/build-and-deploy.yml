@@ -1,0 +1,111 @@
+# SKELETON — not yet wired into the live release pipeline.
+#
+# Implements Gates 0 + 1 of the new release pipeline (build → sign → deploy →
+# bundle, atomic in one workflow run). Mirrors the JSDK pattern in
+# aerospike/aerospike-client-java-sdk/.github/workflows/build-release.yaml.
+#
+# Status: dispatch-only with dry-run defaulting to true. Will not push to
+# JFrog or create a Release Bundle until:
+#   1. DevOps provisions vars (JFROG_PROJECT) and secrets (GPG_*) — see
+#      .cursor/plans/release-pipeline.md §0.11.
+#   2. A successful dry-run dispatch validates the chain.
+#   3. dry-run flag is flipped via dispatch input (or this file is updated
+#      to add the `push:` trigger below).
+#
+# See .cursor/plans/release-pipeline.md §0.6.a for full design notes.
+
+name: Build and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry-run (skip JFrog uploads + Release Bundle creation)"
+        type: boolean
+        default: true
+  # Phase 1: enable on push to trunk branches once dispatch dry-run validates.
+  # push:
+  #   branches: [dev, stage, main]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  extract-version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract
+        run: |
+          VERSION="$(./bin/get-version)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: ${VERSION}"
+
+  build-packages:
+    needs: extract-version
+    uses: aerospike/shared-workflows/.github/workflows/reusable_execute-build.yaml@07c958ca # v3.3.0
+    with:
+      gh-workflows-ref: 07c958ca # v3.3.0 — must match the @-ref above
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-name: aerospike-client-python-sdk
+      jf-build-id: ${{ github.run_number }}-buildinfo-${{ needs.extract-version.outputs.version }}
+      gh-artifact-directory: dist
+      gh-artifact-name: build-artifacts-${{ needs.extract-version.outputs.version }}
+      working-directory: local
+      setup-python: true
+      python-version: "3.12"
+      setup-java: true
+      java-version: "21"
+      # ANTLR parser must be regenerated before `python -m build` runs;
+      # build-artifacts.sh assumes that step has already happened (see its
+      # header comment). Mirrors release.yml's two-step build.
+      build-script: |
+        make generate-ael
+        bash scripts/ci/build-artifacts.sh
+      publish-build-info: true
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+  sign-artifacts:
+    needs: [extract-version, build-packages]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_sign-artifacts.yaml@07c958ca # v3.3.0
+    with:
+      gh-workflows-ref: 07c958ca # v3.3.0
+      gh-artifact-name: signed_build-artifacts-${{ needs.extract-version.outputs.version }}
+      gh-unsigned-artifacts: build-artifacts-${{ needs.extract-version.outputs.version }}
+    secrets:
+      gpg-private-key: ${{ secrets.GPG_SECRET_KEY }}
+      gpg-public-key: ${{ secrets.GPG_PUBLIC_KEY }}
+      gpg-key-pass: ${{ secrets.GPG_PASS }}
+
+  deploy-artifacts:
+    needs: [extract-version, sign-artifacts]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_deploy-artifacts.yaml@07c958ca # v3.3.0
+    with:
+      gh-workflows-ref: 07c958ca # v3.3.0
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-name: aerospike-client-python-sdk
+      jf-metadata-build-id: ${{ github.run_number }}-buildinfo
+      jf-build-id: ${{ github.run_number }}
+      gh-artifact-name: signed_build-artifacts-${{ needs.extract-version.outputs.version }}
+      version: ${{ needs.extract-version.outputs.version }}
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+      dry-run: ${{ inputs.dry-run || false }}
+
+  create-release-bundle:
+    needs: [extract-version, deploy-artifacts]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_create-release-bundle.yaml@07c958ca # v3.3.0
+    with:
+      gh-workflows-ref: 07c958ca # v3.3.0
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-names: aerospike-client-python-sdk:${{ github.run_number }}
+      jf-bundle-name: aerospike-client-python-sdk
+      version: ${{ needs.extract-version.outputs.version }}
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+      dry-run: ${{ inputs.dry-run || false }}

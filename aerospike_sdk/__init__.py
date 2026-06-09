@@ -22,10 +22,14 @@ from aerospike_async import (
     BitwiseOverflowActions,
     BitwiseResizeFlags,
     BitWriteFlags,
+    CdtOperation,
     CommitStatus,
+    CTX,
+    ExpType,
     HLLWriteFlags,
     ListReturnType,
     ListWriteFlags,
+    LoopVarPart,
     MapReturnType,
     MapWriteFlags,
     ModifyFlags,
@@ -36,7 +40,7 @@ from aerospike_async import (
     TxnState,
 )
 
-from aerospike_sdk.aio import Client, Session, TransactionalSession, ClusterDefinition, Host
+from aerospike_sdk.aio import AsyncPool, Client, Session, TransactionalSession, ClusterDefinition, Host
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.ael.exceptions import AelParseException
@@ -52,6 +56,7 @@ from aerospike_sdk.exceptions import (
     GenerationError,
     InvalidNamespaceError,
     InvalidNodeError,
+    MaxErrorRate,
     QueryTerminatedError,
     QuotaError,
     SecurityError,
@@ -60,6 +65,8 @@ from aerospike_sdk.exceptions import (
 )
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
+from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -72,6 +79,7 @@ __version__ = "0.1.0"
 __all__ = [
     "AbortStatus",
     "AerospikeError",
+    "AsyncPool",
     "AuthenticationError",
     "AuthMode",
     "AuthorizationError",
@@ -81,19 +89,23 @@ __all__ = [
     "BitWriteFlags",
     "BackoffError",
     "Behavior",
+    "CdtOperation",
     "ClusterDefinition",
     "CommitError",
     "CommitStatus",
     "ConnectionError",
+    "CTX",
     "DataSet",
     "AelParseException",
     "ErrorHandler",
     "ErrorStrategy",
     "Exp",
+    "ExpType",
     "Client",
     "in_list",
     "GenerationError",
     "Host",
+    "HllConfig",
     "HLLWriteFlags",
     "Index",
     "IndexContext",
@@ -102,10 +114,13 @@ __all__ = [
     "InvalidNodeError",
     "ListReturnType",
     "ListWriteFlags",
+    "LoopVarPart",
     "MapReturnType",
     "MapWriteFlags",
+    "MaxErrorRate",
     "ModifyFlags",
     "OnError",
+    "OperationResult",
     "parse_ctx",
     "parse_ael",
     "parse_ael_with_index",
