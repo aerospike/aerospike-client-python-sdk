@@ -790,7 +790,7 @@ async def _seed_cdt_data(client, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
 
     Used by both ``client_with_cdt_data`` (broad-surface seed) and
-    ``client_with_cdt_data_812`` (8.1.2+ seed) so the two clusters see the
+    ``client_with_cdt_data_812`` (8.1.3+ seed) so the two clusters see the
     exact same shape.
     """
     session = client.create_session()
@@ -835,9 +835,9 @@ async def _drop_cdt_data(session, ds):
 
 @pytest.fixture
 async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
-    """SDK client + CDT dataset on the 8.1.2+ seed.
+    """SDK client + CDT dataset on the 8.1.3+ seed.
 
-    Used by tests that exercise convenience wrappers around server-8.1.2
+    Used by tests that exercise convenience wrappers around server-8.1.3
     ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
     ``aerospike_host_812_required`` fixture skips the test cleanly when
     ``AEROSPIKE_HOST_8_1_2`` is unset.
@@ -852,9 +852,9 @@ async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, w
 async def client_with_cdt_data(aerospike_host, client_policy, wait_for_set_visible):
     """SDK client + CDT dataset on the broad-surface seed.
 
-    Tests that exercise convenience wrappers around server-8.1.2 ExpOps
+    Tests that exercise convenience wrappers around server-8.1.3 ExpOps
     should consume ``client_with_cdt_data_812`` instead so they auto-route
-    to the 8.1.2+ cluster when one is available.
+    to the 8.1.3+ cluster when one is available.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
@@ -1811,24 +1811,70 @@ class TestRelativeRangeAel:
 class TestAelErrorHandling:
     """Tests for AEL error handling."""
 
-    async def test_invalid_ael_syntax(self, client_with_cdt_data):
-        """Test that invalid AEL raises AelParseException."""
-        with pytest.raises(AelParseException):
-            await (
+    @pytest.mark.parametrize(
+        "expected_exc,match",
+        [
+            pytest.param(
+                AelParseException,
+                None,
+                id="client-side",
+                marks=requires_client_side_ael,
+            ),
+            pytest.param(
+                InvalidRequest,
+                "ParameterError",
+                id="server-side",
+                marks=requires_server_compiled_ael,
+            ),
+        ],
+    )
+    async def test_invalid_ael_syntax(self, client_with_cdt_data, expected_exc, match):
+        """Invalid AEL raises AelParseException (client) or InvalidRequest (server).
+
+        Client path: parser raises in :meth:`where` before ``execute`` returns a stream.
+        Server path: filter may build, then the cluster rejects it while reading rows.
+        """
+        with pytest.raises(expected_exc, match=match):
+            stream = await (
                 client_with_cdt_data.query("test", "cdt_test")
                 .where("this is not valid AEL !!!")
                 .execute()
             )
+            async for result in stream:
+                pass
 
-    async def test_invalid_list_syntax(self, client_with_cdt_data):
-        """Test invalid list syntax raises AelParseException."""
-        # [stringValue] is not valid - should be [=stringValue] or ["stringValue"]
-        with pytest.raises(AelParseException):
-            await (
+    @pytest.mark.parametrize(
+        "expected_exc,match",
+        [
+            pytest.param(
+                AelParseException,
+                None,
+                id="client-side",
+                marks=requires_client_side_ael,
+            ),
+            pytest.param(
+                InvalidRequest,
+                "ParameterError",
+                id="server-side",
+                marks=requires_server_compiled_ael,
+            ),
+        ],
+    )
+    async def test_invalid_list_syntax(self, client_with_cdt_data, expected_exc, match):
+        """Invalid list path ``[stringValue]`` — client parse error or server ParameterError.
+
+        ``[stringValue]`` is not valid; use ``[=stringValue]`` or ``[\"stringValue\"]``.
+        Client path: often raises in :meth:`where` during parse; server path may fail
+        when evaluating the filter on the cluster.
+        """
+        with pytest.raises(expected_exc, match=match):
+            stream = await (
                 client_with_cdt_data.query("test", "cdt_test")
                 .where("$.numbers.[invalidSyntax] == 100")
                 .execute()
             )
+            async for result in stream:
+                pass
 
 
 # =============================================================================
@@ -2092,10 +2138,10 @@ class TestInExpression:
 class TestConvenienceWrappers:
     """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    These helpers are thin pass-throughs to the native 8.1.2 ExpOps (see
+    These helpers are thin pass-throughs to the native 8.1.3 ExpOps (see
     the docstrings in ``aerospike_sdk/exp.py``). Server versions older
-    than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
-    consume ``client_with_cdt_data_812`` which auto-routes to the 8.1.2+
+    than 8.1.3 reject the opcodes with ``ParameterError``, so the tests
+    consume ``client_with_cdt_data_812`` which auto-routes to the 8.1.3+
     cluster when one is available and skips cleanly otherwise. Callers
     that need broader compatibility should build the equivalent expression
     explicitly with ``Exp.list_get_by_value`` /
@@ -2180,6 +2226,15 @@ class TestConvenienceWrappers:
         assert len(records) == 3
 
 
+def _hex_blob_expr(payload: bytes) -> str:
+    return f"$.payload:BLOB == X'{payload.hex()}'"
+
+
+def _b64_blob_expr(payload: bytes) -> str:
+    enc = base64.b64encode(payload).decode("ascii")
+    return f'$.payload.get(type: BLOB) == "{enc}"'
+
+
 class TestAelMapBlobIntegrationQueries:
     """Extra map and blob AEL filters exercised against a live server."""
 
@@ -2213,35 +2268,50 @@ class TestAelMapBlobIntegrationQueries:
         assert "alice" in records[0].bins["scores"]
         assert "bob" in records[0].bins["scores"]
 
-    async def test_blob_bin_ael_equality_on_server(
+    @pytest.mark.parametrize(
+        "make_expr",
+        [
+            pytest.param(
+                _hex_blob_expr,
+                id="server-side-hex",
+                marks=requires_server_compiled_ael,
+            ),
+            pytest.param(
+                _b64_blob_expr,
+                id="client-side-b64",
+                marks=requires_client_side_ael,
+            ),
+        ],
+    )
+    async def test_blob_bin_ael_equality(
         self,
         aerospike_host,
         client_policy,
-        wait_for_set_visible,
+        enterprise,
+        make_expr,
     ):
-        """BLOB bin filter using a base64 literal in AEL."""
-        import base64
-
+        """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
         async with Client(seeds=aerospike_host, policy=client_policy) as client:
             session = client.create_session()
             k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
             payload = bytes([1, 2, 254])
+
             try:
                 await session.delete(k).execute()
             except Exception:
                 pass
 
             await session.upsert(k).put({"payload": payload}).execute()
-            await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
+            await asyncio.sleep(0.25 if not enterprise else 0.01)
 
-            enc = base64.b64encode(payload).decode("ascii")
             stream = await (
                 session.query("test", "ael_blob_srv_it")
-                    .where(f'$.payload.get(type: BLOB) == "{enc}"')
-                    .execute()
+                .where(make_expr(payload))
+                .execute()
             )
             rows = [r.record async for r in stream]
             stream.close()
+
             assert len(rows) == 1
             assert rows[0].bins["payload"] == payload
 
