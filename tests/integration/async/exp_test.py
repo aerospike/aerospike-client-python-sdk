@@ -1924,30 +1924,11 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session, key, "not (countOneBits($.A) == 1)")
         await self._assert_matches(session, key, "countOneBits($.A) == 1", "A", 1)
 
-    @pytest.mark.parametrize("expected_pos", [
-        pytest.param(
-            0,
-            id="server-side",
-            marks=[
-                requires_server_compiled_ael,
-                pytest.mark.xfail(
-                    condition=server_version_gte("8.1.2"),
-                    reason="findBitLeft() emits invalid msgpack (ParameterError at eval time) — server codegen bug",
-                    strict=True,
-                ),
-            ],
-        ),
-        pytest.param(
-            63,
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
-    async def test_filter_lscan(self, filter_session, expected_pos):
-        """Left scan: findBitLeft($.A, true) == <expected_pos> for key A."""
+    async def test_filter_lscan(self, filter_session):
+        """Left scan: findBitLeft($.A, true) == 63 for key A."""
         session, ds = filter_session
         key = ds.id("A")
-        expr = f"findBitLeft($.A, true) == {expected_pos}"
+        expr = f"findBitLeft($.A, true) == 63"
         await self._assert_filtered_out(session, key, f"not ({expr})")
         await self._assert_matches(session, key, expr, "A", 1)
 
