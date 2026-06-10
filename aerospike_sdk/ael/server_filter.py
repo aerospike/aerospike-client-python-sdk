@@ -17,25 +17,11 @@
 
 from __future__ import annotations
 
-import sys
+import os
 
 from aerospike_async import FilterExpression
 
 from aerospike_sdk.ael.parser import parse_ael
-
-
-def _print_ael_wire_decision(detail: str, ael: str) -> None:
-    """Visible under pytest (stderr); banner so it is not glued to the progress line."""
-    print(
-        "\n"
-        "======== aerospike_sdk.ael.server_filter (AEL wire decision) ========\n"
-        f"{detail}\n"
-        f"ael={ael!r}\n"
-        "=====================================================================\n",
-        file=sys.stderr,
-        flush=True,
-    )
-
 
 def filter_expression_from_ael_string(
     ael: str,
@@ -51,19 +37,5 @@ def filter_expression_from_ael_string(
     if supports_server_compiled_ael:
         factory = getattr(FilterExpression, "from_server_compiled_ael", None)
         if callable(factory):
-            _print_ael_wire_decision(
-                "branch: SERVER-COMPILED (FilterExpression.from_server_compiled_ael)",
-                ael,
-            )
             return factory(ael)
-        _print_ael_wire_decision(
-            "branch: CLIENT PARSE (server compile requested but "
-            "from_server_compiled_ael missing or not callable)",
-            ael,
-        )
-    else:
-        _print_ael_wire_decision(
-            "branch: CLIENT PARSE (supports_server_compiled_ael=False)",
-            ael,
-        )
     return parse_ael(ael)
