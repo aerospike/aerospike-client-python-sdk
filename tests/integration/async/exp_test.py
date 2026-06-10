@@ -2221,35 +2221,30 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session, key, "not (max($.A, $.D, $.E) == 1)")
         await self._assert_matches(session, key, "max($.A, $.D, $.E) == 1", "A", 1)
 
-    @requires_client_side_ael
-    async def test_filter_cond(self, filter_session):
-        """Conditional: when A==1 => D-E == 2 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
-        when_expr = (
-            "when($.A == 0 => $.D + $.E, "
+    @pytest.mark.parametrize("ael", [
+        pytest.param(
+            "(when($.A == 0 => $.D + $.E, "
             "$.A == 1 => $.D - $.E, "
             "$.A == 2 => $.D * $.E, "
-            "default => -1)"
-        )
-        cond_ael = f"({when_expr}) == 2"
-        await self._assert_filtered_out(session, key, f"not ({cond_ael})")
-        await self._assert_matches(session, key, cond_ael, "A", 1)
-
-    @requires_server_compiled_ael
-    async def test_filter_cond_server(self, filter_session):
-        """Conditional on server-compiled path (typed bins in ``when``)."""
-        session, ds = filter_session
-        key = ds.id("A")
-        when_expr = (
-            "when($.A:INT == 0 => $.D:INT + $.E:INT, "
+            "default => -1)) == 2",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "(when($.A:INT == 0 => $.D:INT + $.E:INT, "
             "$.A:INT == 1 => $.D:INT - $.E:INT, "
             "$.A:INT == 2 => $.D:INT * $.E:INT, "
-            "default => -1)"
-        )
-        cond_ael = f"({when_expr}) == 2"
-        await self._assert_filtered_out(session, key, f"not ({cond_ael})")
-        await self._assert_matches(session, key, cond_ael, "A", 1)
+            "default => -1)) == 2",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_filter_cond(self, filter_session, ael):
+        """Conditional ``when(...) == 2`` for key A (A==1 ⇒ D−E==2); client vs typed server AEL."""
+        session, ds = filter_session
+        key = ds.id("A")
+        await self._assert_filtered_out(session, key, f"not ({ael})")
+        await self._assert_matches(session, key, ael, "A", 1)
 
 
 class TestInExpression:
