@@ -38,7 +38,7 @@ Dedicated VMs on isolated CPU cores with direct, low-latency networking between 
 | OS | Ubuntu 24.04 LTS, kernel 6.17.0-gcp |
 | Python | 3.14.5 free-threaded build (e.g. 3.14t) |
 | Rust | 1.95.0 |
-| PAC | `aerospike-async` 0.4.0a2 (built from source with `mimalloc` global allocator) |
+| PAC | `aerospike-async` 0.5.0a1 (built from source with `mimalloc` global allocator) |
 | PSDK | `aerospike-sdk` 0.9.0a2 (built from source) |
 | Legacy Python client | `aerospike` 19.2.1 (single-threaded, sync, C client; published PyPI wheel) |
 | Aerospike server | Enterprise 8.1.1.1, 3-node cluster, in-memory, 4 GB per node, RF=1 |
