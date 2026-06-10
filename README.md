@@ -192,9 +192,15 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 
 ### Prerequisites
 
-- **Python** 3.10 - 3.14 (recommended: [pyenv](https://github.com/pyenv/pyenv) with a dedicated environment)
+- **Python** 3.10 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
+  Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
+  or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
+  Note: free-threaded targets (`cp314t` ABI) require building PAC from source today —
+  see "Local PAC checkout" below. `aerospike-async` does not yet publish FT wheels
+  to PyPI.
 - **Aerospike server** — required for integration tests
-- **Rust toolchain** (`rustc` + `cargo`) — only needed if building the Aerospike Python Async Client from source
+- **Rust toolchain** (`rustc` + `cargo`) — required for building the Aerospike Python Async Client from source
+  (always required on free-threaded Python until FT wheels ship)
 - **Java 11+** — required for the one-time AEL parser build (`make generate-ael`)
 
 ### Setting up a dev environment
@@ -206,11 +212,16 @@ pip install -e ".[dev]"    # install with dev extras
 
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
-### Local PAC checkout (development against an unreleased PAC tree)
+### Local PAC checkout (required for free-threaded Python today)
 
 To test against a sibling Aerospike Python Async Client working tree (e.g. for
 a feature not yet on PyPI), install it editable first and pass `--no-deps` to
 this SDK so pip doesn't try to re-resolve PAC from PyPI:
+
+If you're on free-threaded Python (`cp314t` ABI), this is currently the only
+way to install PAC — `aerospike-async` does not yet publish FT wheels to PyPI,
+and the `pip install -e ".[dev]"` flow above will fail with a "no supported
+wheel on this platform" error.
 
 ```bash
 pip install -e /path/to/aerospike-client-python-async

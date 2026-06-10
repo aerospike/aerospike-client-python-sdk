@@ -208,32 +208,38 @@ class WorkerStats:
         is_error: bool,
         latency_ms: Optional[float],
     ) -> None:
+        # `reads` / `writes` count *successful* ops only.  Timeouts and
+        # errors increment their own counters and DO NOT inflate the TPS
+        # number.  Use `total_ops()` for attempted-ops semantics (e.g.
+        # `--max-ops` gating).
         if is_read:
-            self.reads += 1
             if is_timeout:
                 self.read_timeouts += 1
             elif is_error:
                 self.read_errors += 1
-            elif latency_ms is not None:
-                if latency_ms <= 1.0:
-                    self.read_le1 += 1
-                r_gt = self.read_gt
-                for j, thresh in enumerate(self._thresholds):
-                    if latency_ms > thresh:
-                        r_gt[j] += 1
+            else:
+                self.reads += 1
+                if latency_ms is not None:
+                    if latency_ms <= 1.0:
+                        self.read_le1 += 1
+                    r_gt = self.read_gt
+                    for j, thresh in enumerate(self._thresholds):
+                        if latency_ms > thresh:
+                            r_gt[j] += 1
         else:
-            self.writes += 1
             if is_timeout:
                 self.write_timeouts += 1
             elif is_error:
                 self.write_errors += 1
-            elif latency_ms is not None:
-                if latency_ms <= 1.0:
-                    self.write_le1 += 1
-                w_gt = self.write_gt
-                for j, thresh in enumerate(self._thresholds):
-                    if latency_ms > thresh:
-                        w_gt[j] += 1
+            else:
+                self.writes += 1
+                if latency_ms is not None:
+                    if latency_ms <= 1.0:
+                        self.write_le1 += 1
+                    w_gt = self.write_gt
+                    for j, thresh in enumerate(self._thresholds):
+                        if latency_ms > thresh:
+                            w_gt[j] += 1
         if latency_ms is not None and not is_error and not is_timeout:
             with self._lat_lock:
                 self._lat_pairs.append((latency_ms, is_read))
@@ -255,7 +261,7 @@ class WorkerStats:
         isn't available from the stream API.
         """
         if is_read:
-            self.reads += n_success + n_error
+            self.reads += n_success
             self.read_errors += n_error
             if latency_ms is not None and n_success > 0:
                 if latency_ms <= 1.0:
@@ -265,7 +271,7 @@ class WorkerStats:
                     if latency_ms > thresh:
                         r_gt[j] += 1
         else:
-            self.writes += n_success + n_error
+            self.writes += n_success
             self.write_errors += n_error
             if latency_ms is not None and n_success > 0:
                 if latency_ms <= 1.0:
@@ -351,8 +357,16 @@ class StatsCollector:
         return self._warmup <= self._current_interval < hi
 
     def total_ops(self) -> int:
+        # Attempted-ops semantics: includes successes + timeouts + errors.
+        # Used for `--max-ops` gating so a failure-heavy run still
+        # terminates rather than looping forever waiting on successes.
         with self._workers_lock:
-            return sum(w.reads + w.writes for w in self._workers)
+            return sum(
+                w.reads + w.writes
+                + w.read_timeouts + w.write_timeouts
+                + w.read_errors + w.write_errors
+                for w in self._workers
+            )
 
     def sample_cpu(self) -> None:
         ru = resource.getrusage(resource.RUSAGE_SELF)
@@ -533,11 +547,14 @@ class StatsCollector:
         w_err = sum(x.write_errors for x in mid)
         r_to = sum(x.read_timeouts for x in mid)
         w_to = sum(x.write_timeouts for x in mid)
-        total_ops = sum(t_tps)
+        total_succ = sum(t_tps)
         total_err = r_err + w_err
         total_to = r_to + w_to
-        err_pct = (100.0 * total_err / total_ops) if total_ops else 0.0
-        to_pct = (100.0 * total_to / total_ops) if total_ops else 0.0
+        # Denominator for error / timeout rates is attempted ops, not
+        # successes — otherwise an all-error run reports 0% errors.
+        attempted = total_succ + total_err + total_to
+        err_pct = (100.0 * total_err / attempted) if attempted else 0.0
+        to_pct = (100.0 * total_to / attempted) if attempted else 0.0
 
         lat = sorted(self._lat_summary.tolist())
         pct_lines: List[str] = []

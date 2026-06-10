@@ -70,21 +70,25 @@ class RecordStream:
         :meth:`first_or_raise`: Assert a single OK row.
     """
 
+    __slots__ = (
+        "_source", "_closed", "_single_result",
+        # Chunked-iteration state (set lazily by from_chunked_recordset).
+        # Slots so set-after-init is allowed without per-instance dict.
+        "_chunked", "_chunk_first", "_chunk_recordset",
+        "_chunk_reexecute", "_chunk_limit", "_chunk_count", "_counter_ref",
+    )
+
     def __init__(self, source: AsyncIterator[RecordResult]) -> None:
         self._source = source
         self._closed = False
+        # Fast-path cache for single-result streams: avoids async
+        # iteration overhead in first() / first_or_raise() / __anext__.
+        self._single_result: RecordResult | None = None
+        # Chunked fields lazily initialized: from_chunked_recordset is the
+        # only path that touches them. has_more_chunks() reads via getattr
+        # so a freshly-constructed stream needs no extra writes here.
         self._chunked = False
         self._chunk_first = True
-        self._chunk_recordset: Any = None
-        self._chunk_reexecute: Callable[
-            [PartitionFilter], Awaitable[Any]
-        ] | None = None
-        self._chunk_limit: int = 0
-        self._chunk_count: int = 0
-        self._counter_ref: list[int] = [0]
-        # Fast-path cache for single-result streams: avoids async
-        # iteration overhead in first() / first_or_raise().
-        self._single_result: RecordResult | None = None
 
     # -- factory constructors ------------------------------------------------
 
@@ -203,8 +207,14 @@ class RecordStream:
         """
         rc = ResultCode.OK if record is not None else ResultCode.KEY_NOT_FOUND_ERROR
         result = RecordResult(key=key, record=record, result_code=rc, index=0)
-        inst = cls(_SingleResultIter(result))
+        # Skip the _SingleResultIter allocation; __anext__ short-circuits via
+        # _single_result instead. Saves an iterator + frame per single-key op.
+        inst = cls.__new__(cls)
+        inst._source = None  # type: ignore[assignment]
+        inst._closed = False
         inst._single_result = result
+        inst._chunked = False
+        inst._chunk_first = True
         return inst
 
     @classmethod
@@ -244,6 +254,14 @@ class RecordStream:
         """
         if self._closed:
             raise StopAsyncIteration
+        # Single-result fast path: from_single skips iterator allocation
+        # and stashes the result in _single_result. Drain it here without
+        # hitting an underlying iterator.
+        r = self._single_result
+        if r is not None:
+            self._single_result = None
+            self._closed = True
+            return r
         return await self._source.__anext__()
 
     # -- chunked iteration ---------------------------------------------------

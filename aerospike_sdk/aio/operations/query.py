@@ -21,6 +21,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import (
+    Protocol,
     TYPE_CHECKING,
     Any,
     Awaitable,
@@ -31,8 +32,12 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
     overload,
 )
+
+from abc import abstractmethod
+from typing_extensions import Self
 
 from aerospike_async import (
     BasePolicy,
@@ -287,7 +292,7 @@ class _WriteVerbs:
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> WriteSegmentBuilder:
+    ) -> "WriteSegmentBuilder":
         raise NotImplementedError
 
     def upsert(
@@ -455,7 +460,23 @@ class _OperationSpec:
     udf_args: Optional[List[Any]] = None
 
 
-_T = TypeVar("_T")
+class _SupportsAddOperation(Protocol):
+    """Structural type for builders that accept arbitrary CDT/op additions
+    and can spawn write-segment chains.
+
+    Used as the bound for :data:`_T` in :class:`QueryBinBuilder` /
+    :class:`WriteBinBuilder` so mypyc can resolve ``parent.add_operation(...)``
+    and ``parent._start_write_verb(...)`` statically. Concrete implementers:
+    ``_QueryBuilderBase``, ``_WriteSegmentBuilderBase``.
+    """
+
+    def add_operation(self, op: Any) -> None: ...
+    def _start_write_verb(
+        self, op_type: str, arg1: Any, *more_keys: Any,
+    ) -> "WriteSegmentBuilder": ...
+
+
+_T = TypeVar("_T", bound=_SupportsAddOperation)
 
 
 class _QueryBuilderBase:
@@ -486,6 +507,38 @@ class _QueryBuilderBase:
     # a soft "no-op" outcome.
     _WRITES_REQUIRING_EXISTING_KEY = frozenset({"update", "replace_if_exists"})
 
+    # Class-level defaults for always-virgin-at-init fields. Reads fall
+    # through here until a chained method sets the instance attribute,
+    # eliminating ~17 attribute writes per `session.query(key)` /
+    # `session.upsert(key)` op. The bypass-check chain at the top of
+    # `execute()` relies on these defaults being readable; chained
+    # methods like `.bins(...)` simply assign instance attrs that
+    # shadow the class default.
+    _bins: Optional[List[str]] = None
+    _with_no_bins: bool = False
+    _filter_expression: Optional[FilterExpression] = None
+    _query_hint: Optional[QueryHint] = None
+    _where_ael: Optional[str] = None
+    _index_context: Optional["IndexContext"] = None
+    _policy: Optional[QueryPolicy] = None
+    _partition_filter: Optional[PartitionFilter] = None
+    _chunk_size: Optional[int] = None
+    _fail_on_filtered_out: bool = False
+    _respond_all_keys: bool = False
+    _read_policy: Optional[ReadPolicy] = None
+    _op_type: Optional[str] = None
+    _generation: Optional[int] = None
+    _ttl_seconds: Optional[int] = None
+    _durable_delete: Optional[bool] = None
+    _durable_delete_command_default: Optional[bool] = None
+    _record_delete_in_operations: bool = False
+    _default_filter_expression: Optional[FilterExpression] = None
+    _default_ttl_seconds: Optional[int] = None
+    _udf_package: Optional[str] = None
+    _udf_function: Optional[str] = None
+    _udf_args: Optional[List[Any]] = None
+    _op_projection: Optional[List[Any]] = None
+
     def __init__(
         self,
         client: Client,
@@ -495,6 +548,8 @@ class _QueryBuilderBase:
         indexes_monitor: Optional["IndexesMonitor"] = None,
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
+        cached_read_policy_sc: Optional[ReadPolicy] = None,
+        cached_write_policy_sc: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
@@ -529,39 +584,14 @@ class _QueryBuilderBase:
         self._behavior = behavior
         self._indexes_monitor = indexes_monitor
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
-        self._bins: Optional[List[str]] = None
-        self._with_no_bins: bool = False
+        # Mutable-list fields need per-instance copies (cannot live as
+        # class defaults — first mutation would leak across instances).
         self._filter_records: List[_FilterRecord] = []
-        self._filter_expression: Optional[FilterExpression] = None
-        self._query_hint: Optional[QueryHint] = None
-        self._where_ael: Optional[str] = None
-        self._index_context: Optional["IndexContext"] = None
-        self._policy: Optional[QueryPolicy] = None
-        self._partition_filter: Optional[PartitionFilter] = None
-        self._chunk_size: Optional[int] = None
-        self._fail_on_filtered_out: bool = False
-        self._respond_all_keys: bool = False
         self._operations: List[Any] = []
         self._specs: List[_OperationSpec] = []
         self._single_key: Optional[Key] = None
         self._keys: Optional[List[Key]] = None
-        self._read_policy: Optional[ReadPolicy] = None
-        self._op_type: Optional[str] = None
-        self._generation: Optional[int] = None
-        self._ttl_seconds: Optional[int] = None
-        self._durable_delete: Optional[bool] = None
-        self._durable_delete_command_default: Optional[bool] = None
-        self._record_delete_in_operations: bool = False
-        self._default_filter_expression: Optional[FilterExpression] = None
-        self._default_ttl_seconds: Optional[int] = None
-        self._udf_package: Optional[str] = None
-        self._udf_function: Optional[str] = None
-        self._udf_args: Optional[List[Any]] = None
-        # Optional ops projection (server returns the result of these ops
-        # per-record instead of the bin set). Server >= 8.1.2 accepts CDT,
-        # expression, bit, and HLL reads here; older servers accept only the
-        # basic Read op.
-        self._op_projection: Optional[List[Any]] = None
+        # All scalar / None / False fields use class-level defaults declared above.
         # Reuse session-cached policies when available; fall back to
         # computing them lazily from the behavior on first use.
         # MRT participation: when set, every policy produced by this
@@ -574,9 +604,15 @@ class _QueryBuilderBase:
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
+            # Per-mode SC variants for bypass paths that resolve namespace
+            # mode at use time and pick the right cached policy.
+            self._base_read_policy_sc: Optional[ReadPolicy] = cached_read_policy_sc
+            self._base_write_policy_sc: Optional[WritePolicy] = cached_write_policy_sc
         else:
             self._base_read_policy = None
             self._base_write_policy = None
+            self._base_read_policy_sc = None
+            self._base_write_policy_sc = None
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -609,9 +645,9 @@ class _QueryBuilderBase:
             self._namespace_mode = self._namespace_mode_resolver_blocking(self._namespace)
         else:
             self._namespace_mode = Mode.AP
-        if self._namespace_mode != Mode.AP:
-            self._base_read_policy = None
-            self._base_write_policy = None
+        if self._namespace_mode == Mode.SC:
+            self._base_read_policy = self._base_read_policy_sc
+            self._base_write_policy = self._base_write_policy_sc
 
     def _resolved_namespace_mode(self) -> Mode:
         assert self._namespace_mode is not None
@@ -639,7 +675,7 @@ class _QueryBuilderBase:
             bp = BatchPolicy()
         return self._apply_txn(bp)
 
-    def with_txn(self, txn: Optional[Txn]) -> "QueryBuilder":
+    def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
 
         Overrides any transaction captured at construction. Pass ``None`` to
@@ -671,7 +707,7 @@ class _QueryBuilderBase:
         self._base_write_policy = None
         return self
 
-    def bins(self, bin_names: List[str]) -> QueryBuilder:
+    def bins(self, bin_names: List[str]) -> Self:
         """Restrict the read to a non-empty set of bin names.
 
         Mutually exclusive with :meth:`with_no_bins`.
@@ -703,7 +739,7 @@ class _QueryBuilderBase:
         self._with_no_bins = False
         return self
 
-    def with_op_projection(self, *ops: Any) -> QueryBuilder:
+    def with_op_projection(self, *ops: Any) -> Self:
         """Project query results through one or more read operations.
 
         The server applies ``ops`` to every matching record and returns the
@@ -741,7 +777,7 @@ class _QueryBuilderBase:
         self._op_projection = list(ops) if ops else None
         return self
 
-    def with_no_bins(self) -> QueryBuilder:
+    def with_no_bins(self) -> Self:
         """
         Specify that no bins should be read (header-only query).
         
@@ -762,7 +798,7 @@ class _QueryBuilderBase:
         self._bins = []
         return self
 
-    def filter(self, filter_obj: Filter) -> QueryBuilder:
+    def filter(self, filter_obj: Filter) -> Self:
         """Add a secondary index filter to the query.
 
         Args:
@@ -774,7 +810,7 @@ class _QueryBuilderBase:
         self._filter_records.append(_FilterRecord(filter=filter_obj))
         return self
 
-    def filter_expression(self, expression: FilterExpression) -> QueryBuilder:
+    def filter_expression(self, expression: FilterExpression) -> Self:
         """
         Set a FilterExpression for server-side filtering.
 
@@ -816,7 +852,7 @@ class _QueryBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
-    ) -> QueryBuilder:
+    ) -> Self:
         """Apply a server-side filter for dataset queries or keyed reads that support it.
 
         String arguments are parsed with the AEL; prefer f-strings for
@@ -845,7 +881,7 @@ class _QueryBuilderBase:
             self._filter_expression = expression
         return self
 
-    def with_index_context(self, index_context: "IndexContext") -> QueryBuilder:
+    def with_index_context(self, index_context: "IndexContext") -> Self:
         """Explicitly override the secondary index metadata used for filter generation.
 
         Most applications do **not** need this method. The client automatically
@@ -865,7 +901,7 @@ class _QueryBuilderBase:
         self._index_context = index_context
         return self
 
-    def with_policy(self, policy: QueryPolicy) -> QueryBuilder:
+    def with_policy(self, policy: QueryPolicy) -> Self:
         """
         Set the query policy.
         
@@ -878,7 +914,7 @@ class _QueryBuilderBase:
         self._policy = policy
         return self
 
-    def with_read_policy(self, policy: ReadPolicy) -> QueryBuilder:
+    def with_read_policy(self, policy: ReadPolicy) -> Self:
         """
         Set the read policy (for single key or batch key queries).
         
@@ -891,7 +927,7 @@ class _QueryBuilderBase:
         self._read_policy = policy
         return self
 
-    def partition(self, partition_filter: PartitionFilter) -> QueryBuilder:
+    def partition(self, partition_filter: PartitionFilter) -> Self:
         """Restrict a dataset query using a PAC :class:`~aerospike_async.PartitionFilter`.
 
         Prefer :meth:`on_partition` or :meth:`on_partition_range` for common cases.
@@ -908,7 +944,7 @@ class _QueryBuilderBase:
         self._partition_filter = partition_filter
         return self
 
-    def on_partitions(self, *partition_ids: int) -> QueryBuilder:
+    def on_partitions(self, *partition_ids: int) -> Self:
         """
         Set partitions to query by partition IDs.
         
@@ -933,7 +969,7 @@ class _QueryBuilderBase:
             self._partition_filter = PartitionFilter.by_range(min_id, max_id + 1)
         return self
 
-    def on_partition(self, part_id: int) -> QueryBuilder:
+    def on_partition(self, part_id: int) -> Self:
         """
         Target a specific partition for the query.
         
@@ -955,7 +991,7 @@ class _QueryBuilderBase:
         """
         return self.on_partition_range(part_id, part_id + 1)
 
-    def on_partition_range(self, start_incl: int, end_excl: int) -> QueryBuilder:
+    def on_partition_range(self, start_incl: int, end_excl: int) -> Self:
         """
         Target a range of partitions for the query.
         
@@ -997,7 +1033,7 @@ class _QueryBuilderBase:
         self._partition_filter = PartitionFilter.by_range(start_incl, end_excl)
         return self
 
-    def chunk_size(self, chunk_size: int) -> QueryBuilder:
+    def chunk_size(self, chunk_size: int) -> Self:
         """Tune server-side streaming chunk size (maps to query policy ``max_records`` chunking).
 
         This method controls how many records are fetched per chunk from the server
@@ -1026,7 +1062,7 @@ class _QueryBuilderBase:
         self._chunk_size = chunk_size
         return self
 
-    def records_per_second(self, rps: int) -> QueryBuilder:
+    def records_per_second(self, rps: int) -> Self:
         """
         Set the maximum records per second for the query.
         
@@ -1043,7 +1079,7 @@ class _QueryBuilderBase:
         self._ensure_policy().records_per_second = rps
         return self
 
-    def max_records(self, max_records: int) -> QueryBuilder:
+    def max_records(self, max_records: int) -> Self:
         """
         Set the maximum number of records to return.
         
@@ -1060,7 +1096,7 @@ class _QueryBuilderBase:
         self._ensure_policy().max_records = max_records
         return self
 
-    def limit(self, limit: int) -> QueryBuilder:
+    def limit(self, limit: int) -> Self:
         """
         Set the maximum number of records to return (alias for max_records).
         
@@ -1085,7 +1121,7 @@ class _QueryBuilderBase:
             raise ValueError(f"Limit must be > 0, not {limit}")
         return self.max_records(limit)
 
-    def expected_duration(self, duration: "QueryDuration") -> QueryBuilder:
+    def expected_duration(self, duration: "QueryDuration") -> Self:
         """
         Set the expected duration of the query.
         
@@ -1103,7 +1139,7 @@ class _QueryBuilderBase:
         self._ensure_policy().expected_duration = duration
         return self
 
-    def with_hint(self, hint: QueryHint) -> QueryBuilder:
+    def with_hint(self, hint: QueryHint) -> Self:
         """Attach a query hint for secondary index selection or scheduling.
 
         A hint can redirect which secondary index is used (``index_name``),
@@ -1137,7 +1173,7 @@ class _QueryBuilderBase:
         self._query_hint = hint
         return self
 
-    def replica(self, replica: "Replica") -> QueryBuilder:
+    def replica(self, replica: "Replica") -> Self:
         """
         Set the replica preference for the query.
         
@@ -1156,7 +1192,7 @@ class _QueryBuilderBase:
         self._ensure_policy().replica = replica
         return self
 
-    def base_policy(self, base_policy: "BasePolicy") -> QueryBuilder:
+    def base_policy(self, base_policy: "BasePolicy") -> Self:
         """
         Set the base policy for the query.
         
@@ -1175,7 +1211,7 @@ class _QueryBuilderBase:
         self._ensure_policy().base_policy = base_policy
         return self
 
-    def fail_on_filtered_out(self) -> QueryBuilder:
+    def fail_on_filtered_out(self) -> Self:
         """Surface rows that fail a filter as ``FILTERED_OUT`` instead of omitting them.
 
         Applies to key-based reads where a filter excludes the record. Without this
@@ -1190,7 +1226,7 @@ class _QueryBuilderBase:
         self._fail_on_filtered_out = True
         return self
 
-    def respond_all_keys(self) -> QueryBuilder:
+    def respond_all_keys(self) -> Self:
         """Ensure batch/point reads emit one row per requested key, including not-found.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
@@ -1214,7 +1250,7 @@ class _QueryBuilderBase:
     def default_where(
         self,
         expression: Union[str, FilterExpression],
-    ) -> QueryBuilder:
+    ) -> Self:
         """Set a filter applied to any chained operation that does not call :meth:`where`.
 
         When a chain contains multiple operations (reads, writes, UDFs), each
@@ -1250,7 +1286,7 @@ class _QueryBuilderBase:
             self._default_filter_expression = expression
         return self
 
-    def default_expire_record_after_seconds(self, seconds: int) -> QueryBuilder:
+    def default_expire_record_after_seconds(self, seconds: int) -> Self:
         """Set a default TTL applied to chained operations that lack their own.
 
         Args:
@@ -1267,17 +1303,17 @@ class _QueryBuilderBase:
         self._default_ttl_seconds = seconds
         return self
 
-    def default_never_expire(self) -> QueryBuilder:
+    def default_never_expire(self) -> Self:
         """Set the default TTL to never expire (TTL = -1)."""
         self._default_ttl_seconds = _TTL_NEVER_EXPIRE
         return self
 
-    def default_with_no_change_in_expiration(self) -> QueryBuilder:
+    def default_with_no_change_in_expiration(self) -> Self:
         """Set the default to preserve each record's existing TTL (TTL = -2)."""
         self._default_ttl_seconds = _TTL_DONT_UPDATE
         return self
 
-    def default_expiry_from_server_default(self) -> QueryBuilder:
+    def default_expiry_from_server_default(self) -> Self:
         """Set the default TTL to the namespace's server default (TTL = 0)."""
         self._default_ttl_seconds = _TTL_SERVER_DEFAULT
         return self
@@ -1985,8 +2021,27 @@ class _QueryBuilderBase:
             )]
 
         if op_type is None and not has_ops:
-            # Simple read — all bins or projected bins. _make_read_policy
-            # picks up the spec-level filter_expression when present.
+            # Simple read — all bins or projected bins. Fast path: PAC's
+            # get_blocking_with_overrides builds the per-call ReadPolicy in
+            # Rust from the session-cached base + filter_expression / txn.
+            # Falls back to legacy `_make_read_policy` only when no Behavior
+            # is bound or a user-supplied read_policy is in play.
+            if self._base_read_policy is not None and self._read_policy is None:
+                try:
+                    record = self._client.get_blocking_with_overrides(
+                        key,
+                        spec.bins,
+                        self._base_read_policy,
+                        filter_expression=spec.filter_expression,
+                        txn=self._txn,
+                    )
+                except Exception as e:
+                    return self._handle_error_blocking_singlekey(
+                        key, e, None, disp, handler)
+                return [RecordResult(
+                    key=key, record=record, result_code=ResultCode.OK,
+                )]
+            # Slow path: no base, or user-supplied read_policy.
             rp = self._make_read_policy(spec)
             try:
                 record = self._client.get_blocking(key, spec.bins, policy=rp)
@@ -1998,9 +2053,43 @@ class _QueryBuilderBase:
             )]
 
         if has_ops:
-            # Write via operate. _make_write_policy threads filter
-            # expression, generation, TTL, durable-delete, REA-from-op-type,
-            # and the txn binding into the WritePolicy.
+            # Write via operate. Fast path: PAC's operate_blocking_with_overrides
+            # builds the per-call WritePolicy in Rust from the session-cached
+            # base + the small set of fields the SDK actually varies. Skips
+            # _make_write_policy's Python work on the hot path.
+            #
+            # Fall back to the legacy path when:
+            #  - no session-cached base policy (no Behavior bound), or
+            #  - record-delete op present (applies_dd True; needs the spec's
+            #    effective_dd resolution inside _make_write_policy).
+            if (
+                self._base_write_policy is not None
+                and not spec.contains_record_delete_op
+            ):
+                rea = _OP_TYPE_TO_REA.get(op_type)
+                exp = (
+                    _to_expiration(spec.ttl_seconds)
+                    if spec.ttl_seconds is not None else None
+                )
+                try:
+                    record = self._client.operate_blocking_with_overrides(
+                        key,
+                        spec.operations,
+                        self._base_write_policy,
+                        record_exists_action=rea,
+                        expiration=exp,
+                        generation=spec.generation,
+                        durable_delete=False,
+                        filter_expression=spec.filter_expression,
+                        txn=self._txn,
+                    )
+                except Exception as e:
+                    return self._handle_error_blocking_singlekey(
+                        key, e, spec.op_type, disp, handler)
+                return [RecordResult(
+                    key=key, record=record, result_code=ResultCode.OK,
+                )]
+            # Slow path: complex durable-delete or no Behavior — fall back.
             wp = self._make_write_policy(spec)
             try:
                 record = self._client.operate_blocking(key, spec.operations, policy=wp)
@@ -2451,7 +2540,7 @@ class _QueryBuilderBase:
                 .bin("age").get() \\
                 .execute()
         """
-        return QueryBinBuilder(self, bin_name)
+        return QueryBinBuilder(cast("QueryBuilder", self), bin_name)
 
     def add_operation(self, op: Any) -> None:
         """Append a read operation produced by a bin or CDT builder."""
@@ -2459,7 +2548,7 @@ class _QueryBuilderBase:
 
     def with_write_operations(
         self, operations: Sequence[Any],
-    ) -> QueryBuilder:
+    ) -> Self:
         """Attach scalar write operations for a background dataset task.
 
         Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
@@ -2482,7 +2571,7 @@ class _QueryBuilderBase:
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
-    ) -> QueryBuilder:
+    ) -> Self:
         """Chain another query with new key(s) for batch/point stacking.
 
         Finalizes the current query segment and begins a new one with
@@ -2529,7 +2618,7 @@ class _QueryBuilderBase:
         self._finalize_current_spec()
         self._op_type = op_type
         self._set_current_keys(arg1, *more_keys)
-        return WriteSegmentBuilder(self)
+        return WriteSegmentBuilder(cast("QueryBuilder", self))
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
@@ -2773,7 +2862,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         :class:`QueryBinBuilder`: Per-bin read operations.
     """
 
-
     async def _ensure_namespace_mode(self) -> None:
         """Resolve AP vs SC once per builder so behavior scopes match the namespace."""
         if self._namespace_mode is not None:
@@ -2782,9 +2870,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             self._namespace_mode = await self._namespace_mode_resolver(self._namespace)
         else:
             self._namespace_mode = Mode.AP
-        if self._namespace_mode != Mode.AP:
-            self._base_read_policy = None
-            self._base_write_policy = None
+        if self._namespace_mode == Mode.SC:
+            self._base_read_policy = self._base_read_policy_sc
+            self._base_write_policy = self._base_write_policy_sc
 
 
 
@@ -2883,6 +2971,51 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         See Also:
             :class:`~aerospike_sdk.error_strategy.ErrorStrategy`: ``on_error`` options.
         """
+        # Ultra-early bypass: virgin single-key read shape from
+        # `session.query(key).execute()`. Skips _finalize_current_spec +
+        # _OperationSpec allocation + _execute_single_key_direct spec-unpacking
+        # and dispatches directly to PAC get_with_overrides. Any chained
+        # method (.bin/.bins/.where/.with_txn/.ensure_generation/.expire_record/
+        # write verbs) flips a tracked field that disqualifies this path,
+        # so correctness for those flows is preserved.
+        if (
+            self._single_key is not None
+            and not self._specs
+            and not self._operations
+            and self._op_type is None
+            and self._bins is None
+            and not self._with_no_bins
+            and self._filter_expression is None
+            and self._default_filter_expression is None
+            and self._where_ael is None
+            and self._generation is None
+            and self._ttl_seconds is None
+            and self._default_ttl_seconds is None
+            and self._durable_delete is None
+            and self._udf_function is None
+            and on_error is None
+        ):
+            # Hot path: hand AP + SC base policies to PAC, let Rust resolve
+            # namespace mode (cached) and pick. Skips the per-op
+            # `_ensure_namespace_mode` await on the SDK side entirely when
+            # both policies are pre-built (the common no-txn case).
+            rp_ap = self._base_read_policy
+            rp_sc = self._base_read_policy_sc
+            if rp_ap is not None and rp_sc is not None:
+                key = self._single_key
+                try:
+                    record = await self._client.get_with_overrides(
+                        key, None, rp_ap,
+                        base_policy_sc=rp_sc,
+                        txn=self._txn,
+                    )
+                except Exception as e:
+                    return self._handle_error(
+                        key, e, _ErrorDisposition.THROW, None)
+                return RecordStream.from_single(key, record)
+            # Fall through when an AP-only policy is cached (e.g. txn nulled
+            # them): legacy path with explicit mode resolution.
+
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
 
@@ -3182,12 +3315,26 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         has_ops = bool(spec.operations)
 
         if op_type is None and not has_ops:
-            # Simple read — all bins or projected bins.
+            # Simple read — fast path via PAC's get_with_overrides when the
+            # session-cached base ReadPolicy is available. PAC builds the
+            # per-call policy in Rust from base + filter / txn.
             if self._base_read_policy is None and self._behavior is not None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
                     self._behavior.get_settings(
                         OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            rp = self._apply_txn(self._base_read_policy or ReadPolicy())
+            if self._base_read_policy is not None:
+                try:
+                    record = await self._client.get_with_overrides(
+                        key, spec.bins, self._base_read_policy,
+                        filter_expression=spec.filter_expression,
+                        txn=self._txn,
+                    )
+                except Exception as e:
+                    return self._handle_error(
+                        key, e, _ErrorDisposition.THROW, None)
+                return RecordStream.from_single(key, record)
+            # No base policy — fall back to the legacy build-in-Python path.
+            rp = self._apply_txn(ReadPolicy())
             try:
                 record = await self._client.get(key, spec.bins, policy=rp)
             except Exception as e:
@@ -3196,24 +3343,32 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             return RecordStream.from_single(key, record)
 
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
-            # Write via operate — upsert or verb with REA override.
+            # Write via operate — fast path via PAC's operate_with_overrides
+            # when the session-cached base WritePolicy is available. PAC
+            # builds the per-call policy in Rust from base + REA + overrides.
             if self._base_write_policy is None and self._behavior is not None:
                 self._base_write_policy = self._apply_txn(to_write_policy(
                     self._behavior.get_settings(
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
                         self._resolved_namespace_mode())))
+            if self._base_write_policy is not None:
+                try:
+                    record = await self._client.operate_with_overrides(
+                        key, spec.operations, self._base_write_policy,
+                        record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
+                        durable_delete=False,
+                        txn=self._txn,
+                    )
+                except Exception as e:
+                    return self._handle_error(
+                        key, e, _ErrorDisposition.THROW, None,
+                        op_type=spec.op_type)
+                return RecordStream.from_single(key, record)
+            # No base policy — fall back to the legacy build-in-Python path.
             rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
+            wp = self._apply_txn(WritePolicy())
             if rea is not None:
-                if self._behavior is not None:
-                    wp = self._apply_txn(to_write_policy(
-                        self._behavior.get_settings(
-                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                            self._resolved_namespace_mode())))
-                else:
-                    wp = self._apply_txn(WritePolicy())
                 wp.record_exists_action = rea
-            else:
-                wp = self._apply_txn(self._base_write_policy or WritePolicy())
             try:
                 record = await self._client.operate(key, spec.operations, policy=wp)
             except Exception as e:
@@ -3541,9 +3696,16 @@ class _WriteSegmentBuilderBase:
     :class:`QueryBuilder` / ``SyncQueryBuilder`` or on a session.
     """
     def __init__(self, qb: QueryBuilder) -> None:
+        # NOTE: declared as `QueryBuilder` (the concrete subclass) so mypyc
+        # can devirtualize calls on `self._qb` in the hot path. Sync callers
+        # pass `SyncQueryBuilder` (a sibling subclass of `_QueryBuilderBase`),
+        # which mypyc's runtime check would reject — but `SyncQueryBuilder`
+        # explicitly inherits from `QueryBuilder` for exactly this reason
+        # (see sync/operations/query.py). Widening to `_QueryBuilderBase`
+        # here cost ~40% TPS on the sync builder hot path.
         self._qb = qb
 
-    def with_txn(self, txn: Optional[Txn]) -> "WriteSegmentBuilder":
+    def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
 
         Delegates to the underlying :class:`QueryBuilder`; see
@@ -3571,7 +3733,7 @@ class _WriteSegmentBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         """Set a filter expression on the current write segment.
 
         Args:
@@ -3586,7 +3748,7 @@ class _WriteSegmentBuilderBase:
             self._qb._filter_expression = expression
         return self
 
-    def expire_record_after_seconds(self, seconds: int) -> WriteSegmentBuilder:
+    def expire_record_after_seconds(self, seconds: int) -> Self:
         """Set the TTL on the current write segment.
 
         Args:
@@ -3603,7 +3765,7 @@ class _WriteSegmentBuilderBase:
         self._qb._ttl_seconds = seconds
         return self
 
-    def never_expire(self) -> WriteSegmentBuilder:
+    def never_expire(self) -> Self:
         """Set this record to never expire (TTL = -1).
 
         Returns:
@@ -3612,7 +3774,7 @@ class _WriteSegmentBuilderBase:
         self._qb._ttl_seconds = _TTL_NEVER_EXPIRE
         return self
 
-    def with_no_change_in_expiration(self) -> WriteSegmentBuilder:
+    def with_no_change_in_expiration(self) -> Self:
         """Preserve the record's existing TTL (TTL = -2).
 
         Returns:
@@ -3621,7 +3783,7 @@ class _WriteSegmentBuilderBase:
         self._qb._ttl_seconds = _TTL_DONT_UPDATE
         return self
 
-    def expiry_from_server_default(self) -> WriteSegmentBuilder:
+    def expiry_from_server_default(self) -> Self:
         """Use the namespace's default TTL for this record (TTL = 0).
 
         Returns:
@@ -3630,7 +3792,7 @@ class _WriteSegmentBuilderBase:
         self._qb._ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
-    def ensure_generation_is(self, generation: int) -> WriteSegmentBuilder:
+    def ensure_generation_is(self, generation: int) -> Self:
         """Set expected generation for optimistic locking on the current segment.
 
         Args:
@@ -3647,7 +3809,7 @@ class _WriteSegmentBuilderBase:
         self._qb._generation = generation
         return self
 
-    def with_durable_delete(self) -> WriteSegmentBuilder:
+    def with_durable_delete(self) -> Self:
         """Enable durable delete on the current segment.
 
         Returns:
@@ -3656,22 +3818,22 @@ class _WriteSegmentBuilderBase:
         self._qb._durable_delete = True
         return self
 
-    def default_with_durable_delete(self) -> WriteSegmentBuilder:
+    def default_with_durable_delete(self) -> Self:
         """Prefer durable deletes for this segment when resolving behavior defaults."""
         self._qb._durable_delete_command_default = True
         return self
 
-    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+    def default_without_durable_delete(self) -> Self:
         """Prefer non-durable deletes for this segment when resolving behavior defaults."""
         self._qb._durable_delete_command_default = False
         return self
 
-    def without_durable_delete(self) -> WriteSegmentBuilder:
+    def without_durable_delete(self) -> Self:
         """Force a non-durable delete for this segment (may be rejected on SC)."""
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> WriteSegmentBuilder:
+    def respond_all_keys(self) -> Self:
         """Include results for missing keys in the stream.
 
         Returns:
@@ -3680,7 +3842,7 @@ class _WriteSegmentBuilderBase:
         self._qb._respond_all_keys = True
         return self
 
-    def fail_on_filtered_out(self) -> WriteSegmentBuilder:
+    def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code.
 
         Returns:
@@ -3689,7 +3851,7 @@ class _WriteSegmentBuilderBase:
         self._qb._fail_on_filtered_out = True
         return self
 
-    def replace_only(self) -> WriteSegmentBuilder:
+    def replace_only(self) -> Self:
         """Change the current segment to replace-if-exists semantics.
 
         The record must already exist; the operation fails with
@@ -3705,13 +3867,13 @@ class _WriteSegmentBuilderBase:
     def execute_blocking_fast_path(
         self,
         on_error: Optional[OnError] = None,
-    ) -> Optional[tuple]:
+    ) -> Optional[List[RecordResult]]:
         """Try the blocking single-key fast path via the parent QueryBuilder.
 
         Mirrors :meth:`execute` but uses PAC ``_blocking``. Returns
-        ``(key, record)`` on success, ``None`` when the spec shape isn't
-        yet handled by the blocking dispatch. Raises a converted PAC
-        exception on failure.
+        a list of :class:`RecordResult` on success, ``None`` when the spec
+        shape isn't yet handled by the blocking dispatch. Raises a converted
+        PAC exception on failure.
         """
         return self._qb.execute_blocking_fast_path(on_error)
     def bin(self, bin_name: str) -> WriteBinBuilder:
@@ -3723,9 +3885,9 @@ class _WriteSegmentBuilderBase:
         Returns:
             A WriteBinBuilder for method chaining.
         """
-        return WriteBinBuilder(self, bin_name)
+        return WriteBinBuilder(cast("WriteSegmentBuilder", self), bin_name)
 
-    def put(self, bins: dict) -> WriteSegmentBuilder:
+    def put(self, bins: dict) -> Self:
         """Apply ``Operation.put`` for each bin in the mapping.
 
         Args:
@@ -3744,11 +3906,11 @@ class _WriteSegmentBuilderBase:
             self._qb._operations.append(Operation.put(bin_name, value))
         return self
 
-    def set_bins(self, bins: dict) -> WriteSegmentBuilder:
+    def set_bins(self, bins: dict) -> Self:
         """Alias for :meth:`put`."""
         return self.put(bins)
 
-    def _add_op(self, op: Any) -> WriteSegmentBuilder:
+    def _add_op(self, op: Any) -> Self:
         self._qb._operations.append(op)
         return self
 
@@ -3756,35 +3918,35 @@ class _WriteSegmentBuilderBase:
         """Append an operation (used by CDT action builders)."""
         self._qb._operations.append(op)
 
-    def set_to(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+    def set_to(self, bin_name: str, value: Any) -> Self:
         """Set a bin to *value*."""
         return self._add_op(Operation.put(bin_name, value))
 
-    def add(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+    def add(self, bin_name: str, value: Any) -> Self:
         """Add a numeric *value* to a bin."""
         return self._add_op(Operation.add(bin_name, value))
 
-    def increment_by(self, bin_name: str, value: Any) -> WriteSegmentBuilder:
+    def increment_by(self, bin_name: str, value: Any) -> Self:
         """Alias for :meth:`add`."""
         return self.add(bin_name, value)
 
-    def get(self, bin_name: str) -> WriteSegmentBuilder:
+    def get(self, bin_name: str) -> Self:
         """Read a bin value back within a write operate."""
         return self._add_op(Operation.get_bin(bin_name))
 
-    def append(self, bin_name: str, value: str) -> WriteSegmentBuilder:
+    def append(self, bin_name: str, value: str) -> Self:
         """Append a string to a bin."""
         return self._add_op(Operation.append(bin_name, value))
 
-    def prepend(self, bin_name: str, value: str) -> WriteSegmentBuilder:
+    def prepend(self, bin_name: str, value: str) -> Self:
         """Prepend a string to a bin."""
         return self._add_op(Operation.prepend(bin_name, value))
 
-    def remove_bin(self, bin_name: str) -> WriteSegmentBuilder:
+    def remove_bin(self, bin_name: str) -> Self:
         """Delete a bin from the record."""
         return self._add_op(Operation.put(bin_name, None))
 
-    def delete_record(self) -> WriteSegmentBuilder:
+    def delete_record(self) -> Self:
         """Add a record-level delete to the current operate call.
 
         Unlike :meth:`~_WriteVerbs.delete` which targets a different key,
@@ -3809,7 +3971,7 @@ class _WriteSegmentBuilderBase:
         self._qb._record_delete_in_operations = True
         return self._add_op(Operation.delete())
 
-    def touch_record(self) -> WriteSegmentBuilder:
+    def touch_record(self) -> Self:
         """Add a record-level touch to the current operate call.
 
         Resets the record's TTL as part of an atomic multi-operation call.
@@ -3839,7 +4001,7 @@ class _WriteSegmentBuilderBase:
         expression: Union[str, FilterExpression],
         *,
         ignore_eval_failure: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
         expr = parse_ael(expression) if isinstance(expression, str) else expression
@@ -3853,7 +4015,7 @@ class _WriteSegmentBuilderBase:
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         """Write expression result only if bin does not already exist."""
         flags = _build_exp_write_flags(
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
@@ -3870,7 +4032,7 @@ class _WriteSegmentBuilderBase:
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         """Write expression result only if bin already exists."""
         flags = _build_exp_write_flags(
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
@@ -3887,7 +4049,7 @@ class _WriteSegmentBuilderBase:
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         """Write expression result, creating or overwriting the bin."""
         flags = _build_exp_write_flags(
             ExpWriteFlags.DEFAULT, ignore_op_failure,
@@ -3913,11 +4075,11 @@ class _WriteSegmentBuilderBase:
         self._qb._finalize_current_spec()
         self._qb._op_type = None
         self._qb._set_current_keys(arg1, *more_keys)
-        return self._qb
+        return cast("QueryBuilder", self._qb)
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> WriteSegmentBuilder:
+    ) -> Self:
         self._qb._finalize_current_spec()
         self._qb._op_type = op_type
         self._qb._set_current_keys(arg1, *more_keys)
@@ -4045,6 +4207,27 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     Private class — never seen by end users; constructed by the session
     when a single-key write verb is invoked.
     """
+
+    # Class-level defaults for fields that are always None/False at
+    # construction time. Reads fall through to these until a chained
+    # method (`.with_durable_delete()`, `.delete_record()`, etc.) assigns
+    # an instance attribute that shadows the class default. Eliminates 3
+    # attribute writes per `_SingleKeyWriteSegment(...)` construction
+    # call — pure savings on the bench upsert/insert/etc hot path.
+    _dd_command_default: Optional[bool] = None
+    _dd_override: Optional[bool] = None
+    _record_delete_in_fast_ops: bool = False
+
+    def _promote(self) -> None:
+        """Lift the fast-path state into a full builder. Subclasses override.
+
+        Declared on the base so static checkers and mypyc can resolve the
+        attribute on ``self`` without ``# type: ignore`` markers. The base
+        implementation raises — concrete subclasses (:class:`_SingleKeyWriteSegment`
+        and ``SyncSingleKeyWriteSegment``) override.
+        """
+        raise NotImplementedError("subclass must implement _promote")
+
     def __init__(
         self,
         client: Client,
@@ -4056,6 +4239,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
+        write_policy_sc: WritePolicy | None = None,
+        read_policy_sc: ReadPolicy | None = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -4068,16 +4253,20 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         if txn is None:
             self._write_policy = write_policy
             self._read_policy = read_policy
+            self._write_policy_sc = write_policy_sc
+            self._read_policy_sc = read_policy_sc
         else:
             self._write_policy = None
             self._read_policy = None
+            self._write_policy_sc = None
+            self._read_policy_sc = None
         self._behavior_fast = behavior
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
-        self._dd_command_default: Optional[bool] = None
-        self._dd_override: Optional[bool] = None
-        self._record_delete_in_fast_ops = False
+        # _dd_command_default, _dd_override, _record_delete_in_fast_ops
+        # are class-level defaults on _SingleKeyWriteSegmentBase; reads
+        # fall through, chained-method writes shadow.
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this segment's captured txn on an outer policy in place."""
@@ -4085,7 +4274,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             policy.txn = self._txn
         return policy
 
-    def with_txn(self, txn: Optional[Txn]) -> "_SingleKeyWriteSegment":
+    def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
 
         See :meth:`QueryBuilder.with_txn` for semantics.
@@ -4097,7 +4286,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._qb.with_txn(txn)
         return self
 
-    def put(self, bins: dict) -> WriteSegmentBuilder:
+    def put(self, bins: dict) -> Self:
         if self._qb is not None:
             return super().put(bins)
         ops = self._ops
@@ -4105,7 +4294,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             ops.append(Operation.put(bin_name, value))
         return self
 
-    def _add_op(self, op: Any) -> WriteSegmentBuilder:
+    def _add_op(self, op: Any) -> Self:
         if self._qb is not None:
             self._qb._operations.append(op)
         else:
@@ -4118,37 +4307,37 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         else:
             self._ops.append(op)
 
-    def replace_only(self) -> WriteSegmentBuilder:
+    def replace_only(self) -> Self:
         if self._qb is not None:
             return super().replace_only()
         self._op_type_fast = "replace_if_exists"
         return self
 
-    def delete_record(self) -> WriteSegmentBuilder:
+    def delete_record(self) -> Self:
         if self._qb is not None:
             return super().delete_record()
         self._record_delete_in_fast_ops = True
         return self._add_op(Operation.delete())
 
-    def default_with_durable_delete(self) -> WriteSegmentBuilder:
+    def default_with_durable_delete(self) -> Self:
         if self._qb is not None:
             return super().default_with_durable_delete()
         self._dd_command_default = True
         return self
 
-    def default_without_durable_delete(self) -> WriteSegmentBuilder:
+    def default_without_durable_delete(self) -> Self:
         if self._qb is not None:
             return super().default_without_durable_delete()
         self._dd_command_default = False
         return self
 
-    def without_durable_delete(self) -> WriteSegmentBuilder:
+    def without_durable_delete(self) -> Self:
         if self._qb is not None:
             return super().without_durable_delete()
         self._dd_override = False
         return self
 
-    def with_durable_delete(self) -> WriteSegmentBuilder:
+    def with_durable_delete(self) -> Self:
         if self._qb is not None:
             return super().with_durable_delete()
         self._dd_override = True
@@ -4215,18 +4404,18 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
             self._write_policy = wp
         return self._apply_txn(wp or WritePolicy())
-    def execute_blocking_fast_path(  # type: ignore[override]
+    def execute_blocking_fast_path(
         self,
         on_error: Optional[OnError] = None,
-    ) -> Optional[tuple]:
+    ) -> Optional[List[RecordResult]]:
         """Blocking fast path for ``_SingleKeyWriteSegment``.
 
         Promotes to a full ``QueryBuilder`` first (so namespace-mode
         resolution and the spec-shape eligibility checks work), then
         defers to :meth:`QueryBuilder.execute_blocking_fast_path`.
 
-        Returns ``(key, record)`` on success; ``None`` when the spec
-        shape isn't eligible (caller falls back to runner-driven).
+        Returns a list of :class:`RecordResult` on success; ``None`` when
+        the spec shape isn't eligible (caller falls back to runner-driven).
         """
         if on_error is not None:
             # Fast path requires THROW disposition; bail.
@@ -4250,8 +4439,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
     __slots__ = (
         "_client_fast", "_key", "_op_type_fast", "_ops",
         "_write_policy", "_behavior_fast", "_read_policy",
+        "_write_policy_sc", "_read_policy_sc",
         "_txn", "_namespace_mode_resolver", "_namespace_mode_resolver_blocking",
-        "_dd_command_default", "_dd_override", "_record_delete_in_fast_ops",
+        # _dd_command_default, _dd_override, _record_delete_in_fast_ops:
+        # class-level defaults on _SingleKeyWriteSegmentBase (skip them
+        # here so reads fall through to class default and writes go to
+        # __dict__ inherited from the non-slotted base).
     )
 
 
@@ -4283,6 +4476,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             behavior=self._behavior_fast,
             cached_write_policy=self._write_policy,
             cached_read_policy=self._read_policy,
+            cached_write_policy_sc=self._write_policy_sc,
+            cached_read_policy_sc=self._read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
@@ -4319,19 +4514,61 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
     ) -> RecordStream:
         if self._qb is not None:
             return await self._qb.execute(on_error)
-        if self._namespace_mode_resolver is not None:
+        if on_error is not None:
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
-        if on_error is not None:
+        # Durable-delete state requires the slow path: bypasses don't carry
+        # _dd_override / _dd_command_default through to the per-call policy,
+        # and SC namespaces require the right durable_delete flag (FailForbidden
+        # otherwise). Promote and defer to QueryBuilder.execute().
+        if self._dd_override is not None or self._dd_command_default is not None:
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
 
         key = self._key
         op_type = self._op_type_fast
 
+        # Hot path: when both AP + SC base policies are pre-built (the
+        # common no-txn case), hand them to PAC and let Rust resolve
+        # namespace mode (cached, lazy on first miss) and pick.
+        # Eliminates the per-op `_namespace_mode_resolver` await + dict
+        # lookup that would otherwise fire here. Delete/touch/exists keep
+        # their own PAC entries below.
+        if (
+            op_type not in ("delete", "touch", "exists")
+            and self._write_policy is not None
+            and self._write_policy_sc is not None
+        ):
+            try:
+                record = await self._client_fast.operate_with_overrides(
+                    key,
+                    self._ops,
+                    self._write_policy,
+                    base_policy_sc=self._write_policy_sc,
+                    record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
+                    durable_delete=False,
+                    txn=self._txn,
+                )
+            except Exception as exc:
+                return self._handle_fast_error(exc, op_type or "upsert")
+            return RecordStream.from_single(key, record)
+
+        # Fallback (delete/touch/exists + txn-bound cells): resolve mode
+        # explicitly, then dispatch to the right primitive.
+        mode = Mode.AP
+        if self._namespace_mode_resolver is not None:
+            mode = await self._namespace_mode_resolver(key.namespace)
+        if mode == Mode.SC:
+            cached_wp = self._write_policy_sc
+            cached_rp = self._read_policy_sc
+        else:
+            cached_wp = self._write_policy
+            cached_rp = self._read_policy
+
         # -- delete (PAC returns bool, no record) --
         if op_type == "delete":
-            wp = self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = self._apply_txn(wp)
             try:
                 existed = await self._client_fast.delete(key, policy=wp)
             except Exception as exc:
@@ -4342,7 +4579,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- touch (no record returned) --
         if op_type == "touch":
-            wp = self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = self._apply_txn(wp)
             try:
                 await self._client_fast.touch(key, policy=wp)
             except Exception as exc:
@@ -4351,14 +4589,14 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- exists (uses ReadPolicy, returns bool) --
         if op_type == "exists":
-            rp = self._read_policy
+            rp = cached_rp
             if rp is None and self._behavior_fast is not None:
                 rp = self._apply_txn(to_read_policy(
                     self._behavior_fast.get_settings(
-                        OpKind.READ, OpShape.POINT)))
-                self._read_policy = rp
+                        OpKind.READ, OpShape.POINT, mode)))
             if rp is None:
-                rp = self._apply_txn(ReadPolicy())
+                rp = ReadPolicy()
+            rp = self._apply_txn(rp)
             try:
                 found = await self._client_fast.exists(key, policy=rp)
             except Exception as exc:
@@ -4367,22 +4605,41 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
 
-        # -- operate-based: upsert, insert, update, replace, replace_if_exists --
+        # -- operate-based fallback when only one cached policy is set
+        # (e.g. txn-bound segment nulled both policies). cached_wp here
+        # is from the AP-or-SC pick above; use it if available, else
+        # build from behavior.
+        if cached_wp is not None:
+            try:
+                record = await self._client_fast.operate_with_overrides(
+                    key,
+                    self._ops,
+                    cached_wp,
+                    record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
+                    durable_delete=False,
+                    txn=self._txn,
+                )
+            except Exception as exc:
+                return self._handle_fast_error(exc, op_type or "upsert")
+            return RecordStream.from_single(key, record)
+
+        # Fall back to the legacy build-policy-in-Python path.
         rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
         if rea is not None:
             if self._behavior_fast is not None:
-                wp = self._apply_txn(to_write_policy(
+                wp = to_write_policy(
                     self._behavior_fast.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
+                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
             else:
-                wp = self._apply_txn(WritePolicy())
+                wp = WritePolicy()
             wp.record_exists_action = rea
         else:
             wp = self._get_write_policy()
+        wp = self._apply_txn(wp)
 
         try:
             record = await self._client_fast.operate(
-                wp, key, self._ops)
+                key, self._ops, policy=wp)
         except Exception as exc:
             return self._handle_fast_error(exc, op_type or "upsert")
         return RecordStream.from_single(key, record)

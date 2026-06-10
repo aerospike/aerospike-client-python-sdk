@@ -34,7 +34,9 @@ import asyncio
 import itertools
 import logging
 import os
+import sys
 import threading
+import warnings
 from typing import (
     Callable,
     Coroutine,
@@ -51,6 +53,17 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 X = TypeVar("X")
+
+
+def _gil_is_enabled() -> bool:
+    """Return True if Python's GIL is currently enabled.
+
+    On regular CPython (no free-threading build), ``sys._is_gil_enabled``
+    is absent and the GIL is always on. On free-threaded builds
+    (3.13t / 3.14t) the GIL state is dynamic and depends on the
+    ``PYTHON_GIL`` env var plus any C extensions that re-enable it.
+    """
+    return getattr(sys, "_is_gil_enabled", lambda: True)()
 
 
 class AsyncPool:
@@ -75,7 +88,14 @@ class AsyncPool:
     of ``loop_count``.  Tune via the ``index_refresh_interval`` kwarg
     on :class:`AsyncPool` itself.
 
-    **Tuning notes** (from 12-core measurement run, client+server colocated):
+    **Per-Client Tokio runtime.**  When ``loop_count >= 4``, AsyncPool
+    automatically configures each Client to use its own dedicated PAC
+    Tokio runtime instead of the shared global one. This eliminates the
+    cross-loop scheduler contention that previously caused throughput to
+    collapse beyond 4 loops. Controlled via the ``per_client_runtime``
+    kwarg; see its docstring for the threshold rationale and override.
+
+    **Tuning notes** (8-core remote-cluster measurement, FT 3.14t):
 
     * **Tasks-per-loop floor.**  Below ~16–32 concurrent asyncio tasks
       per loop, per-call dispatch overhead (``run_coroutine_threadsafe`` +
@@ -83,15 +103,17 @@ class AsyncPool:
       4-loop pool with 8 tasks/loop measured *slower* than a 1-loop client
       with 32 tasks total.  Keep tasks-per-loop in the same regime that
       saturates a single client.
-    * **Throughput vs tail latency.**  Adding loops trades p99 for TPS.
-      In one sample, going from 1 → 8 loops took p99 from 0.6 ms to 6.1 ms
-      while TPS rose then fell.  Latency-sensitive workloads should pick a
-      ``loop_count`` based on the p99 budget; throughput-only workloads can
-      push higher.
+    * **Throughput scales monotonically with loops** under per-Client
+      runtime (4×64 = 167K, 8×64 = 178K, 12×64 = 180K TPS measured).  TPS
+      ceiling on 8-core hardware is ~180K, capped by Python interpreter
+      self-time across loops.
+    * **Tail latency degrades with loops.**  4×64 has p99 = 4.3 ms; 12×64
+      has p99 = 15.5 ms. Latency-sensitive workloads should pick
+      ``loop_count`` based on the p99 budget; throughput-only workloads
+      can push higher.
     * **Sweet spot is hardware-dependent.**  With colocated client+server
-      the sweet spot is at 1–2 loops because they share CPU; with a remote
-      server on dedicated hardware the curve flattens later.  Always
-      validate against your target deployment.
+      the sweet spot shifts down because they share CPU; with more cores
+      the ceiling shifts up. Always validate against your target deployment.
 
     Example::
 
@@ -114,6 +136,7 @@ class AsyncPool:
         loop_count: Optional[int] = None,
         *,
         index_refresh_interval: float = 5.0,
+        per_client_runtime: Optional[bool] = None,
     ) -> None:
         """Configure the pool.  Call :meth:`start` or use ``async with``.
 
@@ -123,6 +146,18 @@ class AsyncPool:
                 ``loop_count`` times — once per pool thread.  Each client
                 connects on its own loop, binding its PAC
                 ``CompletionBridge`` to that loop.
+
+                **Shared-policy invariant:** when ``per_client_runtime`` is
+                enabled (auto at ``loop_count >= 4`` on free-threaded Python),
+                the factory MUST return Clients sharing a single
+                ``ClientPolicy`` PyO3 object — typically via a closure that
+                captures one policy: ``policy = ClientPolicy(); factory =
+                lambda: Client(seeds, policy=policy)``. AsyncPool applies a
+                one-shot mutation to that shared policy before any loop
+                thread starts; constructing a fresh ``ClientPolicy`` per
+                call would land the mutation on client 0 only and silently
+                disable the per-Client runtime for the rest. Violations
+                raise ``RuntimeError`` from :meth:`start`.
 
                 **Connection-pool sizing:** with N clients, total connections
                 per server node = N × ``max_conns_per_node``.  To keep the
@@ -137,6 +172,19 @@ class AsyncPool:
                 monitor serves all pool clients — the per-Client monitor
                 each ``client_factory()`` would create is replaced before
                 connect, eliminating N×polling load.
+            per_client_runtime: Whether each pool Client should run on its
+                own dedicated PAC Tokio runtime (per-loop runtime isolation,
+                eliminates cross-loop scheduler contention).
+
+                * ``None`` (default): auto-enable when ``loop_count >= 4``.
+                  Below 4 loops the shared global runtime wins on the
+                  per-loop worker budget; at 4+ loops per-Client runtimes
+                  scale monotonically (measured: AsyncPool 8×64 lifts from
+                  ~59K TPS collapsed to ~184K with per-Client runtimes).
+                * ``True``: always enable. Worker count auto-sized to
+                  ``max(2, os.cpu_count() // loop_count)``.
+                * ``False``: never enable; use the shared global runtime
+                  regardless of ``loop_count``.
 
         Example::
 
@@ -153,6 +201,34 @@ class AsyncPool:
         """
         self._factory = client_factory
         self._n = loop_count or os.cpu_count() or 4
+        # Auto-decide per-Client runtime: enable at 4+ loops where it scales,
+        # leave alone below where the shared global runtime wins. ALSO gate
+        # on GIL being disabled — under GIL-on Python the per-Client Tokio
+        # workers all serialize on one GIL when delivering completions back
+        # to asyncio, which deadlocks (every worker stuck in futex_do_wait
+        # while the main loop blocks on epoll). Threshold + GIL check are
+        # both empirical (8-core measurements); revisit on other hardware.
+        if per_client_runtime is None:
+            per_client_runtime = self._n >= 4 and not _gil_is_enabled()
+        elif per_client_runtime and _gil_is_enabled():
+            # Explicit opt-in on GIL-on is a footgun — known to deadlock.
+            # Warn loudly but honor the user's choice; they may know
+            # something we don't (e.g., a tiny synthetic test).
+            warnings.warn(
+                "AsyncPool: per_client_runtime=True requested but the GIL is "
+                "enabled. This combination deadlocks under load — the "
+                "per-Client Tokio workers serialize on one GIL when delivering "
+                "completions. Either run on a free-threaded Python build with "
+                "PYTHON_GIL=0, or set per_client_runtime=False (or None for "
+                "the safe auto-decide).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        self._per_client_runtime = per_client_runtime
+        # Worker count: divide CPUs across loops, floor at 2 so each runtime
+        # has at least one extra worker to absorb tail-latency bursts.
+        n_cpu = os.cpu_count() or 4
+        self._per_client_runtime_workers = max(2, n_cpu // self._n)
         self._loops: List[Optional[asyncio.AbstractEventLoop]] = [None] * self._n
         self._threads: List[threading.Thread] = []
         self._clients: List[Client] = []
@@ -190,6 +266,46 @@ class AsyncPool:
         if self._closed:
             raise RuntimeError("AsyncPool is closed; create a new one")
 
+        # Phase 1: construct all N clients on the main thread, BEFORE any
+        # loop threads exist. Each call to `self._factory()` returns a
+        # fresh `Client` but typically shares the same `ClientPolicy`
+        # PyO3 object (the standard factory shape is
+        # `lambda: Client(seeds, policy=shared_policy)`). Constructing
+        # the clients here keeps them on a single thread until policy
+        # mutation is done.
+        clients: List[Optional[Client]] = [None] * self._n
+        for i in range(self._n):
+            client = self._factory()
+            # Replace the factory-created per-Client monitor with the pool's
+            # shared one before `connect()` runs.  `_owns_monitor = False`
+            # makes the per-Client lazy-start path skip start (so only one
+            # daemon thread polls, not N).  The pool drives the shared
+            # monitor's lifecycle (stop on aclose).
+            client._indexes_monitor = self._shared_monitor
+            client._owns_monitor = False
+            clients[i] = client
+
+        # Phase 2: one-shot policy mutation.  Per-Client Tokio runtime must
+        # be set BEFORE connect() because PAC's new_client() reads this
+        # field at construction.  This relies on the documented invariant
+        # that the factory returns Clients sharing a single ClientPolicy
+        # PyO3 object — verified by `_assert_shared_policy_invariant()`
+        # below. A single mutation on clients[0]._policy then applies to
+        # all clients via shared reference. Doing this once, BEFORE any
+        # loop threads exist, avoids the race where the previous
+        # per-iteration mutation could collide with already-running loop
+        # threads — on 3.14t free-threading PyO3's RefCell-style borrow
+        # checker raised `RuntimeError: Already borrowed` because the
+        # mutation took `&mut ClientPolicy` while a peer loop thread held
+        # a shared borrow via `Client.connect()`'s policy read.
+        if self._per_client_runtime:
+            self._assert_shared_policy_invariant(clients)
+            clients[0]._policy.per_client_runtime_workers = (
+                self._per_client_runtime_workers
+            )
+
+        # Phase 3: spawn the N loop threads. Safe now because clients are
+        # fully constructed and their shared policy is finalized.
         for i in range(self._n):
             t = threading.Thread(
                 target=self._run_loop_thread,
@@ -203,23 +319,16 @@ class AsyncPool:
         for ev in self._loop_ready:
             ev.wait()
 
-        # Schedule all connects concurrently on their respective loops.
-        # `run_coroutine_threadsafe` returns a `concurrent.futures.Future`;
-        # we wrap each so `gather` can await them without blocking the
-        # caller's event loop (sequential `.result()` would freeze the
-        # caller's loop for up to N × connect_timeout seconds).
-        clients: List[Optional[Client]] = [None] * self._n
+        # Phase 4: schedule all connects concurrently on their respective
+        # loops.  `run_coroutine_threadsafe` returns a
+        # `concurrent.futures.Future`; we wrap each so `gather` can await
+        # them without blocking the caller's event loop (sequential
+        # `.result()` would freeze the caller's loop for up to
+        # N × connect_timeout seconds).
         afuts: List[asyncio.Future[None]] = []
         for i in range(self._n):
-            client = self._factory()
-            # Replace the factory-created per-Client monitor with the pool's
-            # shared one before `connect()` runs.  `_owns_monitor = False`
-            # makes the per-Client lazy-start path skip start (so only one
-            # daemon thread polls, not N).  The pool drives the shared
-            # monitor's lifecycle (stop on aclose).
-            client._indexes_monitor = self._shared_monitor
-            client._owns_monitor = False
-            clients[i] = client
+            client = clients[i]
+            assert client is not None
             loop = self._loops[i]
             assert loop is not None
             cfut = asyncio.run_coroutine_threadsafe(client.connect(), loop)
@@ -467,6 +576,36 @@ class AsyncPool:
             raise RuntimeError(
                 "AsyncPool is not started; call start() or use async with"
             )
+
+    def _assert_shared_policy_invariant(self, clients: List[Optional[Client]]) -> None:
+        """Verify all clients share a single ``ClientPolicy`` PyO3 object.
+
+        The Phase-2 one-shot mutation in :meth:`start` relies on this
+        invariant: it mutates ``clients[0]._policy`` and expects the change
+        to be visible to all other clients via shared reference. The
+        documented factory shape (``lambda: Client(seeds, policy=shared)``)
+        produces this; an unusual factory that constructs a fresh
+        ``ClientPolicy`` per call would silently land
+        ``per_client_runtime_workers`` on client 0 only and break the
+        per-Client-runtime promise for clients 1..N-1.
+
+        Raises:
+            RuntimeError: If the factory produced clients with differing
+                ``ClientPolicy`` identities while ``per_client_runtime``
+                is enabled.
+        """
+        first = clients[0]._policy
+        for i, c in enumerate(clients[1:], start=1):
+            if c._policy is not first:
+                raise RuntimeError(
+                    f"AsyncPool with per_client_runtime requires the "
+                    f"factory to return Clients sharing a single "
+                    f"ClientPolicy object; client {i}'s policy is a "
+                    f"different object than client 0's. Use a closure "
+                    f"that captures one policy: "
+                    f"`policy = ClientPolicy(); "
+                    f"factory = lambda: Client(seeds, policy=policy)`."
+                )
 
     def _guard_self_dispatch(self) -> None:
         """Raise if the caller is running on one of the pool's own loops.

@@ -82,12 +82,18 @@ class SyncClient:
         max_error_rate: Optional[int] = None,
         error_rate_window: Optional[int] = None,
         indexes_monitor: Optional[IndexesMonitor] = None,
+        current_thread_runtime: bool = False,
     ) -> None:
         """Initialize a SyncClient (no IO).
 
         Args:
             seeds: Aerospike cluster seed addresses (e.g., "localhost:3000").
-            policy: Optional client policy. Defaults to a fresh ``ClientPolicy``.
+            policy: Optional client policy. When not supplied, defaults to a
+                fresh ``ClientPolicy`` with ``conn_pools_per_node = 8`` (PAC's
+                default of 4 is tuned for async; sync workloads driven from
+                many caller threads see real connection-pool mutex contention
+                at 4). Pass an explicit ``ClientPolicy`` to override either
+                this default or any other client-level setting.
             index_refresh_interval: Seconds between secondary index cache
                 refreshes (default 5.0). The monitor is a daemon thread that
                 starts lazily on the first AEL ``where()`` query — clients
@@ -100,15 +106,43 @@ class SyncClient:
                 :class:`IndexesMonitor` to share across clients (for example
                 an :class:`AsyncPool`). When supplied, this client uses it
                 but does not own its lifecycle.
+            current_thread_runtime: **Experimental — opt-in, subject to
+                removal.** When ``True``, each calling OS thread gets its
+                own PAC ``_LocalClient`` (sync-only, backed by a per-thread
+                ``current_thread`` Tokio runtime). Eliminates the
+                cross-thread worker hop on every op for ~+30-40% TPS lift
+                on 32-thread sync workloads. Open caveats before
+                production use: per-thread cluster tend multiplies info
+                load on the cluster at high thread counts; the
+                ``*_with_overrides`` method surface on ``_LocalClient`` is
+                only partially populated (get/put/operate/info), so SC
+                namespaces are not yet covered for the full PAC method
+                set. Recommended pairing when opted in: set
+                ``policy.conn_pools_per_node = 1`` so total connections
+                per node stay modest (N threads × 1 ≈ shared client's 8).
         """
         self._seeds = seeds
         if policy is None:
             policy = ClientPolicy()
+            if current_thread_runtime:
+                # Per-thread Client = per-thread pool; one connection per
+                # thread is enough for the per-thread blocking pattern.
+                policy.conn_pools_per_node = 1
+            else:
+                # SyncClient drives PAC from many caller threads, so the
+                # per-node connection-pool mutex sees real contention that
+                # async (single- or per-Client-loop) workloads do not.
+                # py-spy traces at conn_pools_per_node=4 showed ~65% of
+                # lock-contended samples in put_back/get on a 32-thread
+                # builder cell; 8 cuts the p99 tail roughly in half with no
+                # TPS cost. User-supplied policies are respected as-is.
+                policy.conn_pools_per_node = 8
         if max_error_rate is not None:
             policy.max_error_rate = max_error_rate
         if error_rate_window is not None:
             policy.error_rate_window = error_rate_window
         self._policy = policy
+        self._current_thread_runtime = current_thread_runtime
         self._client: Optional[AsyncClient] = None
         self._connected = False
         if indexes_monitor is not None:
@@ -131,13 +165,23 @@ class SyncClient:
         thread is not started here; it lazy-starts on the first AEL
         ``where()`` query.
 
+        When ``current_thread_runtime=True``, no PAC Client is constructed
+        here. Instead a thread-local proxy is installed; each calling OS
+        thread lazy-constructs its own
+        :class:`aerospike_async.LocalClient` on first op.
+
         Idempotent: returns early if already connected.
         """
         if self._connected and self._client is not None:
             return
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
-        self._client = new_client_blocking(self._policy, self._seeds)
+        if self._current_thread_runtime:
+            from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
+            # type: ignore[assignment] — proxy duck-types as PAC Client.
+            self._client = _ThreadLocalLocalClient(self._policy, self._seeds)  # type: ignore[assignment]
+        else:
+            self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
 
     def close(self) -> None:

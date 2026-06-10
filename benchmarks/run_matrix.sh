@@ -76,8 +76,7 @@ rm -f "$OUT"/*.txt
 
 ARGS=(-H "$HOST" -n "$NS" -s "$SET" -k "$KEYS" -o I8
       -w RU,50 -d "$DURATION"
-      --services-alternate --no-tracemalloc)
-      #--services-alternate --no-tracemalloc --with-telemetry)
+      --services-alternate --no-tracemalloc --with-telemetry)
 
 run() {
   local tag="$1"; shift
@@ -100,6 +99,22 @@ for gil in 0 1; do
       PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
         run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
           --mode sync --threads $threads $fp
+    done
+  done
+done
+
+# --- PSDK sync EXPERIMENTAL current_thread_runtime -------------------------
+# Per-thread Tokio current_thread runtime + per-thread PAC _LocalClient.
+# Dormant by default — only fires when the bench passes the explicit flag.
+# Kept in-matrix so each lever lands with both default + ct_runtime numbers.
+for gil in 0 1; do
+  for threads in 32 1; do
+    for fp in --fast-path --no-fast-path; do
+      sfx=${fp//-/_}
+      tag="psdk_sync${sfx}_t${threads}_ctrt_gil${gil}"
+      PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
+        run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
+          --mode sync --threads $threads $fp --current-thread-runtime
     done
   done
 done
@@ -133,6 +148,21 @@ for gil in 0 1; do
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
         --mode pac-blocking --threads $threads
+  done
+done
+
+# --- PAC sync EXPERIMENTAL current_thread_runtime --------------------------
+# Per-thread Tokio current_thread runtime + per-thread PAC _LocalClient.
+# Dormant by default — only fires when the bench passes the explicit flag.
+# Apples-to-apples PAC-direct ct_runtime measurement (no PSDK layer);
+# compare against psdk_sync_*_ctrt_gil* cells to isolate PSDK overhead
+# under ct_runtime.
+for gil in 0 1; do
+  for threads in 32 1; do
+    tag="pac_sync_t${threads}_ctrt_gil${gil}"
+    PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
+      run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
+        --mode pac-blocking --threads $threads --current-thread-runtime
   done
 done
 
