@@ -724,12 +724,6 @@ class TestExpWithAel:
 
         assert len(records) == 3
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="Server-side asInt() cast emits invalid msgpack (ParameterError at eval time) "
-        "— server bug, pending fix",
-        strict=True,
-    )
     async def test_where_explicit_cast_still_works(self, client_with_data):
         """Test that asInt() casts a float bin to int for comparison."""
         stream = await (
@@ -790,7 +784,7 @@ async def _seed_cdt_data(client, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
 
     Used by both ``client_with_cdt_data`` (broad-surface seed) and
-    ``client_with_cdt_data_812`` (8.1.3+ seed) so the two clusters see the
+    ``client_with_cdt_data_812`` (8.1.2+ seed) so the two clusters see the
     exact same shape.
     """
     session = client.create_session()
@@ -835,9 +829,9 @@ async def _drop_cdt_data(session, ds):
 
 @pytest.fixture
 async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
-    """SDK client + CDT dataset on the 8.1.3+ seed.
+    """SDK client + CDT dataset on the 8.1.2+ seed.
 
-    Used by tests that exercise convenience wrappers around server-8.1.3
+    Used by tests that exercise convenience wrappers around server-8.1.2
     ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
     ``aerospike_host_812_required`` fixture skips the test cleanly when
     ``AEROSPIKE_HOST_8_1_2`` is unset.
@@ -852,9 +846,9 @@ async def client_with_cdt_data_812(aerospike_host_812_required, client_policy, w
 async def client_with_cdt_data(aerospike_host, client_policy, wait_for_set_visible):
     """SDK client + CDT dataset on the broad-surface seed.
 
-    Tests that exercise convenience wrappers around server-8.1.3 ExpOps
+    Tests that exercise convenience wrappers around server-8.1.2 ExpOps
     should consume ``client_with_cdt_data_812`` instead so they auto-route
-    to the 8.1.3+ cluster when one is available.
+    to the 8.1.2+ cluster when one is available.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
@@ -1048,17 +1042,12 @@ class TestExistsAndCount:
 
         assert len(records) == 3
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
-        strict=True,
-    )
     async def test_list_count_comparison(self, client_with_cdt_data):
         """Test $.listBin.count() for getting list size."""
         # rec1 has 5 numbers, rec2 has 5 numbers, rec3 has 3 numbers
         stream = await (
             client_with_cdt_data.query("test", "cdt_test")
-            .where("$.numbers.count() > 3")
+            .where("$.numbers:LIST.count() > 3")
             .execute()
         )
         records = []
@@ -1070,18 +1059,12 @@ class TestExistsAndCount:
         for rec in records:
             assert len(rec.bins["numbers"]) > 3
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
-        strict=True,
-        raises=InvalidRequest,
-    )
     async def test_list_count_equals(self, client_with_cdt_data):
         """Test $.listBin.count() == value."""
         # rec3 has exactly 3 numbers
         stream = await (
             client_with_cdt_data.query("test", "cdt_test")
-            .where("$.numbers.count() == 3")
+            .where("$.numbers:LIST.count() == 3")
             .execute()
         )
         records = []
@@ -1092,18 +1075,12 @@ class TestExistsAndCount:
         assert len(records) == 1
         assert len(records[0].bins["numbers"]) == 3
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
-        strict=True,
-        raises=InvalidRequest,
-    )
     async def test_names_list_count(self, client_with_cdt_data):
         """Test count on names list."""
         # rec1: 3 names, rec2: 2 names, rec3: 1 name
         stream = await (
             client_with_cdt_data.query("test", "cdt_test")
-            .where("$.names.count() >= 2")
+            .where("$.names:LIST.count() >= 2")
             .execute()
         )
         records = []
@@ -1130,19 +1107,13 @@ class TestExistsAndCount:
         assert len(records) == 1
         assert records[0].bins["info"]["age"] > 30
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
-        strict=True,
-        raises=InvalidRequest,
-    )
     async def test_count_with_arithmetic(self, client_with_cdt_data):
         """Test count() in arithmetic expressions."""
         # Count of numbers + count of names > 5
         # rec1: 5+3=8, rec2: 5+2=7, rec3: 3+1=4
         stream = await (
             client_with_cdt_data.query("test", "cdt_test")
-            .where("($.numbers.count() + $.names.count()) > 5")
+            .where("($.numbers:LIST.count() + $.names:LIST.count()) > 5")
             .execute()
         )
         records = []
@@ -1232,8 +1203,8 @@ class TestAdvancedListAel:
         assert min(records[0].bins["values"]) < 5
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
+        condition=server_version_gte("8.1.2"),
+        reason="server-side LIST-pinned .count() (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
     async def test_list_by_value(self, client_with_list_data):
@@ -1241,7 +1212,7 @@ class TestAdvancedListAel:
         # rec1 and rec3 have 30 in their values list
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.values.[=30].count() > 0")
+            .where("$.values:LIST.[=30].count() > 0")
             .execute()
         )
         records = []
@@ -1260,7 +1231,7 @@ class TestAdvancedListAel:
         # but we can verify it parses and executes without error
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.values.[1:3].count() == 2")
+            .where("$.values:LIST.[1:3].count() == 2")
             .execute()
         )
         records = []
@@ -1280,7 +1251,7 @@ class TestAdvancedListAel:
         # rec4: [3, 4, 5] (3 items)
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.values.[2:].count() == 3")
+            .where("$.values:LIST.[2:].count() == 3")
             .execute()
         )
         records = []
@@ -1297,7 +1268,7 @@ class TestAdvancedListAel:
         # rec2: [5, 15, 25, 35, 45] -> [15, 25, 35] (3 items)
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.values.[=10:40].count() == 3")
+            .where("$.values:LIST.[=10:40].count() == 3")
             .execute()
         )
         records = []
@@ -1312,7 +1283,7 @@ class TestAdvancedListAel:
         # [#0:2] gets rank 0 and 1 (2 smallest items)
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.values.[#0:2].count() == 2")
+            .where("$.values:LIST.[#0:2].count() == 2")
             .execute()
         )
         records = []
@@ -1324,8 +1295,8 @@ class TestAdvancedListAel:
         assert len(records) == 4
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
+        condition=server_version_gte("8.1.2"),
+        reason="server-side LIST-pinned .count() (ParameterError at eval time) — server bug, pending fix",
         strict=True,
     )
     async def test_list_value_list(self, client_with_list_data):
@@ -1333,7 +1304,7 @@ class TestAdvancedListAel:
         # Find records where tags contain "alpha"
         stream = await (
             client_with_list_data.query("test", "list_ael_test")
-            .where("$.tags.[=alpha].count() > 0")
+            .where("$.tags:LIST.[=alpha].count() > 0")
             .execute()
         )
         records = []
@@ -1387,7 +1358,7 @@ class TestAdvancedMapAel:
     """Test advanced map AEL features."""
 
     @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
+        condition=server_version_gte("8.1.2"),
         reason="Server-side count() cast emits invalid msgpack (ParameterError at eval time) "
         "— server bug, pending fix",
         strict=True,
@@ -1397,7 +1368,7 @@ class TestAdvancedMapAel:
         # Find records where scores contains value 100
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{=100}.count() > 0")
+            .where("$.scores:MAP.{=100}.count() > 0")
             .execute()
         )
         records = []
@@ -1413,7 +1384,7 @@ class TestAdvancedMapAel:
         # Get first 2 entries (count=2)
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{0:2}.count() == 2")
+            .where("$.scores:MAP.{0:2}.count() == 2")
             .execute()
         )
         records = []
@@ -1432,7 +1403,7 @@ class TestAdvancedMapAel:
         # rec3: heidi=88 (1 item)
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{=80:95}.count() == 2")
+            .where("$.scores:MAP.{=80:95}.count() == 2")
             .execute()
         )
         records = []
@@ -1447,7 +1418,7 @@ class TestAdvancedMapAel:
         # Get 2 smallest values
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{#0:2}.count() == 2")
+            .where("$.scores:MAP.{#0:2}.count() == 2")
             .execute()
         )
         records = []
@@ -1543,7 +1514,7 @@ class TestNestedCdtAel:
         # nested_list[0] has 3 elements for rec1, 2 for rec2
         stream = await (
             client_with_nested_data.query("test", "nested_ael_test")
-            .where("$.nested_list.[0].count() == 3")
+            .where("$.nested_list.[0]:LIST.count() == 3")
             .execute()
         )
         records = []
@@ -1554,17 +1525,11 @@ class TestNestedCdtAel:
         assert len(records) == 1
         assert len(records[0].bins["nested_list"][0]) == 3
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="Server-side bin.count() emits invalid msgpack (ParameterError at eval time) "
-        "— server bug, pending fix",
-        strict=True,
-    )
     async def test_list_size_simple(self, client_with_nested_data):
         """Test $.list.count() - basic list size."""
         stream = await (
             client_with_nested_data.query("test", "nested_ael_test")
-            .where("$.simple_list.count() == 5")
+            .where("$.simple_list:LIST.count() == 5")
             .execute()
         )
         records = []
@@ -1598,7 +1563,7 @@ class TestMapKeyOperationsAel:
         # Get entries for keys alice and bob from scores
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{alice,bob}.count() == 2")
+            .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
         records = []
@@ -1609,17 +1574,12 @@ class TestMapKeyOperationsAel:
         # Only rec1 has both alice and bob
         assert len(records) == 1
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="$.bin.count() on bare bin emits invalid msgpack (ParameterError at eval time) — server bug, pending fix",
-        strict=True,
-    )
     async def test_map_key_range(self, client_with_map_data):
-        """Test $.map.{a-d} - get entries by key range."""
+        """Test $.map.{@a:b} - map key range (server AEL; bare {a:b} is index-only)."""
         # Get entries with keys from 'a' to 'd' (alice, bob, charlie)
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{alice-dave}.count() >= 2")
+            .where("$.scores:MAP.{@alice:dave}.count() >= 2")
             .execute()
         )
         records = []
@@ -1678,7 +1638,7 @@ class TestRelativeRangeAel:
         # For rec1 [0, 4, 5, 9, 11, 15]: value 5 is at index 2, rank 0-2 relative gets [5,9]
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.numbers.[#0:2~5].count() >= 1")
+            .where("$.numbers:LIST.[#0:2~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1694,7 +1654,7 @@ class TestRelativeRangeAel:
         # Get all items from rank 0 relative to value 5
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.numbers.[#0:~5].count() >= 1")
+            .where("$.numbers:LIST.[#0:~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1710,7 +1670,7 @@ class TestRelativeRangeAel:
         # Get items NOT in rank range
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.numbers.[!#0:2~5].count() >= 1")
+            .where("$.numbers:LIST.[!#0:2~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1726,7 +1686,7 @@ class TestRelativeRangeAel:
         # Get map entries with rank relative to value 80
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{#-1:1~80}.count() >= 1")
+            .where("$.scores:MAP.{#-1:1~80}.count() >= 1")
             .execute()
         )
         records = []
@@ -1740,7 +1700,7 @@ class TestRelativeRangeAel:
         """Test $.map.{#rank:~value} - map value-relative rank range without end count."""
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{#-2:~80}.count() >= 2")
+            .where("$.scores:MAP.{#-2:~80}.count() >= 2")
             .execute()
         )
         records = []
@@ -1754,7 +1714,7 @@ class TestRelativeRangeAel:
         """Test $.map.{!#rank:end~value} - inverted map value-relative rank range."""
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{!#-1:1~80}.count() >= 1")
+            .where("$.scores:MAP.{!#-1:1~80}.count() >= 1")
             .execute()
         )
         records = []
@@ -1769,7 +1729,7 @@ class TestRelativeRangeAel:
         # Get map entries at index 0 to 1 relative to key "bob"
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{0:1~bob}.count() >= 1")
+            .where("$.scores:MAP.{0:1~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1783,7 +1743,7 @@ class TestRelativeRangeAel:
         """Test $.map.{start:~key} - map key-relative index range without end count."""
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{0:~bob}.count() >= 1")
+            .where("$.scores:MAP.{0:~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1797,7 +1757,7 @@ class TestRelativeRangeAel:
         """Test $.map.{!start:end~key} - inverted map key-relative index range."""
         stream = await (
             client_with_relative_range_data.query("test", "rel_range_test")
-            .where("$.scores.{!0:1~bob}.count() >= 1")
+            .where("$.scores:MAP.{!0:1~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1971,7 +1931,7 @@ class TestAdvancedExpFilters:
             marks=[
                 requires_server_compiled_ael,
                 pytest.mark.xfail(
-                    condition=server_version_gte("8.1.3"),
+                    condition=server_version_gte("8.1.2"),
                     reason="findBitLeft() emits invalid msgpack (ParameterError at eval time) — server codegen bug",
                     strict=True,
                 ),
@@ -1991,11 +1951,6 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session, key, f"not ({expr})")
         await self._assert_matches(session, key, expr, "A", 1)
 
-    @pytest.mark.xfail(
-        condition=server_version_gte("8.1.3"),
-        reason="findBitRight() emits invalid msgpack (ParameterError at eval time) — server codegen bug, pending fix",
-        strict=True,
-    )
     async def test_filter_rscan(self, filter_session):
         """Right scan: findBitRight(1, true) == 63 for key A."""
         session, ds = filter_session
@@ -2138,10 +2093,10 @@ class TestInExpression:
 class TestConvenienceWrappers:
     """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    These helpers are thin pass-throughs to the native 8.1.3 ExpOps (see
+    These helpers are thin pass-throughs to the native 8.1.2 ExpOps (see
     the docstrings in ``aerospike_sdk/exp.py``). Server versions older
-    than 8.1.3 reject the opcodes with ``ParameterError``, so the tests
-    consume ``client_with_cdt_data_812`` which auto-routes to the 8.1.3+
+    than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
+    consume ``client_with_cdt_data_812`` which auto-routes to the 8.1.2+
     cluster when one is available and skips cleanly otherwise. Callers
     that need broader compatibility should build the equivalent expression
     explicitly with ``Exp.list_get_by_value`` /
@@ -2257,7 +2212,7 @@ class TestAelMapBlobIntegrationQueries:
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
             client_with_map_data.query("test", "map_ael_test")
-            .where("$.scores.{alice,bob}.count() == 2")
+            .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
         records = []
