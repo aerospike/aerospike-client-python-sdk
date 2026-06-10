@@ -27,7 +27,11 @@ from aerospike_sdk.aio.operations.query import (
     WriteBinBuilder,
     WriteSegmentBuilder,
 )
-from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder, SyncWriteSegmentBuilder
+from aerospike_sdk.sync.operations.query import (
+    SyncQueryBuilder,
+    SyncWriteBinBuilder,
+    SyncWriteSegmentBuilder,
+)
 
 
 class _OpCollector:
@@ -159,7 +163,6 @@ class TestQueryBinBuilderIndexListReads:
 class TestSyncWriteBinBuilderIndexListOps:
 
     def _build(self, bin_name: str = "L"):
-        from aerospike_sdk.sync.operations.query import SyncQueryBuilder
         qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
         qb._op_type = "upsert"
         qb._single_key = _make_key()

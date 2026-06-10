@@ -90,6 +90,9 @@ def client_policy_from_config(cfg: object) -> ClientPolicy:
     cli_alt = getattr(cfg, "services_alternate", None)
     policy.use_services_alternate = cli_alt if cli_alt is not None else env_alt
 
+    if getattr(cfg, "seed_only_cluster", False):
+        policy.seed_only_cluster = True
+
     ca = getattr(cfg, "tls_ca_file", None)
     cert = getattr(cfg, "tls_cert_file", None)
     key = getattr(cfg, "tls_key_file", None)

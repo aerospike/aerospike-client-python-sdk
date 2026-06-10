@@ -30,8 +30,8 @@ from aerospike_sdk.aio.operations.batch import (
     BatchBinBuilder,
     BatchKeyOperationBuilder,
     BatchOperationBuilder,
-    BatchOpType,
 )
+from aerospike_sdk.operations_shared import BatchOpType
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,

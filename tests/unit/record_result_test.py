@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from aerospike_async import Key
 from aerospike_async.exceptions import ResultCode
 
+from aerospike_sdk import HllConfig
 from aerospike_sdk.exceptions import AerospikeError, GenerationError
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
@@ -162,8 +163,13 @@ class TestImmutability:
 
     def test_cannot_set_attribute(self):
         rr = RecordResult(key=_key(), record=_record(), result_code=ResultCode.OK)
+        # `setattr` instead of direct `rr.record = ...` to bypass static
+        # analyzers (PyCharm `PyDataclass`, mypy `misc`) that flag the
+        # intentional frozen-dataclass mutation. Runtime behavior is
+        # identical: any attribute assignment raises `FrozenInstanceError`
+        # (an `AttributeError` subclass).
         with pytest.raises(AttributeError):
-            rr.record = None  # type: ignore[misc]
+            setattr(rr, "record", None)
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +221,12 @@ class TestBatchRecordsToResults:
 class TestGetHllConfig:
 
     def test_returns_config_from_two_element_list(self):
-        from aerospike_sdk import HllConfig
         rr = RecordResult(
             key=_key(), record=_record(h=[14, -1]), result_code=ResultCode.OK,
         )
         assert rr.get_hll_config("h") == HllConfig.of(14)
 
     def test_returns_config_with_minhash(self):
-        from aerospike_sdk import HllConfig
         rr = RecordResult(
             key=_key(), record=_record(h=[12, 20]), result_code=ResultCode.OK,
         )

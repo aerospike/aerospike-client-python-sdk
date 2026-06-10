@@ -22,6 +22,7 @@ Tests both:
 """
 
 import pytest
+import pytest_asyncio
 from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.aio.client import Client
@@ -709,3 +710,216 @@ class TestBatchExpressionOps:
         rec = await rs.first_or_raise()
         assert rec.record.bins["tag"] == "done"
         assert rec.record.bins["doubled"] == 20
+
+
+class TestBatchExecuteStream:
+    """Lazy `execute_stream()` — completion-order yields, no
+    writes-complete-on-return guarantee. Mixed ops in one call."""
+
+    @pytest_asyncio.fixture
+    async def track_key(self, client):
+        """Factory: register a Key for auto-cleanup at fixture teardown.
+
+        Replaces manual ``try/except session.delete(k).execute()`` loops at
+        the end of every test. Pass each Key through this factory once and
+        the fixture handles the drop in teardown order.
+        """
+        session = client.create_session()
+        created: list = []
+
+        def track(key):
+            created.append(key)
+            return key
+
+        yield track
+
+        for k in created:
+            try:
+                await session.delete(k).execute()
+            except Exception:
+                pass
+
+    async def test_execute_stream_mixed_ops_yields_all(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """Mixed writes + AEL read + delete in one streaming batch.
+
+        Verifies:
+        - All 4 ops yield a RecordResult (set-equality on input indices).
+        - The streamed expression-read result carries the computed value
+          (`select_from "$.A + $.B"` → sum bin).
+        - Post-batch persisted state matches op semantics: the WRITE
+          actually flipped its bin; the two READS did NOT persist a
+          `sum` bin (select_from is a read, not a write); the DELETE
+          removed its record.
+        """
+        session = client.create_session()
+        keys = [track_key(users.id(f"estream_mix_{i}")) for i in range(4)]
+        for i, k in enumerate(keys):
+            await session.upsert(k).put({"A": i, "B": i * 2}).execute()
+
+        stream = await (
+            session.batch()
+                .upsert(keys[0]).bin("A").set_to(99)
+                .update(keys[1]).bin("sum").select_from("$.A + $.B")
+                .update(keys[2]).bin("sum").select_from("$.A + $.B")
+                .delete(keys[3])
+                .execute_stream()
+        )
+        results = await stream.collect()
+        assert len(results) == 4
+        assert {r.index for r in results} == {0, 1, 2, 3}
+
+        by_idx = {r.index: r for r in results}
+        for r in results:
+            assert r.is_ok
+
+        # In-stream value checks: the two select_from ops carry the
+        # computed `sum` bin on their BatchRecord even though the persistent
+        # record won't have it (verified below).
+        # keys[1]: A=1, B=2 → 1+2=3
+        # keys[2]: A=2, B=4 → 2+4=6
+        assert by_idx[1].record.bins["sum"] == 3
+        assert by_idx[2].record.bins["sum"] == 6
+
+        # Persisted state checks:
+        # (write) keys[0]: bin A flipped from 0 → 99; B unchanged.
+        rec0 = await (await session.query(keys[0]).execute()).first_or_raise()
+        assert rec0.record.bins["A"] == 99
+        assert rec0.record.bins["B"] == 0
+
+        # (read) keys[1] / keys[2]: `select_from` is a read — the original
+        # bins are untouched, and `sum` is NOT persisted.
+        rec1 = await (await session.query(keys[1]).execute()).first_or_raise()
+        assert rec1.record.bins == {"A": 1, "B": 2}
+        rec2 = await (await session.query(keys[2]).execute()).first_or_raise()
+        assert rec2.record.bins == {"A": 2, "B": 4}
+
+        # (delete) keys[3]: gone.
+        empty = await (await session.query(keys[3]).execute()).collect()
+        assert empty == []
+
+    async def test_execute_stream_read_only_ops_dispatch_as_reads(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """AEL select_from under the UPDATE verb is a read — must dispatch
+        as BatchReadOp on the wire so the server accepts it. Catches the
+        regression where read-only op lists got wrapped in BatchWriteOp.
+        Also verifies the persisted record was NOT mutated (select_from is
+        a read; if the bug regressed and it landed as a write, the `sum`
+        bin would persist)."""
+        session = client.create_session()
+        keys = [track_key(users.id(f"estream_ro_{i}")) for i in range(2)]
+        for i, k in enumerate(keys):
+            await session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
+
+        stream = await (
+            session.batch()
+                .update(keys[0]).bin("sum").select_from("$.A + $.B")
+                .update(keys[1]).bin("sum").select_from("$.A + $.B")
+                .execute_stream()
+        )
+        results = await stream.collect()
+        assert len(results) == 2
+        results.sort(key=lambda r: r.index)
+        assert results[0].record.bins["sum"] == 8  # 5 + 3
+        assert results[1].record.bins["sum"] == 9  # 6 + 3
+
+        # Persisted state: `sum` should NOT be on disk — select_from is read.
+        rec0 = await (await session.query(keys[0]).execute()).first_or_raise()
+        assert rec0.record.bins == {"A": 5, "B": 3}
+        rec1 = await (await session.query(keys[1]).execute()).first_or_raise()
+        assert rec1.record.bins == {"A": 6, "B": 3}
+
+
+class TestBatchVerbExistenceEnforcement:
+    """Verbs (``insert``/``update``/``replace``/``replace_if_exists``) carry a
+    per-key :class:`BatchWritePolicy` with the right
+    :class:`RecordExistsAction`, so the server enforces the verb's
+    existence constraint on the wire. ``upsert`` is the default (no
+    enforcement) and exists as the always-succeeds variant."""
+
+    @pytest_asyncio.fixture
+    async def track_key(self, client):
+        session = client.create_session()
+        created: list = []
+        def track(key):
+            created.append(key)
+            return key
+        yield track
+        for k in created:
+            try:
+                await session.delete(k).execute()
+            except Exception:
+                pass
+
+    async def test_update_nonexistent_returns_key_not_found(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """``update`` against a non-existent key must surface KEY_NOT_FOUND
+        — not silently upsert."""
+        session = client.create_session()
+        missing = track_key(users.id("verb_update_missing"))
+        stream = await (
+            session.batch().update(missing).bin("v").set_to(1).execute()
+        )
+        results = await stream.collect()
+        assert len(results) == 1
+        assert not results[0].is_ok
+        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    async def test_insert_existing_returns_key_exists(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """``insert`` against an existing key must surface KEY_EXISTS
+        — not silently upsert."""
+        session = client.create_session()
+        existing = track_key(users.id("verb_insert_existing"))
+        await session.upsert(existing).put({"v": 1}).execute()
+
+        stream = await (
+            session.batch().insert(existing).bin("v").set_to(2).execute()
+        )
+        results = await stream.collect()
+        assert len(results) == 1
+        assert not results[0].is_ok
+        assert results[0].result_code == ResultCode.KEY_EXISTS_ERROR
+
+    async def test_replace_if_exists_nonexistent_returns_key_not_found(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """``replace_if_exists`` against a non-existent key surfaces KEY_NOT_FOUND."""
+        session = client.create_session()
+        missing = track_key(users.id("verb_replace_if_exists_missing"))
+        stream = await (
+            session.batch().replace_if_exists(missing).bin("v").set_to(1).execute()
+        )
+        results = await stream.collect()
+        assert len(results) == 1
+        assert not results[0].is_ok
+        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    async def test_upsert_against_nonexistent_succeeds(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """``upsert`` is the no-enforcement verb — succeeds on either side."""
+        session = client.create_session()
+        k = track_key(users.id("verb_upsert_missing"))
+        stream = await (session.batch().upsert(k).bin("v").set_to(1).execute())
+        results = await stream.collect()
+        assert results[0].is_ok
+
+    async def test_execute_stream_enforces_verbs(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        """Streaming path enforces verb existence semantics the same as
+        the buffered path."""
+        session = client.create_session()
+        missing = track_key(users.id("verb_stream_missing"))
+        stream = await (
+            session.batch().update(missing).bin("v").set_to(1).execute_stream()
+        )
+        results = await stream.collect()
+        assert len(results) == 1
+        assert not results[0].is_ok
+        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR

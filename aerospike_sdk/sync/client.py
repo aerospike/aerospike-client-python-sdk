@@ -111,13 +111,10 @@ class SyncClient:
                 own PAC ``_LocalClient`` (sync-only, backed by a per-thread
                 ``current_thread`` Tokio runtime). Eliminates the
                 cross-thread worker hop on every op for ~+30-40% TPS lift
-                on 32-thread sync workloads. Open caveats before
-                production use: per-thread cluster tend multiplies info
-                load on the cluster at high thread counts; the
-                ``*_with_overrides`` method surface on ``_LocalClient`` is
-                only partially populated (get/put/operate/info), so SC
-                namespaces are not yet covered for the full PAC method
-                set. Recommended pairing when opted in: set
+                on 32-thread sync workloads. Open caveat before production
+                use: per-thread cluster tend multiplies info load on the
+                cluster at high thread counts. Recommended pairing when
+                opted in: set
                 ``policy.conn_pools_per_node = 1`` so total connections
                 per node stay modest (N threads × 1 ≈ shared client's 8).
         """

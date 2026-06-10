@@ -13,23 +13,23 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Async operations for the Aerospike SDK API."""
+"""Neutral session-level types shared by async + sync session implementations.
 
-from aerospike_sdk.aio.operations.batch import (
-    BatchOperationBuilder,
-    BatchKeyOperationBuilder,
-    BatchBinBuilder,
-)
-from aerospike_sdk.aio.operations.index import IndexBuilder
-from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.operations_shared import BatchOpType
+No asyncio anywhere. Lives at the package root so neither
+:mod:`aerospike_sdk.aio.session` nor :mod:`aerospike_sdk.sync.session` has
+to reach across tiers for these.
+"""
 
-__all__ = [
-    "BatchOperationBuilder",
-    "BatchKeyOperationBuilder",
-    "BatchBinBuilder",
-    "BatchOpType",
-    "IndexBuilder",
-    "QueryBuilder",
-]
+from __future__ import annotations
 
+from typing import NamedTuple
+
+
+class NamespaceScStatus(NamedTuple):
+    """Result of :meth:`aerospike_sdk.aio.session.Session.namespace_sc_status` /
+    :meth:`aerospike_sdk.sync.session.SyncSession.namespace_sc_status`."""
+
+    is_sc: bool
+    """True when the namespace exists and ``strong-consistency`` is enabled."""
+    detail: str
+    """Empty when ``is_sc`` is true; otherwise a short explanation for logging or skips."""

@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import (
     Any,
     Awaitable,
@@ -44,28 +43,25 @@ from aerospike_async import (
     Txn,
 )
 
-from aerospike_sdk.aio.operations.query import _build_exp_write_flags, _resolve_hll_flags
+from aerospike_sdk.aio.operations.query import _resolve_hll_flags
 from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.operations_shared import (
+    BatchOpType,
+    _build_exp_write_flags,
+    _build_pac_batch_ops,
+)
+from aerospike_sdk.error_strategy import ErrorHandler, _filter_records_with_handler
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_batch_policy
+from aerospike_sdk.record_result import batch_records_to_results
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.policy.behavior import Behavior
 
 NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
-
-
-class BatchOpType(Enum):
-    """Type of batch operation."""
-    INSERT = "insert"
-    UPDATE = "update"
-    UPSERT = "upsert"
-    REPLACE = "replace"
-    REPLACE_IF_EXISTS = "replace_if_exists"
-    DELETE = "delete"
 
 
 class BatchBinBuilder:
@@ -472,16 +468,42 @@ class BatchKeyOperationBuilder(_BatchKeyOperationBuilderBase):
     
     
     
-    async def execute(self) -> RecordStream:
-        """Execute all batch operations."""
-        return await self._batch.execute()
+    async def execute(self, on_error: Optional[ErrorHandler] = None) -> RecordStream:
+        """Execute all batch operations.
+
+        Args:
+            on_error: Optional ``(key, index, exception) -> None`` callback.
+                Failed per-key results are dispatched to the handler and
+                excluded from the returned stream.
+        """
+        return await self._batch.execute(on_error=on_error)
+
+    async def execute_stream(
+        self, on_error: Optional[ErrorHandler] = None,
+    ) -> RecordStream:
+        """Lazy streaming batch execute. See :meth:`BatchOperationBuilder.execute_stream`."""
+        return await self._batch.execute_stream(on_error=on_error)
 
 
 
 class _BatchOperationBuilderBase:
-    """State + chaining shared by async and sync BatchOperationBuilder.
+    """Source of truth for batch-builder state — ``_key_operations``,
+    ``_behavior``, ``_txn``, ``_namespace_mode_resolver(_blocking)``,
+    ``_client`` — that fluent chaining (``.insert(k).bin(...).set_to(...)``)
+    mutates. Both the async dispatch path
+    (:meth:`BatchOperationBuilder.execute` / :meth:`execute_stream`) and the
+    sync wrappers in :mod:`aerospike_sdk.sync.operations.batch` (which reach
+    in via ``self._inner.*``) read this state.
 
-    Methods migrate from :class:`BatchOperationBuilder` during Phase 4 collapse.
+    The sync dispatch never enters an event loop — it calls PAC's
+    ``*_blocking`` entries directly. Pure-Python op-construction helpers
+    (:func:`_build_pac_batch_ops`, :func:`_write_policy_for_op_type`) live
+    in :mod:`aerospike_sdk.operations_shared` and are shared by both surfaces;
+    they aren't "async" code, just neutral utilities.
+
+    :meth:`execute_blocking` on this base is the buffered sync sibling of
+    :meth:`BatchOperationBuilder.execute` — no asyncio, returns the raw PAC
+    ``BatchRecord`` list for the caller to wrap (the sync wrappers do).
     """
     def __init__(
         self,
@@ -656,32 +678,13 @@ class _BatchOperationBuilderBase:
         """Synchronously execute all batch operations; returns raw PAC ``BatchRecord`` list.
 
         Caller wraps in :class:`SyncRecordStream` (or any other sync
-        iterator). Mirrors :meth:`execute` semantics — same prep, same
-        delete-vs-operate split, same policy building — but the dispatch
-        is PAC ``batch_delete_blocking`` / ``batch_operate_blocking`` and
-        no asyncio loop is involved.
+        iterator). Mirrors :meth:`execute` semantics: a single mixed
+        ``batch_blocking`` call over pre-wrapped ops; per-key write
+        policies enforce verb existence semantics on the wire. No
+        asyncio loop is involved.
         """
         if not self._key_operations:
             raise ValueError("No operations to execute. Add operations with insert(), update(), etc.")
-
-        delete_keys: List[Key] = []
-        operate_keys: List[Key] = []
-        operate_ops: List[List[Union[Operation, ExpOperation]]] = []
-
-        for key_op in self._key_operations:
-            if key_op._op_type == BatchOpType.DELETE:
-                delete_keys.append(key_op._key)
-            else:
-                operate_keys.append(key_op._key)
-                ops = key_op._operations.copy()
-                if not ops and key_op._bins:
-                    for bin_name, value in key_op._bins.items():
-                        ops.append(Operation.put(bin_name, value))
-                if not ops:
-                    ops.append(Operation.touch())
-                operate_ops.append(ops)
-
-        raw_results: list = []
 
         all_keys = [key_op._key for key_op in self._key_operations]
         batch_mode = self._resolved_mode_for_keys_blocking(all_keys)
@@ -696,38 +699,26 @@ class _BatchOperationBuilderBase:
             batch_policy = BatchPolicy()
         self._apply_txn(batch_policy)
 
+        delete_policy: Optional[BatchDeletePolicy] = None
+        has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
+        if has_delete and self._behavior is not None:
+            delete_keys = [k._key for k in self._key_operations
+                           if k._op_type == BatchOpType.DELETE]
+            bs = self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.BATCH,
+                self._resolved_mode_for_keys_blocking(delete_keys),
+            )
+            if resolve_durable_delete(bs.durable_delete, None, None):
+                delete_policy = BatchDeletePolicy()
+                delete_policy.durable_delete = True
+
+        ops = _build_pac_batch_ops(self._key_operations, delete_policy)
+
         try:
-            delete_policy: Optional[BatchDeletePolicy] = None
-            if delete_keys and self._behavior is not None:
-                bs = self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE,
-                    OpShape.BATCH,
-                    self._resolved_mode_for_keys_blocking(delete_keys),
-                )
-                if resolve_durable_delete(bs.durable_delete, None, None):
-                    delete_policy = BatchDeletePolicy()
-                    delete_policy.durable_delete = True
-
-            if delete_keys:
-                delete_results = self._client.batch_delete_blocking(
-                    delete_keys,
-                    batch_policy=batch_policy,
-                    delete_policy=delete_policy,
-                )
-                raw_results.extend(delete_results)
-
-            if operate_keys:
-                operate_results = self._client.batch_operate_blocking(
-                    operate_keys,
-                    operate_ops,
-                    batch_policy=batch_policy,
-                )
-                raw_results.extend(operate_results)
+            return self._client.batch_blocking(ops, batch_policy=batch_policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
-
-        return raw_results
-
 
 
 class BatchOperationBuilder(_BatchOperationBuilderBase):
@@ -772,8 +763,29 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
     
     
     
-    async def execute(self) -> RecordStream:
-        """Execute all batch operations.
+    async def execute(
+        self, on_error: Optional[ErrorHandler] = None,
+    ) -> RecordStream:
+        """Execute all batch operations as a buffered call.
+
+        Awaits all per-key results before returning a :class:`RecordStream`
+        backed by a fully-materialized list. Writes are guaranteed to have
+        completed server-side by the time this method returns; subsequent
+        reads will observe the new state without races. Callers that don't
+        iterate the returned stream are safe — the "fire-and-forget" shape
+        works as expected.
+
+        For true per-record streaming (records arrive at first-RTT, peak
+        memory bounded), see :meth:`execute_stream` — note its different
+        semantics (completion-order yields, no writes-complete-on-return
+        guarantee, peak memory bounded).
+
+        Internally dispatches as a single mixed PAC ``batch`` call over
+        pre-wrapped :class:`BatchWriteOp` / :class:`BatchReadOp` /
+        :class:`BatchDeleteOp` entries — each per-key write carries its
+        own :class:`BatchWritePolicy` so the verb's existence semantics
+        (``update`` requires existing, ``insert`` requires absent, …) are
+        enforced on the wire. Results land in input order.
 
         Example::
 
@@ -787,40 +799,21 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
             )
             rows = await stream.collect()
 
+        Args:
+            on_error: Optional ``(key, index, exception) -> None`` callback.
+                When set, failed per-key results are dispatched to the
+                callback and excluded from the returned stream — the stream
+                contains only successes. Cluster-level errors still raise.
+
         Returns:
-            A :class:`RecordStream` of per-key :class:`RecordResult` items.
+            A :class:`RecordStream` of per-key :class:`RecordResult` items,
+            backed by a materialized list (positional via :attr:`RecordResult.index`).
 
         Raises:
             ValueError: If no operations have been added.
         """
         if not self._key_operations:
             raise ValueError("No operations to execute. Add operations with insert(), update(), etc.")
-
-        # Separate delete operations from others (they use batch_delete)
-        delete_keys: List[Key] = []
-        operate_keys: List[Key] = []
-        operate_ops: List[List[Union[Operation, ExpOperation]]] = []
-
-        for key_op in self._key_operations:
-            if key_op._op_type == BatchOpType.DELETE:
-                delete_keys.append(key_op._key)
-            else:
-                operate_keys.append(key_op._key)
-                # Build operations list for this key
-                ops = key_op._operations.copy()
-
-                # If no operations but we have bins, convert to put operations
-                if not ops and key_op._bins:
-                    for bin_name, value in key_op._bins.items():
-                        ops.append(Operation.put(bin_name, value))
-
-                # If still no operations, add a touch to make it valid
-                if not ops:
-                    ops.append(Operation.touch())
-
-                operate_ops.append(ops)
-
-        raw_results: list = []
 
         all_keys = [key_op._key for key_op in self._key_operations]
         batch_mode = await self._resolved_mode_for_keys(all_keys)
@@ -830,43 +823,128 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
             batch_policy = to_batch_policy(
                 self._behavior.get_settings(
                     OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, batch_mode))
-        # Under MRT the PAC rejects a null BatchPolicy, so materialize one
-        # just to carry the txn reference when the behavior path didn't.
         if self._txn is not None and batch_policy is None:
             from aerospike_async import BatchPolicy
             batch_policy = BatchPolicy()
         self._apply_txn(batch_policy)
 
+        delete_policy: Optional[BatchDeletePolicy] = None
+        has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
+        if has_delete and self._behavior is not None:
+            delete_keys = [k._key for k in self._key_operations
+                           if k._op_type == BatchOpType.DELETE]
+            bs = self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.BATCH,
+                await self._resolved_mode_for_keys(delete_keys),
+            )
+            if resolve_durable_delete(bs.durable_delete, None, None):
+                delete_policy = BatchDeletePolicy()
+                delete_policy.durable_delete = True
+
+        ops = _build_pac_batch_ops(self._key_operations, delete_policy)
+
         try:
-            delete_policy: Optional[BatchDeletePolicy] = None
-            if delete_keys and self._behavior is not None:
-                bs = self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE,
-                    OpShape.BATCH,
-                    await self._resolved_mode_for_keys(delete_keys),
-                )
-                if resolve_durable_delete(bs.durable_delete, None, None):
-                    delete_policy = BatchDeletePolicy()
-                    delete_policy.durable_delete = True
-
-            if delete_keys:
-                delete_results = await self._client.batch_delete(
-                    delete_keys,
-                    batch_policy=batch_policy,
-                    delete_policy=delete_policy,
-                )
-                raw_results.extend(delete_results)
-
-            if operate_keys:
-                operate_results = await self._client.batch_operate(
-                    operate_keys,
-                    operate_ops,
-                    batch_policy=batch_policy,
-                )
-                raw_results.extend(operate_results)
+            raw_results = await self._client.batch(ops, batch_policy=batch_policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
+        if on_error is not None:
+            return RecordStream.from_list(
+                _filter_records_with_handler(
+                    batch_records_to_results(raw_results), on_error,
+                ),
+            )
         return RecordStream.from_batch_records(raw_results)
+
+    async def execute_stream(
+        self, on_error: Optional[ErrorHandler] = None,
+    ) -> RecordStream:
+        """Lazy streaming batch execute — yields records in completion order.
+
+        Builds a single mixed PAC ``batch_stream`` call covering all ops
+        (reads, writes, deletes) and returns a :class:`RecordStream` whose
+        ``__anext__`` pulls ``(idx, BatchRecord)`` tuples from the PAC
+        stream one at a time. First record arrives at first-RTT, not after
+        all keys complete; peak memory is bounded.
+
+        **Caveats** — differ from :meth:`execute`:
+
+        - **Yields completion order, not input order.** Each
+          :class:`RecordResult` carries its originating op's input
+          position in :attr:`RecordResult.index`; sort after collecting if
+          positional results are needed.
+        - **Per-key errors inline** on :class:`RecordResult` (when
+          ``on_error`` is unset); cluster-level errors raise from
+          ``__anext__``.
+        - **No writes-complete-on-return guarantee.** Per-node tasks
+          dispatch in the background; if the caller awaits this method
+          but never iterates the returned stream, server-side writes may
+          still be in-flight when subsequent code runs. Callers that need
+          writes-complete-on-return — or use the "fire-and-forget" shape
+          (``await session.batch()...execute_stream()`` without draining)
+          — must use :meth:`execute` instead.
+
+        Per-key op composition is inspected via
+        :func:`aerospike_async.has_any_write_op` to choose the right PAC
+        op wrapper: read-only op lists (e.g. AEL ``select_from``
+        expressions) land as :class:`BatchReadOp`, write/mutation op
+        lists as :class:`BatchWriteOp`. Matches the wire-dispatch
+        behavior of the buffered :meth:`execute` path.
+
+        Args:
+            on_error: Optional ``(key, index, exception) -> None`` callback.
+                When set, per-key failures are dispatched to the handler
+                as records arrive and excluded from the returned stream;
+                cluster-level errors still raise from ``__anext__``.
+
+        Returns:
+            A lazy :class:`RecordStream`. ``async for`` it to drive
+            PAC's per-record yield.
+
+        Raises:
+            ValueError: If no operations have been added.
+        """
+        if not self._key_operations:
+            raise ValueError(
+                "No operations to execute. Add operations with insert(), update(), etc.")
+
+        all_keys = [key_op._key for key_op in self._key_operations]
+        batch_mode = await self._resolved_mode_for_keys(all_keys)
+
+        batch_policy = None
+        if self._behavior is not None:
+            batch_policy = to_batch_policy(
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, batch_mode))
+        if self._txn is not None and batch_policy is None:
+            from aerospike_async import BatchPolicy
+            batch_policy = BatchPolicy()
+        self._apply_txn(batch_policy)
+
+        delete_policy: Optional[BatchDeletePolicy] = None
+        has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
+        if has_delete and self._behavior is not None:
+            delete_keys = [k._key for k in self._key_operations
+                           if k._op_type == BatchOpType.DELETE]
+            bs = self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE,
+                OpShape.BATCH,
+                await self._resolved_mode_for_keys(delete_keys),
+            )
+            if resolve_durable_delete(bs.durable_delete, None, None):
+                delete_policy = BatchDeletePolicy()
+                delete_policy.durable_delete = True
+
+        ops = _build_pac_batch_ops(self._key_operations, delete_policy)
+
+        try:
+            pac_stream = await self._client.batch_stream(
+                ops, batch_policy=batch_policy,
+            )
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
+
+        return RecordStream.from_pac_batch_stream(pac_stream, on_error=on_error)
 
 

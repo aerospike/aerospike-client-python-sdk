@@ -15,17 +15,22 @@
 
 """Tests for ErrorStrategy, ErrorHandler, and disposition resolution."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from aerospike_async import Key
+from aerospike_async import Expiration, Key
 from aerospike_async.exceptions import ResultCode
 
+from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
 from aerospike_sdk.error_strategy import (
     ErrorStrategy,
     _ErrorDisposition,
+    _filter_records_with_handler,
     _resolve_disposition,
 )
-from aerospike_sdk.exceptions import AerospikeError, TimeoutError
+from aerospike_sdk.exceptions import AerospikeError, GenerationError, TimeoutError
+from aerospike_sdk.operations_shared import _to_expiration
 from aerospike_sdk.record_result import RecordResult
 
 
@@ -78,6 +83,70 @@ class TestResolveDisposition:
 
 
 # ---------------------------------------------------------------------------
+# _filter_records_with_handler
+# ---------------------------------------------------------------------------
+
+class TestFilterRecordsWithHandler:
+    """``_filter_records_with_handler`` routes non-OK rows to the callback
+    and returns successes only. Backs the ``on_error`` parameter on the
+    batch ``execute()`` / ``execute_stream()`` surface."""
+
+    def _ok(self, key_val: int, idx: int) -> RecordResult:
+        return RecordResult(
+            key=_key(key_val), record=None,
+            result_code=ResultCode.OK, index=idx,
+        )
+
+    def _fail(
+        self, key_val: int, idx: int,
+        rc: ResultCode = ResultCode.KEY_NOT_FOUND_ERROR,
+        exception=None,
+    ) -> RecordResult:
+        return RecordResult(
+            key=_key(key_val), record=None,
+            result_code=rc, index=idx, exception=exception,
+        )
+
+    def test_all_successes_pass_through_unchanged(self):
+        rows = [self._ok(1, 0), self._ok(2, 1)]
+        captured: list = []
+        out = _filter_records_with_handler(rows, lambda *a: captured.append(a))
+        assert out == rows
+        assert captured == []
+
+    def test_failures_routed_to_handler_and_excluded(self):
+        rows = [self._ok(1, 0), self._fail(2, 1), self._ok(3, 2)]
+        captured: list = []
+        out = _filter_records_with_handler(
+            rows, lambda k, i, e: captured.append((k, i, e)),
+        )
+        assert [r.index for r in out] == [0, 2]
+        assert len(captured) == 1
+        k, i, exc = captured[0]
+        assert k == _key(2)
+        assert i == 1
+        assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    def test_handler_receives_stored_exception_when_present(self):
+        stored = TimeoutError("timed out")
+        rows = [self._fail(1, 0, rc=ResultCode.TIMEOUT, exception=stored)]
+        captured: list = []
+        _filter_records_with_handler(
+            rows, lambda k, i, e: captured.append(e),
+        )
+        assert captured[0] is stored
+
+    def test_handler_receives_synthesized_exception_when_no_stored(self):
+        rows = [self._fail(1, 0, rc=ResultCode.KEY_NOT_FOUND_ERROR)]
+        captured: list = []
+        _filter_records_with_handler(
+            rows, lambda k, i, e: captured.append(e),
+        )
+        assert isinstance(captured[0], AerospikeError)
+        assert captured[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
+# ---------------------------------------------------------------------------
 # RecordResult with exception field
 # ---------------------------------------------------------------------------
 
@@ -110,7 +179,6 @@ class TestRecordResultException:
             key=_key(), record=None,
             result_code=ResultCode.GENERATION_ERROR,
         )
-        from aerospike_sdk.exceptions import GenerationError
         with pytest.raises(GenerationError):
             rr.or_raise()
 
@@ -141,9 +209,6 @@ class TestBuilderFlagWiring:
     """Verify WriteSegmentBuilder flag methods set state on the QueryBuilder."""
 
     def _make_wsb(self):
-        from unittest.mock import MagicMock
-        from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
-
         qb = QueryBuilder(
             client=MagicMock(),
             namespace="test",
@@ -231,9 +296,6 @@ class TestBuilderFlagWiring:
 class TestBuilderValidation:
 
     def _make_wsb(self):
-        from unittest.mock import MagicMock
-        from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
-
         qb = QueryBuilder(
             client=MagicMock(),
             namespace="test",
@@ -269,17 +331,11 @@ class TestBuilderValidation:
             wsb.expire_record_after_seconds(-1)
 
     def test_default_expire_record_after_seconds_zero_raises(self):
-        from unittest.mock import MagicMock
-        from aerospike_sdk.aio.operations.query import QueryBuilder
-
         qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
         with pytest.raises(ValueError, match="greater than 0"):
             qb.default_expire_record_after_seconds(0)
 
     def test_bins_empty_list_raises(self):
-        from unittest.mock import MagicMock
-        from aerospike_sdk.aio.operations.query import QueryBuilder
-
         qb = QueryBuilder(
             client=MagicMock(),
             namespace="test",
@@ -296,22 +352,15 @@ class TestBuilderValidation:
 class TestToExpiration:
 
     def test_never_expire(self):
-        from aerospike_async import Expiration
-        from aerospike_sdk.aio.operations.query import _to_expiration
         assert _to_expiration(-1) is Expiration.NEVER_EXPIRE
 
     def test_dont_update(self):
-        from aerospike_async import Expiration
-        from aerospike_sdk.aio.operations.query import _to_expiration
         assert _to_expiration(-2) is Expiration.DONT_UPDATE
 
     def test_server_default(self):
-        from aerospike_async import Expiration
-        from aerospike_sdk.aio.operations.query import _to_expiration
         assert _to_expiration(0) is Expiration.NAMESPACE_DEFAULT
 
     def test_positive_seconds(self):
-        from aerospike_sdk.aio.operations.query import _to_expiration
         exp = _to_expiration(3600)
         assert exp is not None
 
@@ -323,8 +372,6 @@ class TestToExpiration:
 class TestDefaultTtlMethods:
 
     def _make_qb(self):
-        from unittest.mock import MagicMock
-        from aerospike_sdk.aio.operations.query import QueryBuilder
         return QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
 
     def test_default_never_expire(self):

@@ -24,6 +24,7 @@ from aerospike_async import (
     HllOperation,
 )
 
+from aerospike_sdk import HllConfig
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
@@ -50,7 +51,6 @@ class _OpCollector:
 
 class TestWriteBinHll:
     def test_hll_init_add_get_count_chain(self):
-        from aerospike_sdk import HllConfig
         wbb, segment = _make_wbb("sk")
         wbb.hll_init(HllConfig.of(12, 4)).bin("sk").hll_add(["a", "b"]).bin("sk").hll_get_count()
         ops = segment._qb._operations

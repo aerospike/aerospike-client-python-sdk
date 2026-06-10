@@ -30,6 +30,8 @@ from aerospike_sdk import (
 )
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.sync.session import SyncSession
 
 
 class _FakePacClient:
@@ -63,7 +65,6 @@ class _FakeSyncClient:
         return self._pac
 
     def _resolve_namespace_mode_blocking(self, namespace):
-        from aerospike_sdk.policy.behavior_settings import Mode
         return Mode.AP
 
 
@@ -180,7 +181,6 @@ def test_subclasses_sync_session() -> None:
     """SyncTransactionalSession must be a proper SyncSession subclass so
     session APIs (query, upsert, batch, ...) work inside the ``with`` block.
     """
-    from aerospike_sdk.sync.session import SyncSession
     assert issubclass(SyncTransactionalSession, SyncSession)
 
 
@@ -208,8 +208,6 @@ def test_explicit_behavior_honored(
 
 def _make_sync_session():
     """Construct a SyncSession bound to a fake client (no IO)."""
-    from aerospike_sdk.sync.session import SyncSession
-
     client = _FakeSyncClient()
     sync_session = SyncSession(
         client=client, behavior=Behavior.DEFAULT,

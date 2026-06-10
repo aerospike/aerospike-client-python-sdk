@@ -22,6 +22,7 @@ from typing import AsyncIterator
 from aerospike_async import Key
 from aerospike_async.exceptions import ResultCode
 
+from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
 
@@ -133,6 +134,67 @@ class TestFromBatchRecords:
         assert not results[1].is_ok
 
 
+class _FakeBatchStream:
+    """Minimal async-iterable stand-in for a PAC ``BatchRecordStream``."""
+
+    def __init__(self, tuples):
+        self._items = iter(tuples)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._items)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+class TestFromPacBatchStreamOnError:
+    """``from_pac_batch_stream(on_error=...)`` routes non-OK BatchRecords to
+    the callback and excludes them from the yielded stream."""
+
+    async def test_no_handler_includes_failures(self):
+        br_ok = SimpleNamespace(
+            key=_key(1), record=_record(),
+            result_code=ResultCode.OK, in_doubt=False,
+        )
+        br_fail = SimpleNamespace(
+            key=_key(2), record=None,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False,
+        )
+        stream = RecordStream.from_pac_batch_stream(
+            _FakeBatchStream([(0, br_ok), (1, br_fail)]),
+        )
+        results = await stream.collect()
+        assert len(results) == 2
+        assert results[0].is_ok and not results[1].is_ok
+
+    async def test_handler_excludes_failures_and_receives_args(self):
+        br_ok = SimpleNamespace(
+            key=_key(1), record=_record(),
+            result_code=ResultCode.OK, in_doubt=False,
+        )
+        br_fail = SimpleNamespace(
+            key=_key(2), record=None,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False,
+        )
+
+        captured: list = []
+        stream = RecordStream.from_pac_batch_stream(
+            _FakeBatchStream([(0, br_ok), (1, br_fail)]),
+            on_error=lambda k, i, e: captured.append((k, i, e)),
+        )
+        results = await stream.collect()
+
+        assert len(results) == 1
+        assert results[0].key == _key(1)
+        assert len(captured) == 1
+        k, i, exc = captured[0]
+        assert k == _key(2) and i == 1
+        assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
 # ---------------------------------------------------------------------------
 # from_recordset
 # ---------------------------------------------------------------------------
@@ -205,7 +267,6 @@ class TestFirst:
             await stream.first_or_raise()
 
     async def test_first_or_raise_error(self):
-        from aerospike_sdk.exceptions import AerospikeError
         stream = RecordStream.from_list([_fail_result()])
         with pytest.raises(AerospikeError):
             await stream.first_or_raise()
