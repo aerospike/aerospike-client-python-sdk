@@ -17,8 +17,6 @@
 
 from __future__ import annotations
 
-import sys
-
 from aerospike_async import FilterExpression
 
 from aerospike_sdk.ael.parser import parse_ael
@@ -37,15 +35,5 @@ def filter_expression_from_ael_string(
     if supports_server_compiled_ael:
         factory = getattr(FilterExpression, "from_server_compiled_ael", None)
         if callable(factory):
-            print(
-                "[AEL filter wire] branch=server_compiled_ael",
-                file=sys.stderr,
-                flush=True,
-            )
             return factory(ael)
-    print(
-        "[AEL filter wire] branch=client_parse",
-        file=sys.stderr,
-        flush=True,
-    )
     return parse_ael(ael)

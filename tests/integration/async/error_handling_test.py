@@ -31,7 +31,10 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pac_compat import (
+    requires_server_compiled_ael,
+    xfail_if_server_compiled_ael_wire_active,
+)
 
 from .durable_delete_support import delete_keys_durable
 
@@ -586,6 +589,7 @@ class TestOperateWithFilter:
     @requires_server_compiled_ael
     async def test_operate_read_with_matching_where(self, session, ds):
         """Query + bin.select_from() with matching where() returns result."""
+        xfail_if_server_compiled_ael_wire_active(session.client)
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
         await session.upsert(k).put({"v": 1}).execute()

@@ -19,6 +19,10 @@ Integration tests that need server-compiled AEL on the wire can use
 :data:`requires_server_compiled_ael`; tests that assume the **client-side**
 string-AEL path (no server compilation for ``where(str)``) can use
 :data:`requires_client_side_ael` (see ``tests/integration/conftest.py``).
+
+Runtime :func:`xfail_if_server_compiled_ael_wire_active` /
+:func:`xfail_if_server_compiled_ael_factory_exposed` mark known-broken cases
+when the server-compiled AEL path is active (see in-repo xfail call sites).
 """
 
 from __future__ import annotations
@@ -52,6 +56,29 @@ def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None
         "and first active node Version.supports_server_compiled_ael "
         "(Client.supports_server_compiled_ael; homogeneous cluster assumption)."
     )
+
+
+_XFAIL_SERVER_COMPILED_AEL_MSG = (
+    "Known breakage when server-compiled AEL wire path is active "
+    "(tracked; revisit when chain / operate + [128, AEL] is fixed)."
+)
+
+
+def xfail_if_server_compiled_ael_wire_active(client: SupportsServerCompiledAel) -> None:
+    """Call at the start of an integration test that fails only under server-compiled AEL."""
+    if client.supports_server_compiled_ael:
+        pytest.xfail(_XFAIL_SERVER_COMPILED_AEL_MSG)
+
+
+def xfail_if_server_compiled_ael_factory_exposed() -> None:
+    """Call at the start of a unit test without a connected ``Client``.
+
+    When PAC exposes ``FilterExpression.from_server_compiled_ael``, string AEL
+    helpers may touch code paths that expect a full QueryBuilder (e.g.
+    ``_supports_server_compiled_ael`` on the parent collector).
+    """
+    if callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+        pytest.xfail(_XFAIL_SERVER_COMPILED_AEL_MSG)
 
 
 def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> None:

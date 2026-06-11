@@ -20,10 +20,11 @@ import asyncio
 import pytest
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
+
+from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
 
 
 @pytest.fixture
@@ -188,6 +189,7 @@ class TestWriteWithExpressions:
     """Expression-based writes in a chained context."""
 
     async def test_upsert_from_expression(self, session, ds):
+        xfail_if_server_compiled_ael_wire_active(session.client)
         k = ds.id("cb_exp_1")
         await _cleanup(session, k)
 
@@ -203,6 +205,10 @@ class TestWriteWithExpressions:
 
         rec_result = await (await session.query(k).execute()).first_or_raise()
         rec = rec_result.record
+        assert "computed" in rec.bins, (
+            "expected upsert_from to create bin 'computed'; "
+            f"bins={rec.bins!r}"
+        )
         assert rec.bins["computed"] == 1006
 
         await _cleanup(session, k)

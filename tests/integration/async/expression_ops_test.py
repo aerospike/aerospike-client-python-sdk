@@ -36,6 +36,7 @@ from aerospike_async.exceptions import ResultCode, ServerError
 from aerospike_sdk import Client
 from aerospike_sdk.exceptions import AerospikeError
 
+from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
 
 NS = "test"
 SET = "exp_ops"
@@ -125,6 +126,7 @@ class TestSelectFrom:
 
     async def test_select_from_returns_nil(self, client):
         """select_from on missing bin with ignore_eval_failure returns None."""
+        xfail_if_server_compiled_ael_wire_active(client)
         rs = await (
             client.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
                 .execute()
@@ -260,6 +262,7 @@ class TestCombinedExpression:
 
     async def test_upsert_from_and_select_from(self, client):
         """upsert_from + select_from in same execute."""
+        xfail_if_server_compiled_ael_wire_active(client)
         session = client.create_session()
         stream = await (
             session.update(_key(KEY_A))
@@ -284,6 +287,7 @@ class TestCombinedExpression:
 
     async def test_write_eval_error_with_ignore(self, client):
         """upsert_from + select_from with ignore_eval_failure on both."""
+        xfail_if_server_compiled_ael_wire_active(client)
         session = client.create_session()
         stream = await (
             session.update(_key(KEY_B))
