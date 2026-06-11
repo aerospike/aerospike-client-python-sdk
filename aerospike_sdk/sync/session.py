@@ -28,8 +28,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
 from aerospike_async import Key, Record, Txn
 
-from aerospike_sdk.aio.session import NamespaceScStatus
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.session_shared import NamespaceScStatus
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
@@ -64,11 +64,18 @@ class SyncSession:
         self._client = client
         self._behavior = behavior
         # Pre-compute base policies once per session so the fast-path
-        # get/put skip the policy_mapper for the common no-override case.
+        # get/put + builder bypasses skip the policy_mapper for the common
+        # no-override case. Cache both AP and SC variants so bypass paths
+        # can pick the right policy per resolved namespace mode without
+        # rebuilding. `_cached_*_policy` stays as the AP alias.
         self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT))
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
+        self._cached_read_policy_sc = to_read_policy(
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
+        self._cached_write_policy_sc = to_write_policy(
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
         # Cache the PAC client for fast-path methods.
         self._pac_client = client.underlying_client
         # Non-transactional sessions always return None;
@@ -108,11 +115,17 @@ class SyncSession:
     ) -> Optional[Record]:
         """Direct single-key read — no builder, no stream — synchronous.
 
-        Calls PAC ``get_blocking`` once with the session-cached
-        :class:`~aerospike_async.ReadPolicy`.
+        Passes the AP + SC cached policies; PAC picks the right one based
+        on the key's namespace mode (from the in-memory partition map).
         """
         if self._txn is None:
-            return self._pac_client.get_blocking(key, bins, policy=self._cached_read_policy)
+            return self._pac_client.get_blocking(
+                key, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
+            )
+        # Under MRT the cached policies are skipped (txn not stamped);
+        # rebuild a per-call policy from behavior.
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
@@ -121,11 +134,15 @@ class SyncSession:
     def put(self, key: Key, bins: Dict[str, Any]) -> None:
         """Direct single-key upsert — no builder, no stream — synchronous.
 
-        Calls PAC ``put_blocking`` once with the session-cached
-        :class:`~aerospike_async.WritePolicy`.
+        Passes the AP + SC cached policies; PAC picks the right one based
+        on the key's namespace mode.
         """
         if self._txn is None:
-            self._pac_client.put_blocking(key, bins, policy=self._cached_write_policy)
+            self._pac_client.put_blocking(
+                key, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
+            )
             return
         policy = to_write_policy(
             self._behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
@@ -281,6 +298,8 @@ class SyncSession:
                 indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
+                cached_read_policy_sc=self._cached_read_policy_sc,
+                cached_write_policy_sc=self._cached_write_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -300,6 +319,8 @@ class SyncSession:
                 indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
+                cached_read_policy_sc=self._cached_read_policy_sc,
+                cached_write_policy_sc=self._cached_write_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -324,6 +345,8 @@ class SyncSession:
             indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
+            cached_read_policy_sc=self._cached_read_policy_sc,
+            cached_write_policy_sc=self._cached_write_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -459,6 +482,8 @@ class SyncSession:
             behavior=self._behavior,
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
+            write_policy_sc=self._cached_write_policy_sc,
+            read_policy_sc=self._cached_read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,

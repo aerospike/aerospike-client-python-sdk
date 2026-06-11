@@ -23,7 +23,10 @@ without requiring an SC cluster.
 
 import pytest
 
+from aerospike_async import TxnState, WritePolicy
+
 from aerospike_sdk import AbortStatus, CommitStatus, Txn, TransactionalSession
+from aerospike_sdk.aio.session import Session
 from aerospike_sdk.policy.behavior import Behavior
 
 
@@ -177,12 +180,10 @@ def test_transactional_session_subclasses_session() -> None:
     """TransactionalSession must be a proper Session subclass so session
     APIs (query, upsert, batch, ...) work inside the ``async with`` block.
     """
-    from aerospike_sdk.aio.session import Session
     assert issubclass(TransactionalSession, Session)
 
 
 def test_get_current_transaction_is_none_on_plain_session() -> None:
-    from aerospike_sdk.aio.session import Session
     session = Session.__new__(Session)
     session._txn = None
     assert session.get_current_transaction() is None
@@ -222,7 +223,6 @@ async def test_explicit_behavior_honored(
 
 def test_pac_txn_has_expected_state_enum() -> None:
     """PAC must expose the four Txn state values (even if read-only)."""
-    from aerospike_async import TxnState
     assert {
         TxnState.OPEN, TxnState.COMMITTED, TxnState.ABORTED, TxnState.VERIFIED,
     } == {getattr(TxnState, n) for n in ("OPEN", "COMMITTED", "ABORTED", "VERIFIED")}
@@ -232,7 +232,6 @@ def test_pac_txn_state_is_writable_and_round_trips() -> None:
     """PAC exposes ``Txn.state`` as a writable property (used by the
     ``test_txn_read_fails_for_all_states_except_open`` integration test).
     """
-    from aerospike_async import Txn, TxnState
     t = Txn()
     assert t.state == TxnState.OPEN
     for target in (TxnState.COMMITTED, TxnState.ABORTED,
@@ -247,7 +246,6 @@ def test_pac_txn_timeout_is_writable_before_sharing() -> None:
     operation builder. This is the path
     ``test_txn_mrt_expired_after_deadline`` depends on.
     """
-    from aerospike_async import Txn
     t = Txn()
     assert t.timeout == 0
     t.timeout = 2
@@ -262,7 +260,6 @@ def test_pac_txn_timeout_setter_rejects_after_sharing() -> None:
     the PAC setter so a future regression (silent no-op, wrong error type)
     is caught here at the PSDK boundary.
     """
-    from aerospike_async import Txn, WritePolicy
     t = Txn()
     p = WritePolicy()
     p.txn = t  # clones the underlying Arc, refcount > 1

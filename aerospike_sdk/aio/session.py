@@ -23,7 +23,6 @@ from typing import (
     Awaitable,
     Dict,
     List,
-    NamedTuple,
     Optional,
     overload,
     TYPE_CHECKING,
@@ -51,15 +50,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-
-
-class NamespaceScStatus(NamedTuple):
-    """Result of :meth:`Session.namespace_sc_status`."""
-
-    is_sc: bool
-    """True when the namespace exists and ``strong-consistency`` is enabled."""
-    detail: str
-    """Empty when ``is_sc`` is true; otherwise a short explanation for logging or skips."""
+from aerospike_sdk.session_shared import NamespaceScStatus
 
 
 def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
@@ -124,10 +115,18 @@ class Session:
         self._behavior = behavior
         # Pre-compute base policies once per session so QueryBuilders
         # skip per-op policy_mapper calls for the common no-override path.
+        # Cache both AP and SC variants so the bypass paths can pick the
+        # right policy per resolved namespace mode without rebuilding.
+        # `_cached_*_policy` stays as the AP alias (matches behavior's default
+        # mode); session.get/put still use it.
         self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT))
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
+        self._cached_read_policy_sc = to_read_policy(
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
+        self._cached_write_policy_sc = to_write_policy(
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
         # Cache the raw PAC client for fast-path methods.
         self._pac_client = client._async_client
         # Transaction hook. Non-transactional sessions always return None;
@@ -261,7 +260,10 @@ class Session:
         """
         if self._txn is None:
             return await self._pac_client.get(
-                key, bins, policy=self._cached_read_policy)
+                key, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
+            )
         policy = to_read_policy(
             self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
@@ -301,7 +303,10 @@ class Session:
         """
         if self._txn is None:
             await self._pac_client.put(
-                key, bins, policy=self._cached_write_policy)
+                key, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
+            )
             return
         policy = to_write_policy(
             self._behavior.get_settings(
@@ -452,6 +457,8 @@ class Session:
             indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
+            cached_read_policy_sc=self._cached_read_policy_sc,
+            cached_write_policy_sc=self._cached_write_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -531,6 +538,8 @@ class Session:
             indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
+            cached_read_policy_sc=self._cached_read_policy_sc,
+            cached_write_policy_sc=self._cached_write_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -548,6 +557,8 @@ class Session:
             behavior=self._behavior,
             write_policy=self._cached_write_policy,
             read_policy=self._cached_read_policy,
+            write_policy_sc=self._cached_write_policy_sc,
+            read_policy_sc=self._cached_read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -664,6 +675,41 @@ class Session:
             :meth:`Client.query`: Same shapes without session behavior.
             :meth:`upsert`: Writes for the same keys.
         """
+        # Ultra-fast entry for the most common shape: `session.query(key)`
+        # with no other positional or keyword args. Skip the entire
+        # isinstance chain (3 checks + wasted list alloc) and the kwarg
+        # routing — go straight to QueryBuilder construction. This is the
+        # bench / typical-app read pattern and now accounts for ~3.7 µs/op
+        # on async single-loop builder; this entry cuts it dramatically.
+        if (
+            arg1.__class__ is Key
+            and arg2 is None
+            and not keys
+            and namespace is None
+            and set_name is None
+            and dataset is None
+            and key is None
+            and keys_list is None
+            and behavior is None
+        ):
+            builder = QueryBuilder(
+                client=self._client._async_client,
+                namespace=arg1.namespace,
+                set_name=arg1.set_name,
+                behavior=self._behavior,
+                indexes_monitor=self._client._indexes_monitor,
+                cached_read_policy=self._cached_read_policy,
+                cached_write_policy=self._cached_write_policy,
+                cached_read_policy_sc=self._cached_read_policy_sc,
+                cached_write_policy_sc=self._cached_write_policy_sc,
+                txn=self._txn,
+                namespace_mode_resolver=self._resolve_namespace_mode,
+                namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            )
+            builder._single_key = arg1
+            return builder
+
         b = self._behavior if behavior is None else behavior
         # Handle positional arguments (SDK API)
         if arg1 is not None:
@@ -693,11 +739,13 @@ class Session:
                         indexes_monitor=self._client._indexes_monitor,
                         cached_read_policy=self._cached_read_policy,
                         cached_write_policy=self._cached_write_policy,
-            txn=self._txn,
-            namespace_mode_resolver=self._resolve_namespace_mode,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-        )
+                        cached_read_policy_sc=self._cached_read_policy_sc,
+                        cached_write_policy_sc=self._cached_write_policy_sc,
+                        txn=self._txn,
+                        namespace_mode_resolver=self._resolve_namespace_mode,
+                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                        supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+                    )
                     builder._single_key = arg1
                     return builder
                 return self._bind_txn(
@@ -1116,11 +1164,25 @@ class Session:
             :meth:`replace`: Replace-entire-record semantics when configured.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
-            return self._fast_write_segment("upsert", arg1)
+            # Inline _fast_write_segment + use positional args to skip the
+            # extra function call and kwargs-dict construction. Bench-hot.
+            return _SingleKeyWriteSegment(
+                self._client._async_client,
+                arg1,
+                "upsert",
+                self._behavior,
+                self._cached_write_policy,
+                self._cached_read_policy,
+                self._txn,
+                self._resolve_namespace_mode,
+                self._resolve_namespace_mode_blocking,
+                self._cached_write_policy_sc,
+                self._cached_read_policy_sc,
+            )
         return self._build_write_segment(
             "upsert", arg1, arg2, *keys,
             key=key, dataset=dataset, namespace=namespace,
@@ -1157,7 +1219,7 @@ class Session:
             :meth:`upsert`: Create or update.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1195,7 +1257,7 @@ class Session:
             :meth:`replace_if_exists`: Replace semantics when the record exists.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1233,7 +1295,7 @@ class Session:
             :meth:`replace_if_exists`: Replace only when the record exists.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1271,7 +1333,7 @@ class Session:
             :meth:`replace`: Unconditional replace semantics.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1314,7 +1376,7 @@ class Session:
             :meth:`background_task`: Delete many records via a server job.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1352,7 +1414,7 @@ class Session:
             :meth:`upsert`: Writes that can also set expiration via the builder.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):
@@ -1397,7 +1459,7 @@ class Session:
             :meth:`query`: Read record data when the key is known to exist.
         """
         if (
-            isinstance(arg1, Key) and arg2 is None and not keys
+            arg1.__class__ is Key and arg2 is None and not keys
             and key is None and dataset is None
             and namespace is None and key_value is None
         ):

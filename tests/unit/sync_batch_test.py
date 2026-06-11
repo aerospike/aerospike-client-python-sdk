@@ -24,8 +24,8 @@ from aerospike_sdk.aio.operations.batch import (
     BatchBinBuilder,
     BatchKeyOperationBuilder,
     BatchOperationBuilder,
-    BatchOpType,
 )
+from aerospike_sdk.operations_shared import BatchOpType
 from aerospike_sdk.sync.operations.batch import (
     SyncBatchBinBuilder,
     SyncBatchKeyOperationBuilder,
@@ -67,7 +67,8 @@ def test_sync_batch_bin_delegates_and_wraps_parent(async_batch):
 
 
 def test_sync_batch_execute_calls_blocking(async_batch):
-    """SyncBatch routes through PAC `execute_blocking`."""
+    """SyncBatchOperationBuilder.execute() (buffered) routes through the
+    async builder's `execute_blocking` and wraps in :class:`SyncRecordStream`."""
     k = Key("test", "s", "e")
     sync = SyncBatchOperationBuilder(async_batch)
     sync.insert(k).bin("v").set_to(1)
@@ -84,4 +85,32 @@ def test_sync_batch_key_execute_calls_blocking(async_batch):
     async_batch.execute_blocking = MagicMock(return_value=[])
     stream = sk.execute()
     async_batch.execute_blocking.assert_called_once()
+    assert isinstance(stream, SyncRecordStream)
+
+
+def test_sync_batch_execute_stream_calls_batch_stream_blocking(async_batch):
+    """SyncBatchOperationBuilder.execute_stream() builds a mixed PAC ops
+    list and dispatches via `client.batch_stream_blocking`, wrapping the
+    result in a lazy :class:`SyncRecordStream`. Streaming path —
+    completion-order yields, no writes-complete-on-return guarantee."""
+    k = Key("test", "s", "estream")
+    sync = SyncBatchOperationBuilder(async_batch)
+    sync.insert(k).bin("v").set_to(1)
+    fake_pac_stream = MagicMock()
+    fake_pac_stream.__iter__ = lambda self: iter([])
+    async_batch._client.batch_stream_blocking = MagicMock(return_value=fake_pac_stream)
+    stream = sync.execute_stream()
+    async_batch._client.batch_stream_blocking.assert_called_once()
+    assert isinstance(stream, SyncRecordStream)
+
+
+def test_sync_batch_key_execute_stream_calls_batch_stream_blocking(async_batch):
+    k = Key("test", "s", "estream2")
+    sync = SyncBatchOperationBuilder(async_batch)
+    sk = sync.insert(k).bin("v").set_to(1)
+    fake_pac_stream = MagicMock()
+    fake_pac_stream.__iter__ = lambda self: iter([])
+    async_batch._client.batch_stream_blocking = MagicMock(return_value=fake_pac_stream)
+    stream = sk.execute_stream()
+    async_batch._client.batch_stream_blocking.assert_called_once()
     assert isinstance(stream, SyncRecordStream)

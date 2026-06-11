@@ -31,11 +31,10 @@ from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
 
 
 def _session_mock() -> MagicMock:
-    from aerospike_sdk.policy.behavior_settings import Mode
-
     s = MagicMock()
     s.behavior = Behavior.DEFAULT
     fc = MagicMock()

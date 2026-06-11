@@ -5,3 +5,6 @@
 
 # ANTLR runtime for string-based AEL parsing
 antlr4-python3-runtime>=4.13.0
+
+# typing.Self backport for Python <3.11
+typing_extensions>=4.0.0

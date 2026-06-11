@@ -223,7 +223,12 @@ def _worker(
     stats: _Stats,
     stop: threading.Event,
 ) -> None:
-    import aerospike
+    # Deferred import: the legacy `aerospike` package is an optional dep,
+    # only needed at runtime for `--mode legacy-sync`. Bench-test environments
+    # install it; dev / IDE venvs typically don't. Suppression keeps IDEs
+    # (PyCharm "Unresolved reference") quiet without forcing the install.
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import aerospike  # type: ignore[import-not-found]
 
     rng = random.Random((seed + worker_id + 1) % (2**32))
     ns, sn = namespace, set_name
@@ -312,7 +317,8 @@ def main() -> int:
     stop = threading.Event()
 
     # Connect
-    import aerospike
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import aerospike  # type: ignore[import-not-found]
     use_alt = os.environ.get(
         "AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower() in ("true", "1", "yes")
     config = {"hosts": [(host, port)], "use_services_alternate": use_alt}

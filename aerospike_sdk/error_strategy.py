@@ -91,3 +91,27 @@ def _resolve_disposition(
         if on_error is ErrorStrategy.IN_STREAM:
             return _ErrorDisposition.IN_STREAM
     return _ErrorDisposition.HANDLER
+
+
+def _filter_records_with_handler(
+    results: list,
+    handler: ErrorHandler,
+) -> list:
+    """Route failed :class:`RecordResult` rows to ``handler``; return only successes.
+
+    Errors dispatched to ``handler`` are excluded from the returned list.
+    The exception passed to the handler is ``r.exception`` when set,
+    otherwise constructed from the result code via
+    :func:`_result_code_to_exception`.
+    """
+    from aerospike_sdk.exceptions import _result_code_to_exception
+    out: list = []
+    for r in results:
+        if not r.is_ok:
+            exc = r.exception or _result_code_to_exception(
+                r.result_code, str(r.result_code), r.in_doubt,
+            )
+            handler(r.key, r.index, exc)
+            continue
+        out.append(r)
+    return out

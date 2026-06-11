@@ -24,7 +24,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, List, Tuple, Union
 
-from aerospike_async import Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
+from aerospike_async import FastRng, Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
+from aerospike_async import _LocalClient as _PacLocalClient
 from aerospike_async.exceptions import RecordNotFound as _AsRecordNotFound
 
 from aerospike_sdk import AsyncPool
@@ -53,6 +54,155 @@ def _is_timeout(exc: BaseException) -> bool:
     if isinstance(exc, AsTimeoutError):
         return True
     return isinstance(exc, TimeoutError)
+
+
+_SELF_TEST_KEY = "__bench_self_test__"
+_SELF_TEST_BIN = "b_st"
+_SELF_TEST_VAL = 0x5AFEC0DE
+
+# Hard ceiling on each self-test helper. Catches connectivity / partition /
+# TLS / services-alternate-mismatch hangs by failing fast before the timed
+# phase — without this, a PAC retry loop on an unroutable partition keeps
+# the bench process alive forever even though no real op makes progress.
+# Override via `BENCH_SELFTEST_TIMEOUT_SEC` env var (positive float seconds).
+import os as _os  # local import — only the workers module needs it for this
+def _selftest_timeout_default() -> float:
+    raw = _os.environ.get("BENCH_SELFTEST_TIMEOUT_SEC", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return 10.0
+_SELF_TEST_TIMEOUT_SEC = _selftest_timeout_default()
+
+
+_SELF_TEST_TIMEOUT_HINT = (
+    "Check connectivity to the seed host, that `--services-alternate` / "
+    "`--no-services-alternate` matches the cluster's `alternate-access-address` "
+    "configuration, that the namespace / set exist, and that TLS settings are "
+    "correct. PAC's default retry policy keeps trying on partition-routing "
+    "errors, so without this fast-fail the bench process hangs."
+)
+
+
+def _self_test_fail(mode: str, detail: str) -> RuntimeError:
+    return RuntimeError(
+        f"bench self-test failed ({mode}): {detail}. "
+        "Aborting before the timed phase to avoid reporting phantom-success "
+        "TPS. The data path is silently no-op'ing — check for method-name "
+        "mismatches in proxies / broken bypass branches."
+    )
+
+
+def _self_test_timeout_fail(mode: str) -> RuntimeError:
+    return RuntimeError(
+        f"bench self-test ({mode}) timed out after {_SELF_TEST_TIMEOUT_SEC:.0f}s. "
+        f"{_SELF_TEST_TIMEOUT_HINT}"
+    )
+
+
+def _run_sync_self_test_with_timeout(mode: str, fn) -> None:
+    """Run a sync self-test on a worker thread with a hard wall-clock bound.
+
+    The PAC blocking call is uninterruptible from Python, so we cannot
+    cancel an in-flight `*_blocking` op. Instead the watchdog raises a
+    ``RuntimeError`` on the caller; the bench framework treats that as
+    "abort the run" and the daemon thread is reaped on process exit.
+    The point is to fail loudly within a bounded time even if the sync
+    op never returns.
+    """
+    done = threading.Event()
+    err: List[BaseException] = []
+
+    def runner() -> None:
+        try:
+            fn()
+        except BaseException as exc:
+            err.append(exc)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=runner, daemon=True, name=f"selftest-{mode}")
+    t.start()
+    if not done.wait(_SELF_TEST_TIMEOUT_SEC):
+        raise _self_test_timeout_fail(mode)
+    if err:
+        raise err[0]
+
+
+def _self_test_psdk_sync(session: SyncSession, dataset: DataSet) -> None:
+    def _inner() -> None:
+        key = dataset.id(_SELF_TEST_KEY)
+        session.upsert(key).put({_SELF_TEST_BIN: _SELF_TEST_VAL}).execute().first()
+        rr = session.query(key).execute().first()
+        if rr is None or rr.record is None:
+            raise _self_test_fail("psdk-sync", "get returned no record after put")
+        got = rr.record.bins.get(_SELF_TEST_BIN)
+        if got != _SELF_TEST_VAL:
+            raise _self_test_fail(
+                "psdk-sync", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+            )
+
+    _run_sync_self_test_with_timeout("psdk-sync", _inner)
+
+
+async def _self_test_psdk_async(session: Session, dataset: DataSet) -> None:
+    async def _inner() -> None:
+        key = dataset.id(_SELF_TEST_KEY)
+        s = await session.upsert(key).put({_SELF_TEST_BIN: _SELF_TEST_VAL}).execute()
+        await s.first()
+        s = await session.query(key).execute()
+        rr = await s.first()
+        if rr is None or rr.record is None:
+            raise _self_test_fail("psdk-async", "get returned no record after put")
+        got = rr.record.bins.get(_SELF_TEST_BIN)
+        if got != _SELF_TEST_VAL:
+            raise _self_test_fail(
+                "psdk-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+            )
+
+    try:
+        await asyncio.wait_for(_inner(), timeout=_SELF_TEST_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        raise _self_test_timeout_fail("psdk-async")
+
+
+def _self_test_pac_blocking(client: Any, dataset: DataSet) -> None:
+    def _inner() -> None:
+        key = dataset.id(_SELF_TEST_KEY)
+        client.put_blocking(key, {_SELF_TEST_BIN: _SELF_TEST_VAL}, policy=WritePolicy())
+        rec = client.get_blocking(key, policy=ReadPolicy())
+        if rec is None:
+            raise _self_test_fail("pac-blocking", "get returned no record after put")
+        got = rec.bins.get(_SELF_TEST_BIN)
+        if got != _SELF_TEST_VAL:
+            raise _self_test_fail(
+                "pac-blocking", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+            )
+
+    _run_sync_self_test_with_timeout("pac-blocking", _inner)
+
+
+async def _self_test_pac_async(client: Any, dataset: DataSet) -> None:
+    async def _inner() -> None:
+        key = dataset.id(_SELF_TEST_KEY)
+        await client.put(key, {_SELF_TEST_BIN: _SELF_TEST_VAL})
+        rec = await client.get(key)
+        if rec is None:
+            raise _self_test_fail("pac-async", "get returned no record after put")
+        got = rec.bins.get(_SELF_TEST_BIN)
+        if got != _SELF_TEST_VAL:
+            raise _self_test_fail(
+                "pac-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+            )
+
+    try:
+        await asyncio.wait_for(_inner(), timeout=_SELF_TEST_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        raise _self_test_timeout_fail("pac-async")
 
 
 def _is_not_found(exc: BaseException) -> bool:
@@ -288,6 +438,28 @@ def _build_op_sync(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
+    # Per-op key construction uses PAC's Key.from_int_user_key fast path —
+    # skips Python str() conversion + PythonValue dispatch (~2 µs → ~500 ns
+    # per call). The bench's FastRng (xoshiro256++) supplies kid; key
+    # construction stays per-op (matches JSDK methodology).
+    ns_str = dataset.namespace
+    set_str = dataset.set_name
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        # Legacy A/B path: pre-build keys; opt-in via --prebuilt-keys.
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
+        _pk_counter = [0]
+        def pick_key(_rng):
+            i = _pk_counter[0]
+            _pk_counter[0] = (i + 1) & 0x7FFFFFFF
+            return _pk_pairs[i % pkn]
+    else:
+        def pick_key(rng):
+            kid = rng.randint(1, kc)
+            return (key_from_int(ns_str, set_str, kid), kid)
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             def op(rng):
@@ -322,8 +494,7 @@ def _build_op_sync(
         if bsz <= 1 and fp:
             if single_bin:
                 def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         session.get(key)
@@ -333,8 +504,7 @@ def _build_op_sync(
                 return op
 
             def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     session.get(key)
@@ -350,8 +520,7 @@ def _build_op_sync(
         if bsz <= 1:
             if single_bin:
                 def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         stream = session.query(key).execute()
@@ -362,8 +531,7 @@ def _build_op_sync(
                 return op
 
             def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     stream = session.query(key).execute()
@@ -379,7 +547,7 @@ def _build_op_sync(
 
         # batch RU
         def op(rng):
-            keys = [ds_id(str(rng.randint(1, kc))) for _ in range(bsz)]
+            keys = [pick_key(rng)[0] for _ in range(bsz)]
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)
@@ -435,6 +603,27 @@ def _build_op_async(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
+    # Per-op key construction uses PAC's Key.from_int_user_key fast path
+    # (skips Python str() + PythonValue dispatch, ~2 µs → ~500 ns per call).
+    # Bench's FastRng supplies kid; Key construction stays per-op (JSDK
+    # methodology). prebuilt_keys is legacy A/B path.
+    ns_str = dataset.namespace
+    set_str = dataset.set_name
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
+        _pk_counter = [0]
+        def pick_key(_rng):
+            i = _pk_counter[0]
+            _pk_counter[0] = (i + 1) & 0x7FFFFFFF
+            return _pk_pairs[i % pkn]
+    else:
+        def pick_key(rng):
+            kid = rng.randint(1, kc)
+            return (key_from_int(ns_str, set_str, kid), kid)
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             async def op(rng):
@@ -470,8 +659,7 @@ def _build_op_async(
         if bsz <= 1 and fp:
             if single_bin:
                 async def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         await session.get(key)
@@ -481,8 +669,7 @@ def _build_op_async(
                 return op
 
             async def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     await session.get(key)
@@ -498,8 +685,7 @@ def _build_op_async(
         if bsz <= 1:
             if single_bin:
                 async def op(rng):
-                    kid = rng.randint(1, kc)
-                    key = ds_id(str(kid))
+                    key, kid = pick_key(rng)
                     if rng.randint(1, 100) > (100 - read_pct):
                         decision[0] = True
                         stream = await session.query(key).execute()
@@ -511,8 +697,7 @@ def _build_op_async(
                 return op
 
             async def op(rng):
-                kid = rng.randint(1, kc)
-                key = ds_id(str(kid))
+                key, kid = pick_key(rng)
                 if rng.randint(1, 100) > (100 - read_pct):
                     decision[0] = True
                     stream = await session.query(key).execute()
@@ -529,7 +714,7 @@ def _build_op_async(
 
         # batch RU
         async def op(rng):
-            keys = [ds_id(str(rng.randint(1, kc))) for _ in range(bsz)]
+            keys = [pick_key(rng)[0] for _ in range(bsz)]
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = await session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)
@@ -728,19 +913,22 @@ async def run_async(
     bench_state = _BenchState()
     policy = client_policy_from_config(cfg)
     async with Client(cfg.seeds, policy=policy) as client:
-        # Signal that the connection succeeded so the caller can start the
-        # ticker.  Without this, the ticker prints empty intervals while the
-        # client is still trying to connect (or timing out).
-        if connected is not None:
-            connected.set()
-
+        # Run the self-test BEFORE signalling `connected` so a failed
+        # self-test propagates as `sync_error`/`async_error` to the bench
+        # main and aborts the run. If we set `connected` first, the main
+        # thread proceeds past its error-check window and the bench runs
+        # zombie-style for the full duration with no workers.
         session = client.create_session(Behavior.DEFAULT)
         dataset = DataSet.of(cfg.namespace, cfg.set_name)
         fields = list(cfg.bin_fields)
+        await _self_test_psdk_async(session, dataset)
+
+        if connected is not None:
+            connected.set()
 
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             decision = [False]
             has_limit = cfg.max_ops is not None
             sample_every = cfg.lat_sample_every
@@ -818,6 +1006,16 @@ async def run_async_pool(
         thread_stop.set()
 
     async with AsyncPool(factory, loop_count=n_loops) as pool:
+        dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)
+
+        async def _do_self_test(client: Client) -> None:
+            session = client.create_session(Behavior.DEFAULT)
+            await _self_test_psdk_async(session, dataset_for_self_test)
+
+        # Self-test BEFORE `connected.set()` so the failure aborts the
+        # bench rather than running zombie-style. See run_async comment.
+        await pool.run(_do_self_test)
+
         if connected is not None:
             connected.set()
 
@@ -830,7 +1028,7 @@ async def run_async_pool(
 
             async def worker(worker_id: int) -> None:
                 seed = (cfg.seed + loop_idx * cfg.async_tasks + worker_id + 1) % (2**32)
-                rng = random.Random(seed)
+                rng = FastRng(seed)
                 decision = [False]
                 has_limit = cfg.max_ops is not None
                 sample_every = cfg.lat_sample_every
@@ -903,17 +1101,27 @@ def run_sync(
     policy = client_policy_from_config(cfg)
     dataset = DataSet.of(cfg.namespace, cfg.set_name)
 
-    # One shared SyncClient + session across all worker threads. Per-thread
-    # clients would each spin up their own connection pool and Tokio
-    # runtime state, multiplying overhead for no gain.
-    with SyncClient(cfg.seeds, policy=policy) as shared_client:
+    # One SyncClient + session across all worker threads. When
+    # `cfg.current_thread_runtime` is True, the SyncClient internally
+    # installs a thread-local proxy: each worker thread gets its own PAC
+    # `LocalClient` (per-thread Tokio current_thread runtime + per-thread
+    # connection pool) on first op. The shared SyncClient is just a
+    # router; the actual PAC clients are thread-bound.
+    ct_runtime = bool(getattr(cfg, "current_thread_runtime", False))
+    with SyncClient(
+        cfg.seeds, policy=policy,
+        current_thread_runtime=ct_runtime,
+    ) as shared_client:
+        shared_session = shared_client.create_session(Behavior.DEFAULT)
+        # Self-test BEFORE `connected.set()` so a self-test failure
+        # aborts the bench. See run_async comment.
+        _self_test_psdk_sync(shared_session, dataset)
         if connected is not None:
             connected.set()
-        shared_session = shared_client.create_session(Behavior.DEFAULT)
 
         def thread_main(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             fields = list(cfg.bin_fields)
             decision = [False]
             has_limit = cfg.max_ops is not None
@@ -990,18 +1198,75 @@ def run_pac_blocking(
     single_bin = len(fields_t) == 1
     b0_name = fields_t[0].name
 
-    shared_client = new_client_blocking(policy, seeds)
+    # Pre-build keys (shared across threads) — see _build_op_sync.
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i)
+            for _ in range(pkn)
+        ]
+
+    # ct_runtime: each worker thread gets its own `_LocalClient` (per-thread
+    # current_thread Tokio runtime, no cross-thread worker hop). Without
+    # ct_runtime: one shared multi-thread Client across all workers
+    # (PAC default).
+    ct_runtime = bool(getattr(cfg, "current_thread_runtime", False))
+    _tls = threading.local() if ct_runtime else None
+
+    if ct_runtime:
+        # `_LocalClient` is `#[pyclass(unsendable)]` — it's bound to the
+        # thread that created it and panics if dropped on a different
+        # thread. So both construction AND drop must happen inside the
+        # watchdog thread, not the calling main thread.
+        def _ct_runtime_self_test() -> None:
+            client = _PacLocalClient(policy, seeds)
+            key = dataset.id(_SELF_TEST_KEY)
+            client.put_blocking(
+                key, {_SELF_TEST_BIN: _SELF_TEST_VAL}, policy=WritePolicy(),
+            )
+            rec = client.get_blocking(key, policy=ReadPolicy())
+            if rec is None:
+                raise _self_test_fail(
+                    "pac-blocking-ct_runtime",
+                    "get returned no record after put",
+                )
+            got = rec.bins.get(_SELF_TEST_BIN)
+            if got != _SELF_TEST_VAL:
+                raise _self_test_fail(
+                    "pac-blocking-ct_runtime",
+                    f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}",
+                )
+
+        _run_sync_self_test_with_timeout(
+            "pac-blocking-ct_runtime", _ct_runtime_self_test,
+        )
+        shared_client = None
+    else:
+        shared_client = new_client_blocking(policy, seeds)
+        _self_test_pac_blocking(shared_client, dataset)
     if connected is not None:
         connected.set()
 
+    def _thread_client() -> Any:
+        if ct_runtime:
+            c = getattr(_tls, "client", None)
+            if c is None:
+                c = _PacLocalClient(policy, seeds)
+                _tls.client = c
+            return c
+        return shared_client
+
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)
-        rng = random.Random(seed)
+        rng = FastRng(seed)
         has_limit = cfg.max_ops is not None
         sample_every = cfg.lat_sample_every
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
+        pk_counter = 0
+        client = _thread_client()
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return
@@ -1013,9 +1278,13 @@ def run_pac_blocking(
                 payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                 verb = "put"
             else:  # READ_UPDATE
-                keys = _make_keys(dataset, cfg.key_count, rng, 1)
-                assert isinstance(keys, Key)
-                key = keys
+                if pkn > 0:
+                    key, kid = _pk_pairs[pk_counter % pkn]
+                    pk_counter += 1
+                else:
+                    keys = _make_keys(dataset, cfg.key_count, rng, 1)
+                    assert isinstance(keys, Key)
+                    key = keys
                 is_read = rng.randint(1, 100) > (100 - cfg.read_percent)
                 if is_read:
                     verb = "get"
@@ -1035,9 +1304,9 @@ def run_pac_blocking(
             t0 = time.perf_counter() if sample else 0.0
             try:
                 if verb == "get":
-                    shared_client.get_blocking(key, policy=read_policy)
+                    client.get_blocking(key, policy=read_policy)
                 else:
-                    shared_client.put_blocking(key, payload, policy=write_policy)
+                    client.put_blocking(key, payload, policy=write_policy)
             except BaseException as exc:
                 dt = (time.perf_counter() - t0) * 1000.0 if sample else None
                 if _is_not_found(exc):
@@ -1061,10 +1330,16 @@ def run_pac_blocking(
             for f in futures:
                 f.result()
     finally:
-        try:
-            shared_client.close_blocking()
-        except Exception:
-            pass
+        # Per-thread `_LocalClient`s drop with their owning threads; the
+        # shared Client (when ct_runtime is off) closes here. The seed
+        # client used for the self-test in ct_runtime mode is intentionally
+        # leaked — it's bound to this caller thread's current_thread
+        # runtime and would race with worker-thread teardown if reaped now.
+        if shared_client is not None:
+            try:
+                shared_client.close_blocking()
+            except Exception:
+                pass
 
 
 async def run_pac_async(
@@ -1104,17 +1379,31 @@ async def run_pac_async(
     sample_every = cfg.lat_sample_every
     with_tel = cfg.with_telemetry
 
+    # Pre-build keys (shared across worker tasks) — see _build_op_sync.
+    key_from_int = Key.from_int_user_key
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i)
+            for _ in range(pkn)
+        ]
+
     client = await new_client(policy, cfg.seeds)
     try:
+        # Self-test BEFORE `connected.set()` so a failure aborts the bench.
+        await _self_test_pac_async(client, DataSet.of(ns, set_name))
+
         if connected is not None:
             connected.set()
 
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
-            rng = random.Random(seed)
+            rng = FastRng(seed)
             ws = stats.register_worker()
             has_limit = cfg.max_ops is not None
             local_count = 0
+            pk_counter = 0
             while not stop.is_set():
                 if has_limit and stats.total_ops() >= cfg.max_ops:
                     return
@@ -1122,12 +1411,16 @@ async def run_pac_async(
                 if cfg.workload == WorkloadKind.INSERT:
                     is_read = False
                     kid = bench_state.next_insert_key()
-                    k = Key(ns, set_name, str(kid))
+                    k = key_from_int(ns, set_name, kid)
                     payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                     verb = "put"
                 else:  # READ_UPDATE
-                    kid = rng.randint(1, kc)
-                    k = Key(ns, set_name, str(kid))
+                    if pkn > 0:
+                        k, kid = _pk_pairs[pk_counter % pkn]
+                        pk_counter += 1
+                    else:
+                        kid = rng.randint(1, kc)
+                        k = key_from_int(ns, set_name, kid)
                     is_read = rng.randint(1, 100) > (100 - read_pct)
                     if is_read:
                         verb = "get"
@@ -1218,9 +1511,11 @@ def run_legacy_sync(
         else:
             hosts.append((seed, 3000))
 
+    cli_alt = getattr(cfg, "services_alternate", None)
     use_services_alt = (
-        _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
-        or getattr(cfg, "services_alternate", False)
+        cli_alt
+        if cli_alt is not None
+        else _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
     )
     config: dict = {"hosts": hosts}
     if use_services_alt:
@@ -1243,17 +1538,47 @@ def run_legacy_sync(
     except Exception:
         record_not_found = None
 
+    # Pre-build legacy-style tuple keys (shared across threads).
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn > 0:
+        _pk_rng = random.Random(cfg.seed)
+        _pk_pairs = [
+            ((ns, set_name, str(i := _pk_rng.randint(1, kc))), i)
+            for _ in range(pkn)
+        ]
+
+    legacy_st_key = (ns, set_name, _SELF_TEST_KEY)
+
+    def _legacy_self_test() -> None:
+        try:
+            shared_client.put(legacy_st_key, {_SELF_TEST_BIN: _SELF_TEST_VAL})
+            _, _, got_bins = shared_client.get(legacy_st_key)
+            got = got_bins.get(_SELF_TEST_BIN) if got_bins is not None else None
+            if got != _SELF_TEST_VAL:
+                raise _self_test_fail(
+                    "legacy-sync",
+                    f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}",
+                )
+        except RuntimeError:
+            raise
+        except BaseException as exc:
+            raise _self_test_fail("legacy-sync", f"put/get raised {exc!r}") from exc
+
+    # Self-test BEFORE `connected.set()` so a failure aborts the bench.
+    _run_sync_self_test_with_timeout("legacy-sync", _legacy_self_test)
+
     if connected is not None:
         connected.set()
 
     def thread_main(worker_id: int) -> None:
         seed = (cfg.seed + worker_id + 1) % (2**32)
-        rng = random.Random(seed)
+        rng = FastRng(seed)
         has_limit = cfg.max_ops is not None
         sample_every = cfg.lat_sample_every
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
+        pk_counter = 0
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return
@@ -1265,8 +1590,12 @@ def run_legacy_sync(
                 payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                 verb = "put"
             else:  # READ_UPDATE
-                kid = rng.randint(1, kc)
-                key = (ns, set_name, str(kid))
+                if pkn > 0:
+                    key, kid = _pk_pairs[pk_counter % pkn]
+                    pk_counter += 1
+                else:
+                    kid = rng.randint(1, kc)
+                    key = (ns, set_name, str(kid))
                 is_read = rng.randint(1, 100) > (100 - read_pct)
                 if is_read:
                     verb = "get"

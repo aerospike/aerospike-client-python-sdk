@@ -9,6 +9,7 @@ The primary API. All operations are `async`/`await`.
 | Class | Description |
 |-------|-------------|
 | [`Client`](client.md) | Entry point — connect, create sessions, manage lifecycle |
+| [`AsyncPool`](async-pool.md) | Multi-loop async pool — N event loops × N clients for parallel async work (free-threaded Python) |
 | [`Cluster`](cluster.md) | Cluster handle returned by `Client` |
 | [`Session`](session.md) | Scoped reads and writes with a fixed `Behavior` |
 | [`QueryBuilder`](query.md) | Build and execute read queries (point, set, batch) |
@@ -78,6 +79,7 @@ Aerospike Expression Language parsing and filter generation.
 :maxdepth: 1
 
 client
+async-pool
 cluster
 session
 query

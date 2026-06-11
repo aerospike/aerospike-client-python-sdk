@@ -34,6 +34,7 @@ from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
 if TYPE_CHECKING:
     from aerospike_async import Record
+    from aerospike_sdk.error_strategy import ErrorHandler
     from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -79,6 +80,51 @@ class SyncRecordStream:
     def from_batch_records(cls, batch_records: Sequence) -> "SyncRecordStream":
         """Wrap a list of PAC ``BatchRecord`` objects."""
         return cls.from_list(batch_records_to_results(list(batch_records)))
+
+    @classmethod
+    def from_pac_batch_stream(
+        cls, pac_stream: Any, on_error: "ErrorHandler | None" = None,
+    ) -> "SyncRecordStream":
+        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (sync iter).
+
+        See :meth:`aerospike_sdk.record_stream.RecordStream.from_pac_batch_stream`
+        for the contract. This sync variant pulls ``(idx, BatchRecord)``
+        tuples via PAC's blocking ``__iter__``/``__next__`` and maps each
+        to a :class:`RecordResult` with ``index=idx`` (NOT enumeration —
+        completion order can differ from input order).
+
+        Args:
+            pac_stream: PAC ``BatchRecordStream`` (sync iter) to drain.
+            on_error: Optional ``(key, index, exception) -> None`` callback.
+                When set, per-key failures are dispatched to the handler
+                and excluded from the returned stream; cluster-level errors
+                still raise from ``__next__``.
+        """
+        from aerospike_sdk.exceptions import _convert_pac_exception, _result_code_to_exception
+
+        def _gen() -> Iterator[RecordResult]:
+            try:
+                for idx, br in pac_stream:
+                    rc = (
+                        br.result_code
+                        if br.result_code is not None
+                        else ResultCode.OK
+                    )
+                    if on_error is not None and rc != ResultCode.OK:
+                        on_error(br.key, idx, _result_code_to_exception(
+                            rc, str(rc), br.in_doubt))
+                        continue
+                    yield RecordResult(
+                        key=br.key,
+                        record=br.record,
+                        result_code=rc,
+                        in_doubt=br.in_doubt,
+                        index=idx,
+                    )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
+
+        return cls(_gen())
 
     @classmethod
     def from_pac_recordset(cls, recordset: Any) -> "SyncRecordStream":

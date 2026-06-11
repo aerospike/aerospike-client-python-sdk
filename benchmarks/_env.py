@@ -87,9 +87,11 @@ def client_policy_from_config(cfg: object) -> ClientPolicy:
     policy = ClientPolicy()
     env_alt = os.environ.get(
         "AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower() in ("true", "1", "yes")
-    policy.use_services_alternate = (
-        getattr(cfg, "services_alternate", False) or env_alt
-    )
+    cli_alt = getattr(cfg, "services_alternate", None)
+    policy.use_services_alternate = cli_alt if cli_alt is not None else env_alt
+
+    if getattr(cfg, "seed_only_cluster", False):
+        policy.seed_only_cluster = True
 
     ca = getattr(cfg, "tls_ca_file", None)
     cert = getattr(cfg, "tls_cert_file", None)

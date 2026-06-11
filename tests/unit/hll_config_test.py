@@ -54,8 +54,13 @@ class TestHllConfig:
 
     def test_frozen(self):
         config = HllConfig.of(14)
+        # `setattr` instead of direct `config.index_bit_count = ...` to bypass
+        # static analyzers (PyCharm `PyDataclass`, mypy `misc`) that flag the
+        # intentional frozen-dataclass mutation. Runtime behavior is identical:
+        # frozen-dataclass `__setattr__` raises `FrozenInstanceError`
+        # regardless of how the assignment is dispatched.
         with pytest.raises(dataclasses.FrozenInstanceError):
-            config.index_bit_count = 16  # type: ignore[misc]
+            setattr(config, "index_bit_count", 16)
 
     def test_repr(self):
         assert repr(HllConfig.of(14)) == "HllConfig(index_bit_count=14, min_hash_bit_count=-1)"

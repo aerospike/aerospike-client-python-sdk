@@ -290,7 +290,10 @@ def wait_for_set_visible():
 
         await wait_for_set_visible(session, "test", "my_set", 4)
     """
-    async def _wait(session, ns, set_name, expected, *, timeout=5.0, interval=0.05):
+    async def _wait(
+        session, ns, set_name, expected,
+        *, timeout=5.0, interval=0.05, settle=0.1,
+    ):
         deadline = time.monotonic() + timeout
         last_seen = -1
         while time.monotonic() < deadline:
@@ -300,6 +303,15 @@ def wait_for_set_visible():
                 seen += 1
             stream.close()
             if seen >= expected:
+                # Brief settle pause — scan-count visibility precedes CDT-bin
+                # storage / filter-expression readiness by a few tens of ms
+                # on busier CI runners. Without this, AEL CDT-path filters
+                # (e.g. ``$.numbers.[0] > 50``, ``$.values.[1:3].count() == 2``)
+                # observed against just-seeded records can return 0 matches
+                # even though the scan sees the records. Observed on 3.12
+                # and 3.13t CI runs 2026-06-05.
+                if settle > 0:
+                    await asyncio.sleep(settle)
                 return
             last_seen = seen
             await asyncio.sleep(interval)

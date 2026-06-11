@@ -20,7 +20,9 @@ from datetime import timedelta
 import pytest
 from aerospike_async import ClientPolicy
 
+from aerospike_sdk.aio.cluster_definition import ClusterDefinition as AsyncClusterDefinition
 from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition
 
 
 class TestSystemSettingsApplyTo:
@@ -77,8 +79,13 @@ class TestSystemSettingsImmutability:
     """Verify the frozen dataclass rejects field mutation after creation."""
     def test_frozen(self):
         ss = SystemSettings(max_connections_per_node=100)
+        # `setattr` instead of direct `ss.max_connections_per_node = ...` to
+        # bypass static analyzers (PyCharm `PyDataclass`, mypy `misc`) that
+        # flag the intentional frozen-dataclass mutation. Runtime behavior is
+        # identical: any attribute assignment raises `FrozenInstanceError`
+        # (an `AttributeError` subclass).
         with pytest.raises(AttributeError):
-            ss.max_connections_per_node = 200
+            setattr(ss, "max_connections_per_node", 200)
 
 
 class TestClusterDefinitionWithSystemSettings:
@@ -86,9 +93,7 @@ class TestClusterDefinitionWithSystemSettings:
     ClusterDefinition builders, correctly populating the ClientPolicy
     produced by _get_policy() and supporting method chaining."""
     def test_async_cluster_definition_applies_settings(self):
-        from aerospike_sdk.aio.cluster_definition import ClusterDefinition
-
-        cd = ClusterDefinition("localhost", 3000)
+        cd = AsyncClusterDefinition("localhost", 3000)
         ss = SystemSettings(
             max_connections_per_node=300,
             tend_interval=timedelta(seconds=3),
@@ -99,9 +104,7 @@ class TestClusterDefinitionWithSystemSettings:
         assert policy.tend_interval == 3_000
 
     def test_sync_cluster_definition_applies_settings(self):
-        from aerospike_sdk.sync.cluster_definition import ClusterDefinition
-
-        cd = ClusterDefinition("localhost", 3000)
+        cd = SyncClusterDefinition("localhost", 3000)
         ss = SystemSettings(
             max_connections_per_node=300,
             tend_interval=timedelta(seconds=3),
@@ -112,9 +115,7 @@ class TestClusterDefinitionWithSystemSettings:
         assert policy.tend_interval == 3_000
 
     def test_chaining(self):
-        from aerospike_sdk.aio.cluster_definition import ClusterDefinition
-
-        cd = ClusterDefinition("localhost", 3000) \
+        cd = AsyncClusterDefinition("localhost", 3000) \
             .with_system_settings(SystemSettings(max_connections_per_node=400)) \
             .validate_cluster_name_is("test")
         policy = cd._get_policy()

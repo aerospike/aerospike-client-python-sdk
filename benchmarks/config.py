@@ -76,7 +76,11 @@ class WorkloadConfig:
     auth_mode: Optional[str] = None
     auth_user: Optional[str] = None
     auth_password: Optional[str] = None
-    services_alternate: bool = False
+    services_alternate: Optional[bool] = None
+    seed_only_cluster: bool = False
+    """Testing-only. Skip cluster tend and route every op via the seed
+    address(es). Eliminates tend-load confound on ct_runtime cells and
+    speeds unit-test cluster setup. Unsafe under topology changes."""
     latency_style: str = "columns"
     # Python allocation tracing. Off by default — `tracemalloc.start()` hooks
     # every PyObject alloc/free and walks the Python frame stack each time,
@@ -101,6 +105,19 @@ class WorkloadConfig:
     """When True, enable per-second TPS ticker, sampled latency histograms,
     and summary percentiles. Default is the lean path that runs straight to
     ``--duration`` and prints only a final TPS / errors / timeouts summary."""
+    prebuilt_keys: int = 0
+    current_thread_runtime: bool = False
+    """When True (sync mode only), SyncClient installs a thread-local proxy:
+    each bench worker thread gets its own PAC `LocalClient` backed by a
+    per-thread `current_thread` Tokio runtime. Eliminates cross-thread sync
+    per op vs the shared multi-thread runtime path. See
+    `aerospike_sdk.sync._threadlocal_client` for tend-load caveats."""
+    """When >0, pre-generate this many Key objects at worker startup;
+    workers index them sequentially per op instead of constructing keys
+    via per-op `random.randint + str + Key()`. Eliminates the Python
+    stdlib RNG handicap (~5 µs/op vs Rust/Java's ~15 ns/op) so the bench
+    reveals the client's actual ceiling rather than the bench harness'
+    Python overhead. Sequential indexing — no per-op RNG."""
 
 
 def parse_latency_arg(value: str) -> tuple[int, int, str]:
@@ -339,8 +356,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--services-alternate",
         action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use services-alternate (the alternate-access-address pathway) "
+        "for cluster discovery during tending. Only enable when the target "
+        "cluster has `alternate-access-address` configured on its nodes — "
+        "otherwise partition routing fails with 'Invalid cluster node' and "
+        "ops hang in PAC's retry loop. Pass `--services-alternate` to enable, "
+        "`--no-services-alternate` to force-disable (overrides "
+        "AEROSPIKE_USE_SERVICES_ALTERNATE from `aerospike.env` if set). "
+        "When neither form is passed, falls back to that env var (default: "
+        "env or False, matching JSDK's `--services-alternate` default of "
+        "false).",
+    )
+    p.add_argument(
+        "--seed-only",
+        dest="seed_only_cluster",
+        action="store_true",
         default=False,
-        help="Use services-alternate for cluster discovery (default: False).",
+        help="Testing-only. Skip cluster tend entirely; route every op via "
+        "the seed address(es). Removes tend-load from ct_runtime / pool "
+        "measurements. Unsafe under node restart / failover / rebalance — "
+        "do not enable against production-class clusters.",
     )
     p.add_argument(
         "--tracemalloc",
@@ -390,6 +426,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "the lean path runs straight to --duration and prints only a final "
         "TPS / errors / timeouts summary.",
     )
+    p.add_argument(
+        "--current-thread-runtime",
+        action="store_true",
+        default=False,
+        help="(sync mode) Install a thread-local PAC LocalClient per worker "
+        "thread; each thread runs its own current_thread Tokio runtime + "
+        "connection pool. Eliminates the cross-thread worker hop the shared "
+        "multi-thread runtime imposes on every sync op. Recommended pairing: "
+        "ClientPolicy with conn_pools_per_node=1.",
+    )
+    p.add_argument(
+        "--prebuilt-keys",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Pre-generate N Key objects at startup; workers cycle through "
+        "them sequentially instead of paying per-op `random.randint` + "
+        "`str()` + `Key()` construction (~5 µs/op on Python). Eliminates "
+        "the bench's Python-stdlib RNG handicap and reveals the client's "
+        "true upper-bound ceiling. JSDK / Rust-core benches don't pay this "
+        "tax because their PRNGs are essentially free. 0 (default) keeps "
+        "per-op RNG.",
+    )
     return p
 
 
@@ -437,7 +496,8 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         auth_mode=auth_mode,
         auth_user=auth_user,
         auth_password=auth_password,
-        services_alternate=getattr(ns, "services_alternate", False),
+        services_alternate=getattr(ns, "services_alternate", None),
+        seed_only_cluster=bool(getattr(ns, "seed_only_cluster", False)),
         latency_style=getattr(ns, "latency_style", "columns"),
         tracemalloc_enabled=bool(getattr(ns, "tracemalloc", False)),
         fast_path=bool(getattr(ns, "fast_path", False)),
@@ -449,4 +509,6 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
             bool(getattr(ns, "with_telemetry", False))
             or getattr(ns, "latency_style", "columns") != "columns"
         ),
+        prebuilt_keys=max(0, int(getattr(ns, "prebuilt_keys", 0))),
+        current_thread_runtime=bool(getattr(ns, "current_thread_runtime", False)),
     )
