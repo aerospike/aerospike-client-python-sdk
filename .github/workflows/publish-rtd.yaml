@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "PSDK version to wait for on PyPI (e.g. 0.9.0a2)"
+        description: "PSDK version to wait for on PyPI (e.g. 0.9.0a4)"
         type: string
         required: true
       rtd_version:
-        description: "RTD version slug to build (e.g. v0.9.0-alpha.2, latest, stable)"
+        description: "RTD version slug to build (e.g. v0.9.0-alpha.4, latest, stable)"
         type: string
         required: true
       pypi_timeout_minutes:

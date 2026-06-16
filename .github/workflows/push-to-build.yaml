@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.9.0-alpha.2) — must match VERSION file'
+        description: 'Release version (e.g. 0.9.0-alpha.4) — must match VERSION file'
         required: true
         type: string
       dry_run:
