@@ -1,0 +1,94 @@
+name: PSDK Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.9.0-alpha.2) — must match VERSION file'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry-run mode (deploy + bundle creation are no-ops)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+
+jobs:
+  validate:
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate version matches VERSION file
+        run: |
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
+          echo "VERSION file: $FILE_VERSION"
+          if [ "$FILE_VERSION" != "${{ inputs.version }}" ]; then
+            echo "::error::Version mismatch: VERSION file has '$FILE_VERSION' but dispatch requested '${{ inputs.version }}'"
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists on remote"
+            exit 1
+          fi
+          echo "Tag v${{ inputs.version }} is available"
+
+      - name: Enforce branch gate
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          VERSION="${{ inputs.version }}"
+          case "$VERSION" in
+            *-alpha.*|*-beta.*)
+              if [ "$BRANCH" != "dev" ]; then
+                echo "::error::alpha/beta releases must be dispatched from 'dev' (current: $BRANCH)"
+                exit 1
+              fi ;;
+            *-rc.*)
+              if [ "$BRANCH" != "stage" ]; then
+                echo "::error::RC releases must be dispatched from 'stage' (current: $BRANCH)"
+                exit 1
+              fi ;;
+            *)
+              if [ "$BRANCH" != "main" ]; then
+                echo "::error::Stable releases must be dispatched from 'main' (current: $BRANCH)"
+                exit 1
+              fi ;;
+          esac
+          echo "Version $VERSION from branch $BRANCH — OK"
+
+      - name: Validate PAC dependency is on PyPI
+        run: |
+          PAC_PIN=$(python3 -c "
+          import re, pathlib
+          text = pathlib.Path('pyproject.toml').read_text()
+          m = re.search(r'aerospike-async==([^\s\"]+)', text)
+          print(m.group(1) if m else '')
+          ")
+          if [ -z "$PAC_PIN" ]; then
+            echo "::error::Could not extract aerospike-async version pin from pyproject.toml"
+            exit 1
+          fi
+          echo "Checking PyPI for aerospike-async==$PAC_PIN"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://pypi.org/pypi/aerospike-async/${PAC_PIN}/json")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::aerospike-async==$PAC_PIN is not available on PyPI (HTTP $STATUS)"
+            exit 1
+          fi
+          echo "aerospike-async==$PAC_PIN is available on PyPI — OK"
+
+  build-release:
+    name: Build release
+    needs: validate
+    uses: ./.github/workflows/build-release.yaml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit

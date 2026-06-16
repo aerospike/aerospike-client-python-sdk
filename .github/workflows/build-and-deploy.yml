@@ -6,13 +6,10 @@
 #
 # Status: dispatch-only with dry-run defaulting to true. Will not push to
 # JFrog or create a Release Bundle until:
-#   1. DevOps provisions vars (JFROG_PROJECT) and secrets (GPG_*) — see
-#      .cursor/plans/release-pipeline.md §0.11.
+#   1. DevOps provisions vars (JFROG_PROJECT) and secrets (GPG_*).
 #   2. A successful dry-run dispatch validates the chain.
 #   3. dry-run flag is flipped via dispatch input (or this file is updated
 #      to add the `push:` trigger below).
-#
-# See .cursor/plans/release-pipeline.md §0.6.a for full design notes.
 
 name: Build and Deploy
 

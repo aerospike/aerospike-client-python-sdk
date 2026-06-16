@@ -1,0 +1,87 @@
+name: Promote to stage
+
+on:
+  push:
+    branches:
+      - stage
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry-run mode. Defaults to true for manual dispatch.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify-ancestry:
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify stage tip is reachable from dev
+        run: |
+          git fetch origin dev
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "::error::stage tip $GITHUB_SHA is not reachable from origin/dev."
+            echo "dev tip:   $(git rev-parse origin/dev)"
+            echo "stage tip: $GITHUB_SHA"
+            exit 1
+          fi
+          echo "stage tip $GITHUB_SHA is reachable from origin/dev"
+
+  extract-version:
+    needs: verify-ancestry
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    outputs:
+      version: ${{ steps.extract.outputs.release-version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Extract version
+        id: extract
+        uses: ./.github/actions/get-version
+
+  promote-bundle:
+    needs: [verify-ancestry, extract-version]
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Setup JFrog CLI
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_URL: https://artifact.aerospike.io
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == 'true'
+        env:
+          BUNDLE_VERSION: ${{ needs.extract-version.outputs.version }}
+        run: |
+          echo "DRY-RUN: would promote release bundle"
+          echo "  bundle-name: aerospike-client-python-sdk"
+          echo "  version:     $BUNDLE_VERSION"
+          echo "  environment: STAGE"
+          echo "  jf-project:  ${{ vars.JFROG_PROJECT }}"
+
+      - name: Promote Release Bundle v2 to STAGE
+        if: env.DRY_RUN != 'true'
+        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+        with:
+          bundle-name: aerospike-client-python-sdk
+          version: ${{ needs.extract-version.outputs.version }}
+          environment: STAGE
+          jf-project: ${{ vars.JFROG_PROJECT }}
