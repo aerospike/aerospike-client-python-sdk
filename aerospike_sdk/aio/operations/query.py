@@ -83,6 +83,10 @@ from aerospike_async import (
     ReadPolicy,
     Replica,
     Statement,
+    StringNumericType,
+    StringOperation,
+    StringRegexFlags,
+    StringWriteFlags,
     Txn,
     WritePolicy,
 )
@@ -313,7 +317,7 @@ class _SupportsAddOperation(Protocol):
     ``_QueryBuilderBase``, ``_WriteSegmentBuilderBase``.
     """
 
-    def add_operation(self, op: Any) -> None: ...
+    def add_operation(self, op: Any) -> Self: ...
     def _start_write_verb(
         self, op_type: str, arg1: Any, *more_keys: Any,
     ) -> "WriteSegmentBuilder": ...
@@ -2385,9 +2389,10 @@ class _QueryBuilderBase:
         """
         return QueryBinBuilder(cast("QueryBuilder", self), bin_name)
 
-    def add_operation(self, op: Any) -> None:
-        """Append a read operation produced by a bin or CDT builder."""
+    def add_operation(self, op: Any) -> Self:
+        """Append a read operation. Returns ``self`` so calls can chain."""
         self._operations.append(op)
+        return self
 
     def with_write_operations(
         self, operations: Sequence[Any],
@@ -5276,6 +5281,436 @@ class WriteBinBuilder(_WriteVerbs):
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
+    # -- Server-side string operations (server 8.1.3+) ------------------------
+    #
+    # The ``str_*`` family wraps server-side string read/modify ops. Each
+    # method registers a single op on the surrounding write segment and
+    # returns the parent for chaining. Reads return their result under this
+    # bin's name in the record when the operate completes. Modify ops mutate
+    # the bin in place. Use :class:`StringWriteFlags`, :class:`StringRegexFlags`,
+    # and :class:`StringNumericType` for the bitmask / enum arguments.
+    #
+    # CTX navigation on string ops (operating on a string nested inside a
+    # list or map bin) is not exposed on this chainable surface — drop to the
+    # lower-level ``StringOperation.<name>(bin, ctx=[...])`` factory plus
+    # ``append_operations(op)`` for that case.
+
+    # ---- String reads -------------------------------------------------------
+
+    def str_strlen(self) -> WriteSegmentBuilder:
+        """Register a strlen read: Unicode codepoint count of this string bin.
+
+        Returns the codepoint count under this bin's name (NOT the UTF-8
+        byte count — use :meth:`str_byte_length` for bytes).
+
+        Example::
+
+            stream = await (
+                session.upsert(key)
+                    .bin("greeting").set_to("héllo")
+                    .bin("greeting").str_strlen()
+                    .execute()
+            )
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+
+        See Also:
+            :meth:`QueryBinBuilder.str_strlen`: Same read on a query builder.
+            :meth:`str_byte_length`: UTF-8 byte length instead of codepoint count.
+        """
+        return self._segment._add_op(StringOperation.strlen(self._bin))
+
+    def str_substr(self, start: int, end: Optional[int] = None) -> WriteSegmentBuilder:
+        """Register a substr read.
+
+        With ``end`` omitted, returns codepoints from ``start`` to the end of
+        the string. With ``end`` set, returns the half-open codepoint range
+        ``[start, end)``. Negative ``start`` counts from the end. Out-of-bounds
+        indexes are clamped — no error is raised.
+
+        Note:
+            ``end`` is end-exclusive (NOT a length). To extract three
+            codepoints starting at index 2, pass ``start=2, end=5``.
+
+        Example::
+
+            stream = await (
+                session.upsert(key)
+                    .bin("greeting").set_to("hello world")
+                    .bin("greeting").str_substr(0, 5)  # → "hello"
+                    .execute()
+            )
+
+        Args:
+            start: Codepoint index to start at. Negative counts from end.
+            end: End-exclusive codepoint index. ``None`` means run to end.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.substr(self._bin, start, end))
+
+    def str_char_at(self, index: int) -> WriteSegmentBuilder:
+        """Register a char-at read: returns the codepoint at ``index`` as a
+        one-codepoint string. Negative ``index`` counts from the end.
+
+        Example::
+            stream = await session.upsert(key).bin("s").str_char_at(1).execute()
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.char_at(self._bin, index))
+
+    def str_find(self, needle: str, occurrence: Optional[int] = None) -> WriteSegmentBuilder:
+        """Register a find read: codepoint index of the first occurrence of
+        ``needle``, or the N-th occurrence when ``occurrence`` is given.
+
+        Returns -1 if the needle is absent. Occurrence numbering is 1-based
+        (``1`` = first match); ``-1`` selects the last match.
+
+        Example::
+            stream = await session.upsert(key).bin("s").str_find("world").execute()
+
+        Args:
+            needle: Substring to locate.
+            occurrence: 1-based match index. ``None`` means first occurrence.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.find(self._bin, needle, occurrence),
+        )
+
+    def str_contains(self, needle: str) -> WriteSegmentBuilder:
+        """Register a contains read: ``True`` iff this bin contains ``needle``.
+
+        Result is a Python ``bool`` (the server returns a native msgpack
+        boolean for the seven boolean-shaped read ops).
+
+        Example::
+            stream = await session.upsert(key).bin("s").str_contains("hello").execute()
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.contains(self._bin, needle))
+
+    def str_starts_with(self, prefix: str) -> WriteSegmentBuilder:
+        """Register a starts-with read: ``True`` iff this bin starts with ``prefix``."""
+        return self._segment._add_op(StringOperation.starts_with(self._bin, prefix))
+
+    def str_ends_with(self, suffix: str) -> WriteSegmentBuilder:
+        """Register an ends-with read: ``True`` iff this bin ends with ``suffix``."""
+        return self._segment._add_op(StringOperation.ends_with(self._bin, suffix))
+
+    def str_to_integer(self) -> WriteSegmentBuilder:
+        """Register a to-integer read: parses this bin as ``int64``.
+
+        Server returns ``PARAMETER_ERROR`` if the bin doesn't parse as an
+        integer.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.to_integer(self._bin))
+
+    def str_to_double(self) -> WriteSegmentBuilder:
+        """Register a to-double read: parses this bin as ``float64``.
+
+        Server returns ``PARAMETER_ERROR`` if the bin doesn't parse as a
+        double.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.to_double(self._bin))
+
+    def str_byte_length(self) -> WriteSegmentBuilder:
+        """Register a byte-length read: UTF-8 byte count of this string bin.
+
+        Differs from :meth:`str_strlen` for non-ASCII content (where one
+        codepoint can encode to multiple bytes).
+        """
+        return self._segment._add_op(StringOperation.byte_length(self._bin))
+
+    def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> WriteSegmentBuilder:
+        """Register an is-numeric read: ``True`` iff this bin parses as a number.
+
+        Pass ``numeric_type`` to restrict to ``StringNumericType.INT`` or
+        ``StringNumericType.FLOAT``; default ``ANY`` accepts either.
+
+        Example::
+
+            stream = await (
+                session.upsert(key).bin("count")
+                    .str_is_numeric(StringNumericType.INT)
+                    .execute()
+            )
+
+        Args:
+            numeric_type: Restrict to one numeric class. ``None`` = either.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.is_numeric(self._bin, numeric_type),
+        )
+
+    def str_is_upper(self) -> WriteSegmentBuilder:
+        """Register an is-upper read: ``True`` iff every cased codepoint is uppercase."""
+        return self._segment._add_op(StringOperation.is_upper(self._bin))
+
+    def str_is_lower(self) -> WriteSegmentBuilder:
+        """Register an is-lower read: ``True`` iff every cased codepoint is lowercase."""
+        return self._segment._add_op(StringOperation.is_lower(self._bin))
+
+    def str_to_blob(self) -> WriteSegmentBuilder:
+        """Register a to-blob read: UTF-8 bytes of this string bin as a blob."""
+        return self._segment._add_op(StringOperation.to_blob(self._bin))
+
+    def str_split(self, separator: Optional[str] = None) -> WriteSegmentBuilder:
+        """Register a split read.
+
+        With ``separator`` omitted, returns one element per Unicode codepoint
+        (per-codepoint split). With ``separator`` set, splits on the
+        substring; absent separator → singleton list with the whole string.
+
+        Args:
+            separator: Substring to split on. ``None`` = codepoint-wise.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.split(self._bin, separator))
+
+    def str_b64_decode(self) -> WriteSegmentBuilder:
+        """Register a base64-decode read: treats the bin as base64 text, returns bytes."""
+        return self._segment._add_op(StringOperation.b64_decode(self._bin))
+
+    def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a regex-compare read: ``True`` iff ``pattern`` matches this bin.
+
+        Uses ICU regex syntax. Combine ``StringRegexFlags`` constants with
+        bitwise OR for the ``flags`` argument.
+
+        Example::
+
+            stream = await (
+                session.upsert(key).bin("s")
+                    .str_regex_compare("^hello.*", StringRegexFlags.CASE_INSENSITIVE)
+                    .execute()
+            )
+
+        Args:
+            pattern: ICU regex pattern.
+            flags: OR-combined :class:`StringRegexFlags` bitmask. Defaults to 0.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.regex_compare(self._bin, pattern, int(flags)),
+        )
+
+    # ---- String modifies ----------------------------------------------------
+
+    def str_insert(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register an insert modify: splice ``value`` into this bin at codepoint ``index``.
+
+        Negative ``index`` counts from the end of the string. Out-of-bounds
+        indexes clamp.
+
+        Args:
+            index: Codepoint index to splice at.
+            value: String to insert.
+            flags: OR-combined :class:`StringWriteFlags` bitmask
+                (``NO_FAIL`` suppresses the op on missing-bin error).
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.insert(self._bin, index, value, flags=int(flags)),
+        )
+
+    def str_overwrite(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register an overwrite modify: overwrite codepoints starting at ``index`` with ``value``.
+
+        May extend the bin's length when ``value`` runs past the end.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.overwrite(self._bin, index, value, flags=int(flags)),
+        )
+
+    def str_concat(self, value: Union[str, List[str]], *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a concat modify: append ``value`` (single string or list of strings).
+
+        The wire format is always list-of-strings — passing a single
+        ``str`` is wrapped in a 1-element list internally.
+
+        Args:
+            value: String to append, or list of strings to append in order.
+            flags: OR-combined :class:`StringWriteFlags` bitmask.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.concat(self._bin, value, flags=int(flags)),
+        )
+
+    def str_snip(self, start: int, end: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
+
+        Note:
+            ``end`` is REQUIRED. The server-side snip op cannot dispatch a
+            1-arg form. To remove the suffix from ``start`` to the bin's
+            end, pass the codepoint length explicitly (e.g. from a paired
+            :meth:`str_strlen` read).
+
+        Args:
+            start: Codepoint index where the removed range starts.
+            end: Exclusive end of the removed range.
+            flags: OR-combined :class:`StringWriteFlags` bitmask.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.snip(self._bin, start, end, flags=int(flags)),
+        )
+
+    def str_replace(
+        self, needle: str, replacement: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
+        """Register a replace modify: replace the first occurrence of ``needle``.
+
+        Use :meth:`str_replace_all` to replace every occurrence.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.replace(self._bin, needle, replacement, flags=int(flags)),
+        )
+
+    def str_replace_all(
+        self, needle: str, replacement: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
+        """Register a replace-all modify: replace every occurrence of ``needle``."""
+        return self._segment._add_op(
+            StringOperation.replace_all(self._bin, needle, replacement, flags=int(flags)),
+        )
+
+    def str_regex_replace(
+        self, pattern: str, replacement: str, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
+        """Register a regex-replace modify.
+
+        Replaces the first match of ``pattern`` with ``replacement``. Set
+        the ``GLOBAL`` bit in ``flags`` (``StringRegexFlags.GLOBAL``) to
+        replace every match.
+
+        Note:
+            ``flags`` here is :class:`StringRegexFlags` (regex behavior),
+            NOT :class:`StringWriteFlags`. The server's regex-replace op has
+            no slot for write flags on the wire; ``str_regex_replace`` does
+            not accept a ``write_flags=`` kwarg for that reason.
+
+        Args:
+            pattern: ICU regex pattern.
+            replacement: Replacement text.
+            flags: OR-combined :class:`StringRegexFlags` bitmask.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.regex_replace(self._bin, pattern, replacement, int(flags)),
+        )
+
+    def str_upper(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register an upper modify: uppercase the bin in place."""
+        return self._segment._add_op(StringOperation.upper(self._bin, flags=int(flags)))
+
+    def str_lower(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a lower modify: lowercase the bin in place."""
+        return self._segment._add_op(StringOperation.lower(self._bin, flags=int(flags)))
+
+    def str_case_fold(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a case-fold modify: locale-independent lowercase, useful for comparison keys."""
+        return self._segment._add_op(StringOperation.case_fold(self._bin, flags=int(flags)))
+
+    def str_normalize_nfc(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a normalize-NFC modify: Unicode NFC normalization in place.
+
+        Already-normalized strings are unchanged.
+        """
+        return self._segment._add_op(StringOperation.normalize_nfc(self._bin, flags=int(flags)))
+
+    def str_trim_start(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a trim-start modify: strip whitespace from the start of the bin."""
+        return self._segment._add_op(StringOperation.trim_start(self._bin, flags=int(flags)))
+
+    def str_trim_end(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a trim-end modify: strip whitespace from the end of the bin."""
+        return self._segment._add_op(StringOperation.trim_end(self._bin, flags=int(flags)))
+
+    def str_trim(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a trim modify: strip whitespace from both ends of the bin."""
+        return self._segment._add_op(StringOperation.trim(self._bin, flags=int(flags)))
+
+    def str_pad_start(
+        self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
+        """Register a pad-start modify: left-pad with ``pad_string`` to ``target_length`` codepoints.
+
+        No-op when the bin is already at or above ``target_length``.
+        """
+        return self._segment._add_op(
+            StringOperation.pad_start(self._bin, target_length, pad_string, flags=int(flags)),
+        )
+
+    def str_pad_end(
+        self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
+        """Register a pad-end modify: right-pad with ``pad_string`` to ``target_length`` codepoints.
+
+        No-op when the bin is already at or above ``target_length``.
+        """
+        return self._segment._add_op(
+            StringOperation.pad_end(self._bin, target_length, pad_string, flags=int(flags)),
+        )
+
+    def str_repeat(self, count: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a repeat modify: repeat the bin contents ``count`` times.
+
+        ``count`` must be non-negative.
+        """
+        return self._segment._add_op(
+            StringOperation.repeat(self._bin, count, flags=int(flags)),
+        )
+
+    def str_to_string(self) -> WriteSegmentBuilder:
+        """Register a to-string read: convert a non-string bin to its string representation.
+
+        Accepts ``int``, ``float``, ``string``, or ``blob`` source types;
+        any other type returns ``BIN_TYPE_ERROR`` from the server. Has no
+        ``flags`` argument and no CDT-context support (the wire op has no
+        payload to carry a CTX wrapper).
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(StringOperation.to_string(self._bin))
+
     # -- Expression operations ------------------------------------------------
 
     def select_from(
@@ -6132,6 +6567,127 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
         self._parent.add_operation(
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )  # type: ignore[union-attr]
+        return self._parent
+
+    # -- Server-side string read operations (server 8.1.3+) -------------------
+    #
+    # See :class:`WriteBinBuilder` for the parallel write-side surface +
+    # modify-op family. Only reads make sense on a query builder; users
+    # writing AND reading in the same operate should use ``WriteBinBuilder``
+    # via ``session.upsert(key).bin(...).str_*()``.
+
+    def str_strlen(self) -> _T:
+        """Read the Unicode codepoint count of this string bin (NOT byte count)."""
+        self._parent.add_operation(StringOperation.strlen(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_substr(self, start: int, end: Optional[int] = None) -> _T:
+        """Read codepoints from ``start`` to ``end`` (exclusive); or to bin end when ``end=None``."""
+        self._parent.add_operation(  # type: ignore[union-attr]
+            StringOperation.substr(self._bin, start, end),
+        )
+        return self._parent
+
+    def str_char_at(self, index: int) -> _T:
+        """Read the codepoint at ``index`` as a one-codepoint string."""
+        self._parent.add_operation(StringOperation.char_at(self._bin, index))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_find(self, needle: str, occurrence: Optional[int] = None) -> _T:
+        """Read the codepoint index of the first (or N-th) occurrence of ``needle``; -1 if absent."""
+        self._parent.add_operation(  # type: ignore[union-attr]
+            StringOperation.find(self._bin, needle, occurrence),
+        )
+        return self._parent
+
+    def str_contains(self, needle: str) -> _T:
+        """Read a bool: ``True`` iff this bin contains ``needle`` as a substring."""
+        self._parent.add_operation(StringOperation.contains(self._bin, needle))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_starts_with(self, prefix: str) -> _T:
+        """Read a bool: ``True`` iff this bin starts with ``prefix``."""
+        self._parent.add_operation(StringOperation.starts_with(self._bin, prefix))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_ends_with(self, suffix: str) -> _T:
+        """Read a bool: ``True`` iff this bin ends with ``suffix``."""
+        self._parent.add_operation(StringOperation.ends_with(self._bin, suffix))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_to_integer(self) -> _T:
+        """Parse this bin as an ``int64``. Server returns PARAMETER_ERROR on bad input."""
+        self._parent.add_operation(StringOperation.to_integer(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_to_double(self) -> _T:
+        """Parse this bin as a ``float64``. Server returns PARAMETER_ERROR on bad input."""
+        self._parent.add_operation(StringOperation.to_double(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_byte_length(self) -> _T:
+        """Read the UTF-8 byte count of this string bin."""
+        self._parent.add_operation(StringOperation.byte_length(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> _T:
+        """Read a bool: ``True`` iff this bin parses as a number.
+
+        Pass ``numeric_type`` to restrict to ``StringNumericType.INT`` /
+        ``StringNumericType.FLOAT``; default ``ANY`` accepts either.
+        """
+        self._parent.add_operation(  # type: ignore[union-attr]
+            StringOperation.is_numeric(self._bin, numeric_type),
+        )
+        return self._parent
+
+    def str_is_upper(self) -> _T:
+        """Read a bool: ``True`` iff every cased codepoint is uppercase."""
+        self._parent.add_operation(StringOperation.is_upper(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_is_lower(self) -> _T:
+        """Read a bool: ``True`` iff every cased codepoint is lowercase."""
+        self._parent.add_operation(StringOperation.is_lower(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_to_blob(self) -> _T:
+        """Read the UTF-8 bytes of this string bin as a blob."""
+        self._parent.add_operation(StringOperation.to_blob(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_split(self, separator: Optional[str] = None) -> _T:
+        """Read a list of strings.
+
+        With ``separator=None`` returns one element per codepoint; with a
+        separator returns the substrings between separator occurrences
+        (singleton list when separator is absent).
+        """
+        self._parent.add_operation(StringOperation.split(self._bin, separator))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_b64_decode(self) -> _T:
+        """Treat this bin as base64-encoded text; return the decoded bytes as a blob."""
+        self._parent.add_operation(StringOperation.b64_decode(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _T:
+        """Read a bool: ``True`` iff the ICU regex ``pattern`` matches this bin.
+
+        ``flags`` is an OR-combined :class:`StringRegexFlags` bitmask.
+        """
+        self._parent.add_operation(  # type: ignore[union-attr]
+            StringOperation.regex_compare(self._bin, pattern, int(flags)),
+        )
+        return self._parent
+
+    def str_to_string(self) -> _T:
+        """Convert a non-string bin to its string representation.
+
+        Accepts ``int`` / ``float`` / ``string`` / ``blob`` source types;
+        any other type returns ``BIN_TYPE_ERROR`` from the server.
+        """
+        self._parent.add_operation(StringOperation.to_string(self._bin))  # type: ignore[union-attr]
         return self._parent
 
     # -- Expression read ------------------------------------------------------

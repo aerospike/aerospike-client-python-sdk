@@ -394,6 +394,33 @@ def aerospike_host_812_required(aerospike_host_8_1_2):
     return aerospike_host_8_1_2
 
 
+@pytest.fixture(scope="session")
+def aerospike_host_8_1_3():
+    """Seed for an 8.1.3+ Aerospike cluster, when one is available locally.
+
+    Returns ``None`` when ``AEROSPIKE_HOST_8_1_3`` is unset; tests that need
+    8.1.3+ behavior (e.g. string operations) should accept this fixture and
+    ``pytest.skip`` when it is ``None`` rather than failing.
+    """
+    return os.environ.get('AEROSPIKE_HOST_8_1_3')
+
+
+@pytest.fixture
+def aerospike_host_813_required(aerospike_host_8_1_3):
+    """Returns the 8.1.3+ host or skips the dependent test cleanly.
+
+    Tests that exercise server-8.1.3-only features (string operations)
+    opt in by depending on this fixture. When ``AEROSPIKE_HOST_8_1_3``
+    is unset the dependent test is skipped with a clear message.
+    """
+    if not aerospike_host_8_1_3:
+        pytest.skip(
+            "AEROSPIKE_HOST_8_1_3 is unset; this test requires an 8.1.3+ "
+            "cluster. Set AEROSPIKE_HOST_8_1_3 in aerospike.env to enable."
+        )
+    return aerospike_host_8_1_3
+
+
 def _parse_build_string(build: str):
     """Parse a server build string (e.g. ``8.1.2.1``) into ``(M, m, p, b)``.
 

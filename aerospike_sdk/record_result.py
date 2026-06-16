@@ -132,6 +132,35 @@ class RecordResult:
             raise ValueError("Record is None despite ResultCode.OK")
         return self.record
 
+    def operation_result(self, i: int) -> Any:
+        """Return the positional result for the *i*-th op in the originating request.
+
+        Slots are filled in op-arrival order. Ops that produced no value
+        (e.g. write-only modifies that don't return) carry Python ``None``;
+        an out-of-range *i* also returns ``None``. If :attr:`record` is
+        ``None`` (error rows), this also returns ``None``.
+
+        Use this when a single execute issues multiple ops and you need to
+        address each result by its op index. For by-name access, prefer
+        ``self.record.bins``.
+
+        Args:
+            i: Zero-based op index into the originating request.
+
+        Returns:
+            The Python value at that op position, or ``None``.
+
+        Example::
+
+            result = await (
+                session.upsert(key).bin("s").str_upper().bin("s").get().execute()
+            ).first_or_raise()
+            assert result.operation_result(1) == "AB"
+        """
+        if self.record is None:
+            return None
+        return self.record.operation_result(i)
+
     def get_hll_config(self, bin_name: str) -> HllConfig | None:
         """Return the HLL bin's :class:`~aerospike_sdk.HllConfig` from a ``hll_describe()`` result.
 

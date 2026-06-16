@@ -507,9 +507,10 @@ class _WriteSegmentBuilderBase:
         self._qb._operations.append(op)
         return self
 
-    def add_operation(self, op: Any) -> None:
-        """Append an operation (used by CDT action builders)."""
+    def add_operation(self, op: Any) -> Self:
+        """Append an operation. Returns ``self`` so calls can chain."""
         self._qb._operations.append(op)
+        return self
 
     def set_to(self, bin_name: str, value: Any) -> Self:
         """Set a bin to *value*."""
@@ -789,11 +790,13 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._ops.append(op)
         return self
 
-    def add_operation(self, op: Any) -> None:
+    def add_operation(self, op: Any) -> Self:
+        """Append an operation. Returns ``self`` so calls can chain."""
         if self._qb is not None:
             self._qb._operations.append(op)
         else:
             self._ops.append(op)
+        return self
 
     def replace_only(self) -> Self:
         if self._qb is not None:

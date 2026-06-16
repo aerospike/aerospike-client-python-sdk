@@ -124,6 +124,7 @@ guide/connecting
 guide/reads
 guide/writes
 guide/cdt-operations
+guide/string-ops
 guide/expression-ael
 guide/transactions
 guide/error-handling

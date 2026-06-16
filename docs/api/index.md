@@ -16,6 +16,7 @@ The primary API. All operations are `async`/`await`.
 | [`WriteSegmentBuilder`](write-segment.md) | Build and execute writes (upsert, insert, update, replace, delete) |
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
+| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.1.3+) |
 | [`BatchOperationBuilder`](batch.md) | Low-level batch operation builder |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
@@ -86,6 +87,7 @@ query
 write-segment
 cdt-read
 cdt-write
+string-builder
 batch
 index-builder
 background
