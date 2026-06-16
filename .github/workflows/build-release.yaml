@@ -1,0 +1,151 @@
+name: Build and release
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Keep deploy and bundle creation in dry-run mode.
+        required: false
+        type: boolean
+        default: true
+
+env:
+  SHARED_WORKFLOWS_REF: 7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+
+jobs:
+  extract-version:
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    outputs:
+      version: ${{ steps.extract.outputs.release-version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - name: Extract version
+        id: extract
+        uses: ./.github/actions/get-version
+
+  build-packages:
+    name: build (${{ matrix.name }})
+    needs: extract-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wheel
+            runs-on: ubuntu-22.04
+            package-kind: wheel
+          - name: sdist
+            runs-on: ubuntu-22.04
+            package-kind: sdist
+    uses: aerospike/shared-workflows/.github/workflows/reusable_execute-build.yaml@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+    with:
+      gh-workflows-ref: 7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+      runs-on: ${{ matrix.runs-on }}
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-name: aerospike-client-python-sdk
+      jf-build-id: ${{ github.run_number }}-buildinfo-${{ matrix.name }}
+      gh-checkout-path: shared-workflows
+      gh-source-path: aerospike-client-python-sdk
+      working-directory: aerospike-client-python-sdk
+      setup-python: true
+      python-version: "3.13"
+      setup-java: true
+      java-version: "21"
+      build-script: |
+        set -euo pipefail
+
+        python -m pip install --upgrade pip build
+
+        make generate-ael
+
+        rm -rf build
+        mkdir -p build
+
+        if [[ "$PACKAGE_KIND" == "sdist" ]]; then
+          python -m build --sdist --outdir build
+        else
+          python -m build --wheel --outdir build
+        fi
+      build-env: PACKAGE_KIND=${{ matrix.package-kind }}
+      gh-artifact-directory: build
+      gh-artifact-name: build-artifacts-${{ matrix.name }}
+      gh-retention-days: 1
+      publish-build-info: true
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+  collect-artifacts:
+    needs: build-packages
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Checkout shared-workflows actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: aerospike/shared-workflows
+          ref: ${{ env.SHARED_WORKFLOWS_REF }}
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Collect build artifacts
+        uses: ./.github/actions/collect-build-artifacts
+
+  deploy-artifacts:
+    needs: [extract-version, collect-artifacts]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_deploy-artifacts.yaml@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+    with:
+      gh-workflows-ref: 7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+      runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-name: aerospike-client-python-sdk
+      jf-metadata-build-id: ${{ github.run_number }}-buildinfo
+      jf-build-id: ${{ github.run_number }}
+      gh-artifact-name: build-artifacts
+      version: ${{ needs.extract-version.outputs.version }}
+      gh-retention-days: 1
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+      dry-run: ${{ inputs.dry_run }}
+
+  create-release-bundle:
+    needs: [extract-version, deploy-artifacts]
+    uses: aerospike/shared-workflows/.github/workflows/reusable_create-release-bundle.yaml@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+    with:
+      gh-workflows-ref: 7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+      runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+      jf-project: ${{ vars.JFROG_PROJECT }}
+      jf-build-names: aerospike-client-python-sdk:${{ github.run_number }}
+      jf-bundle-name: aerospike-client-python-sdk
+      version: ${{ needs.extract-version.outputs.version }}
+      oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+      oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+      dry-run: ${{ inputs.dry_run }}
+
+  promote-release-bundle-dev:
+    needs: [extract-version, create-release-bundle]
+    if: ${{ inputs.dry_run == false }}
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    steps:
+      - name: Setup JFrog CLI
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_URL: https://artifact.aerospike.io
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+      - name: Promote release bundle to DEV
+        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+        with:
+          bundle-name: aerospike-client-python-sdk
+          version: ${{ needs.extract-version.outputs.version }}
+          environment: DEV
+          jf-project: ${{ vars.JFROG_PROJECT }}
