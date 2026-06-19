@@ -1,8 +1,10 @@
 # Aerospike Python SDK
 
-A modern, developer-friendly interface for Aerospike. Async-first, Pythonic API
-with a chainable session model, fluent query builder, and AEL string filters
-over the [Aerospike Python Async Client](https://pypi.org/project/aerospike-async/).
+High-performance, developer-friendly interface for Aerospike. Async-first,
+Pythonic API with a chainable session model, fluent query builder, and AEL
+string filters layered over the [Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
+(PAC) — with first-class free-threaded Python (`cp314t`) support for parallel-
+thread throughput well past what GIL-bound clients can sustain.
 
 > **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
 > via [GitHub Issues](https://github.com/aerospike/aerospike-client-python-sdk/issues).
@@ -195,8 +197,9 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 - **Python** 3.10 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
-  Free-threaded wheels (`cp313t` / `cp314t`) ship across the same platform
-  matrix as the regular CPython wheels starting with `aerospike-async` v0.5.0-alpha.1.
+  Free-threaded wheels (`cp314t`) ship across the same platform matrix as
+  the regular CPython wheels. (PyO3 0.29 dropped 3.13t support; PSDK's
+  free-threaded build starts at 3.14t.)
 - **Aerospike server** — required for integration tests
 - **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
 - **Java 11+** — required for the one-time AEL parser build (`make generate-ael`)
