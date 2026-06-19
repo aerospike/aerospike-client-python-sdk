@@ -139,19 +139,19 @@ async with AsyncPool(factory, loop_count=4) as pool:
 **Scaling**: at `loop_count >= 4`, AsyncPool automatically gives each Client
 its own PAC Tokio runtime (per-Client runtime isolation). This eliminates the
 cross-loop scheduler contention that previously capped throughput at 4 loops,
-so TPS scales monotonically. Measured on 8-core hardware, FT Python:
+so TPS scales monotonically. Measured on 8-core hardware, FT Python (with
+uvloop enabled by default and PAC's drainer thread serializing
+`call_soon_threadsafe` wakeups across all pooled Clients):
 
 | Pool size | TPS | p99 latency |
 |---|---|---|
-| 2 × 64 tasks | ~139K | 1.7 ms |
-| 4 × 64 tasks | ~170K | 4.1 ms |
-| 6 × 64 tasks | ~177K | 6.3 ms |
-| 8 × 64 tasks | ~178K | 9.3 ms |
-| 12 × 64 tasks | ~180K | 15.5 ms |
+| 4 × 64 tasks | **~246K** | 2.5 ms |
+| 8 × 64 tasks | **~273K** | 4.5 ms |
 
-The ceiling at ~180K is Python interpreter self-time across the loops; adding
-more loops past 8–12 trades p99 latency for marginal TPS. Pick `loop_count`
-based on the tail-latency budget your workload tolerates.
+The ceiling at ~270-280K is now essentially the same as PSDK sync `ct_runtime`
+(~265K) — async no longer carries a structural gap below sync on free-threaded
+Python. Past 8 loops, additional loops trade p99 latency for marginal TPS;
+pick `loop_count` based on the tail-latency budget your workload tolerates.
 
 You can override the auto-enable threshold via `AsyncPool(..., per_client_runtime=True|False)`.
 Forcing it on at low loop counts may be useful on smaller hardware; forcing
@@ -190,20 +190,45 @@ value (e.g. lower for memory-constrained deployments).
 
 ## Performance summary table
 
-Numbers from the [Benchmarking Guide](benchmarking.md) — 8-vCPU isolated client VM → 8-vCPU isolated server VM over a low-latency private network, 100K keys, 50/50 RW, 50-byte payload.
+Numbers from the [Benchmarking Guide](benchmarking.md) — 8-vCPU isolated client VM → 3× 8-vCPU isolated server VMs over a low-latency private network, 100K keys, 50/50 RW, 50-byte payload.
 
 ### Single-key dispatch (batch size 1)
 
 | Mode | Threads / Tasks | Free-threaded TPS | Non-FT TPS |
 |---|---|---|---|
-| Sync fast-path (`session.get`/`put`) | 32 | **~214K** | ~53K |
-| Sync builder (`session.query(k).execute()`) | 32 | ~153K | ~32K |
-| Async fast-path, single client | 32 tasks | ~113K | ~76K |
-| Async fast-path, AsyncPool 4×64 | 256 tasks | **~173K** | ~56K (slower than single-loop) |
-| Async fast-path, AsyncPool 8×64 | 512 tasks | **~182K** | (FT only) |
-| Async fast-path, AsyncPool 12×64 | 768 tasks | **~180K** | (FT only) |
-| Async builder, single client | 32 tasks | ~63K | ~50K |
-| Async builder, AsyncPool 4×64 | 256 tasks | ~147K | ~38K (slower than single-loop) |
+| **Sync fast-path** (`session.get`/`put`) | 32 | **~210K** | ~51K |
+| Sync builder (`session.query(k).execute()`) | 32 | ~148K | ~31K |
+| **Async fast-path, AsyncPool 8×64** | 512 tasks | **~273K** | (FT only) |
+| **Async fast-path, AsyncPool 4×64** | 256 tasks | **~246K** | ~94K |
+| Async fast-path, single client | 32 tasks | ~119K | ~104K |
+| Async builder, AsyncPool 4×64 | 256 tasks | ~179K | ~57K |
+| Async builder, single client | 32 tasks | ~67K | ~62K |
+
+:::{admonition} Experimental: `current_thread_runtime` (ct_runtime)
+:class: warning
+
+`SyncClient` accepts a `current_thread_runtime=True` flag that gives each Python thread its own PAC `_LocalClient` (per-thread Tokio current-thread runtime). **It boosts measured TPS to ~265K (sync fp) / ~187K (sync builder)** on free-threaded Python — but it comes with non-trivial operational baggage:
+
+- **N× cluster-tend threads.** Each per-thread runtime owns its own `Cluster` and runs its own cluster-tend loop. At 32 worker threads that's 32 tend loops polling the cluster every second.
+- **N× connection pools.** Each thread's runtime maintains its own pool. PSDK auto-defaults `conn_pools_per_node=1` when you opt in (so total per-node connections stay around `N threads × 1 pool` ≈ the non-ct_runtime default of 8), but if you pass your own `ClientPolicy` you take responsibility for the connection count.
+- **Incomplete `_with_overrides` surface.** Not every PAC method routes through the ct_runtime path; some operations still hit the shared multi-thread runtime even when ct_runtime is on.
+
+Usage (opt-in):
+
+```python
+from aerospike_sdk import Behavior, SyncClient
+
+# Auto-default `conn_pools_per_node = 1` applies because we didn't pass a policy.
+# Cluster-tend multiplication is NOT mitigated by the default — each
+# worker thread that calls session.get/put will lazily create its own
+# _LocalClient, each with its own tend loop.
+with SyncClient("localhost:3000", current_thread_runtime=True) as client:
+    session = client.create_session(Behavior.DEFAULT)
+    # ... worker threads each call session.get / session.put as normal ...
+```
+
+Treat ct_runtime as an experimental performance lever for benchmarking and tightly-controlled deployments. The default sync path (one shared Tokio multi-thread runtime + one shared connection pool) is the recommended production setup.
+:::
 
 ### With batching (`--batch-size > 1`, free-threaded)
 
@@ -211,19 +236,20 @@ When the workload can group keys per call, the chained-builder API amortizes its
 
 | Mode | Batch size | Peak TPS |
 |---|---|---|
-| **Sync builder** | 128 | **~563K** |
-| AsyncPool builder, 4×64 | 64 | ~335K |
-| Async single-loop builder, 32 tasks | 128 | ~230K |
+| **Sync builder** | 128 | **~484K** |
+| AsyncPool builder, 4×64 | 64 | ~336K |
+| Async single-loop builder, 32 tasks | 128 | ~191K |
 
 **Practical reading:**
-- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales monotonically to ~563K TPS at batch=128, **94% above Rust-core async direct (~290K)**. Doubling the batch size keeps amortizing the per-call cost.
-- For single-key workloads, the **sync fast-path** (~214K) is the highest mode. If you need async, **AsyncPool fast-path** scales monotonically through 4–12 loops to ~180K (closing most of the gap to sync on the same hardware).
-- On regular Python (GIL on), *async single-client fast-path* (~76K) is the simplest high-throughput mode; sync fast-path (~53K) is slightly lower because of GIL contention across the 32 worker threads.
+- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales to ~484K TPS at batch=128. Doubling the batch size keeps amortizing the per-call cost.
+- For single-key workloads on free-threaded Python, the **sync fast-path** (~210K) is the highest non-experimental single-key sync mode. If you need async, **AsyncPool fast-path** at 4-8 loops reaches ~246-273K — equal to or higher than sync on the same hardware.
+- On regular Python (GIL on), single-client async (~104K) is actually faster than sync (~51K) because of GIL contention across many sync threads. AsyncPool helps less under non-FT (~94K at 4×64) — close to single-loop with extra orchestration cost.
 
-## Why sync and async perform so differently
+## Why sync and async perform similarly now
 
-The cost stacks for sync and async are not the same. From the [benchmarking guide](benchmarking.md)'s stack analysis:
+The cost stacks for sync and async used to diverge sharply — async historically lost ~50% to the asyncio ↔ Tokio bridge per op. With PAC's drainer thread (a single persistent waker thread handling all Tokio→asyncio wakeups) plus uvloop installed by default under FT, the async ceiling has closed substantially:
 
-- **Sync clients pay only the PyO3 boundary cost** (~11%). The SDK layer on top of PAC adds ~3%. PSDK sync builder routes through PAC's `_blocking` entries directly — no asyncio loop in the path.
-- **Async clients pay PyO3 + asyncio event-loop scheduling + a Tokio worker bounce on each op** — roughly a 59% drop vs Rust async direct. Every async op crosses Tokio ↔ asyncio twice (submit, then complete), which is the fundamental cost of bridging two async runtimes. `AsyncPool` recovers some of that by running multiple event loops on multiple OS threads in parallel, but only on free-threaded Python.
-- **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~563K TPS — *94% above* Rust-core async direct (~290K) and the highest single-loop number in the matrix. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.
+- **Sync clients pay only the PyO3 boundary cost** plus a per-op thread-handoff between caller and Tokio (~71 µs per op). PSDK fast-path adds ~3-5% on top of PAC direct — the SDK layer is essentially free.
+- **Async clients pay PyO3 + asyncio event-loop scheduling**. The drainer thread eliminates per-batch `Python::attach` churn on Tokio workers; uvloop reduces per-op loop-thread cost. With both, single-loop async tops out around 130K TPS (the asyncio loop thread is now the single-threaded bottleneck, doing per-op `set_result` and task wakeup).
+- **AsyncPool with N loops** breaks past the single-loop ceiling by parallelizing the loop work across N Python threads. 4-8 loops scale to 246-273K TPS — equal to or above the production sync ceiling.
+- **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~484K TPS — much higher than any single-key cell. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.
