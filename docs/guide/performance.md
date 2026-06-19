@@ -145,24 +145,23 @@ uvloop enabled by default and PAC's drainer thread serializing
 
 | Pool size | TPS | p99 latency |
 |---|---|---|
-| 4 × 64 tasks | **~246K** | 2.5 ms |
-| 8 × 64 tasks | **~273K** | 4.5 ms |
+| 4 × 64 tasks | **~260K** | 2.5 ms |
+| 8 × 64 tasks | **~292K** | 4.1 ms |
 
-The ceiling at ~270-280K is now essentially the same as PSDK sync `ct_runtime`
-(~265K) — async no longer carries a structural gap below sync on free-threaded
-Python. Past 8 loops, additional loops trade p99 latency for marginal TPS;
-pick `loop_count` based on the tail-latency budget your workload tolerates.
+The 290K ceiling is now **above** the PSDK sync `ct_runtime` ceiling (~266K)
+and well past the production sync fast-path (~214K) — async is the highest-
+throughput single-key Python mode on free-threaded hardware. Past 8 loops,
+additional loops trade p99 latency for marginal TPS; pick `loop_count` based
+on the tail-latency budget your workload tolerates.
 
 You can override the auto-enable threshold via `AsyncPool(..., per_client_runtime=True|False)`.
 Forcing it on at low loop counts may be useful on smaller hardware; forcing
 it off reverts to the shared global Tokio runtime path. Worker count is
 auto-derived as `max(2, os.cpu_count() // loop_count)`.
 
-**Do not use AsyncPool on regular (GIL-on) Python.** Empirically it's 17-26% *slower* than a single-client async setup because:
-- The GIL still serializes all Python code across the 4 OS threads
-- The pool's task orchestration adds Python work that has nowhere to escape to under the GIL
+**AsyncPool on regular (GIL-on) Python is now roughly on par with single-client async** after the uvloop-in-pool change — measured ~108K (pool 4×64) vs ~106K (single-loop) on FT-Python forced to GIL-on. The GIL still serializes all Python execution across pool threads, so the multi-loop architecture can't deliver the full FT scaling, but uvloop's per-op savings inside the pool now roughly cancel the orchestration overhead.
 
-On regular Python, use a single `Client` + `asyncio.gather` instead.
+On regular Python it's a wash — pick AsyncPool if it fits your code shape (you already write fan-out patterns) or a single `Client` + `asyncio.gather` if simpler. The real AsyncPool win remains free-threaded Python.
 
 ## Sync vs async — when to pick which
 
@@ -196,13 +195,13 @@ Numbers from the [Benchmarking Guide](benchmarking.md) — 8-vCPU isolated clien
 
 | Mode | Threads / Tasks | Free-threaded TPS | Non-FT TPS |
 |---|---|---|---|
-| **Sync fast-path** (`session.get`/`put`) | 32 | **~210K** | ~51K |
-| Sync builder (`session.query(k).execute()`) | 32 | ~148K | ~31K |
-| **Async fast-path, AsyncPool 8×64** | 512 tasks | **~273K** | (FT only) |
-| **Async fast-path, AsyncPool 4×64** | 256 tasks | **~246K** | ~94K |
-| Async fast-path, single client | 32 tasks | ~119K | ~104K |
-| Async builder, AsyncPool 4×64 | 256 tasks | ~179K | ~57K |
-| Async builder, single client | 32 tasks | ~67K | ~62K |
+| **Sync fast-path** (`session.get`/`put`) | 32 | **~214K** | ~51K |
+| Sync builder (`session.query(k).execute()`) | 32 | ~149K | ~32K |
+| **Async fast-path, AsyncPool 8×64** | 512 tasks | **~292K** | (FT only) |
+| **Async fast-path, AsyncPool 4×64** | 256 tasks | **~260K** | ~108K |
+| Async fast-path, single client | 32 tasks | ~118K | ~106K |
+| Async builder, AsyncPool 4×64 | 256 tasks | ~182K | ~61K |
+| Async builder, single client | 32 tasks | ~68K | ~64K |
 
 :::{admonition} Experimental: `current_thread_runtime` (ct_runtime)
 :class: warning
@@ -236,14 +235,14 @@ When the workload can group keys per call, the chained-builder API amortizes its
 
 | Mode | Batch size | Peak TPS |
 |---|---|---|
-| **Sync builder** | 128 | **~484K** |
+| **Sync builder** | 128 | **~485K** |
 | AsyncPool builder, 4×64 | 64 | ~336K |
-| Async single-loop builder, 32 tasks | 128 | ~191K |
+| Async single-loop builder, 32 tasks | 128 | ~205K |
 
 **Practical reading:**
-- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales to ~484K TPS at batch=128. Doubling the batch size keeps amortizing the per-call cost.
-- For single-key workloads on free-threaded Python, the **sync fast-path** (~210K) is the highest non-experimental single-key sync mode. If you need async, **AsyncPool fast-path** at 4-8 loops reaches ~246-273K — equal to or higher than sync on the same hardware.
-- On regular Python (GIL on), single-client async (~104K) is actually faster than sync (~51K) because of GIL contention across many sync threads. AsyncPool helps less under non-FT (~94K at 4×64) — close to single-loop with extra orchestration cost.
+- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales to ~485K TPS at batch=128. Doubling the batch size keeps amortizing the per-call cost.
+- For single-key workloads on free-threaded Python, **AsyncPool fast-path at 4-8 loops** delivers **~260-292K TPS** — the highest non-experimental single-key mode, above sync fast-path (~214K). If you prefer sync, the fast-path is still the best non-experimental sync mode.
+- On regular Python (GIL on), AsyncPool 4×64 (~108K) edges out single-client async (~106K) and is roughly 2× sync fast-path (~51K). Under non-FT, AsyncPool is now a slight win rather than a loss thanks to uvloop inside the pool.
 
 ## Why sync and async perform similarly now
 
@@ -251,5 +250,5 @@ The cost stacks for sync and async used to diverge sharply — async historicall
 
 - **Sync clients pay only the PyO3 boundary cost** plus a per-op thread-handoff between caller and Tokio (~71 µs per op). PSDK fast-path adds ~3-5% on top of PAC direct — the SDK layer is essentially free.
 - **Async clients pay PyO3 + asyncio event-loop scheduling**. The drainer thread eliminates per-batch `Python::attach` churn on Tokio workers; uvloop reduces per-op loop-thread cost. With both, single-loop async tops out around 130K TPS (the asyncio loop thread is now the single-threaded bottleneck, doing per-op `set_result` and task wakeup).
-- **AsyncPool with N loops** breaks past the single-loop ceiling by parallelizing the loop work across N Python threads. 4-8 loops scale to 246-273K TPS — equal to or above the production sync ceiling.
+- **AsyncPool with N loops** breaks past the single-loop ceiling by parallelizing the loop work across N Python threads. 4-8 loops scale to 260-292K TPS — above the production sync ceiling on the same hardware.
 - **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~484K TPS — much higher than any single-key cell. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.

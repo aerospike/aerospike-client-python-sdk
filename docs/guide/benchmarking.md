@@ -145,26 +145,26 @@ Every cell in the matrix below was produced by `python -m benchmarks.benchmark -
 
 | Client / Mode | Threads / Tasks | FT TPS | non-FT TPS |
 |---|---|---|---|
-| **PSDK sync, fast-path** (`session.get` / `session.put`) | 32 | **210,443** | 50,793 |
-| **PSDK sync, fast-path, ct_runtime** | 32 | **264,704** | 56,870 |
-| PSDK sync, builder (chained API) | 32 | 148,178 | 31,138 |
-| PSDK sync, builder, ct_runtime | 32 | 186,553 | 33,115 |
-| **PSDK async AsyncPool, fast-path** | 4×64 | **246,412** | 94,408 |
-| **PSDK async AsyncPool, fast-path** | 8×64 | **~273,000** | (FT only) |
-| PSDK async AsyncPool, builder | 4×64 | 178,592 | 56,785 |
-| **PSDK async single-loop, fast-path** | 32 tasks | **119,258** | 104,470 |
-| PSDK async single-loop, builder | 32 tasks | 67,066 | 62,105 |
-| PSDK sync, fast-path | 1 | 11,041 | 9,315 |
-| PSDK sync, builder | 1 | 9,969 | 9,336 |
-| **PAC sync direct** (`pac-blocking`) | 32 | **206,634** | 49,585 |
-| **PAC sync direct, ct_runtime** | 32 | **276,886** | 60,774 |
-| **PAC async direct** (`pac-async`) | 32 tasks | **129,520** | 113,277 |
-| PAC sync | 1 | 11,884 | 10,556 |
-| PAC async | 1 task | 7,746 | 8,298 |
-| **Rust core, async** (Tokio tasks, no Python) | 32 tasks | **814,697** | n/a (no GIL) |
-| Rust core, sync (OS threads + `Handle::block_on`) | 32 | 694,493 | n/a (no GIL) |
-| Rust core, async | 1 task | 46,167 | n/a (no GIL) |
-| Rust core, sync | 1 | 42,156 | n/a (no GIL) |
+| **PSDK sync, fast-path** (`session.get` / `session.put`) | 32 | **214,489** | 50,857 |
+| **PSDK sync, fast-path, ct_runtime** | 32 | **265,971** | 57,200 |
+| PSDK sync, builder (chained API) | 32 | 149,428 | 31,564 |
+| PSDK sync, builder, ct_runtime | 32 | 187,209 | 33,444 |
+| **PSDK async AsyncPool, fast-path** | 4×64 | **260,325** | 108,327 |
+| **PSDK async AsyncPool, fast-path** | 8×64 | **~292,000** | (FT only) |
+| PSDK async AsyncPool, builder | 4×64 | 181,838 | 61,281 |
+| **PSDK async single-loop, fast-path** | 32 tasks | **118,220** | 105,959 |
+| PSDK async single-loop, builder | 32 tasks | 68,402 | 64,496 |
+| PSDK sync, fast-path | 1 | 10,946 | 9,730 |
+| PSDK sync, builder | 1 | 10,053 | 8,826 |
+| **PAC sync direct** (`pac-blocking`) | 32 | **209,426** | 50,194 |
+| **PAC sync direct, ct_runtime** | 32 | **271,066** | 60,730 |
+| **PAC async direct** (`pac-async`) | 32 tasks | **124,001** | 114,020 |
+| PAC sync | 1 | 12,221 | 11,812 |
+| PAC async | 1 task | 7,773 | 8,304 |
+| **Rust core, async** (Tokio tasks, no Python) | 32 tasks | **800,695** | n/a (no GIL) |
+| Rust core, sync (OS threads + `Handle::block_on`) | 32 | 694,030 | n/a (no GIL) |
+| Rust core, async | 1 task | 46,385 | n/a (no GIL) |
+| Rust core, sync | 1 | 38,783 | n/a (no GIL) |
 | Python legacy (sync, C client) | 1 | (FT N/A, no wheel) | ~15,000 |
 
 The Rust-core numbers reflect a 3-VM ASD topology (each ASD on its own 8-vCPU VM, no CPU contention between server processes). On a co-located topology (3 ASD containers sharing one 8-vCPU host), the Rust-core ceiling is ~280K — server-side CPU contention, not a client-side limit. The Python clients (PAC, PSDK) hit a Python-layer ceiling well below either Rust-core figure, so they aren't sensitive to the server topology in the same way.
@@ -194,9 +194,9 @@ p50 / p99 / p99.9 in microseconds, sampled 1-in-100 ops during measurement. Fram
 | PSDK sync, fast-path | 1 | 100 / 100 / 200 | 100 / 100 / 100 |
 | PSDK async single-loop, fast-path | 32 tasks | 200 / 300 / 600 | 500 / 600 / 700 |
 | PSDK async single-loop, builder | 32 tasks | 500 / 600 / 800 | 1,000 / 1,200 / 1,300 |
-| PSDK async AsyncPool, fast-path | 4×64 | **800 / 2,500 / 3,700** | 5,500 / 14,300 / 17,400 |
-| PSDK async AsyncPool, fast-path | 8×64 | 1,800 / 4,500 / 5,800 | (FT only) |
-| PSDK async AsyncPool, builder | 4×64 | 1,400 / 2,600 / 3,800 | 8,400 / 27,000 / 27,300 |
+| PSDK async AsyncPool, fast-path | 4×64 | **900 / 2,500 / 3,500** | 4,800 / 13,300 / 16,400 |
+| PSDK async AsyncPool, fast-path | 8×64 | 1,700 / 4,100 / 5,800 | (FT only) |
+| PSDK async AsyncPool, builder | 4×64 | 1,400 / 2,600 / 3,800 | 7,800 / 25,300 / 26,000 |
 | PAC sync | 32 | 100 / 300 / 500 | 600 / 2,800 / 3,800 |
 | PAC sync, ct_runtime | 32 | 100 / 200 / 300 | 500 / 2,300 / 3,300 |
 | PAC sync | 1 | 100 / 100 / 100 | 100 / 100 / 100 |
@@ -220,12 +220,12 @@ The single-key cells above measure one record per `execute()`. Real applications
 
 | Batch size | Total TPS | × b=1 |
 |---|---|---|
-| 1 | 150,665 | 1.00× |
-| 4 | 145,891 | 0.97× |
-| 16 | 327,749 | 2.18× |
-| 32 | 405,691 | 2.69× |
-| 64 | 466,603 | 3.10× |
-| **128** | **483,755** | **3.21×** |
+| 1 | 145,898 | 1.00× |
+| 4 | 142,895 | 0.98× |
+| 16 | 328,253 | 2.25× |
+| 32 | 401,467 | 2.75× |
+| 64 | 470,720 | 3.23× |
+| **128** | **485,056** | **3.32×** |
 
 ### PSDK async single-loop builder
 
@@ -233,12 +233,12 @@ The single-key cells above measure one record per `execute()`. Real applications
 
 | Batch size | Total TPS | × b=1 |
 |---|---|---|
-| 1 | 67,393 | 1.00× |
-| 4 | 62,635 | 0.93× |
-| 16 | 117,037 | 1.74× |
-| 32 | 144,517 | 2.14× |
-| 64 | 173,077 | 2.57× |
-| **128** | **190,549** | **2.83×** |
+| 1 | 64,569 | 1.00× |
+| 4 | 59,514 | 0.92× |
+| 16 | 121,155 | 1.88× |
+| 32 | 144,885 | 2.24× |
+| 64 | 174,080 | 2.70× |
+| **128** | **204,736** | **3.17×** |
 
 ### PSDK async AsyncPool builder
 
@@ -246,15 +246,15 @@ Four event loops × 64 tasks per loop. Free-threaded only.
 
 | Batch size | Total TPS | × b=1 (pool) |
 |---|---|---|
-| 1 | 177,504 | 1.00× |
-| 4 | 154,439 | 0.87× |
-| 16 | 260,109 | 1.47× |
-| 32 | 304,411 | 1.71× |
-| **64** | **335,733** | **1.89×** |
+| 1 | 190,278 | 1.00× |
+| 4 | 156,954 | 0.83× |
+| 16 | 265,443 | 1.40× |
+| 32 | 310,901 | 1.63× |
+| **64** | **336,469** | **1.77×** |
 
-**Headline**: the **PSDK sync builder scales through batch=128 to ~484K TPS** — the highest framework number in the matrix. Sync batch routes via PAC's `batch_*_blocking` entries with one PyO3 boundary per batch, so doubling the batch size keeps amortizing the per-call Python cost. The b=128 peak is 3.2× the single-key sync builder.
+**Headline**: the **PSDK sync builder scales through batch=128 to ~485K TPS** — the highest framework number in the matrix. Sync batch routes via PAC's `batch_*_blocking` entries with one PyO3 boundary per batch, so doubling the batch size keeps amortizing the per-call Python cost. The b=128 peak is 3.3× the single-key sync builder.
 
-The async single-loop sweep tops out around 191K (batch=128) — the asyncio ↔ Tokio bridge cost per `execute()` doesn't go away just because each call moves more data. AsyncPool recovers most of that by running 4 loops in parallel, hitting 336K at batch=64.
+The async single-loop sweep tops out around 205K (batch=128) — the asyncio ↔ Tokio bridge cost per `execute()` doesn't go away just because each call moves more data. AsyncPool recovers most of that by running 4 loops in parallel, hitting 336K at batch=64.
 
 ## Stack cost analysis
 
@@ -262,29 +262,29 @@ Layering the headline single-key TPS numbers across clients shows where every tr
 
 | Layer | TPS | Note |
 |---|---|---|
-| **Rust core async direct** | **814,697** | `aerospike-core` via Tokio tasks — cluster-side ceiling, no Python |
-| Rust core sync (`block_on`) | 694,493 | `aerospike-core` via OS threads + `block_on` |
-| **PAC sync direct, ct_runtime** | **276,886** | PyO3 wrapper, per-thread Tokio current-thread runtime |
-| **PSDK sync, fast-path, ct_runtime** | **264,704** | SDK fast-path + ct_runtime |
-| **PSDK async AsyncPool, fast-path (8×64)** | **~273,000** | 8 event loops × 64 tasks (FT only) |
-| **PSDK async AsyncPool, fast-path (4×64)** | **246,412** | 4 event loops × 64 tasks (FT only) |
-| **PAC sync direct (multi-thread Tokio)** | **206,634** | PyO3 wrapper, shared Tokio multi-thread runtime |
-| **PSDK sync, fast-path** | **210,443** | SDK `session.get` / `session.put` → PAC blocking |
-| PSDK async AsyncPool, builder (4×64) | 178,592 | 4 loops, full builder path |
-| PSDK sync, builder | 148,178 | SDK chained builder → execute → stream |
-| **PAC async direct, 32 tasks** | **129,520** | PyO3 wrapper, asyncio ↔ Tokio bridge (with drainer + uvloop) |
-| **PSDK async single-loop, fast-path** | **119,258** | One event loop, `session.get` / `session.put` |
-| PSDK async single-loop, builder | 67,066 | One event loop, full builder path |
+| **Rust core async direct** | **800,695** | `aerospike-core` via Tokio tasks — cluster-side ceiling, no Python |
+| Rust core sync (`block_on`) | 694,030 | `aerospike-core` via OS threads + `block_on` |
+| **PSDK async AsyncPool, fast-path (8×64)** | **~292,000** | 8 event loops × 64 tasks (FT only, uvloop) |
+| **PAC sync direct, ct_runtime** | **271,066** | PyO3 wrapper, per-thread Tokio current-thread runtime |
+| **PSDK sync, fast-path, ct_runtime** | **265,971** | SDK fast-path + ct_runtime |
+| **PSDK async AsyncPool, fast-path (4×64)** | **260,325** | 4 event loops × 64 tasks (FT only, uvloop) |
+| **PSDK sync, fast-path** | **214,489** | SDK `session.get` / `session.put` → PAC blocking |
+| **PAC sync direct (multi-thread Tokio)** | **209,426** | PyO3 wrapper, shared Tokio multi-thread runtime |
+| PSDK async AsyncPool, builder (4×64) | 181,838 | 4 loops, full builder path |
+| PSDK sync, builder | 149,428 | SDK chained builder → execute → stream |
+| **PAC async direct, 32 tasks** | **124,001** | PyO3 wrapper, asyncio ↔ Tokio bridge (with drainer + uvloop) |
+| **PSDK async single-loop, fast-path** | **118,220** | One event loop, `session.get` / `session.put` |
+| PSDK async single-loop, builder | 68,402 | One event loop, full builder path |
 | Python legacy (sync, non-FT) | ~15,000 | Single-thread C client baseline |
 
 ### Sync stack — boundary cost is small
 
 | Transition | TPS | Δ |
 |---|---|---|
-| Rust core sync (cluster-side ceiling) | 694,493 | — |
-| → PAC sync direct (multi-thread Tokio) | 206,634 | **−70%** (PyO3 + Python boundary; Tokio thread-handoff in the per-op path) |
-| → PSDK sync, fast-path | 210,443 | flat — SDK layer is essentially free |
-| → PSDK sync, builder | 148,178 | **−30%** vs fp (chained builder + stream wrap in Python) |
+| Rust core sync (cluster-side ceiling) | 694,030 | — |
+| → PAC sync direct (multi-thread Tokio) | 209,426 | **−70%** (PyO3 + Python boundary; Tokio thread-handoff in the per-op path) |
+| → PSDK sync, fast-path | 214,489 | flat — SDK layer is essentially free |
+| → PSDK sync, builder | 149,428 | **−30%** vs fp (chained builder + stream wrap in Python) |
 
 The big drop is PyO3 + the per-op Python ↔ Tokio thread handoff (~71 µs per op). The PSDK SDK layer is essentially free over PAC direct.
 
@@ -292,11 +292,11 @@ The big drop is PyO3 + the per-op Python ↔ Tokio thread handoff (~71 µs per o
 
 | Transition | TPS | Δ |
 |---|---|---|
-| PSDK sync, fast-path (sync reference) | 210,443 | — |
-| → PAC async direct (single loop, drainer + uvloop) | 129,520 | **−38%** (asyncio loop thread is the gating step) |
-| → PSDK async single-loop, fast-path | 119,258 | **−8%** vs PAC async (PSDK SDK layer) |
-| → PSDK async AsyncPool, fast-path (4×64) | 246,412 | **+107%** vs single-loop (parallelism across loops, FT only) — **above sync** |
-| → PSDK async AsyncPool, fast-path (8×64) | ~273,000 | **+129%** vs single-loop, **+30% over sync** |
+| PSDK sync, fast-path (sync reference) | 214,489 | — |
+| → PAC async direct (single loop, drainer + uvloop) | 124,001 | **−42%** (asyncio loop thread is the gating step) |
+| → PSDK async single-loop, fast-path | 118,220 | **−5%** vs PAC async (PSDK SDK layer) |
+| → PSDK async AsyncPool, fast-path (4×64) | 260,325 | **+120%** vs single-loop (parallelism across loops + uvloop inside pool, FT only) — **+21% above sync** |
+| → PSDK async AsyncPool, fast-path (8×64) | ~292,000 | **+147%** vs single-loop, **+36% over sync** |
 
 **Async key insight**: post-drainer-thread + uvloop, the single-loop async ceiling sits around 120-130K. The bottleneck is now the **asyncio loop thread doing per-op `set_result` and task wakeup work, single-threaded**. `AsyncPool` (multi-loop) breaks past that ceiling by running 4-8 loops in parallel — at 8×64 it actually **exceeds** the sync fast-path ceiling. Only useful under free-threaded Python; under regular CPython the GIL serializes the loops and the pool is slower than a single client (see [AsyncPool note](#asyncpool-is-a-free-threading-feature)).
 
@@ -319,9 +319,9 @@ Speedup of fast-path over builder on **single-key** dispatch at 32 threads / 4×
 
 | Config | Builder TPS | Fast-path TPS | Speedup |
 |---|---|---|---|
-| PSDK async, single client | 67,066 | 119,258 | **1.78×** |
-| PSDK async, AsyncPool 4×64 | 178,592 | 246,412 | **1.38×** |
-| PSDK sync | 148,178 | 210,443 | **1.42×** |
+| PSDK async, single client | 68,402 | 118,220 | **1.73×** |
+| PSDK async, AsyncPool 4×64 | 181,838 | 260,325 | **1.43×** |
+| PSDK sync | 149,428 | 214,489 | **1.44×** |
 
 These speedups are for single-key dispatch. With batching, the builder amortizes its per-op overhead across many keys per call — at batch=128 the sync builder reaches 484K TPS (vs 210K for sync fast-path). The fast-path stays single-key only; for any workload that can batch, the builder eventually wins.
 
@@ -338,12 +338,12 @@ Under non-FT Python the GIL still serializes all Python execution. AsyncPool end
 
 | Config | non-FT TPS | vs single-loop non-FT |
 |---|---|---|
-| async single-loop, fast-path, 32 tasks | 104,470 | baseline |
-| async AsyncPool 4×64, fast-path | 94,408 | **−10%** |
-| async single-loop, builder, 32 tasks | 62,105 | baseline |
-| async AsyncPool 4×64, builder | 56,785 | **−9%** |
+| async single-loop, fast-path, 32 tasks | 105,959 | baseline |
+| async AsyncPool 4×64, fast-path | 108,327 | **+2%** (uvloop in pool roughly recovers the overhead) |
+| async single-loop, builder, 32 tasks | 64,496 | baseline |
+| async AsyncPool 4×64, builder | 61,281 | **−5%** |
 
-**On regular Python or with `PYTHON_GIL=1`, use a single `Client` + `asyncio.gather`. Reserve `AsyncPool` for free-threaded runs only.**
+**AsyncPool is roughly on par with single-client async under GIL-on Python** now that pool loops use uvloop too. Pick the one that fits your code shape; the real AsyncPool win is reserved for free-threaded runs.
 
 ## Error classification
 

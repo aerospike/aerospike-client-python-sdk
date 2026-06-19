@@ -156,19 +156,26 @@ class TestAsyncPoolDispatch:
 
 
 class TestAsyncPoolLoopType:
-    """Pool threads must use stdlib SelectorEventLoop, not uvloop.
+    """Pool threads use uvloop (not the stdlib SelectorEventLoop).
 
-    Background: PAC installs uvloop as the global asyncio event-loop policy
-    at import time.  Under free-threaded CPython (3.13t / 3.14t), multiple
-    uvloop instances on separate OS threads deadlock periodically (TPS
-    oscillates between baseline and zero).  ``AsyncPool._run_loop_thread``
-    avoids this by explicitly constructing ``asyncio.SelectorEventLoop``
-    instead of calling ``asyncio.new_event_loop()`` (which would honor the
-    uvloop policy).  Regression-guard so a future "clean up the comment"
-    refactor can't silently reintroduce the freeze.
+    Background: PAC installs uvloop as the global asyncio event-loop
+    policy at import time.  ``AsyncPool._run_loop_thread`` calls
+    ``asyncio.new_event_loop()`` so pool loops honor that policy and
+    pick up uvloop.  uvloop 0.22.x has a documented libuv race on
+    ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) that
+    historically deadlocked multiple uvloop instances under free-
+    threading; PAC's drainer thread (single persistent waker that
+    funnels every ``call_soon_threadsafe`` through one thread)
+    eliminates the multi-threaded access pattern the race needs, and
+    empirical stress (20+ minutes z=128 single-loop + AsyncPool 8×64,
+    zero stalls) confirms it holds in practice.
+
+    Regression-guard so the loop type stays uvloop.  If a future change
+    switches back to SelectorEventLoop (or any non-uvloop loop), this
+    test will fail loudly so the perf regression isn't silent.
     """
 
-    async def test_pool_threads_use_selector_event_loop(
+    async def test_pool_threads_use_uvloop(
         self, aerospike_host, client_policy
     ):
         async with AsyncPool(
@@ -176,13 +183,13 @@ class TestAsyncPoolLoopType:
         ) as pool:
             for i, loop in enumerate(pool._loops):
                 assert loop is not None, f"loop {i} is None"
-                # SelectorEventLoop is the safe stdlib loop.  uvloop's loop
-                # class (uvloop.Loop) would be a regression.
+                # uvloop is installed by PAC's policy; pool loops honor
+                # it via `asyncio.new_event_loop()`.
                 cls_name = type(loop).__name__
-                assert "uvloop" not in type(loop).__module__.lower(), (
-                    f"loop {i} is a uvloop instance ({type(loop).__module__}."
-                    f"{cls_name}); pool threads must use stdlib "
-                    f"SelectorEventLoop under free-threading"
+                assert "uvloop" in type(loop).__module__.lower(), (
+                    f"loop {i} is not a uvloop instance "
+                    f"({type(loop).__module__}.{cls_name}); pool threads "
+                    f"are expected to honor PAC's uvloop policy"
                 )
 
 
