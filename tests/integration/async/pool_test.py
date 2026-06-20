@@ -156,40 +156,58 @@ class TestAsyncPoolDispatch:
 
 
 class TestAsyncPoolLoopType:
-    """Pool threads use uvloop (not the stdlib SelectorEventLoop).
+    """Pool loop type follows the ``use_uvloop`` switch.
 
-    Background: PAC installs uvloop as the global asyncio event-loop
-    policy at import time.  ``AsyncPool._run_loop_thread`` calls
-    ``asyncio.new_event_loop()`` so pool loops honor that policy and
-    pick up uvloop.  uvloop 0.22.x has a documented libuv race on
-    ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) that
-    historically deadlocked multiple uvloop instances under free-
-    threading; PAC's drainer thread (single persistent waker that
-    funnels every ``call_soon_threadsafe`` through one thread)
-    eliminates the multi-threaded access pattern the race needs, and
-    empirical stress (20+ minutes z=128 single-loop + AsyncPool 8×64,
-    zero stalls) confirms it holds in practice.
+    uvloop 0.22.x has a libuv free-threading race on ``loop._ready_len``
+    (MagicStack/uvloop issues #720, #721) that stalls a multi-loop pool when
+    the GIL is disabled — the per-loop race fires across all loops at once and
+    wedges (a hard hang on the fast-path pool path). PAC's drainer thread tames
+    the single-loop case but not N concurrent loops, so ``AsyncPool`` defaults
+    to the stdlib selector loop under free-threading (auto-decide tracks the
+    GIL) and exposes ``use_uvloop`` to force either way.
 
-    Regression-guard so the loop type stays uvloop.  If a future change
-    switches back to SelectorEventLoop (or any non-uvloop loop), this
-    test will fail loudly so the perf regression isn't silent.
+    These guard the contract so a regression in loop selection fails loudly.
     """
 
-    async def test_pool_threads_use_uvloop(
+    @staticmethod
+    def _is_uvloop(loop: asyncio.AbstractEventLoop) -> bool:
+        return "uvloop" in type(loop).__module__.lower()
+
+    async def test_default_avoids_uvloop_under_free_threading(
         self, aerospike_host, client_policy
     ):
+        """Default (``use_uvloop=None``): under free-threading the pool loops
+        must NOT be uvloop — that's the multi-loop stall condition. Under
+        GIL-on the uvloop default is safe, so the guard only bites under FT."""
+        from aerospike_sdk.aio.pool import _gil_is_enabled
+
+        if _gil_is_enabled():
+            pytest.skip("GIL enabled: uvloop default is safe (FT race can't fire)")
         async with AsyncPool(
             _make_factory(aerospike_host, client_policy), loop_count=2
         ) as pool:
             for i, loop in enumerate(pool._loops):
                 assert loop is not None, f"loop {i} is None"
-                # uvloop is installed by PAC's policy; pool loops honor
-                # it via `asyncio.new_event_loop()`.
-                cls_name = type(loop).__name__
-                assert "uvloop" in type(loop).__module__.lower(), (
-                    f"loop {i} is not a uvloop instance "
-                    f"({type(loop).__module__}.{cls_name}); pool threads "
-                    f"are expected to honor PAC's uvloop policy"
+                assert not self._is_uvloop(loop), (
+                    f"loop {i} is uvloop ({type(loop).__module__}) under "
+                    f"free-threading — exposes the multi-loop libuv stall"
+                )
+
+    async def test_use_uvloop_false_forces_selector(
+        self, aerospike_host, client_policy
+    ):
+        """Explicit ``use_uvloop=False`` forces the stdlib selector loop
+        regardless of the global uvloop policy or GIL state."""
+        async with AsyncPool(
+            _make_factory(aerospike_host, client_policy),
+            loop_count=2,
+            use_uvloop=False,
+        ) as pool:
+            for i, loop in enumerate(pool._loops):
+                assert loop is not None, f"loop {i} is None"
+                assert not self._is_uvloop(loop), (
+                    f"loop {i} is {type(loop).__module__}; use_uvloop=False "
+                    f"must force the stdlib selector loop"
                 )
 
 

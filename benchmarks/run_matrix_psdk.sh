@@ -69,9 +69,12 @@ SKIP_BATCH="${SKIP_BATCH:-0}"
 mkdir -p "$OUT"
 rm -f "$OUT"/*.txt
 
+# --no-services-alternate is REQUIRED on bench-asd — see run_matrix.sh for the
+# full rationale (enabling it routes through unreachable alternate addresses
+# and fast-fails ~2/3 of ops, silently throttling the run to one node).
 ARGS=(-H "$HOST" -n "$NS" -s "$SET" -k "$KEYS" -o I8
       -w RU,50 -d "$DURATION"
-      --services-alternate --no-tracemalloc)
+      --no-services-alternate --no-tracemalloc)
 
 run() {
   local tag="$1"; shift
@@ -83,7 +86,7 @@ run() {
 }
 
 export AEROSPIKE_HOST="$HOST"
-export AEROSPIKE_USE_SERVICES_ALTERNATE=true
+export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 
 # --- PSDK sync (fast-path + builder × 32t/1t × FT/non-FT) ------------------
 for gil in 0 1; do

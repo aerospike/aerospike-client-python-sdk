@@ -95,6 +95,13 @@ class AsyncPool:
     collapse beyond 4 loops. Controlled via the ``per_client_runtime``
     kwarg; see its docstring for the threshold rationale and override.
 
+    **Event loop policy.**  Pool loops default to the stdlib selector loop
+    on free-threaded (GIL-off) builds.  uvloop's libuv free-threading race
+    on ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) stalls a
+    multi-loop pool when the GIL is disabled — the per-loop race fires
+    across all loops at once and wedges.  Override with the ``use_uvloop``
+    kwarg.
+
     **Tuning notes** (8-core remote-cluster measurement, FT 3.14t):
 
     * **Tasks-per-loop floor.**  Below ~16–32 concurrent asyncio tasks
@@ -137,6 +144,7 @@ class AsyncPool:
         *,
         index_refresh_interval: float = 5.0,
         per_client_runtime: Optional[bool] = None,
+        use_uvloop: Optional[bool] = None,
     ) -> None:
         """Configure the pool.  Call :meth:`start` or use ``async with``.
 
@@ -185,6 +193,21 @@ class AsyncPool:
                   ``max(2, os.cpu_count() // loop_count)``.
                 * ``False``: never enable; use the shared global runtime
                   regardless of ``loop_count``.
+            use_uvloop: Whether the pool's event loops may use uvloop (when a
+                uvloop policy is installed process-wide).
+
+                * ``None`` (default): auto — **disabled** on free-threaded
+                  (GIL-off) builds, enabled otherwise. uvloop's libuv
+                  free-threading race (MagicStack/uvloop #720, #721) stalls a
+                  multi-loop pool when the GIL is off, so the stdlib selector
+                  loop is used instead. Under GIL-on Python the race can't
+                  fire, so uvloop is left on (preserving prior behavior).
+                * ``True``: force uvloop on the pool loops (only takes effect
+                  if a uvloop policy is installed). Known to stall fast-path
+                  pools under free-threading — opt in only after validating
+                  your workload.
+                * ``False``: force the stdlib ``SelectorEventLoop`` on every
+                  pool loop regardless of the global event-loop policy.
 
         Example::
 
@@ -229,6 +252,17 @@ class AsyncPool:
         # has at least one extra worker to absorb tail-latency bursts.
         n_cpu = os.cpu_count() or 4
         self._per_client_runtime_workers = max(2, n_cpu // self._n)
+        # Event-loop policy. uvloop's libuv free-threading race on
+        # `loop._ready_len` (MagicStack/uvloop #720/#721) stalls a multi-loop
+        # pool when the GIL is disabled: the per-loop (waker-thread vs
+        # loop-thread) race fires across all N loops and wedges (a hard hang on
+        # the fast-path pool path). PAC's drainer thread tames the single-loop
+        # case but not N concurrent loops. Default uvloop OFF under FT; leave it
+        # on under GIL-on (race can't fire, and the pool gives no scaling there
+        # anyway, so this just preserves prior behavior).
+        if use_uvloop is None:
+            use_uvloop = _gil_is_enabled()
+        self._use_uvloop = use_uvloop
         self._loops: List[Optional[asyncio.AbstractEventLoop]] = [None] * self._n
         self._threads: List[threading.Thread] = []
         self._clients: List[Client] = []
@@ -553,17 +587,17 @@ class AsyncPool:
     def _run_loop_thread(self, index: int) -> None:
         """Thread target: create and run an event loop forever.
 
-        Uses ``asyncio.new_event_loop()`` so pool loops pick up PAC's
-        global uvloop policy.  PAC's drainer thread funnels every
-        ``call_soon_threadsafe`` through one persistent waker, which
-        eliminates the multi-threaded-access pattern that triggers
-        uvloop's libuv FT race on ``loop._ready_len`` (MagicStack/
-        uvloop issues #720, #721).  Empirically stable under high-
-        concurrency stress; switching from the previous
-        ``SelectorEventLoop`` lifts AsyncPool TPS by ~15% on free-
-        threaded Python.
+        The loop type honors :attr:`_use_uvloop` (the ``use_uvloop`` kwarg).
+        When enabled, ``asyncio.new_event_loop()`` picks up any globally
+        installed uvloop policy; when disabled, a stdlib
+        ``asyncio.SelectorEventLoop`` is constructed directly, bypassing the
+        global policy.  uvloop is disabled by default on free-threaded builds:
+        its libuv ``loop._ready_len`` race (MagicStack/uvloop #720, #721)
+        stalls multi-loop pools when the GIL is off — the per-loop race fires
+        across all loops at once and wedges (a hard hang on the fast-path
+        pool path).
         """
-        loop = asyncio.new_event_loop()
+        loop = asyncio.new_event_loop() if self._use_uvloop else asyncio.SelectorEventLoop()
         asyncio.set_event_loop(loop)
         self._loops[index] = loop
         self._loop_ready[index].set()
