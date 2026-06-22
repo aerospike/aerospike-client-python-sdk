@@ -218,3 +218,163 @@ async def test_str_strlen_with_map_ctx(client):
         .add_operation(StringOperation.strlen("m", ctx=[CTX.map_key("k1")])) \
         .execute()
     assert (await rs.first_or_raise()).record_or_raise().bins["m"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Self-overlapping needle tests
+#
+# The spec (CLIENTS / "String Operations", §4.1 find / §4.2 replaceAll)
+# defines the contract as **overlap-skip**: after matching at index N the
+# scan resumes from N + len(needle), NOT from N + 1. A self-overlapping
+# needle (prefix == suffix, e.g. "aa", "👋👋") never matches at a position
+# inside a prior match. The spec's canonical examples — `find("aaaa","aa",2)
+# → 2` and `replaceAll("aaaa","aa","X") → "XX"` — are pinned below.
+# ---------------------------------------------------------------------------
+
+async def test_str_find_nth_overlap_skip(client):
+    """``find_nth("aa")`` over ``"aaaaa"`` returns positions 0, 2 only.
+
+    Overlap-skip scan per spec §4.1: after matching "aa" at index 0 the scan
+    advances by needle length (2) to index 2, matches again, advances to
+    index 4 where only one 'a' remains and no further match is possible.
+    Two matches total; occurrences 3+ return -1. (A naive overlap-aware
+    advance-by-one impl would return 1 for the 2nd occurrence — explicitly
+    called out as a wrong-client behavior in the spec.)
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_find_nth_overlap")
+    await sess.upsert(k).bin("s").set_to("aaaaa").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_find("aa")              # 1st (default occurrence)
+                .bin("s").str_find("aa", occurrence=2)
+                .bin("s").str_find("aa", occurrence=3)  # absent → -1
+                .bin("s").str_find("aa", occurrence=4)  # absent → -1
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == [0, 2, -1, -1]
+
+
+async def test_str_find_nth_overlap_skip_longer(client):
+    """``find_nth("abab")`` over ``"abababab"`` returns positions 0, 4 only.
+
+    Overlap-skip per spec §4.1: match at 0, advance by needle length 4,
+    match at 4, advance to end of string. Two matches. An overlap-aware
+    impl would yield three matches at 0, 2, 4.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_find_nth_longer")
+    await sess.upsert(k).bin("s").set_to("abababab").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_find("abab")
+                .bin("s").str_find("abab", occurrence=2)
+                .bin("s").str_find("abab", occurrence=3)  # absent → -1
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == [0, 4, -1]
+
+
+async def test_str_replace_all_overlapping_needle(client):
+    """``replace_all("aa", "X")`` over ``"aaaa"`` yields ``"XX"`` — the spec's
+    canonical overlap-skip example (§4.2): ``"XX"``, NOT ``"XaX"``.
+
+    Matches at index 0 and 2 (both pairs disjoint under overlap-skip), each
+    replaced. Original needles/replacements widened to ``"b"`` and a longer
+    replacement in companion tests to surface advance-direction bugs.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_replace_overlap")
+    await sess.upsert(k).bin("s").set_to("aaaa").execute()
+
+    await sess.upsert(k).bin("s").str_replace_all("aa", "b").execute()
+
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "bb"
+
+
+async def test_str_replace_all_overlap_with_longer_replacement(client):
+    """``replace_all("aa", "xxx")`` over ``"aaaa"`` yields ``"xxxxxx"``.
+
+    Two non-overlapping "aa" matches in "aaaa" (positions 0 and 2) each get
+    replaced by "xxx" → "xxx" + "xxx" = "xxxxxx" (6 chars). The scan does
+    NOT rescan into emitted replacement output, so the result is exactly
+    two "xxx" segments concatenated.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_replace_overlap_long")
+    await sess.upsert(k).bin("s").set_to("aaaa").execute()
+
+    await sess.upsert(k).bin("s").str_replace_all("aa", "xxx").execute()
+
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "xxxxxx"
+
+
+async def test_str_find_needle_equals_haystack(client):
+    """``find("aaa")`` over ``"aaa"`` returns 0; ``find_nth`` 2nd occurrence returns -1."""
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_find_equal")
+    await sess.upsert(k).bin("s").set_to("aaa").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_find("aaa")
+                .bin("s").str_find("aaa", occurrence=2)
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == [0, -1]
+
+
+async def test_str_contains_overlapping_pattern(client):
+    """``contains`` is overlap-agnostic — returns True whenever ANY match exists.
+
+    Sanity guard that contains/starts_with/ends_with behave correctly on
+    haystacks where the only matches are overlapping ones.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_contains_overlap")
+    await sess.upsert(k).bin("s").set_to("aaaa").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_contains("aa")
+                .bin("s").str_starts_with("aa")
+                .bin("s").str_ends_with("aa")
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == [True, True, True]
+
+
+async def test_str_find_overlap_skip_spec_canonical(client):
+    """Spec §4.1 canonical example: ``find("aaaa", "aa", 2) → 2``.
+
+    Pinned verbatim from the spec ASCII-path verification — overlap-skip
+    means the 2nd occurrence of "aa" in "aaaa" starts at index 2, not 1.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_find_overlap_canonical")
+    await sess.upsert(k).bin("s").set_to("aaaa").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_find("aa", occurrence=2)
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == 2
+
+
+async def test_str_find_overlap_skip_icu_path_emoji(client):
+    """Spec §4.1 ICU-path canonical: ``find("👋👋👋👋", "👋👋", 2) → 2``.
+
+    Same overlap-skip contract on the ICU ``usearch`` code path. Indexes are
+    codepoint indexes (per the spec's indexing note), so "👋👋" of length 2
+    advances by 2 codepoints — the 2nd occurrence sits at codepoint
+    index 2, not 1.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_find_overlap_icu_emoji")
+    await sess.upsert(k).bin("s").set_to("👋👋👋👋").execute()
+
+    rs = await (sess.query(k)
+                .bin("s").str_find("👋👋", occurrence=2)
+                .execute())
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["s"] == 2
