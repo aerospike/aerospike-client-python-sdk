@@ -1,0 +1,131 @@
+name: Promote to prod
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry-run mode. Defaults to true for manual dispatch.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  verify-ancestry:
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify main tip is reachable from stage
+        run: |
+          git fetch origin stage
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/stage; then
+            echo "::error::main tip $GITHUB_SHA is not reachable from origin/stage."
+            echo "stage tip: $(git rev-parse origin/stage)"
+            echo "main tip:  $GITHUB_SHA"
+            exit 1
+          fi
+          echo "main tip $GITHUB_SHA is reachable from origin/stage"
+
+  extract-version:
+    needs: verify-ancestry
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    outputs:
+      version: ${{ steps.extract.outputs.release-version }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Extract version
+        id: extract
+        uses: ./.github/actions/get-version
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=v${{ steps.extract.outputs.release-version }}" >> "$GITHUB_OUTPUT"
+
+  tag-main:
+    needs: [verify-ancestry, extract-version]
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      TAG: ${{ needs.extract-version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CLIENT_BOT_PAT || github.token }}
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists on origin"
+            exit 1
+          fi
+
+          git tag -a "$TAG" -m "Release $TAG"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "DRY-RUN: would run git push origin $TAG"
+            exit 0
+          fi
+          git push origin "$TAG"
+
+  draft-github-release:
+    needs: [extract-version, tag-main]
+    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      TAG: ${{ needs.extract-version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect pre-release
+        id: prerelease
+        run: |
+          if echo "${{ needs.extract-version.outputs.version }}" | grep -qE "\-alpha|\-beta|\-rc"; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_DATE=$(date +"%B %d, %Y")
+          API_JSON=$(curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/generate-notes" \
+            -d "{\"tag_name\":\"${{ env.TAG }}\"}")
+          echo "$API_JSON" | jq -r '.body' \
+            | python3 .github/scripts/generate_release_notes.py --date "$RELEASE_DATE" \
+            > release_notes.md
+          echo "--- release_notes.md ---"
+          cat release_notes.md
+
+      - name: Draft GitHub release
+        if: env.DRY_RUN != 'true'
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.0.4
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          draft: true
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
+          body_path: release_notes.md
+          generate_release_notes: false
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == 'true'
+        run: |
+          echo "DRY-RUN: would draft GitHub release for $TAG"
+          echo "--- release notes that would be used ---"
+          cat release_notes.md

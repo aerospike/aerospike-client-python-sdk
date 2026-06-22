@@ -1,0 +1,97 @@
+name: Publish docs to ReadTheDocs
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "PSDK version to wait for on PyPI"
+        type: string
+        required: true
+      rtd_version:
+        description: "RTD version slug to build (for example: latest, stable, or a version tag)"
+        type: string
+        required: true
+      pypi_timeout_minutes:
+        description: "Max minutes to poll PyPI before giving up (default: 60)"
+        type: number
+        required: false
+        default: 60
+      dry_run:
+        description: "Dry-run (skip the actual RTD API call)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  wait-and-publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Skip if RTD not provisioned
+        id: gate
+        run: |
+          if [[ -z "${{ vars.RTD_PROJECT }}" ]]; then
+            echo "RTD_PROJECT unset — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Harden the runner
+        if: steps.gate.outputs.skip != 'true'
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Poll PyPI for aerospike-sdk==${{ inputs.version }}
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          PYPI_VERSION: ${{ inputs.version }}
+          TIMEOUT_MINUTES: ${{ inputs.pypi_timeout_minutes }}
+        run: |
+          DEADLINE=$((SECONDS + TIMEOUT_MINUTES * 60))
+          ATTEMPT=0
+
+          echo "Waiting for aerospike-sdk==$PYPI_VERSION on PyPI (timeout: ${TIMEOUT_MINUTES}m)"
+
+          while true; do
+            ATTEMPT=$((ATTEMPT + 1))
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://pypi.org/pypi/aerospike-sdk/${PYPI_VERSION}/json")
+
+            if [[ "$STATUS" == "200" ]]; then
+              echo "aerospike-sdk==$PYPI_VERSION found on PyPI (attempt $ATTEMPT)"
+              break
+            fi
+
+            if [[ $SECONDS -ge $DEADLINE ]]; then
+              echo "::error::Timed out after ${TIMEOUT_MINUTES}m waiting for aerospike-sdk==$PYPI_VERSION on PyPI"
+              exit 1
+            fi
+
+            REMAINING=$(( (DEADLINE - SECONDS) / 60 ))
+            echo "Attempt $ATTEMPT: not yet available (HTTP $STATUS). ${REMAINING}m remaining. Retrying in 60s..."
+            sleep 60
+          done
+
+      - name: Trigger RTD build
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
+          RTD_VERSION: ${{ inputs.rtd_version }}
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ -z "$RTD_TOKEN" ]]; then
+            echo "::warning::secrets.RTD_TOKEN is not set — skipping RTD trigger."
+            exit 0
+          fi
+          API="https://readthedocs.org/api/v3/projects/${RTD_PROJECT}/versions/${RTD_VERSION}/builds/"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "DRY-RUN: would POST $API"
+            exit 0
+          fi
+          curl -fSsL -X POST -H "Authorization: Token ${RTD_TOKEN}" "$API"
+          echo
+          echo "Triggered RTD build: project=$RTD_PROJECT version=$RTD_VERSION"

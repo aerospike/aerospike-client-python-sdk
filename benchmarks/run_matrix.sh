@@ -69,14 +69,37 @@ mkdir -p "$OUT"
 rm -f "$OUT"/*.txt
 
 
-# Common bench args (-d / --services-alternate / no-tracemalloc are fixed).
+# Common bench args. --no-services-alternate is REQUIRED on bench-asd: the
+# cluster publishes its real addresses via the standard services list, so
+# enabling services-alternate routes through unreachable alternate addresses
+# and fast-fails ~2/3 of ops (only one of three nodes stays reachable). Those
+# errors are excluded from ok-TPS but throttle the run to one node's traffic,
+# so the whole result is invalid. The error gate below catches it if it recurs.
 # --with-telemetry enables 1-in-100 latency sampling so the summary block
-# includes "Latency p50/p99/p99.9" — The framework's per-op sampling cost is
-# ~1-2% TPS hit, so disabled by default.
+# includes "Latency p50/p99/p99.9" — ~1-2% TPS hit, off elsewhere by default.
 
 ARGS=(-H "$HOST" -n "$NS" -s "$SET" -k "$KEYS" -o I8
       -w RU,50 -d "$DURATION"
-      --services-alternate --no-tracemalloc --with-telemetry)
+      --no-services-alternate --no-tracemalloc --with-telemetry)
+
+# Fail the matrix if any cell's real-error rate exceeds this (percent of
+# attempts). Routing / services-alternate poisoning shows up as ~67%; healthy
+# runs are ~0%. Tune via MAX_ERR_PCT=<n> if a populated-keyspace caveat applies.
+MAX_ERR_PCT="${MAX_ERR_PCT:-1.0}"
+FAILURES=()
+
+# Pull the cell's error percentage (PSDK prints "(X% of ops)", rust-core prints
+# "(X% of attempts)") and record a failure if it exceeds MAX_ERR_PCT.
+assess_errors() {
+  local tag="$1" file="$2" pct
+  pct=$(grep -oE '\([0-9]+\.[0-9]+% of (ops|attempts)\)' "$file" \
+        | head -1 | grep -oE '[0-9]+\.[0-9]+' || true)
+  [[ -z "$pct" ]] && return 0
+  if awk -v p="$pct" -v m="$MAX_ERR_PCT" 'BEGIN { exit !(p + 0 > m + 0) }'; then
+    echo "    [FAIL] $tag error_rate=${pct}% > ${MAX_ERR_PCT}% (routing/services-alternate?)" >&2
+    FAILURES+=("$tag (${pct}%)")
+  fi
+}
 
 run() {
   local tag="$1"; shift
@@ -85,10 +108,11 @@ run() {
   tail -6 "$OUT/$tag.txt" \
     | grep -E "Total TPS|Latency p50|Errors:" \
     | sed "s/^/    /"
+  assess_errors "$tag" "$OUT/$tag.txt"
 }
 
 export AEROSPIKE_HOST="$HOST"
-export AEROSPIKE_USE_SERVICES_ALTERNATE=true
+export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 
 # --- PSDK sync (fast-path + builder × 32t/1t × FT/non-FT) ------------------
 for gil in 0 1; do
@@ -193,13 +217,45 @@ if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
       MODE=$mode TASKS=$tasks DURATION="$DURATION" WARMUP="$WARMUP" \
         KEYS="$KEYS" READ_PCT=50 \
         AEROSPIKE_HOST="$HOST" NAMESPACE="$NS" SET="$SET" \
+        AEROSPIKE_USE_SERVICES_ALTERNATE=false \
         benchmarks/rust-core/target/release/rust-core \
         >"$OUT/$tag.txt" 2>&1
       tail -3 "$OUT/$tag.txt" | sed "s/^/    /"
+      assess_errors "$tag" "$OUT/$tag.txt"
     done
   done
 else
   echo "[skip] rust-core binary not built (cargo build --release first)"
+fi
+
+# --- Equal-concurrency async sweep -----------------------------------------
+# Compare the three async clients at MATCHED concurrency (z=32 is already in
+# the base sections above). Avoids the apples-to-oranges trap of pitting a
+# 32-task Rust run against a 512-task Python pool, and shows where each client
+# stops scaling. FT only to keep the cell count down.
+ZSWEEP="${ZSWEEP:-64 128 256 512}"
+for z in $ZSWEEP; do
+  PYTHON_GIL=0 \
+    run "psdk_async_fast_path_z${z}_gil0" \
+      python -m benchmarks.benchmark "${ARGS[@]}" --mode async -z "$z" --fast-path
+  PYTHON_GIL=0 \
+    run "pac_async_z${z}_gil0" \
+      python -m benchmarks.benchmark "${ARGS[@]}" --mode pac-async -z "$z"
+done
+
+if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
+  for z in $ZSWEEP; do
+    tag="rust_async_t${z}"
+    echo "[run] $tag"
+    MODE=async TASKS=$z DURATION="$DURATION" WARMUP="$WARMUP" \
+      KEYS="$KEYS" READ_PCT=50 \
+      AEROSPIKE_HOST="$HOST" NAMESPACE="$NS" SET="$SET" \
+      AEROSPIKE_USE_SERVICES_ALTERNATE=false \
+      benchmarks/rust-core/target/release/rust-core \
+      >"$OUT/$tag.txt" 2>&1
+    tail -3 "$OUT/$tag.txt" | sed "s/^/    /"
+    assess_errors "$tag" "$OUT/$tag.txt"
+  done
 fi
 
 # --- PSDK async batch sweep (single-loop builder, 32 tasks, FT) ------------
@@ -227,3 +283,11 @@ for bsz in 1 4 16 32 64 128; do
 done
 
 echo "[done] $(ls -1 "$OUT" | wc -l) cells in $OUT"
+
+if (( ${#FAILURES[@]} > 0 )); then
+  echo "" >&2
+  echo "[FAIL] ${#FAILURES[@]} cell(s) exceeded ${MAX_ERR_PCT}% errors — results are NOT trustworthy:" >&2
+  printf '         %s\n' "${FAILURES[@]}" >&2
+  echo "  Confirm the seed host and --services-alternate match the cluster's advertised addresses." >&2
+  exit 1
+fi
