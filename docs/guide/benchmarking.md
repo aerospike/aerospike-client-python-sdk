@@ -25,7 +25,7 @@ This guide documents the architecture, setup, and measured TPS / latency for the
 Local benchmarking on macOS via Podman / Docker Desktop hits several bottlenecks that distort results:
 
 - **Userspace TCP proxy** (Docker Desktop's `gvproxy`) — adds 2-5 ms per hop, capping TPS at ~15K regardless of client capability.
-- **CPU contention** — co-locating `asd` and the Python client on a shared VM creates resource competition that masks true scaling behavior. Even server-side: running 3 ASDs as containers on a single 8-vCPU host (vs each on its own 8-vCPU VM) caps `aerospike-core` direct at ~280K TPS because the 3 server processes share 8 vCPUs (~2.7 vCPU each). On dedicated 8-vCPU-per-ASD VMs, that ceiling rises to ~810K — a 2.9× difference for the same client code.
+- **CPU contention** — co-locating `asd` and the Python client on a shared VM creates resource competition that masks true scaling behavior. Server-side: running 3 ASDs as containers on a single 8-vCPU host (vs each on its own 8-vCPU VM) caps `aerospike-core` direct at ~280K TPS because the 3 server processes share 8 vCPUs (~2.7 vCPU each). On dedicated 8-vCPU-per-ASD VMs, the cluster sustains ≥580K TPS — well above where any default-config Python client lands. (Earlier writeups quoted the 3-VM ceiling as 810K and then 405K, then ~290-300K rust-core direct; all three were client-side artifacts — services-alternate routing errors, then the Tokio timer wheel + the default 256-conn pool — masquerading as the cluster.)
 - **uvloop + free-threading** — uvloop 0.22.x has a libuv FT race on `loop._ready_len` (MagicStack/uvloop issues #720, #721) that triggers when many threads concurrently call `loop.call_soon_threadsafe()`. PSDK / PAC fully mitigates this via a single persistent waker thread inside PAC: all Tokio-side `call_soon_threadsafe` invocations funnel through one dedicated thread, eliminating the multi-threaded access pattern the race needs. The fix is empirically stable across 20+ minutes of stress (z=128 single-loop + AsyncPool 8×64, 241M ops, zero stalls). uvloop is installed by default on FT and non-FT Linux/macOS builds. (uvloop has no Windows wheel; PAC falls back to the asyncio default selector loop there.) An `AEROSPIKE_NO_UVLOOP=1` env-var safety valve is available to opt out without uninstalling the dependency.
 
 Dedicated VMs on isolated CPU cores with direct, low-latency networking between client and server eliminate all of these issues. GCP `n4-standard-8` (8 dedicated vCPUs each) on the same VPC is the reference setup. Equivalent isolation on AWS (`c7i.2xlarge` / dedicated tenancy / placement groups), Azure (`Fsv2-series`), or on-prem (two adjacent physical hosts on a quiet switch) reproduces the numbers within run-to-run noise.
@@ -161,13 +161,19 @@ Every cell in the matrix below was produced by `python -m benchmarks.benchmark -
 | **PAC async direct** (`pac-async`) | 32 tasks | **124,001** | 114,020 |
 | PAC sync | 1 | 12,221 | 11,812 |
 | PAC async | 1 task | 7,773 | 8,304 |
-| **Rust core, async** (Tokio tasks, no Python) | 32 tasks | **800,695** | n/a (no GIL) |
-| Rust core, sync (OS threads + `Handle::block_on`) | 32 | 694,030 | n/a (no GIL) |
-| Rust core, async | 1 task | 46,385 | n/a (no GIL) |
-| Rust core, sync | 1 | 38,783 | n/a (no GIL) |
+| **Rust core, async** (default settings) | 32 tasks | **~290,000** | n/a (no GIL) |
+| Rust core, sync (default settings) | 32 | ~246,000 | n/a (no GIL) |
+| Rust core, async, with timer fix + pool sized | 512 tasks | **~580,000** | n/a (no GIL) |
+| Rust core, async | 1 task | 12,627 | n/a (no GIL) |
+| Rust core, sync | 1 | 11,960 | n/a (no GIL) |
 | Python legacy (sync, C client) | 1 | (FT N/A, no wheel) | ~15,000 |
 
-The Rust-core numbers reflect a 3-VM ASD topology (each ASD on its own 8-vCPU VM, no CPU contention between server processes). On a co-located topology (3 ASD containers sharing one 8-vCPU host), the Rust-core ceiling is ~280K — server-side CPU contention, not a client-side limit. The Python clients (PAC, PSDK) hit a Python-layer ceiling well below either Rust-core figure, so they aren't sensitive to the server topology in the same way.
+The Rust-core rows here are on the 3-VM ASD topology. At default settings, rust-core async hits ~290K at t=32 and scales with concurrency — but the apparent plateau between t=32 and t=512 is **client-side**, not the cluster. Two `aerospike-core` defaults stack to cap throughput:
+
+- **Per-op Tokio timer-wheel registration.** Every `aerospike_rt::timeout(...)` insert/remove goes through a shared mutex in Tokio's global time driver; under contention this serializes per-op work. Bypassing it (A2 — measurement hack) lifts rust-core async at t=256 from ~381K to ~551K.
+- **`max_conns_per_node = 256` default**, fail-fast on exhaustion. With the timer also out of the way, t=512 collapses with ~92% errors as the pool refuses past 256 concurrent ops per node. Sizing the pool to match concurrency (`MAX_CONNS_PER_NODE = 512`) takes t=512 to **580K @ 0 errors** — the real ceiling.
+
+Python clients (PAC, PSDK) hit their own client-side ceilings (PyO3 boundary, asyncio/Tokio bridge, builder allocations) well below 580K, so they don't see either of these two artifacts. Earlier versions of this doc quoted 810K and 405K as "the cluster ceiling"; both were artifacts of the two issues above plus an older services-alternate routing bug. There is no real cluster constraint visible from any default-config Python client.
 
 :::{admonition} `ct_runtime` is experimental — measurement-only on this table
 :class: warning
@@ -202,10 +208,10 @@ p50 / p99 / p99.9 in microseconds, sampled 1-in-100 ops during measurement. Fram
 | PAC sync | 1 | 100 / 100 / 100 | 100 / 100 / 100 |
 | PAC async | 32 tasks | **200 / 300 / 500** | 400 / 400 / 500 |
 | PAC async | 1 task | 100 / 200 / 200 | 100 / 200 / 200 |
-| **Rust core, async** | 32 tasks | (sampled) p99 ~170 | n/a (no GIL) |
-| Rust core, sync | 32 | (sampled) p99 ~200 | n/a (no GIL) |
-| Rust core, async | 1 task | p99 ~70 | n/a (no GIL) |
-| Rust core, sync | 1 | p99 ~80 | n/a (no GIL) |
+| **Rust core, async** (default) | 32 tasks | (sampled) p99 ~190 | n/a (no GIL) |
+| Rust core, sync (default) | 32 | (sampled) p99 ~200 | n/a (no GIL) |
+| Rust core, async | 1 task | p99 ~140 | n/a (no GIL) |
+| Rust core, sync | 1 | p99 ~115 | n/a (no GIL) |
 
 Framework latency is histogram-bucketed at 100 µs granularity (`--with-telemetry`'s sampling resolution); Rust-core latency is sampled exactly. Framework cells with reported p50 under 100 µs round up to the 100 µs bucket boundary.
 
@@ -258,12 +264,13 @@ The async single-loop sweep tops out around 205K (batch=128) — the asyncio ↔
 
 ## Stack cost analysis
 
-Layering the headline single-key TPS numbers across clients shows where every transition costs. Note the Rust-core figures reflect the 3-VM ASD topology (no server-side CPU contention); they are an *aspirational* ceiling for what the cluster can deliver — Python clients hit their own client-side ceilings well below this.
+Layering the headline single-key TPS numbers across clients shows where every transition costs. The Rust-core figures below are at the same default settings as the Python clients; Rust-core's *real* cluster-side ceiling is ≥580K (with the per-op Tokio timer wheel bypassed AND `max_conns_per_node` sized to match concurrency — see ["Per-language baselines"](#per-language-baselines) above). Python clients hit their own client-side ceilings well below 580K, so they aren't sensitive to the Rust-core defaults that gate the higher number.
 
 | Layer | TPS | Note |
 |---|---|---|
-| **Rust core async direct** | **800,695** | `aerospike-core` via Tokio tasks — cluster-side ceiling, no Python |
-| Rust core sync (`block_on`) | 694,030 | `aerospike-core` via OS threads + `block_on` |
+| **Rust core async, default settings** | **~290,000** | `aerospike-core` via Tokio tasks; at default settings (timer wheel + 256-conn pool both active) |
+| Rust core async, timer + pool sized | ~580,000 | Real cluster-side ceiling; current `aerospike-core` defaults stack to cap below this |
+| Rust core sync, default settings | ~246,000 | `aerospike-core` via OS threads + `block_on` |
 | **PSDK async AsyncPool, fast-path (8×64)** | **~292,000** | 8 event loops × 64 tasks (FT only, uvloop) |
 | **PAC sync direct, ct_runtime** | **271,066** | PyO3 wrapper, per-thread Tokio current-thread runtime |
 | **PSDK sync, fast-path, ct_runtime** | **265,971** | SDK fast-path + ct_runtime |
@@ -281,12 +288,12 @@ Layering the headline single-key TPS numbers across clients shows where every tr
 
 | Transition | TPS | Δ |
 |---|---|---|
-| Rust core sync (cluster-side ceiling) | 694,030 | — |
-| → PAC sync direct (multi-thread Tokio) | 209,426 | **−70%** (PyO3 + Python boundary; Tokio thread-handoff in the per-op path) |
+| Rust core sync (default settings) | ~246,000 | reference (default `aerospike-core`) |
+| → PAC sync direct (multi-thread Tokio) | 209,426 | **−15%** (PyO3 + Python boundary; Tokio thread-handoff in the per-op path) |
 | → PSDK sync, fast-path | 214,489 | flat — SDK layer is essentially free |
 | → PSDK sync, builder | 149,428 | **−30%** vs fp (chained builder + stream wrap in Python) |
 
-The big drop is PyO3 + the per-op Python ↔ Tokio thread handoff (~71 µs per op). The PSDK SDK layer is essentially free over PAC direct.
+The PyO3 + per-op Python ↔ Tokio thread handoff costs ~15% over the equivalent direct rust-core sync number. The PSDK SDK layer is essentially free over PAC direct. (The cluster sustains higher absolute throughput than rust-core sync default — see ["Per-language baselines"](#per-language-baselines) — but with the default `aerospike-core` settings active, both Python and Rust-direct paths land in the same band.)
 
 ### Async stack — closer to sync than it used to be
 

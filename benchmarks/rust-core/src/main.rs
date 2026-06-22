@@ -42,14 +42,44 @@ async fn main() {
     policy.use_services_alternate = env::var("AEROSPIKE_USE_SERVICES_ALTERNATE")
         .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
+    // Connection pools per node. aerospike-core defaults to 1, which on
+    // <=8-core hosts serializes every checkout/return on a single per-node
+    // Mutex<VecDeque<Connection>> — visible as a throughput cap at high
+    // concurrency. Mirrors the official benchmark's --connPoolsPerNode knob so
+    // the contention can be measured rather than assumed.
+    policy.conn_pools_per_node = env::var("CONN_POOLS_PER_NODE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    // Max connections per node. Default 256 fails-fast on burst > capacity at
+    // high concurrency (see Phase 4b in the timer-churn plan). Lifting it tests
+    // whether a high-concurrency cell is pool-bound vs cluster-bound, without
+    // adding throttling.
+    if let Some(n) = env::var("MAX_CONNS_PER_NODE").ok().and_then(|v| v.parse().ok()) {
+        policy.max_conns_per_node = n;
+    }
     let client = Arc::new(Client::new(&policy, &host).await.expect("connect"));
 
-    let read_policy = Arc::new(ReadPolicy::default());
-    let write_policy = Arc::new(WritePolicy::default());
+    // Phase 4 timeout guards: drive total_timeout / socket_timeout from env.
+    // TOTAL_TIMEOUT_MS=1 exercises the deadline()-clamp path (budget exhausted
+    // before/during IO → zero-duration Sleep → immediate Err(Timeout), no panic).
+    let mut read_policy = ReadPolicy::default();
+    let mut write_policy = WritePolicy::default();
+    if let Some(n) = env::var("TOTAL_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()) {
+        read_policy.base_policy.total_timeout = n;
+        write_policy.base_policy.total_timeout = n;
+    }
+    if let Some(n) = env::var("SOCKET_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()) {
+        read_policy.base_policy.socket_timeout = n;
+        write_policy.base_policy.socket_timeout = n;
+    }
+    let read_policy = Arc::new(read_policy);
+    let write_policy = Arc::new(write_policy);
 
     println!(
-        "rust mode={} workers={} duration={}s warmup={}s read_pct={}",
-        mode, workers, duration, warmup, read_pct
+        "rust mode={} workers={} duration={}s warmup={}s read_pct={} conn_pools_per_node={} max_conns_per_node={} total_timeout={} socket_timeout={}",
+        mode, workers, duration, warmup, read_pct, policy.conn_pools_per_node, policy.max_conns_per_node,
+        read_policy.base_policy.total_timeout, read_policy.base_policy.socket_timeout
     );
 
     if mode == "sync" {
