@@ -1150,16 +1150,38 @@ class _QueryBuilderBase:
         return self
 
     def default_expire_record_after(self, duration: timedelta) -> Self:
-        """Set the default TTL using a :class:`datetime.timedelta` (must be positive)."""
+        """Set a default TTL using a :class:`datetime.timedelta`.
+
+        Equivalent to :meth:`default_expire_record_after_seconds` with seconds
+        derived from ``duration`` — applied to chained operations that lack
+        their own TTL.
+
+        Args:
+            duration: Positive time-to-live.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``duration`` is not strictly positive.
+        """
         self._default_ttl_seconds = _seconds_from_timedelta(duration)
         return self
 
     def default_expire_record_at(self, when: datetime) -> Self:
-        """Set the default TTL so chained writes expire at an absolute point in time.
+        """Set a default TTL so chained writes expire at an absolute point in time.
 
         A naive ``when`` is interpreted in local time; pass a timezone-aware
-        ``datetime`` for explicit UTC or other zones. Raises ``ValueError``
-        if ``when`` is not strictly in the future.
+        ``datetime`` for explicit UTC or other zones.
+
+        Args:
+            when: Future point at which chained writes should expire.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``when`` is not strictly in the future.
         """
         self._default_ttl_seconds = _seconds_until(when)
         return self
