@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import (
     Protocol,
@@ -109,6 +110,8 @@ from aerospike_sdk.operations_shared import (
     _TTL_SERVER_DEFAULT,
     _WriteSegmentBuilderBase,
     _build_exp_write_flags,
+    _seconds_from_timedelta,
+    _seconds_until,
     _to_expiration,
     _WriteVerbs,
 )
@@ -1144,6 +1147,43 @@ class _QueryBuilderBase:
         if seconds <= 0:
             raise ValueError("seconds must be greater than 0")
         self._default_ttl_seconds = seconds
+        return self
+
+    def default_expire_record_after(self, duration: timedelta) -> Self:
+        """Set a default TTL using a :class:`datetime.timedelta`.
+
+        Equivalent to :meth:`default_expire_record_after_seconds` with seconds
+        derived from ``duration`` — applied to chained operations that lack
+        their own TTL.
+
+        Args:
+            duration: Positive time-to-live.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``duration`` is not strictly positive.
+        """
+        self._default_ttl_seconds = _seconds_from_timedelta(duration)
+        return self
+
+    def default_expire_record_at(self, when: datetime) -> Self:
+        """Set a default TTL so chained writes expire at an absolute point in time.
+
+        A naive ``when`` is interpreted in local time; pass a timezone-aware
+        ``datetime`` for explicit UTC or other zones.
+
+        Args:
+            when: Future point at which chained writes should expire.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``when`` is not strictly in the future.
+        """
+        self._default_ttl_seconds = _seconds_until(when)
         return self
 
     def default_never_expire(self) -> Self:
