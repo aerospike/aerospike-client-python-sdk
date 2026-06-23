@@ -25,6 +25,7 @@ used by the batch dispatchers.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -121,6 +122,35 @@ def _write_policy_for_op_type(op_type: BatchOpType) -> Optional[BatchWritePolicy
 _TTL_NEVER_EXPIRE = -1
 _TTL_DONT_UPDATE = -2
 _TTL_SERVER_DEFAULT = 0
+
+
+def _seconds_from_timedelta(duration: timedelta) -> int:
+    """Convert a positive ``timedelta`` into an integer TTL in seconds.
+
+    Raises:
+        ValueError: If the resulting interval is not strictly positive.
+    """
+    seconds = int(duration.total_seconds())
+    if seconds <= 0:
+        raise ValueError(f"duration must be positive, got {duration!r}")
+    return seconds
+
+
+def _seconds_until(when: datetime) -> int:
+    """Convert an absolute ``datetime`` into an integer TTL in seconds from now.
+
+    A naive ``when`` is interpreted in local time (matching the Java SDK's
+    ``LocalDateTime`` semantics); an aware ``when`` is compared against the
+    current time in its own timezone.
+
+    Raises:
+        ValueError: If ``when`` is not strictly in the future.
+    """
+    now = datetime.now(when.tzinfo) if when.tzinfo is not None else datetime.now()
+    seconds = int((when - now).total_seconds())
+    if seconds <= 0:
+        raise ValueError(f"expiration must be in the future, not {when!r}")
+    return seconds
 
 
 def _to_expiration(ttl: int) -> Expiration:
@@ -385,6 +415,43 @@ class _WriteSegmentBuilderBase:
         if seconds <= 0:
             raise ValueError("seconds must be greater than 0")
         self._qb._ttl_seconds = seconds
+        return self
+
+    def expire_record_after(self, duration: timedelta) -> Self:
+        """Set the TTL using a :class:`datetime.timedelta`.
+
+        Equivalent to :meth:`expire_record_after_seconds` with seconds derived
+        from ``duration`` — convenient when the caller already has a
+        ``timedelta`` (``timedelta(days=30)``, etc.).
+
+        Args:
+            duration: Positive time-to-live.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``duration`` is not strictly positive.
+        """
+        self._qb._ttl_seconds = _seconds_from_timedelta(duration)
+        return self
+
+    def expire_record_at(self, when: datetime) -> Self:
+        """Set the TTL so the record expires at an absolute point in time.
+
+        A naive ``when`` is interpreted in local time; pass a timezone-aware
+        ``datetime`` for explicit UTC or other zones.
+
+        Args:
+            when: Future point at which the record should expire.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``when`` is not strictly in the future.
+        """
+        self._qb._ttl_seconds = _seconds_until(when)
         return self
 
     def never_expire(self) -> Self:
@@ -838,6 +905,14 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def expire_record_after_seconds(self, seconds):
         self._promote()
         return super().expire_record_after_seconds(seconds)
+
+    def expire_record_after(self, duration):
+        self._promote()
+        return super().expire_record_after(duration)
+
+    def expire_record_at(self, when):
+        self._promote()
+        return super().expire_record_at(when)
 
     def never_expire(self):
         self._promote()
