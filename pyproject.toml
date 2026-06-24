@@ -9,7 +9,10 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    "aerospike-async==0.6.0a6",
+    #"aerospike-async==0.6.0a6",   # restore before merging to dev
+    # Pinned to CLIENT-4878-serverside-ael-parsing — server-compiled AEL
+    # support (aerospike-client-python-async#77). Revert to PyPI pin on `dev`.
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@CLIENT-4878-serverside-ael-parsing",
     "antlr4-python3-runtime>=4.13.0",
     "typing_extensions>=4.0.0",
 ]
