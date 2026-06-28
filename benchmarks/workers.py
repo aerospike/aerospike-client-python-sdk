@@ -1192,6 +1192,11 @@ def run_pac_blocking(
     seeds = cfg.seeds
     write_policy = WritePolicy()
     read_policy = ReadPolicy()
+    # Mirror PSDK SyncSession's cached-policy plumbing: pass both AP and
+    # SC variants so PAC's `*_blocking` entry picks one at the C boundary
+    # via the in-memory partition map (no Python-side info call).
+    write_policy_sc = WritePolicy()
+    read_policy_sc = ReadPolicy()
     bench_state = _BenchState()
     dataset = DataSet.of(cfg.namespace, cfg.set_name)
     fields_t = tuple(cfg.bin_fields)
@@ -1267,14 +1272,25 @@ def run_pac_blocking(
         local_count = 0
         pk_counter = 0
         client = _thread_client()
+        # Mirror _build_op_sync's hot-loop shape: hoist cfg.X to locals
+        # and use Key.from_int_user_key (PyO3 fast int ctor, ~500ns) over
+        # dataset.id (PythonValue dispatch, ~2µs). Keeps the harness cost
+        # comparable across the two sync modes.
+        workload = cfg.workload
+        kc = cfg.key_count
+        rp_threshold = 100 - cfg.read_percent
+        wab_pct = cfg.write_all_bins_percent
+        ns_str = dataset.namespace
+        set_str = dataset.set_name
+        key_from_int = Key.from_int_user_key
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return
 
-            if cfg.workload == WorkloadKind.INSERT:
+            if workload == WorkloadKind.INSERT:
                 is_read = False
                 kid = bench_state.next_insert_key()
-                key = dataset.id(kid)
+                key = key_from_int(ns_str, set_str, kid)
                 payload = {b0_name: kid} if single_bin else full_bins(fields_t)
                 verb = "put"
             else:  # READ_UPDATE
@@ -1282,18 +1298,17 @@ def run_pac_blocking(
                     key, kid = _pk_pairs[pk_counter % pkn]
                     pk_counter += 1
                 else:
-                    keys = _make_keys(dataset, cfg.key_count, rng, 1)
-                    assert isinstance(keys, Key)
-                    key = keys
-                is_read = rng.randint(1, 100) > (100 - cfg.read_percent)
+                    kid = rng.randint(1, kc)
+                    key = key_from_int(ns_str, set_str, kid)
+                is_read = rng.randint(1, 100) > rp_threshold
                 if is_read:
                     verb = "get"
                     payload = None
                 else:
                     verb = "put"
                     if single_bin:
-                        payload = {b0_name: rng.randint(1, cfg.key_count)}
-                    elif rng.randint(1, 100) <= cfg.write_all_bins_percent:
+                        payload = {b0_name: rng.randint(1, kc)}
+                    elif rng.randint(1, 100) <= wab_pct:
                         payload = full_bins(fields_t)
                     else:
                         payload = single_bin_put(
@@ -1304,9 +1319,9 @@ def run_pac_blocking(
             t0 = time.perf_counter() if sample else 0.0
             try:
                 if verb == "get":
-                    client.get_blocking(key, policy=read_policy)
+                    client.get_blocking(key, policy=read_policy, policy_sc=read_policy_sc)
                 else:
-                    client.put_blocking(key, payload, policy=write_policy)
+                    client.put_blocking(key, payload, policy=write_policy, policy_sc=write_policy_sc)
             except BaseException as exc:
                 dt = (time.perf_counter() - t0) * 1000.0 if sample else None
                 if _is_not_found(exc):
