@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import enum
 import logging
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
 log = logging.getLogger("aerospike_sdk.background")
@@ -39,6 +40,7 @@ from aerospike_sdk.background_shared import (
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
@@ -288,6 +290,21 @@ class _BackgroundOperationBuilderBase:
     def expire_record_after_seconds(self, seconds: int) -> BackgroundOperationBuilder:
         """Set record TTL in seconds for touches/updates when supported by policy."""
         self._ttl_seconds = seconds
+        return self
+
+    def expire_record_after(self, duration: timedelta) -> BackgroundOperationBuilder:
+        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        self._ttl_seconds = _seconds_from_timedelta(duration)
+        return self
+
+    def expire_record_at(self, when: datetime) -> BackgroundOperationBuilder:
+        """Set record TTL so records expire at an absolute point in time.
+
+        A naive ``when`` is interpreted in local time; pass a timezone-aware
+        ``datetime`` for explicit UTC or other zones. Raises ``ValueError``
+        if ``when`` is not strictly in the future.
+        """
+        self._ttl_seconds = _seconds_until(when)
         return self
 
     def records_per_second(self, rps: int) -> BackgroundOperationBuilder:
