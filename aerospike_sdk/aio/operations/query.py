@@ -178,7 +178,8 @@ from aerospike_sdk.background_shared import (
     make_background_write_policy,
     reject_unsupported_background_write_ops,
 )
-from aerospike_sdk.ael.parser import parse_ael, parse_ael_with_index
+from aerospike_sdk.ael.parser import parse_ael_with_index
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
     OnError,
@@ -397,8 +398,10 @@ class _QueryBuilderBase:
         cached_read_policy_sc: Optional[ReadPolicy] = None,
         cached_write_policy_sc: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
+        *,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -423,6 +426,11 @@ class _QueryBuilderBase:
                 Session-scoped builders supply this; client-only builders omit it.
             namespace_mode_resolver_blocking: Sync counterpart used by
                 :meth:`execute_blocking` (the sync path bypassing asyncio).
+            supports_server_compiled_ael: When true (typically from
+                :attr:`~aerospike_sdk.aio.client.Client.supports_server_compiled_ael`),
+                string :meth:`where` uses server-compiled AEL. ``False`` in tests
+                or PAC-only use defaults to client-side AEL parsing for string
+                predicates.
         """
         self._client = client
         self._namespace = namespace
@@ -445,6 +453,7 @@ class _QueryBuilderBase:
         # reused under MRT because they were pre-computed without a txn, so
         # we null them out to force re-derivation from behavior.
         self._txn: Optional[Txn] = txn
+        self._supports_server_compiled_ael = supports_server_compiled_ael
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode: Optional[Mode] = None
         if txn is None:
@@ -459,6 +468,13 @@ class _QueryBuilderBase:
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+
+    def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
+        return filter_expression_from_ael_string(
+            ael,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
+        )
+
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -721,7 +737,7 @@ class _QueryBuilderBase:
         """
         if isinstance(expression, str):
             self._where_ael = expression
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = self._filter_expression_from_ael(expression)
         else:
             self._where_ael = None
             self._filter_expression = expression
@@ -1127,7 +1143,7 @@ class _QueryBuilderBase:
             :meth:`where`: Per-operation filter on the current operation.
         """
         if isinstance(expression, str):
-            self._default_filter_expression = parse_ael(expression)
+            self._default_filter_expression = self._filter_expression_from_ael(expression)
         else:
             self._default_filter_expression = expression
         return self
@@ -3535,7 +3551,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        if self._where_ael is not None and self._index_context is not None:
+        if self._where_ael is not None and self._index_context is not None and (
+            not self._supports_server_compiled_ael
+        ):
             self._auto_generate_filters(hint, policy)
 
         statement = self._build_statement()
@@ -3681,6 +3699,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # class-level defaults on _SingleKeyWriteSegmentBase (skip them
         # here so reads fall through to class default and writes go to
         # __dict__ inherited from the non-slotted base).
+        "_supports_server_compiled_ael",
     )
 
 
@@ -3717,6 +3736,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key
@@ -5881,6 +5901,18 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
         self._parent = parent
         self._bin = bin_name
 
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression]
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression reads using the same path as :meth:`where`."""
+        if not isinstance(expression, str):
+            return expression
+        qb = self._parent  # type: ignore[union-attr]
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=qb._supports_server_compiled_ael,
+        )
+
     # -- Simple read ----------------------------------------------------------
 
     def get(self) -> _T:
@@ -6195,7 +6227,7 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
             The parent builder for method chaining.
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
         return self._parent
 

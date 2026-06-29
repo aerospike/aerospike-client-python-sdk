@@ -63,7 +63,7 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
@@ -361,6 +361,21 @@ class _WriteSegmentBuilderBase:
     def __init__(self, qb: "QueryBuilder") -> None:
         self._qb = qb
 
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression writes using the same path as :meth:`where`."""
+        if not isinstance(expression, str):
+            return expression
+        if self._qb is not None:
+            supports = self._qb._supports_server_compiled_ael
+        else:
+            supports = getattr(self, "_supports_server_compiled_ael", False)
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=supports,
+        )
+
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
 
@@ -395,7 +410,7 @@ class _WriteSegmentBuilderBase:
             self for method chaining.
         """
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self
@@ -658,7 +673,7 @@ class _WriteSegmentBuilderBase:
     ) -> Self:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.read(bin_name, expr, flags))
 
     def insert_from(
@@ -675,7 +690,7 @@ class _WriteSegmentBuilderBase:
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
@@ -692,7 +707,7 @@ class _WriteSegmentBuilderBase:
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
@@ -709,7 +724,7 @@ class _WriteSegmentBuilderBase:
             ExpWriteFlags.DEFAULT, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def query(
@@ -799,6 +814,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
         write_policy_sc: Optional[WritePolicy] = None,
         read_policy_sc: Optional[ReadPolicy] = None,
+        *,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -822,6 +839,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
+        self._supports_server_compiled_ael = supports_server_compiled_ael
         # _dd_command_default, _dd_override, _record_delete_in_fast_ops
         # are class-level defaults; reads fall through, chained-method
         # writes shadow.

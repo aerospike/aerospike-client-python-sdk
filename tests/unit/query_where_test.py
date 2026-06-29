@@ -18,14 +18,27 @@
 Tests the two forms: where(str) and where(FilterExpression).
 """
 
+import pytest
+from aerospike_async import FilterExpression
+
 from aerospike_sdk import Exp, parse_ael
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
 
 
-def _query_builder():
+def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    client = kwargs.pop("client", None)
+    supports_server_compiled_ael = kwargs.pop("supports_server_compiled_ael", False)
+    if client is None:
+        client = object()
+    return QueryBuilder(
+        client=client,
+        namespace="test",
+        set_name="unit_test",
+        supports_server_compiled_ael=supports_server_compiled_ael,
+        **kwargs,
+    )
 
 
 class TestQueryBuilderWhere:
@@ -63,6 +76,13 @@ class TestQueryBuilderWhere:
         builder.where(exp).bins(["name"])
         assert builder._filter_expression is exp
         assert builder._bins == ["name"]
+
+    def test_where_server_compiled_when_supported(self) -> None:
+        """where(str) uses server-compiled path when builder flag is set."""
+        builder = _query_builder(supports_server_compiled_ael=True)
+        expected_parse = parse_ael("$.age > 20")
+        builder.where("$.age > 20")
+        assert builder._filter_expression != expected_parse
 
 
 class TestSyncQueryBuilderWhere:

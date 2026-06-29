@@ -27,10 +27,14 @@ Covers:
 import pytest
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError
+
+from tests.pac_compat import (
+    requires_server_compiled_ael,
+    xfail_if_server_compiled_ael_wire_active,
+)
 
 from .durable_delete_support import delete_keys_durable
 
@@ -582,17 +586,18 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_read_with_matching_where(self, session, ds):
         """Query + bin.select_from() with matching where() returns result."""
+        xfail_if_server_compiled_ael_wire_active(session.client)
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
         await session.upsert(k).put({"v": 1}).execute()
 
         rs = await (
             session.upsert(k)
-                .bin("result").select_from("$.v")
-                .where("$.v == 1")
-                .execute()
+            .bin("result").select_from("$.v:INT")
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok

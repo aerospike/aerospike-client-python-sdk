@@ -40,6 +40,8 @@ from aerospike_async import (
     new_client_blocking,
 )
 
+from aerospike_sdk.aio.client import _compute_server_compiled_ael_support_blocking
+
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
@@ -151,6 +153,7 @@ class SyncClient:
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
+        self._cached_supports_server_compiled_ael: Optional[bool] = None
 
     # -- Lifecycle ------------------------------------------------------------
 
@@ -180,6 +183,9 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        self._cached_supports_server_compiled_ael = (
+            _compute_server_compiled_ael_support_blocking(self._client)
+        )
 
     def close(self) -> None:
         """Close the connection synchronously.
@@ -193,6 +199,7 @@ class SyncClient:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+        self._cached_supports_server_compiled_ael = None
         self._namespace_mode_cache.clear()
 
     def __enter__(self) -> SyncClient:
@@ -229,6 +236,20 @@ class SyncClient:
         """Alias of :attr:`underlying_client` for parity with
         :class:`~aerospike_sdk.aio.client.Client`."""
         return self.underlying_client
+
+    @property
+    def supports_server_compiled_ael(self) -> bool:
+        """Same as :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`.
+
+        Value is the connect-time snapshot: PAC
+        ``Version.supports_server_compiled_ael`` on the first active node plus PAC
+        API checks (homogeneous cluster assumption).
+        """
+        if not self._connected or self._client is None:
+            return False
+        if self._cached_supports_server_compiled_ael is None:
+            return False
+        return self._cached_supports_server_compiled_ael
 
     def _ensure_connected(self) -> SyncClient:
         """Connect if not already connected; return ``self`` for chaining."""

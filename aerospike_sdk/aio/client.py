@@ -26,6 +26,7 @@ from aerospike_async import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
+    FilterExpression,
     Key,
     RegisterTask,
     UDFLang,
@@ -46,6 +47,57 @@ if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
 log = logging.getLogger(__name__)
+
+
+def _pac_version_supports_server_compiled_filter(version_obj: object) -> bool:
+    """Delegate to PAC :class:`~aerospike_async.Version` server-compiled AEL support.
+
+    Calls :meth:`~aerospike_async.Version.supports_server_compiled_ael` when present.
+    Older PAC builds omit that method; then return ``False`` so the SDK keeps
+    client-side :func:`~aerospike_sdk.ael.parser.parse_ael` for string predicates.
+    """
+    fn = getattr(version_obj, "supports_server_compiled_ael", None)
+    if not callable(fn):
+        return False
+    return bool(fn())
+
+
+async def _first_active_node_supports_server_compiled_ael(pac: AsyncClient) -> bool:
+    """Whether the first **active** node's version reports server-compiled AEL support.
+
+    Assumes **homogeneous** cluster builds (all nodes same server version); only
+    the first active node is consulted. Returns ``False`` if there are no active
+    nodes.
+    """
+    nodes = await pac.nodes()
+    for n in nodes:
+        if n.is_active:
+            return _pac_version_supports_server_compiled_filter(n.version)
+    return False
+
+
+def _first_active_node_supports_server_compiled_ael_blocking(pac: AsyncClient) -> bool:
+    """Blocking counterpart of :func:`_first_active_node_supports_server_compiled_ael`.
+
+    Uses :meth:`~aerospike_async.Client.nodes_blocking` so ``new_client_blocking()``
+    clients never call async-only PAC APIs (which raise at runtime).
+    """
+    nodes = pac.nodes_blocking()
+    for n in nodes:
+        if n.is_active:
+            return _pac_version_supports_server_compiled_filter(n.version)
+    return False
+
+
+def _compute_server_compiled_ael_support_blocking(pac: AsyncClient) -> bool:
+    """Gate for server-compiled string ``where()`` on a blocking PAC client.
+
+    Same rules as :meth:`Client._compute_server_compiled_ael_support`, but uses
+    :func:`_first_active_node_supports_server_compiled_ael_blocking` — no asyncio.
+    """
+    if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+        return False
+    return _first_active_node_supports_server_compiled_ael_blocking(pac)
 
 
 class Client:
@@ -134,6 +186,7 @@ class Client:
         # Shared by all Session instances from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
+        self._cached_supports_server_compiled_ael: Optional[bool] = None
 
     async def connect(self) -> None:
         """Open a connection to the cluster using the configured seeds and policy.
@@ -176,6 +229,9 @@ class Client:
         # IndexesMonitor starts lazily on the first AEL ``where()`` query.
         # Sync benches and callers that never touch the AEL filter-generation
         # path pay zero daemon-thread cost.
+        self._cached_supports_server_compiled_ael = (
+            await self._compute_server_compiled_ael_support()
+        )
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -191,7 +247,41 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
+        self._cached_supports_server_compiled_ael = None
         self._namespace_mode_cache.clear()
+
+    async def _compute_server_compiled_ael_support(self) -> bool:
+        """End-to-end gate for server-compiled string ``where()`` (computed once per connect).
+
+        Requires (1) PAC :meth:`FilterExpression.from_server_compiled_ael` and
+        (2) the **first active** node's ``version.supports_server_compiled_ael()``
+        (homogeneous cluster assumption — all nodes same build). Cached on
+        :meth:`connect`; see :attr:`supports_server_compiled_ael`.
+        """
+        if self._client is None:
+            return False
+        if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+            return False
+        return await _first_active_node_supports_server_compiled_ael(self._client)
+
+    @property
+    def supports_server_compiled_ael(self) -> bool:
+        """Whether server-compiled AEL filters are usable on this connection.
+
+        **Source of truth:** PAC ``Version.supports_server_compiled_ael()`` on the
+        **first active** node only (homogeneous cluster: all nodes same build). The
+        SDK does **not** re-walk the node list on every read; it returns the boolean
+        computed at the last successful :meth:`connect`.
+
+        Also requires the installed PAC to expose
+        :meth:`FilterExpression.from_server_compiled_ael`; otherwise this is
+        ``False`` even when the sampled node reports support.
+
+        Returns ``False`` before :meth:`connect` completes or after :meth:`close`.
+        """
+        if self._cached_supports_server_compiled_ael is None:
+            return False
+        return self._cached_supports_server_compiled_ael
 
     def connect_blocking(self) -> None:
         """Synchronously open a connection without requiring an asyncio loop.
@@ -224,6 +314,9 @@ class Client:
         self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
         # IndexesMonitor starts lazily on the first AEL ``where()`` query.
+        self._cached_supports_server_compiled_ael = (
+            _compute_server_compiled_ael_support_blocking(self._client)
+        )
 
     def close_blocking(self) -> None:
         """Synchronously close the underlying client. Pair with :meth:`connect_blocking`.
@@ -236,6 +329,7 @@ class Client:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+        self._cached_supports_server_compiled_ael = None
         self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:
@@ -469,6 +563,8 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -486,6 +582,8 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -514,6 +612,7 @@ class Client:
             indexes_monitor=self._indexes_monitor,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload
