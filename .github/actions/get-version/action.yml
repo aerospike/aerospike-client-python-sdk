@@ -1,0 +1,22 @@
+name: Get version
+description: Reads the package version from the VERSION file
+
+runs:
+  using: composite
+  steps:
+    - name: Extract version from VERSION file
+      id: extract
+      shell: bash
+      run: |
+        version=$(tr -d '[:space:]' < VERSION)
+        if [[ -z "$version" ]]; then
+          echo "::error::Could not extract version from VERSION file"
+          exit 1
+        fi
+        echo "release-version=${version}" >> "$GITHUB_OUTPUT"
+        echo "Detected version: ${version}"
+
+outputs:
+  release-version:
+    description: The package version from the VERSION file
+    value: ${{ steps.extract.outputs.release-version }}

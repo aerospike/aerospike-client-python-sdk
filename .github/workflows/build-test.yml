@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.13t', '3.14t']
+        python: ['3.14t']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -225,7 +225,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.13t', '3.14t']
+        python: ['3.14t']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4

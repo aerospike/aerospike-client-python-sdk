@@ -78,7 +78,11 @@ from aerospike_sdk.sync import SyncClient, SyncTransactionalSession
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 from aerospike_sdk.sync.session import SyncSession
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _meta_version
+    __version__ = _meta_version("aerospike-sdk")
+except Exception:
+    __version__ = "0.0.0"
 
 __all__ = [
     "AbortStatus",

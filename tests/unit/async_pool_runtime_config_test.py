@@ -190,3 +190,35 @@ def test_default_loop_count_uses_cpu_count(_cpu, _gil):
     # 8 loops on 8 CPUs, GIL off → above threshold, auto on
     assert pool._per_client_runtime is True
     assert pool._per_client_runtime_workers == 2  # max(2, 8 // 8)
+
+
+@patch("aerospike_sdk.aio.pool.os.cpu_count", return_value=8)
+class TestUvloopGate:
+    """``use_uvloop`` auto-decide tracks the GIL: OFF under free-threading.
+
+    uvloop's libuv free-threading race on ``loop._ready_len`` (MagicStack/
+    uvloop #720/#721) stalls a multi-loop pool when the GIL is disabled, so
+    the auto path must pick the stdlib selector loop there. Under GIL-on the
+    race can't fire, so uvloop is left on to preserve prior behavior.
+    """
+
+    @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
+    def test_auto_off_under_free_threading(self, _gil, _cpu):
+        pool = AsyncPool(client_factory=_factory, loop_count=4)
+        assert pool._use_uvloop is False
+
+    @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
+    def test_auto_on_under_gil(self, _gil, _cpu):
+        pool = AsyncPool(client_factory=_factory, loop_count=4)
+        assert pool._use_uvloop is True
+
+    @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
+    def test_explicit_true_overrides_ft_default(self, _gil, _cpu):
+        # Opt-in footgun: honored even under FT where it can stall.
+        pool = AsyncPool(client_factory=_factory, loop_count=4, use_uvloop=True)
+        assert pool._use_uvloop is True
+
+    @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
+    def test_explicit_false_overrides_gil_default(self, _gil, _cpu):
+        pool = AsyncPool(client_factory=_factory, loop_count=4, use_uvloop=False)
+        assert pool._use_uvloop is False
