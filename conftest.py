@@ -417,6 +417,20 @@ def _parse_build_string(build: str):
             return None
 
 
+def __parse_server_version(info_resp: dict):
+    for raw in info_resp.values():
+        if not raw:
+            continue
+        if "=" in raw:
+            _, _, value = raw.partition("=")
+            parsed = _parse_build_string(value.strip())
+        else:
+            parsed = _parse_build_string(raw.strip())
+        if parsed is not None:
+            return parsed
+    return None
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def server_version(aerospike_host, client_policy):
     """Probe the seed for ``build`` info and return ``(M, m, p, b)``.
@@ -435,17 +449,19 @@ async def server_version(aerospike_host, client_policy):
         info = await client.info("build")
     finally:
         await client.close()
-    for raw in info.values():
-        if not raw:
-            continue
-        if "=" in raw:
-            _, _, value = raw.partition("=")
-            parsed = _parse_build_string(value.strip())
-        else:
-            parsed = _parse_build_string(raw.strip())
-        if parsed is not None:
-            return parsed
-    return None
+    return __parse_server_version(info)
+
+
+# Does the same thing as server_version, but is synchronous
+@pytest.fixture(scope="session")
+def server_version_sync(aerospike_host, client_policy):
+    client = asyncio.run(new_client(client_policy, aerospike_host))
+    try:
+        info = asyncio.run(client.info("build"))
+        __parse_server_version(info)
+    finally:
+        asyncio.run(client.close())
+    __parse_server_version(info)
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
