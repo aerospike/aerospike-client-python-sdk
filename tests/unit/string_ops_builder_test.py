@@ -173,7 +173,7 @@ class TestStringMethodSurface:
 
     def test_write_bin_builder_str_method_count(self):
         methods = [m for m in dir(WriteBinBuilder) if m.startswith("str_")]
-        assert len(methods) == 35, f"expected 35 str_* on WriteBinBuilder, got {len(methods)}"
+        assert len(methods) == 37, f"expected 37 str_* on WriteBinBuilder, got {len(methods)}"
 
     def test_query_bin_builder_str_method_count(self):
         methods = [m for m in dir(QueryBinBuilder) if m.startswith("str_")]
@@ -181,7 +181,7 @@ class TestStringMethodSurface:
 
     def test_query_bin_builder_has_no_modify_methods(self):
         """Modifies (e.g. str_upper, str_concat) live ONLY on WriteBinBuilder."""
-        modify_methods = ("str_upper", "str_lower", "str_concat", "str_insert", "str_snip")
+        modify_methods = ("str_upper", "str_lower", "str_concat", "str_insert", "str_snip", "str_append", "str_prepend")
         for m in modify_methods:
             assert not hasattr(QueryBinBuilder, m), \
                 f"QueryBinBuilder should not expose modify method {m}"

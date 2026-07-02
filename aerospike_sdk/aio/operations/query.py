@@ -5606,6 +5606,40 @@ class WriteBinBuilder(_WriteVerbs):
             StringOperation.concat(self._bin, value, flags=int(flags)),
         )
 
+    def str_append(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register an append modify: add ``value`` to the end of the bin.
+
+        The single-value form (server sub-op 67). Use :meth:`str_concat` for
+        the list form.
+
+        Args:
+            value: String to append to the end of the bin.
+            flags: OR-combined :class:`StringWriteFlags` bitmask.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.append(self._bin, value, flags=int(flags)),
+        )
+
+    def str_prepend(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+        """Register a prepend modify: add ``value`` to the start of the bin.
+
+        Distinct from :meth:`str_insert` at index 0 — this is the server's
+        dedicated prepend sub-op (68).
+
+        Args:
+            value: String to prepend to the start of the bin.
+            flags: OR-combined :class:`StringWriteFlags` bitmask.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+        """
+        return self._segment._add_op(
+            StringOperation.prepend(self._bin, value, flags=int(flags)),
+        )
+
     def str_snip(self, start: int, end: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
         """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
 

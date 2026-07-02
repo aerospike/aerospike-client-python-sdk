@@ -71,7 +71,8 @@ async def client(aerospike_host_8_1_3):
         sess = c.create_session()
         for suffix in (
             "reads", "modify", "append_ops", "exp_query",
-            "no_fail", "concat_flag", "list_ctx", "map_ctx",
+            "transform_noop_missing", "create_from_missing",
+            "concat_flag", "list_ctx", "map_ctx",
         ):
             await sess.delete(_TEST_DS.id(f"strop_{suffix}")).execute()
         yield c
@@ -124,6 +125,27 @@ async def test_str_modify_and_read(client):
     assert result.operation_result(1) == "AB"
 
 
+async def test_str_append_and_prepend(client):
+    """``str_append`` (sub-op 67) adds to the end; ``str_prepend`` (sub-op 68)
+    adds to the start — distinct from ``str_concat`` (list form) and
+    ``str_insert(0, …)``."""
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_append_prepend")
+    await sess.upsert(k).bin("s").set_to("hello").execute()
+
+    result = await (await sess.upsert(k)
+                    .bin("s").str_append(" world")
+                    .bin("s").get()
+                    .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "hello world"
+
+    result = await (await sess.upsert(k)
+                    .bin("s").str_prepend("oh ")
+                    .bin("s").get()
+                    .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "oh hello world"
+
+
 async def test_str_reads_via_add_operation(client):
     """Low-level ``StringOperation`` factories via chained ``add_operation``."""
     sess = client.create_session()
@@ -159,22 +181,49 @@ async def test_str_projection_via_exp_on_query(client):
 # Spot tests — flag paths
 # ---------------------------------------------------------------------------
 
-async def test_str_upper_with_no_fail_flag(client):
-    """``StringWriteFlags.NO_FAIL`` suppresses missing-bin errors (not type-mismatch).
+async def test_str_upper_silently_noops_on_missing_bin(client):
+    """Transform / subtractive ops on a missing bin: silent no-op.
 
-    Record exists with a sibling bin; the target bin does not. Without NO_FAIL
-    the server returns BIN_NOT_FOUND; with NO_FAIL the op is a no-op success.
+    Per the string-ops spec (§4.1, server 8.1.3+), the missing-bin path is
+    op-class-dependent, not flag-dependent. ``str_upper`` is a transform op:
+    on a missing bin it succeeds, does not create the bin, and leaves
+    siblings untouched. Behavior is independent of the NO_FAIL flag
+    (NO_FAIL now only suppresses in-op execution failures, not missing-bin).
     """
     sess = client.create_session()
-    k = _TEST_DS.id("strop_no_fail")
+    k = _TEST_DS.id("strop_transform_noop_missing")
+    await sess.delete(k).execute()
     await sess.upsert(k).bin("other").set_to("x").execute()
 
-    await sess.upsert(k) \
-        .bin("missing_bin").str_upper(flags=StringWriteFlags.NO_FAIL) \
-        .execute()
+    await sess.upsert(k).bin("missing_bin").str_upper().execute()
 
-    rs = await sess.query(k).bin("other").get().execute()
-    assert (await rs.first_or_raise()).record_or_raise().bins["other"] == "x"
+    rs = await sess.query(k).execute()
+    bins = (await rs.first_or_raise()).record_or_raise().bins
+    assert bins["other"] == "x"
+    assert "missing_bin" not in bins
+
+
+async def test_str_insert_creates_bin_from_empty_on_missing_bin(client):
+    """Additive / create ops on a missing bin: bin is created from empty.
+
+    Per the string-ops spec (§4.1, server 8.1.3+), the eight additive
+    create-ops {INSERT, OVERWRITE, CONCAT, APPEND, PREPEND, PAD_START,
+    PAD_END, REPEAT} treat the absent bin as the empty string ``""``,
+    apply themselves, and create the bin with the result.
+    ``str_insert(0, "hello")`` on a missing bin therefore creates the
+    bin holding ``"hello"``.
+    """
+    sess = client.create_session()
+    k = _TEST_DS.id("strop_create_from_missing")
+    await sess.delete(k).execute()
+    await sess.upsert(k).bin("other").set_to("x").execute()
+
+    await sess.upsert(k).bin("missing_bin").str_insert(0, "hello").execute()
+
+    rs = await sess.query(k).execute()
+    bins = (await rs.first_or_raise()).record_or_raise().bins
+    assert bins["missing_bin"] == "hello"
+    assert bins["other"] == "x"
 
 
 async def test_str_concat_with_flag(client):

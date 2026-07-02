@@ -80,17 +80,29 @@ stream = await session.query(key).bin("name").get().execute()
 assert (await stream.first_or_raise()).record_or_raise().bins["name"] == "ALICE"
 ```
 
-### Appending and Inserting
+### Appending, Prepending, and Inserting
 
 ```python
-# Concat (the Unicode-aware append). Multi-value form takes a list:
-await session.upsert(key).bin("name").str_concat([" Smith", " Jr."]).execute()
-# "ALICE" → "ALICE Smith Jr."
+# Append a single value to the end:
+await session.upsert(key).bin("name").str_append(" Smith").execute()
+# "ALICE" → "ALICE Smith"
 
-# Insert at a codepoint index. Use index 0 for prepend:
-await session.upsert(key).bin("name").str_insert(0, "Ms. ").execute()
-# → "Ms. ALICE Smith Jr."
+# Prepend a single value to the start:
+await session.upsert(key).bin("name").str_prepend("Ms. ").execute()
+# → "Ms. ALICE Smith"
+
+# Concat is the multi-value append — takes a list appended in order:
+await session.upsert(key).bin("name").str_concat([" Jr.", " III"]).execute()
+# → "Ms. ALICE Smith Jr. III"
+
+# Insert at an arbitrary codepoint index (negative counts from the end):
+await session.upsert(key).bin("name").str_insert(4, " B.").execute()
+# → "Ms. B. ALICE Smith Jr. III"
 ```
+
+``str_append`` / ``str_prepend`` are the single-value forms; use ``str_concat``
+for the list form, and ``str_insert`` when you need an arbitrary position rather
+than the start or end.
 
 ### Replace, Trim, Pad
 
