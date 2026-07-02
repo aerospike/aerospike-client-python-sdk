@@ -227,14 +227,26 @@ await (
 
 ## TTL / Expiration
 
+Three equivalent shapes for setting a record's TTL — pick whichever your call
+site already has handy:
+
 ```python
-await (
-    session.upsert(users.id(1))
-    .expire_record_after_seconds(3600)
-    .put({"session_token": "abc123"})
-    .execute()
-)
+from datetime import datetime, timedelta, timezone
+
+# Raw seconds:
+await session.upsert(users.id(1)).expire_record_after_seconds(3600).put({"session_token": "abc123"}).execute()
+
+# A timedelta:
+await session.upsert(users.id(1)).expire_record_after(timedelta(hours=1)).put({"session_token": "abc123"}).execute()
+
+# An absolute point in time:
+await session.upsert(users.id(1)).expire_record_at(datetime.now(timezone.utc) + timedelta(hours=1)).put({"session_token": "abc123"}).execute()
 ```
+
+`expire_record_at` accepts either a timezone-aware or naive `datetime`. A naive
+value is interpreted in local time. Both methods raise `ValueError` if the
+resolved interval is not strictly positive (past `datetime` or non-positive
+`timedelta`).
 
 ## Batch Writes
 

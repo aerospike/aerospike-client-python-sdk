@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Union, overload
 
 from aerospike_async import ExecuteTask, FilterExpression
@@ -91,6 +92,21 @@ class SyncBackgroundOperationBuilder:
     def expire_record_after_seconds(self, seconds: int) -> SyncBackgroundOperationBuilder:
         """Set record TTL for the background job."""
         self._inner.expire_record_after_seconds(seconds)
+        return self
+
+    def expire_record_after(self, duration: timedelta) -> SyncBackgroundOperationBuilder:
+        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        self._inner.expire_record_after(duration)
+        return self
+
+    def expire_record_at(self, when: datetime) -> SyncBackgroundOperationBuilder:
+        """Set record TTL so records expire at an absolute point in time.
+
+        A naive ``when`` is interpreted in local time; pass a timezone-aware
+        ``datetime`` for explicit UTC or other zones. Raises ``ValueError``
+        if ``when`` is not strictly in the future.
+        """
+        self._inner.expire_record_at(when)
         return self
 
     def records_per_second(self, rps: int) -> SyncBackgroundOperationBuilder:

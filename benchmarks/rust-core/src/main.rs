@@ -34,15 +34,52 @@ async fn main() {
     let mode = env::var("MODE").unwrap_or_else(|_| "async".into());
 
     let mut policy = ClientPolicy::default();
-    policy.use_services_alternate = true;
+    // Honor AEROSPIKE_USE_SERVICES_ALTERNATE (truthy = true). Default false —
+    // bench-asd publishes its real addresses via the standard services list,
+    // and turning on services-alternate routes through unreachable addresses,
+    // producing partition-map errors that the bench would otherwise count as
+    // successful attempts.
+    policy.use_services_alternate = env::var("AEROSPIKE_USE_SERVICES_ALTERNATE")
+        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    // Connection pools per node. aerospike-core defaults to 1, which on
+    // <=8-core hosts serializes every checkout/return on a single per-node
+    // Mutex<VecDeque<Connection>> — visible as a throughput cap at high
+    // concurrency. Mirrors the official benchmark's --connPoolsPerNode knob so
+    // the contention can be measured rather than assumed.
+    policy.conn_pools_per_node = env::var("CONN_POOLS_PER_NODE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    // Max connections per node. Default 256 fails-fast on burst > capacity at
+    // high concurrency (see Phase 4b in the timer-churn plan). Lifting it tests
+    // whether a high-concurrency cell is pool-bound vs cluster-bound, without
+    // adding throttling.
+    if let Some(n) = env::var("MAX_CONNS_PER_NODE").ok().and_then(|v| v.parse().ok()) {
+        policy.max_conns_per_node = n;
+    }
     let client = Arc::new(Client::new(&policy, &host).await.expect("connect"));
 
-    let read_policy = Arc::new(ReadPolicy::default());
-    let write_policy = Arc::new(WritePolicy::default());
+    // Phase 4 timeout guards: drive total_timeout / socket_timeout from env.
+    // TOTAL_TIMEOUT_MS=1 exercises the deadline()-clamp path (budget exhausted
+    // before/during IO → zero-duration Sleep → immediate Err(Timeout), no panic).
+    let mut read_policy = ReadPolicy::default();
+    let mut write_policy = WritePolicy::default();
+    if let Some(n) = env::var("TOTAL_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()) {
+        read_policy.base_policy.total_timeout = n;
+        write_policy.base_policy.total_timeout = n;
+    }
+    if let Some(n) = env::var("SOCKET_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()) {
+        read_policy.base_policy.socket_timeout = n;
+        write_policy.base_policy.socket_timeout = n;
+    }
+    let read_policy = Arc::new(read_policy);
+    let write_policy = Arc::new(write_policy);
 
     println!(
-        "rust mode={} workers={} duration={}s warmup={}s read_pct={}",
-        mode, workers, duration, warmup, read_pct
+        "rust mode={} workers={} duration={}s warmup={}s read_pct={} conn_pools_per_node={} max_conns_per_node={} total_timeout={} socket_timeout={}",
+        mode, workers, duration, warmup, read_pct, policy.conn_pools_per_node, policy.max_conns_per_node,
+        read_policy.base_policy.total_timeout, read_policy.base_policy.socket_timeout
     );
 
     if mode == "sync" {
@@ -109,16 +146,18 @@ async fn run_async(
             .await
         }));
     }
-    let mut total: u64 = 0;
+    let mut total_ok: u64 = 0;
+    let mut total_err: u64 = 0;
     let mut all_lat: Vec<Duration> = Vec::new();
     for h in handles {
-        if let Ok((c, lats)) = h.await {
-            total += c;
+        if let Ok((ok, err, lats)) = h.await {
+            total_ok += ok;
+            total_err += err;
             all_lat.extend(lats);
         }
     }
     let elapsed = t0.elapsed().as_secs_f64();
-    report(total, duration, elapsed, &mut all_lat);
+    report(total_ok, total_err, duration, elapsed, &mut all_lat);
 }
 
 async fn worker_async(
@@ -132,27 +171,34 @@ async fn worker_async(
     lat_sample_every: u64,
     read_policy: Arc<ReadPolicy>,
     write_policy: Arc<WritePolicy>,
-) -> (u64, Vec<Duration>) {
+) -> (u64, u64, Vec<Duration>) {
     let mut rng = SmallRng::seed_from_u64(tid as u64 + 1);
-    let mut count: u64 = 0;
+    let mut ok: u64 = 0;
+    let mut err: u64 = 0;
     let mut lat: Vec<Duration> = Vec::new();
     while Instant::now() < deadline {
         let kid = rng.gen_range(0..keys);
         let key = as_key!(ns.as_str(), set.as_str(), kid);
-        let sample = lat_sample_every > 0 && count % lat_sample_every == 0;
+        let total = ok + err;
+        let sample = lat_sample_every > 0 && total % lat_sample_every == 0;
         let t_op = if sample { Some(Instant::now()) } else { None };
         if rng.gen_range(0..100) < read_pct {
-            let _ = client.get(&read_policy, &key, Bins::All).await;
+            match client.get(&read_policy, &key, Bins::All).await {
+                Ok(_) => ok += 1,
+                Err(_) => err += 1,
+            }
         } else {
             let bin = as_bin!("b0", kid as i64);
-            let _ = client.put(&write_policy, &key, &[bin]).await;
+            match client.put(&write_policy, &key, &[bin]).await {
+                Ok(_) => ok += 1,
+                Err(_) => err += 1,
+            }
         }
         if let Some(t) = t_op {
             lat.push(t.elapsed());
         }
-        count += 1;
     }
-    (count, lat)
+    (ok, err, lat)
 }
 
 /// Sync mode: N OS threads, each calling client.get/put via the shared
@@ -208,16 +254,18 @@ async fn run_sync(
             )
         }));
     }
-    let mut total: u64 = 0;
+    let mut total_ok: u64 = 0;
+    let mut total_err: u64 = 0;
     let mut all_lat: Vec<Duration> = Vec::new();
     for t in threads {
-        if let Ok((c, lats)) = t.join() {
-            total += c;
+        if let Ok((ok, err, lats)) = t.join() {
+            total_ok += ok;
+            total_err += err;
             all_lat.extend(lats);
         }
     }
     let elapsed = t0.elapsed().as_secs_f64();
-    report(total, duration, elapsed, &mut all_lat);
+    report(total_ok, total_err, duration, elapsed, &mut all_lat);
 }
 
 fn worker_sync(
@@ -232,30 +280,37 @@ fn worker_sync(
     read_policy: Arc<ReadPolicy>,
     write_policy: Arc<WritePolicy>,
     handle: tokio::runtime::Handle,
-) -> (u64, Vec<Duration>) {
+) -> (u64, u64, Vec<Duration>) {
     let mut rng = SmallRng::seed_from_u64(tid as u64 + 1);
-    let mut count: u64 = 0;
+    let mut ok: u64 = 0;
+    let mut err: u64 = 0;
     let mut lat: Vec<Duration> = Vec::new();
     while Instant::now() < deadline {
         let kid = rng.gen_range(0..keys);
         let key = as_key!(ns.as_str(), set.as_str(), kid);
-        let sample = lat_sample_every > 0 && count % lat_sample_every == 0;
+        let total = ok + err;
+        let sample = lat_sample_every > 0 && total % lat_sample_every == 0;
         let t_op = if sample { Some(Instant::now()) } else { None };
         if rng.gen_range(0..100) < read_pct {
-            let _ = handle.block_on(client.get(&read_policy, &key, Bins::All));
+            match handle.block_on(client.get(&read_policy, &key, Bins::All)) {
+                Ok(_) => ok += 1,
+                Err(_) => err += 1,
+            }
         } else {
             let bin = as_bin!("b0", kid as i64);
-            let _ = handle.block_on(client.put(&write_policy, &key, &[bin]));
+            match handle.block_on(client.put(&write_policy, &key, &[bin])) {
+                Ok(_) => ok += 1,
+                Err(_) => err += 1,
+            }
         }
         if let Some(t) = t_op {
             lat.push(t.elapsed());
         }
-        count += 1;
     }
-    (count, lat)
+    (ok, err, lat)
 }
 
-fn report(total: u64, requested_duration: f64, wall: f64, lat: &mut [Duration]) {
+fn report(ok: u64, err: u64, requested_duration: f64, wall: f64, lat: &mut [Duration]) {
     lat.sort();
     let pct = |p: f64| -> u128 {
         if lat.is_empty() {
@@ -265,12 +320,17 @@ fn report(total: u64, requested_duration: f64, wall: f64, lat: &mut [Duration]) 
             lat[i].as_micros()
         }
     };
-    let tps = (total as f64 / requested_duration).round() as u64;
+    let total = ok + err;
+    let tps = (ok as f64 / requested_duration).round() as u64;
+    let attempt_tps = (total as f64 / requested_duration).round() as u64;
+    let err_pct = if total > 0 { 100.0 * err as f64 / total as f64 } else { 0.0 };
     println!(
-        "measured: total_ops={}, duration={}s, TPS={}, wall={:.1}s, lat_samples={}, p50={}us, p99={}us, p999={}us",
+        "measured: ok={}, err={} ({:.2}% of attempts), attempts={}, attempt_TPS={}, ok_TPS={}, duration={}s, wall={:.1}s, lat_samples={}, p50={}us, p99={}us, p999={}us",
+        ok, err, err_pct,
         total,
-        requested_duration,
+        attempt_tps,
         tps,
+        requested_duration,
         wall,
         lat.len(),
         pct(50.0),

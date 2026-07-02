@@ -303,6 +303,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -323,6 +324,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -348,6 +350,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
 
     def batch(self) -> SyncBatchOperationBuilder:
@@ -484,6 +487,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
         )
 
     def _build_write_segment(
