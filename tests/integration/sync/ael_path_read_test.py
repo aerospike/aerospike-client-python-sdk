@@ -32,7 +32,10 @@ INT = 42
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
+def client(aerospike_host, client_policy, server_version_sync):
+    if server_version_sync[:3] < (8, 1, 3):
+        pytest.skip(f"This server version {server_version_sync} does not support AEL")
+
     k = DS.id(KEY)
 
     with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
