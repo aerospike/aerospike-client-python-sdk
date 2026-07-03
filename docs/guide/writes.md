@@ -263,10 +263,13 @@ await (
 Mixed operations across different keys are handled automatically when you chain
 multiple write segments.
 
+(execute-vs-execute_stream)=
 ### `execute()` vs `execute_stream()`
 
-The batch builder exposes two terminal methods with different result-delivery
-semantics:
+Every query-path builder — `session.batch()`, the `session.query()` chain, and
+the chained write segments — exposes two terminal methods with different
+result-delivery semantics. **`execute()` is the default;** reach for
+`execute_stream()` only when buffering a large result set is expensive.
 
 - **`execute()`** — buffered. Awaits every per-key result, then returns a
   `RecordStream` backed by a fully-materialized list. Writes are guaranteed to

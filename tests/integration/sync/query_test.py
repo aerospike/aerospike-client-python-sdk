@@ -113,6 +113,79 @@ def test_query_with_filter_expression(client):
     stream.close()
     assert count > 0
 
+
+class TestSyncExecuteStreamAcrossBuilders:
+    """Sync `execute_stream()` mirrors the async contract across the
+    query-path builders. Also guards the mixed-chain fix: the sync
+    ``query(reads).write(...)`` transition must finalize the pending read
+    spec before overwriting op_type/keys — otherwise the reads are dropped
+    (the bug this covers), on both buffered ``execute()`` and lazy
+    ``execute_stream()``."""
+
+    def test_batch_read_stream_matches_execute(self, client):
+        """Multi-key read: execute_stream yields the same rows (by index)
+        as buffered execute()."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(0, 1, 2)
+
+        lazy = session.query(keys).execute_stream().collect()
+        eager = session.query(keys).execute().collect()
+        assert {r.index for r in lazy} == {r.index for r in eager} == {0, 1, 2}
+        assert all(r.is_ok for r in lazy)
+
+    def test_mixed_write_chain_stream_and_buffered(self, client):
+        """A query→write→delete chain yields one row per op on both the
+        buffered and streaming paths, and the chained reads are NOT dropped —
+        they come back carrying their record data. This is the regression
+        guard for the sync ``_start_write_verb`` finalize-first fix: before
+        it, the read spec (indices 0, 1) was silently overwritten by the
+        upsert."""
+        session = client.create_session()
+        ds = DataSet.of("test", "sestream_qmix")
+        keys = [ds.id(i) for i in range(4)]
+        try:
+            for i, k in enumerate(keys):
+                session.upsert(k).put({"v": i}).execute()
+
+            for terminal in ("execute", "execute_stream"):
+                # Re-seed the delete target each round.
+                session.upsert(keys[3]).put({"v": 3}).execute()
+                chain = (
+                    session.query(ds.ids(0, 1))
+                        .upsert(keys[2]).bin("status").set_to("active")
+                        .delete(keys[3])
+                )
+                results = getattr(chain, terminal)().collect()
+                assert {r.index for r in results} == {0, 1, 2, 3}, terminal
+                assert all(r.is_ok for r in results), terminal
+                # The two chained reads survive with their seeded bin data.
+                by_idx = {r.index: r for r in results}
+                assert by_idx[0].record.bins["v"] == 0, terminal
+                assert by_idx[1].record.bins["v"] == 1, terminal
+        finally:
+            for k in keys:
+                try:
+                    session.delete(k).execute()
+                except Exception:
+                    pass
+
+    def test_single_key_write_segment_stream(self, client):
+        """A single-key write segment exposes execute_stream (one record)."""
+        session = client.create_session()
+        ds = DataSet.of("test", "sestream_qsingle")
+        k = ds.id(0)
+        try:
+            results = session.upsert(k).put({"v": 1}).execute_stream().collect()
+            assert len(results) == 1
+            assert results[0].is_ok
+        finally:
+            try:
+                session.delete(k).execute()
+            except Exception:
+                pass
+
+
 def test_query_with_filter_expression_and(client):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
     # Create filter expression: age >= 25 AND age <= 27

@@ -32,6 +32,49 @@ async for result in stream:
 stream.close()
 ```
 
+## Buffered vs. Lazy Delivery
+
+Every query-path builder exposes two terminals with different result-delivery
+semantics. **`execute()` is the default** — reach for `execute_stream()` only
+when a large result set makes buffering expensive.
+
+- **`execute()`** — buffered. Awaits every result, then returns a
+  `RecordStream` backed by a fully-materialized list. Results arrive in input
+  order, and for a chain that includes writes those writes are guaranteed
+  complete server-side by the time the call returns. Use this for most
+  workloads.
+
+- **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
+  `RecordResult` per `__anext__` (`__next__` on sync) as the cluster responds.
+  The first record arrives at first-RTT rather than after all keys complete, so
+  peak memory stays bounded — useful for large batches and scans.
+
+  Caveats:
+
+  - **Yields completion order, not input order.** Each `RecordResult` carries
+    its input position in `.index`; sort after collecting if you need
+    positional order.
+  - **No writes-complete-on-return guarantee.** If a chain includes writes and
+    you discard the stream without iterating, per-node work may still be
+    in-flight. Use `execute()` when you need writes done on return.
+  - **Per-key errors land inline** on `RecordResult`; cluster-level errors
+    raise mid-iteration.
+
+```python
+# Bounded-memory scan — process records as they arrive
+stream = await session.query(users).execute_stream()
+async for result in stream:
+    handle(result.record)
+stream.close()
+```
+
+Keyless dataset queries and scans already stream lazily from the server, so
+`execute_stream()` and `execute()` deliver the same incremental behavior there;
+the distinction matters most for multi-key batch shapes. The same two terminals
+exist on `session.batch()` and the chained write builders — see
+[Writing Data](#execute-vs-execute_stream). Sync builders have the
+identical contract; iterate with `for result in stream`.
+
 ## Selecting Bins
 
 Return only specific bins to reduce network transfer:

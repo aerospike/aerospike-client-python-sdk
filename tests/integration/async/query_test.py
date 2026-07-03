@@ -574,3 +574,83 @@ async def test_has_more_chunks_on_non_chunked_stream(client):
     assert await stream.has_more_chunks() is False
     stream.close()
     assert count == 10
+
+
+class TestExecuteStreamAcrossBuilders:
+    """`execute_stream()` (lazy) is exposed consistently across the
+    query-path builders and yields the same rows as buffered `execute()`,
+    which stays the default. Streaming yields in completion order, so
+    every comparison is by :attr:`RecordResult.index`."""
+
+    async def test_batch_read_stream_matches_execute(self, client):
+        """QueryBuilder.execute_stream on a multi-key read yields the same
+        rows (by index) as buffered execute()."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(0, 1, 2)
+
+        buffered = await (await session.query(keys).execute()).collect()
+        lazy = await (await session.query(keys).execute_stream()).collect()
+
+        assert {r.index for r in lazy} == {r.index for r in buffered} == {0, 1, 2}
+        assert all(r.is_ok for r in lazy)
+        assert {r.index: r.record.bins["id"] for r in lazy} == \
+            {r.index: r.record.bins["id"] for r in buffered}
+
+    async def test_mixed_write_chain_stream(self, client):
+        """A query→write→delete chain (terminates on WriteSegmentBuilder)
+        exposes execute_stream and yields one row per op."""
+        session = client.create_session()
+        ds = DataSet.of("test", "estream_qmix")
+        keys = [ds.id(i) for i in range(4)]
+        try:
+            for i, k in enumerate(keys):
+                await session.upsert(k).put({"v": i}).execute()
+
+            stream = await (
+                session.query(ds.ids(0, 1))
+                    .upsert(keys[2]).bin("status").set_to("active")
+                    .delete(keys[3])
+                    .execute_stream()
+            )
+            results = await stream.collect()
+            assert {r.index for r in results} == {0, 1, 2, 3}
+            assert all(r.is_ok for r in results)
+
+            rec2 = await (await session.query(keys[2]).execute()).first_or_raise()
+            assert rec2.record.bins["status"] == "active"
+            gone = await (await session.query(keys[3]).execute()).collect()
+            assert gone == []
+        finally:
+            for k in keys:
+                try:
+                    await session.delete(k).execute()
+                except Exception:
+                    pass
+
+    async def test_single_key_write_segment_stream(self, client):
+        """A single-key write segment exposes execute_stream (one record)."""
+        session = client.create_session()
+        ds = DataSet.of("test", "estream_qsingle")
+        k = ds.id(0)
+        try:
+            stream = await session.upsert(k).put({"v": 1}).execute_stream()
+            results = await stream.collect()
+            assert len(results) == 1
+            assert results[0].is_ok
+        finally:
+            try:
+                await session.delete(k).execute()
+            except Exception:
+                pass
+
+    async def test_dataset_query_stream_delegates_to_scan(self, client):
+        """execute_stream on a keyless dataset query streams the scan
+        lazily (delegates to execute())."""
+        stream = await client.query("test", "query_test").execute_stream()
+        count = 0
+        async for r in stream:
+            assert r.is_ok
+            count += 1
+        stream.close()
+        assert count == 10
