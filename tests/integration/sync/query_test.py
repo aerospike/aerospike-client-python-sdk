@@ -186,6 +186,121 @@ class TestSyncExecuteStreamAcrossBuilders:
                 pass
 
 
+class TestSyncPopVsFirst:
+    """`pop()` keeps the stream open; `first()` closes it — plus ``_or_raise``."""
+
+    def test_pop_keeps_stream_open(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = session.query(ds.ids(0, 1, 2)).execute_stream()
+        head = stream.pop()
+        assert head is not None
+        rest = stream.collect()
+        assert {head.index} | {r.index for r in rest} == {0, 1, 2}
+
+    def test_first_closes_stream(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = session.query(ds.ids(0, 1, 2)).execute_stream()
+        head = stream.first()
+        assert head is not None
+        assert stream.collect() == []
+
+    def test_pop_or_raise_and_first_or_raise(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+
+        open_stream = session.query(ds.ids(0, 1)).execute_stream()
+        assert open_stream.pop_or_raise().is_ok
+        assert len(open_stream.collect()) == 1
+
+        closed_stream = session.query(ds.ids(0, 1)).execute_stream()
+        assert closed_stream.first_or_raise().is_ok
+        assert closed_stream.collect() == []
+
+
+class TestSyncExecuteStreamClose:
+    """Sync sibling of the async close/context-manager suite: early abandon,
+    idempotent close, close-on-exception via ``with``, plus re-iterate and
+    client-usable-after-close."""
+
+    def test_close_mid_stream_stops_iteration(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(*range(10))
+
+        stream = session.query(keys).execute_stream()
+        seen = 0
+        for _ in stream:
+            seen += 1
+            if seen == 1:
+                stream.close()
+                break
+
+        remaining = sum(1 for _ in stream)
+        assert remaining == 0
+
+    def test_close_is_idempotent(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = session.query(ds.ids(0, 1, 2)).execute_stream()
+        stream.close()
+        stream.close()
+        stream.close()
+        assert stream.collect() == []
+
+    def test_reiterate_after_close_yields_nothing(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = session.query(ds.ids(0, 1, 2, 3)).execute_stream()
+        stream.close()
+        assert list(stream) == []
+        assert list(stream) == []
+
+    def test_client_usable_after_early_close(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = session.query(ds.ids(*range(10))).execute_stream()
+        for _ in stream:
+            stream.close()
+            break
+        rec = session.query(ds.id(0)).execute().first_or_raise()
+        assert rec.record.bins["id"] == 0
+
+    def test_with_closes_on_normal_exit(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        seen = []
+        with session.query(ds.ids(0, 1, 2)).execute_stream() as stream:
+            for r in stream:
+                seen.append(r.index)
+        assert set(seen) == {0, 1, 2}
+        assert stream.collect() == []
+
+    def test_with_closes_on_early_break(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        with session.query(ds.ids(*range(10))).execute_stream() as stream:
+            for _ in stream:
+                break
+        assert stream.collect() == []
+        rec = session.query(ds.id(1)).execute().first_or_raise()
+        assert rec.record.bins["id"] == 1
+
+    def test_with_closes_on_exception(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream_ref = {}
+        with pytest.raises(RuntimeError, match="boom"):
+            with session.query(ds.ids(*range(10))).execute_stream() as stream:
+                stream_ref["s"] = stream
+                for _ in stream:
+                    raise RuntimeError("boom")
+        assert stream_ref["s"].collect() == []
+        rec = session.query(ds.id(2)).execute().first_or_raise()
+        assert rec.record.bins["id"] == 2
+
+
 def test_query_with_filter_expression_and(client):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
     # Create filter expression: age >= 25 AND age <= 27

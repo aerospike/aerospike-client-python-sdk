@@ -293,24 +293,28 @@ result-delivery semantics. **`execute()` is the default;** reach for
     subsequent code runs — subsequent reads can race against pending writes.
   - **Per-key errors land inline** on `RecordResult` (`.is_ok=False`,
     `.exception`); cluster-level errors raise mid-iteration.
+  - **Close it if you abandon it early** — drain fully, or use the context
+    manager, so the producer is released promptly. See
+    [Closing a Stream](#closing-streams).
 
 ```python
-# Lazy streaming — process records as they arrive
-stream = await (
+# Lazy streaming — process records as they arrive.
+# `async with` releases the stream on every exit path.
+async with await (
     session.batch()
         .upsert(key1).bin("v").set_to(1)
         .upsert(key2).bin("v").set_to(2)
         .execute_stream()
-)
-async for result in stream:
-    print(result.index, result.is_ok, result.key.value)
+) as stream:
+    async for result in stream:
+        print(result.index, result.is_ok, result.key.value)
 
 # When positional ordering is needed, collect + sort
-stream = await (...).execute_stream()
-results = await stream.collect()
+async with await (...).execute_stream() as stream:
+    results = await stream.collect()
 results.sort(key=lambda r: r.index)
 ```
 
 Sync siblings: `SyncBatchOperationBuilder.execute()` and `.execute_stream()`
 have the same contract; iterate the latter with `for result in stream` (rather
-than `async for`).
+than `async for`) and use a plain `with` block to auto-close.

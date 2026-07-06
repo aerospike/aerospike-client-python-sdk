@@ -654,3 +654,152 @@ class TestExecuteStreamAcrossBuilders:
             count += 1
         stream.close()
         assert count == 10
+
+
+class TestPopVsFirst:
+    """`pop()` takes one row and keeps the stream open; `first()` takes one row
+    and closes it. Both come in an ``_or_raise`` variant."""
+
+    async def test_pop_keeps_stream_open(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        head = await stream.pop()
+        assert head is not None
+        rest = await stream.collect()
+        assert {head.index} | {r.index for r in rest} == {0, 1, 2}
+
+    async def test_first_closes_stream(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        head = await stream.first()
+        assert head is not None
+        # first() closed the stream: nothing remains.
+        assert await stream.collect() == []
+
+    async def test_pop_or_raise_and_first_or_raise(self, client):
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+
+        open_stream = await session.query(ds.ids(0, 1)).execute_stream()
+        head = await open_stream.pop_or_raise()
+        assert head.is_ok
+        assert len(await open_stream.collect()) == 1   # still open
+
+        closed_stream = await session.query(ds.ids(0, 1)).execute_stream()
+        rec = await closed_stream.first_or_raise()
+        assert rec.is_ok
+        assert await closed_stream.collect() == []     # closed
+
+
+class TestExecuteStreamClose:
+    """Closing a lazy stream releases the producer and stops iteration.
+
+    Covers the same ground as a Closeable/try-with-resources stream — early
+    abandon, idempotent close, close-on-exception via ``async with`` — plus
+    cases a bare Closeable contract typically leaves untested: re-iterating a
+    closed stream, and proving the client is still usable afterward.
+    """
+
+    async def test_close_mid_stream_stops_iteration(self, client):
+        """After close(), no further rows are delivered even if the batch had
+        more buffered/in-flight."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(*range(10))
+
+        stream = await session.query(keys).execute_stream()
+        seen = 0
+        async for _ in stream:
+            seen += 1
+            if seen == 1:
+                stream.close()
+                break
+
+        remaining = 0
+        async for _ in stream:
+            remaining += 1
+        assert remaining == 0
+
+    async def test_close_is_idempotent(self, client):
+        """Repeated close() calls are safe and keep the stream drained."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        stream.close()
+        stream.close()
+        stream.close()
+        assert await stream.collect() == []
+
+    async def test_reiterate_after_close_yields_nothing(self, client):
+        """Re-entering ``async for`` on a closed stream terminates immediately
+        (a scenario Closeable contracts commonly leave unspecified)."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        stream = await session.query(ds.ids(0, 1, 2, 3)).execute_stream()
+        stream.close()
+        first_pass = [r async for r in stream]
+        second_pass = [r async for r in stream]
+        assert first_pass == [] and second_pass == []
+
+    async def test_client_usable_after_early_close(self, client):
+        """Abandoning a stream early must not wedge the client — a subsequent
+        operation on the same session still succeeds."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+
+        stream = await session.query(ds.ids(*range(10))).execute_stream()
+        async for _ in stream:
+            stream.close()
+            break
+
+        # The client keeps working after the partial-then-closed stream.
+        rec = await (await session.query(ds.id(0)).execute()).first_or_raise()
+        assert rec.record.bins["id"] == 0
+
+    async def test_async_with_closes_on_normal_exit(self, client):
+        """``async with`` drains and releases the stream on normal exit."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(0, 1, 2)
+
+        seen = []
+        async with (await session.query(keys).execute_stream()) as stream:
+            async for r in stream:
+                seen.append(r.index)
+        assert set(seen) == {0, 1, 2}
+        # Post-context, the stream is closed: no further rows.
+        assert await stream.collect() == []
+
+    async def test_async_with_closes_on_early_break(self, client):
+        """Breaking out of ``async with`` still closes the stream."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(*range(10))
+
+        async with (await session.query(keys).execute_stream()) as stream:
+            async for _ in stream:
+                break
+        assert await stream.collect() == []
+        # Client still usable.
+        rec = await (await session.query(ds.id(1)).execute()).first_or_raise()
+        assert rec.record.bins["id"] == 1
+
+    async def test_async_with_closes_on_exception(self, client):
+        """An exception inside ``async with`` closes the stream and propagates."""
+        session = client.create_session()
+        ds = DataSet.of("test", "query_test")
+        keys = ds.ids(*range(10))
+
+        stream_ref = {}
+        with pytest.raises(RuntimeError, match="boom"):
+            async with (await session.query(keys).execute_stream()) as stream:
+                stream_ref["s"] = stream
+                async for _ in stream:
+                    raise RuntimeError("boom")
+        # The stream was closed by __aexit__ despite the exception.
+        assert await stream_ref["s"].collect() == []
+        # And the client survives it.
+        rec = await (await session.query(ds.id(2)).execute()).first_or_raise()
+        assert rec.record.bins["id"] == 2
