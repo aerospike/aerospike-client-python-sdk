@@ -1678,6 +1678,143 @@ class _QueryBuilderBase:
             )
         if result.exp is not None:
             policy.filter_expression = result.exp
+
+    def _dataset_set_name(self) -> Optional[str]:
+        return self._set_name or None
+
+    def _query_explain_index_hint(self, hint: Optional[QueryHint]) -> Optional[str]:
+        if hint is None:
+            return None
+        return hint.index_name
+
+    def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
+        """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
+        if self._where_ael is None:
+            return False
+        if self._filter_records:
+            return False
+        if hint is not None and hint.bin_name is not None:
+            return False
+        supports = getattr(self._client, "supports_query_selection", None)
+        if supports is None:
+            return False
+        return bool(supports())
+
+    def _apply_dataset_query_policy_filter(
+        self,
+        policy: QueryPolicy,
+        hint: Optional[QueryHint],
+    ) -> None:
+        if (
+            self._filter_expression is not None
+            and not self._use_server_query_selection(hint)
+        ):
+            policy.filter_expression = self._filter_expression
+
+    def _prepare_dataset_query_index_context(
+        self,
+        hint: Optional[QueryHint],
+    ) -> None:
+        if self._where_ael is None or self._indexes_monitor is None:
+            return
+        if self._use_server_query_selection(hint):
+            return
+        self._indexes_monitor.start(self._client)
+
+    async def _wait_for_dataset_query_index_context(
+        self,
+        hint: Optional[QueryHint],
+    ) -> None:
+        if self._where_ael is None or self._indexes_monitor is None:
+            return
+        if self._use_server_query_selection(hint):
+            return
+        await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
+
+    def _wait_for_dataset_query_index_context_blocking(
+        self,
+        hint: Optional[QueryHint],
+    ) -> None:
+        if self._where_ael is None or self._indexes_monitor is None:
+            return
+        if self._use_server_query_selection(hint):
+            return
+        self._indexes_monitor.wait_until_ready()
+
+    def _maybe_auto_generate_filters(
+        self,
+        hint: Optional[QueryHint],
+        policy: QueryPolicy,
+    ) -> None:
+        if self._where_ael is None or self._index_context is None:
+            return
+        if self._use_server_query_selection(hint):
+            return
+        self._auto_generate_filters(hint, policy)
+
+    async def _run_dataset_query_async(
+        self,
+        policy: QueryPolicy,
+        partition_filter: PartitionFilter,
+        hint: Optional[QueryHint],
+        statement: Statement,
+    ) -> tuple[Any, Any | None]:
+        """Run dataset query; returns (recordset, plan) when server selection was used."""
+        if not self._use_server_query_selection(hint):
+            recordset = await self._client.query(
+                statement, partition_filter, policy=policy,
+            )
+            return recordset, None
+
+        assert self._where_ael is not None
+        log.debug(
+            "Server query selection: explain→execute for %s.%s",
+            self._namespace,
+            self._set_name,
+        )
+        plan = await self._client.query_explain(
+            self._namespace,
+            self._where_ael,
+            set_name=self._dataset_set_name(),
+            index_name_hint=self._query_explain_index_hint(hint),
+            policy=policy,
+        )
+        recordset = await self._client.query_with_plan(
+            statement, partition_filter, plan, policy=policy,
+        )
+        return recordset, plan
+
+    def _run_dataset_query_blocking(
+        self,
+        policy: QueryPolicy,
+        partition_filter: PartitionFilter,
+        hint: Optional[QueryHint],
+        statement: Statement,
+    ) -> tuple[Any, Any | None]:
+        if not self._use_server_query_selection(hint):
+            recordset = self._client.query_blocking(
+                statement, partition_filter, policy=policy,
+            )
+            return recordset, None
+
+        assert self._where_ael is not None
+        log.debug(
+            "Server query selection: explain→execute for %s.%s",
+            self._namespace,
+            self._set_name,
+        )
+        plan = self._client.query_explain_blocking(
+            self._namespace,
+            self._where_ael,
+            set_name=self._dataset_set_name(),
+            index_name_hint=self._query_explain_index_hint(hint),
+            policy=policy,
+        )
+        recordset = self._client.query_with_plan_blocking(
+            statement, partition_filter, plan, policy=policy,
+        )
+        return recordset, plan
+
     def execute_background_task_blocking(self) -> ExecuteTask:
         """Sync counterpart of :meth:`execute_background_task`.
 
@@ -2322,38 +2459,41 @@ class _QueryBuilderBase:
             policy = self._apply_txn(QueryPolicy())
         if self._chunk_size is not None and self._chunk_size > 0:
             policy.max_records = self._chunk_size
-        if self._filter_expression is not None:
-            policy.filter_expression = self._filter_expression
-
         hint = self._query_hint
+        self._apply_dataset_query_policy_filter(policy, hint)
+
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        if self._where_ael is not None and self._indexes_monitor is not None:
-            # Lazy start (idempotent); mirrors the async path.
-            self._indexes_monitor.start(self._client)
-            self._indexes_monitor.wait_until_ready()
+        self._prepare_dataset_query_index_context(hint)
+        self._wait_for_dataset_query_index_context_blocking(hint)
 
         self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        if self._where_ael is not None and self._index_context is not None:
-            self._auto_generate_filters(hint, policy)
+        self._maybe_auto_generate_filters(hint, policy)
 
         statement = self._build_statement()
 
         try:
-            recordset = self._client.query_blocking(
-                statement, partition_filter, policy=policy)
+            recordset, plan = self._run_dataset_query_blocking(
+                policy, partition_filter, hint, statement,
+            )
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
 
-            def _reexecute_blocking(pf: PartitionFilter) -> Any:
-                return client.query_blocking(statement, pf, policy=policy)
+            if plan is not None:
+                def _reexecute_blocking(pf: PartitionFilter) -> Any:
+                    return client.query_with_plan_blocking(
+                        statement, pf, plan, policy=policy,
+                    )
+            else:
+                def _reexecute_blocking(pf: PartitionFilter) -> Any:
+                    return client.query_blocking(statement, pf, policy=policy)
 
             return (recordset, _reexecute_blocking)
 
@@ -3516,41 +3656,41 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             policy = self._apply_txn(QueryPolicy())
         if self._chunk_size is not None and self._chunk_size > 0:
             policy.max_records = self._chunk_size
-        if self._filter_expression is not None:
-            policy.filter_expression = self._filter_expression
-
         hint = self._query_hint
+        self._apply_dataset_query_policy_filter(policy, hint)
+
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        if self._where_ael is not None and self._indexes_monitor is not None:
-            # Lazy start: the monitor's daemon thread only spins up on the
-            # first AEL ``where()`` query. ``start()`` is idempotent.
-            self._indexes_monitor.start(self._client)
-            # Offload the readiness wait so the event loop isn't pinned for
-            # the first-fetch case (subsequent calls return immediately).
-            await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
+        self._prepare_dataset_query_index_context(hint)
+        await self._wait_for_dataset_query_index_context(hint)
 
         self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        if self._where_ael is not None and self._index_context is not None:
-            self._auto_generate_filters(hint, policy)
+        self._maybe_auto_generate_filters(hint, policy)
 
         statement = self._build_statement()
 
         try:
-            recordset = await self._client.query(
-                statement, partition_filter, policy=policy)
+            recordset, plan = await self._run_dataset_query_async(
+                policy, partition_filter, hint, statement,
+            )
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
 
-            async def _reexecute(pf: PartitionFilter) -> Any:
-                return await client.query(statement, pf, policy=policy)
+            if plan is not None:
+                async def _reexecute(pf: PartitionFilter) -> Any:
+                    return await client.query_with_plan(
+                        statement, pf, plan, policy=policy,
+                    )
+            else:
+                async def _reexecute(pf: PartitionFilter) -> Any:
+                    return await client.query(statement, pf, policy=policy)
 
             return RecordStream.from_chunked_recordset(
                 recordset,

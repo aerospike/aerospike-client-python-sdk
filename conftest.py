@@ -461,6 +461,17 @@ async def supports_query_ops_projection_ext(server_version):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_query_selection(server_version):
+    """``True`` when the seed cluster supports two-phase server query selection.
+
+    Mirrors the per-node feature in the Rust core (server >= 8.1.3). Tests
+    that exercise field ``44`` explain→execute should ``pytest.skip`` when
+    this is ``False``.
+    """
+    return server_version is not None and server_version >= (8, 1, 3, 0)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def supports_enhanced_expression_api(server_version):
     """``True`` when the cluster supports the 8.1.2 enhanced expression API.
 
