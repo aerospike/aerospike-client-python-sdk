@@ -1687,6 +1687,11 @@ class _QueryBuilderBase:
             return None
         return hint.index_name
 
+    def _raise_if_filtered_out_plan(self, plan: Any) -> None:
+        """Phase-1 plan with no matching records; do not run execute."""
+        if plan.is_filtered_out:
+            raise _result_code_to_exception(ResultCode.FILTERED_OUT, "")
+
     def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
         if self._where_ael is None:
@@ -1779,6 +1784,7 @@ class _QueryBuilderBase:
             index_name_hint=self._query_explain_index_hint(hint),
             policy=policy,
         )
+        self._raise_if_filtered_out_plan(plan)
         recordset = await self._client.query_with_plan(
             statement, partition_filter, plan, policy=policy,
         )
@@ -1810,6 +1816,7 @@ class _QueryBuilderBase:
             index_name_hint=self._query_explain_index_hint(hint),
             policy=policy,
         )
+        self._raise_if_filtered_out_plan(plan)
         recordset = self._client.query_with_plan_blocking(
             statement, partition_filter, plan, policy=policy,
         )
