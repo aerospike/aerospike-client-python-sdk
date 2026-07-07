@@ -722,22 +722,29 @@ class _BatchOperationBuilderBase:
 
 
 class BatchOperationBuilder(_BatchOperationBuilderBase):
-    """
-    Builder for chaining operations across multiple keys.
-    
-    This class enables method chaining of operations on different keys,
-    which are then executed as a single batch operation.
-    
+    """Builder for chaining write operations across multiple keys.
+
+    Chains write verbs (``insert`` / ``update`` / ``upsert`` / ``replace`` /
+    ``replace_if_exists`` / ``delete``) and expression reads
+    (``bin(...).select_from(...)``) on different keys, executed together in one
+    batch round trip. It is a write-focused convenience: to combine plain
+    reads, ``touch``, or ``exists`` with writes in a single batch, use the
+    :class:`~aerospike_sdk.aio.operations.query.QueryBuilder` chain
+    (``session.query(...)``), which accepts the same write verbs and is a
+    superset of this builder.
+
+    Both terminals are available: :meth:`execute` (buffered) and
+    :meth:`execute_stream` (lazy — streams each node's results as it responds).
+
     Example::
 
-            results = await session.batch() \\
-                .insert(key1).bin("name").set_to("Alice").bin("age").set_to(25) \\
-                .update(key2).bin("counter").add(1) \\
-                .delete(key3) \\
+            results = await (
+                session.batch()
+                .insert(key1).bin("name").set_to("Alice").bin("age").set_to(25)
+                .update(key2).bin("counter").add(1)
+                .delete(key3)
                 .execute()
-    
-    The operations are collected and executed together using the async
-    client's batch_operate method for optimal performance.
+            )
     """
     
 
@@ -775,7 +782,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         iterate the returned stream are safe — the "fire-and-forget" shape
         works as expected.
 
-        For true per-record streaming (records arrive at first-RTT, peak
+        For lazy streaming (results stream back as each node responds, peak
         memory bounded), see :meth:`execute_stream` — note its different
         semantics (completion-order yields, no writes-complete-on-return
         guarantee, peak memory bounded).
@@ -865,8 +872,9 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         Builds a single mixed PAC ``batch_stream`` call covering all ops
         (reads, writes, deletes) and returns a :class:`RecordStream` whose
         ``__anext__`` pulls ``(idx, BatchRecord)`` tuples from the PAC
-        stream one at a time. First record arrives at first-RTT, not after
-        all keys complete; peak memory is bounded.
+        stream one at a time. The first results are available as soon as the
+        first node responds, without waiting for the rest; peak memory stays
+        bounded to the in-flight node responses.
 
         **Caveats** — differ from :meth:`execute`:
 

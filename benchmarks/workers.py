@@ -22,7 +22,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from aerospike_async import FastRng, Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
 from aerospike_async import _LocalClient as _PacLocalClient
@@ -419,6 +419,8 @@ def _build_op_sync(
     fields: List[BinField],
     bench: _BenchState,
     decision: List[bool],
+    pk_pairs: Optional[list] = None,
+    pk_start: int = 0,
 ):
     """Build a per-op callable for the configured sync workload.
 
@@ -426,6 +428,12 @@ def _build_op_sync(
     can call ``op(rng)`` without re-reading config per op. For single-bin
     record specs the write payload is ``{b0: kid}`` literal (no per-op
     rng for bin values).
+
+    ``pk_pairs`` / ``pk_start`` mirror :func:`_build_op_async`: the caller
+    builds the shared ``--prebuilt-keys`` list once and passes a distinct
+    per-worker cursor offset so workers do not march in lockstep over the
+    same keys (which concentrates load on one node and exhausts its
+    connection pool at high concurrency).
     """
     kc = cfg.key_count
     bsz = max(1, cfg.batch_size)
@@ -448,9 +456,10 @@ def _build_op_sync(
     pkn = max(0, cfg.prebuilt_keys)
     if pkn > 0:
         # Legacy A/B path: pre-build keys; opt-in via --prebuilt-keys.
-        _pk_rng = random.Random(cfg.seed)
-        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
-        _pk_counter = [0]
+        # Shared read-only list built once by the caller (see
+        # _prebuilt_key_pairs); fall back to a local build for standalone use.
+        _pk_pairs = pk_pairs if pk_pairs is not None else _prebuilt_key_pairs(cfg)
+        _pk_counter = [pk_start % pkn]
         def pick_key(_rng):
             i = _pk_counter[0]
             _pk_counter[0] = (i + 1) & 0x7FFFFFFF
@@ -577,6 +586,29 @@ def _build_op_sync(
     return op
 
 
+def _prebuilt_key_pairs(cfg: WorkloadConfig):
+    """Build the ``--prebuilt-keys`` (key, kid) list, or ``None`` if disabled.
+
+    Built once and shared across all workers: every worker seeds from the
+    same ``cfg.seed``, so per-worker lists are identical — duplicating them
+    only wastes ``async_tasks × prebuilt_keys`` ``Key`` allocations (and the
+    matching startup CPU) with no behavioral difference. The read-only list
+    is safe to share across threads / loops.
+    """
+    pkn = max(0, cfg.prebuilt_keys)
+    if pkn <= 0:
+        return None
+    rng = random.Random(cfg.seed)
+    key_from_int = Key.from_int_user_key
+    ns_str = cfg.namespace
+    set_str = cfg.set_name
+    kc = cfg.key_count
+    return [
+        (key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i)
+        for _ in range(pkn)
+    ]
+
+
 def _build_op_async(
     session: Session,
     cfg: WorkloadConfig,
@@ -584,6 +616,8 @@ def _build_op_async(
     fields: List[BinField],
     bench: _BenchState,
     decision: List[bool],
+    pk_pairs: Optional[list] = None,
+    pk_start: int = 0,
 ):
     """Build an async per-op callable for the configured workload.
 
@@ -591,6 +625,15 @@ def _build_op_async(
     surface (``session.get`` / ``session.put`` fast-path or
     ``session.query/upsert(...).execute()`` builder). Single-bin specs use
     the literal ``{b0: kid}`` payload — no per-op rng for values.
+
+    ``pk_pairs`` is the shared ``--prebuilt-keys`` list (see
+    :func:`_prebuilt_key_pairs`); callers build it once and pass it in so it
+    is not re-allocated per worker. Only the tiny per-worker cursor stays
+    local. ``pk_start`` staggers that cursor per worker so workers do not
+    march in lockstep over the same keys — lockstep concentrates every op on
+    the single node owning that partition and exhausts its connection pool at
+    high concurrency, distorting the benchmark. Callers pass distinct offsets
+    (e.g. spread across the list by worker index).
     """
     kc = cfg.key_count
     bsz = max(1, cfg.batch_size)
@@ -612,9 +655,11 @@ def _build_op_async(
     key_from_int = Key.from_int_user_key
     pkn = max(0, cfg.prebuilt_keys)
     if pkn > 0:
-        _pk_rng = random.Random(cfg.seed)
-        _pk_pairs = [(key_from_int(ns_str, set_str, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)]
-        _pk_counter = [0]
+        # Shared read-only list, built once by the caller (see
+        # _prebuilt_key_pairs). Fall back to a local build only if a caller
+        # did not pass one, preserving standalone use.
+        _pk_pairs = pk_pairs if pk_pairs is not None else _prebuilt_key_pairs(cfg)
+        _pk_counter = [pk_start % pkn]
         def pick_key(_rng):
             i = _pk_counter[0]
             _pk_counter[0] = (i + 1) & 0x7FFFFFFF
@@ -926,6 +971,11 @@ async def run_async(
         if connected is not None:
             connected.set()
 
+        # Build the prebuilt-key list once, shared across all workers.
+        pk_pairs = _prebuilt_key_pairs(cfg)
+        _pkn = len(pk_pairs) if pk_pairs else 0
+        _n_workers = max(1, cfg.async_tasks)
+
         async def worker(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
             rng = FastRng(seed)
@@ -933,8 +983,12 @@ async def run_async(
             has_limit = cfg.max_ops is not None
             sample_every = cfg.lat_sample_every
             with_tel = cfg.with_telemetry
+            # Stagger each worker's cursor across the shared list so workers
+            # spread over partitions/nodes instead of hammering one key.
+            pk_start = (worker_id * _pkn) // _n_workers if _pkn else 0
             op_func = _build_op_async(
                 session, cfg, dataset, fields, bench_state, decision,
+                pk_pairs, pk_start,
             )
             ws = stats.register_worker()
             local_count = 0
@@ -1021,20 +1075,34 @@ async def run_async_pool(
 
         bridge_task = asyncio.create_task(_bridge_stop())
 
+        # Build the prebuilt-key list once, shared across every loop and
+        # worker. Building it per worker (async_tasks × pool_loops copies of
+        # an identical list) wedged the single-loop pool at startup: the
+        # multi-GB, tens-of-seconds synchronous build monopolized the loop
+        # before any op could fire.
+        pk_pairs = _prebuilt_key_pairs(cfg)
+        _pkn = len(pk_pairs) if pk_pairs else 0
+        _n_workers = max(1, n_loops * cfg.async_tasks)
+
         async def loop_worker(client: Client, loop_idx: int) -> None:
             session = client.create_session(Behavior.DEFAULT)
             dataset = DataSet.of(cfg.namespace, cfg.set_name)
             fields = list(cfg.bin_fields)
 
             async def worker(worker_id: int) -> None:
-                seed = (cfg.seed + loop_idx * cfg.async_tasks + worker_id + 1) % (2**32)
+                global_id = loop_idx * cfg.async_tasks + worker_id
+                seed = (cfg.seed + global_id + 1) % (2**32)
                 rng = FastRng(seed)
                 decision = [False]
                 has_limit = cfg.max_ops is not None
                 sample_every = cfg.lat_sample_every
                 with_tel = cfg.with_telemetry
+                # Stagger each worker's cursor across the shared list so
+                # workers spread over partitions/nodes (see _build_op_async).
+                pk_start = (global_id * _pkn) // _n_workers if _pkn else 0
                 op_func = _build_op_async(
                     session, cfg, dataset, fields, bench_state, decision,
+                    pk_pairs, pk_start,
                 )
                 ws = stats.register_worker()
                 local_count = 0
@@ -1119,6 +1187,11 @@ def run_sync(
         if connected is not None:
             connected.set()
 
+        # Build the prebuilt-key list once, shared across all threads.
+        pk_pairs = _prebuilt_key_pairs(cfg)
+        _pkn = len(pk_pairs) if pk_pairs else 0
+        _n_workers = max(1, cfg.threads)
+
         def thread_main(worker_id: int) -> None:
             seed = (cfg.seed + worker_id + 1) % (2**32)
             rng = FastRng(seed)
@@ -1127,8 +1200,12 @@ def run_sync(
             has_limit = cfg.max_ops is not None
             sample_every = cfg.lat_sample_every
             with_tel = cfg.with_telemetry
+            # Stagger each thread's cursor across the shared list so threads
+            # spread over partitions/nodes (see _build_op_sync).
+            pk_start = (worker_id * _pkn) // _n_workers if _pkn else 0
             op_func = _build_op_sync(
                 shared_session, cfg, dataset, fields, bench_state, decision,
+                pk_pairs, pk_start,
             )
             ws = stats.register_worker()
             local_count = 0
@@ -1270,7 +1347,10 @@ def run_pac_blocking(
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
-        pk_counter = 0
+        # Stagger the shared-list cursor per thread so threads spread over
+        # partitions/nodes instead of hammering one key (lockstep exhausts
+        # the owning node's connection pool at high concurrency).
+        pk_counter = (worker_id * pkn) // max(1, cfg.threads) if pkn else 0
         client = _thread_client()
         # Mirror _build_op_sync's hot-loop shape: hoist cfg.X to locals
         # and use Key.from_int_user_key (PyO3 fast int ctor, ~500ns) over
@@ -1418,7 +1498,10 @@ async def run_pac_async(
             ws = stats.register_worker()
             has_limit = cfg.max_ops is not None
             local_count = 0
-            pk_counter = 0
+            # Stagger the shared-list cursor per task so tasks spread over
+            # partitions/nodes instead of hammering one key (lockstep
+            # exhausts the owning node's connection pool at high concurrency).
+            pk_counter = (worker_id * pkn) // max(1, cfg.async_tasks) if pkn else 0
             while not stop.is_set():
                 if has_limit and stats.total_ops() >= cfg.max_ops:
                     return
@@ -1593,7 +1676,10 @@ def run_legacy_sync(
         with_tel = cfg.with_telemetry
         ws = stats.register_worker()
         local_count = 0
-        pk_counter = 0
+        # Stagger the shared-list cursor per thread so threads spread over
+        # partitions/nodes instead of hammering one key (lockstep exhausts
+        # the owning node's connection pool at high concurrency).
+        pk_counter = (worker_id * pkn) // max(1, cfg.threads) if pkn else 0
         while not stop.is_set():
             if has_limit and stats.total_ops() >= cfg.max_ops:
                 return

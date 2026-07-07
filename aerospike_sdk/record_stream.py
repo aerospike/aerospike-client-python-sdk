@@ -73,6 +73,11 @@ class RecordStream:
 
     __slots__ = (
         "_source", "_closed", "_single_result",
+        # Underlying closeable PAC producer (BatchRecordStream / Recordset)
+        # when this stream is lazily fed from one; None for materialized
+        # sources. close() forwards to it so resources release
+        # deterministically instead of at garbage-collection time.
+        "_closeable",
         # Chunked-iteration state (set lazily by from_chunked_recordset).
         # Slots so set-after-init is allowed without per-instance dict.
         "_chunked", "_chunk_first", "_chunk_recordset",
@@ -82,6 +87,7 @@ class RecordStream:
     def __init__(self, source: AsyncIterator[RecordResult]) -> None:
         self._source = source
         self._closed = False
+        self._closeable: Any = None
         # Fast-path cache for single-result streams: avoids async
         # iteration overhead in first() / first_or_raise() / __anext__.
         self._single_result: RecordResult | None = None
@@ -176,8 +182,15 @@ class RecordStream:
                     )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
+            finally:
+                # Release the receiver on exhaustion / early GeneratorExit
+                # (e.g. the consumer breaks out of the loop and the generator
+                # is collected) even if close() was never called explicitly.
+                pac_stream.close()
 
-        return cls(_iter())
+        inst = cls(_iter())
+        inst._closeable = pac_stream
+        return inst
 
     @classmethod
     def from_recordset(cls, recordset) -> RecordStream:
@@ -190,14 +203,19 @@ class RecordStream:
             stream = RecordStream.from_recordset(recordset)
         """
         async def _iter() -> AsyncIterator[RecordResult]:
-            async for record in recordset:
-                key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
-                yield RecordResult(
-                    key=key,
-                    record=record,
-                    result_code=ResultCode.OK,
-                )
-        return cls(_iter())
+            try:
+                async for record in recordset:
+                    key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
+                    yield RecordResult(
+                        key=key,
+                        record=record,
+                        result_code=ResultCode.OK,
+                    )
+            finally:
+                recordset.close()
+        inst = cls(_iter())
+        inst._closeable = recordset
+        return inst
 
     @classmethod
     def from_chunked_recordset(
@@ -248,6 +266,11 @@ class RecordStream:
         inst = cls(_iter())
         inst._chunk_count = already_counted
         inst._counter_ref = counter
+        # No finally-close in _iter here: the chunked protocol reads
+        # recordset.partition_filter() *after* this chunk exhausts to advance
+        # the cursor, so the recordset must outlive iteration. Release is
+        # handled by has_more_chunks (on advance) and close() (on abandon).
+        inst._closeable = recordset
         return inst
 
     @classmethod
@@ -265,6 +288,7 @@ class RecordStream:
         inst._source = None  # type: ignore[assignment]
         inst._closed = False
         inst._single_result = result
+        inst._closeable = None
         inst._chunked = False
         inst._chunk_first = True
         return inst
@@ -364,7 +388,13 @@ class RecordStream:
         if self._chunk_reexecute is None:
             return False
         recordset = await self._chunk_reexecute(pf)
+        # The prior chunk's recordset is fully consumed and its cursor read;
+        # release it now rather than at GC time before adopting the new one.
+        prior = self._closeable
+        if prior is not None and prior is not recordset:
+            prior.close()
         self._chunk_recordset = recordset
+        self._closeable = recordset
         self._chunk_count = counted_so_far
 
         new_stream = self._make_chunk_iter(
@@ -377,24 +407,28 @@ class RecordStream:
 
     # -- convenience methods -------------------------------------------------
 
-    async def first(self) -> RecordResult | None:
-        """Consume and return the first row, or ``None`` if there are no rows.
+    async def pop(self) -> RecordResult | None:
+        """Advance one row and return it (or ``None`` if empty), keeping the stream open.
+
+        This is the non-closing counterpart of :meth:`first`: it consumes a
+        single row and leaves the rest available for further iteration
+        (``async for``, :meth:`collect`, or another :meth:`pop`). Per-record
+        failures come back **as data** on the :class:`RecordResult`
+        (``is_ok=False``); cluster-level errors raise from iteration.
 
         Returns:
-            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
-            ``None`` when the stream is empty.
-
-        Note:
-            This advances the iterator; remaining rows are left for further
-            ``async for`` or other helpers only if the underlying source allows
-            partial consumption (most SDK streams are single-pass).
+            The next :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the stream is exhausted.
 
         Example::
 
-            stream = await session.query(key).execute()
-            row = await stream.first()
-            if row is None:
-                ...
+            stream = await session.query(*users.ids(1, 2, 3)).execute()
+            head = await stream.pop()          # first row; stream stays open
+            rest = await stream.collect()      # the remaining rows
+
+        See Also:
+            :meth:`first`: Same, but closes the stream afterward (terminal).
+            :meth:`pop_or_raise`: Raise instead of returning an error envelope.
         """
         # Fast path: skip async iteration for single-result streams.
         r = self._single_result
@@ -407,8 +441,59 @@ class RecordStream:
         except StopAsyncIteration:
             return None
 
+    async def pop_or_raise(self) -> RecordResult:
+        """Advance one row and require success, keeping the stream open.
+
+        Non-closing counterpart of :meth:`first_or_raise`.
+
+        Returns:
+            The next OK :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            StopAsyncIteration: If the stream is exhausted (empty).
+            AerospikeError: If the row is not OK (from :meth:`RecordResult.or_raise`).
+
+        See Also:
+            :meth:`first_or_raise`: Terminal variant that closes afterward.
+        """
+        result = await self.pop()
+        if result is None:
+            raise StopAsyncIteration("RecordStream is empty")
+        return result.or_raise()
+
+    async def first(self) -> RecordResult | None:
+        """Return the first row (or ``None`` if empty), then close the stream.
+
+        Terminal convenience for the common "I want a single record" case:
+        it takes one row via :meth:`pop` and then :meth:`close`\\ s the stream,
+        releasing the underlying producer. Per-record failures come back **as
+        data** (``is_ok=False``); cluster-level errors raise.
+
+        Use :meth:`pop` instead if you intend to keep iterating.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the stream is empty.
+
+        Example::
+
+            row = await (await session.query(key).execute()).first()
+            if row is None:
+                ...
+
+        See Also:
+            :meth:`pop`: Non-closing counterpart.
+            :meth:`first_or_raise`: Raise instead of returning an error envelope.
+        """
+        try:
+            return await self.pop()
+        finally:
+            self.close()
+
     async def first_or_raise(self) -> RecordResult:
-        """Return the first row and require success (see :meth:`RecordResult.or_raise`).
+        """Return the first row, require success, then close the stream.
+
+        Terminal counterpart of :meth:`pop_or_raise`.
 
         Returns:
             The first OK :class:`~aerospike_sdk.record_result.RecordResult`.
@@ -419,6 +504,9 @@ class RecordStream:
 
         Example:
             rec = (await stream.first_or_raise()).record_or_raise()
+
+        See Also:
+            :meth:`pop_or_raise`: Non-closing counterpart.
         """
         result = await self.first()
         if result is None:
@@ -469,10 +557,48 @@ class RecordStream:
         """
         return [r async for r in self if not r.is_ok]
 
-    def close(self) -> None:
-        """Mark the stream closed; further :meth:`__anext__` calls stop iteration.
+    # -- async context manager -----------------------------------------------
 
-        Idempotent. Use when abandoning a stream early to cooperate with
-        resource cleanup where supported.
+    async def __aenter__(self) -> RecordStream:
+        """Enter an ``async with`` block, returning the stream itself.
+
+        Pairs with :meth:`__aexit__` so the stream is always :meth:`close`\\ d
+        on block exit — the recommended way to consume a lazy stream::
+
+            async with await session.query(keys).execute_stream() as stream:
+                async for row in stream:
+                    ...
+            # close() runs here, even on early break or exception.
+        """
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Close the stream on ``async with`` exit; never suppresses exceptions."""
+        self.close()
+
+    def close(self) -> None:
+        """Stop iteration and release the underlying producer.
+
+        Marks the stream closed so any further ``async for`` / :meth:`__anext__`
+        ends immediately, and — for lazily-fed streams (a batch ``execute_stream``
+        or a query recordset) — forwards to the underlying producer's ``close()``
+        so its receiver and any buffered-but-unconsumed results are released now,
+        rather than at garbage-collection time.
+
+        For a batch stream, in-flight per-node requests still complete in the
+        background and release their connections as they finish; ``close()``
+        reclaims the consumer side. For a query recordset, the server-side scan
+        is torn down.
+
+        Idempotent. Always call this when abandoning a lazy stream before it is
+        fully drained; a fully-drained stream releases automatically.
         """
         self._closed = True
+        closeable = self._closeable
+        if closeable is not None:
+            self._closeable = None
+            # Defensive: a producer close() must never mask the caller's flow.
+            try:
+                closeable.close()
+            except Exception:
+                log.debug("underlying stream close() raised", exc_info=True)

@@ -241,3 +241,122 @@ class TestSyncBatchExecuteStream:
         assert rec0.record.bins == {"A": 5, "B": 3}
         rec1 = session.query(keys[1]).execute().first_or_raise()
         assert rec1.record.bins == {"A": 6, "B": 3}
+
+
+class TestSyncBatchExecuteStreamClose:
+    """Sync sibling of the async write-batch close/context-manager suite:
+    early abandon, idempotent close, close-on-exception via ``with``,
+    re-iterate, and client-usable-after-close."""
+
+    @pytest.fixture
+    def track_key(self, client):
+        session = client.create_session()
+        created: list = []
+
+        def track(key):
+            created.append(key)
+            return key
+
+        yield track
+
+        for k in created:
+            try:
+                session.delete(k).execute()
+            except Exception:
+                pass
+
+    def _seed(self, session, users, track_key, n):
+        keys = [track_key(users.id(f"sb_estream_close_{i}")) for i in range(n)]
+        for i, k in enumerate(keys):
+            session.upsert(k).put({"v": i}).execute()
+        return keys
+
+    def _write_batch(self, session, keys):
+        b = session.batch()
+        for i, k in enumerate(keys):
+            b = b.upsert(k).put({"v": i})
+        return b
+
+    def test_close_mid_stream_stops_iteration(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 10)
+        stream = self._write_batch(session, keys).execute_stream()
+        seen = 0
+        for _ in stream:
+            seen += 1
+            if seen == 1:
+                stream.close()
+                break
+        assert sum(1 for _ in stream) == 0
+
+    def test_close_is_idempotent(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 3)
+        stream = self._write_batch(session, keys).execute_stream()
+        stream.close()
+        stream.close()
+        stream.close()
+        assert stream.collect() == []
+
+    def test_reiterate_after_close_yields_nothing(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 4)
+        stream = self._write_batch(session, keys).execute_stream()
+        stream.close()
+        assert list(stream) == []
+        assert list(stream) == []
+
+    def test_client_usable_after_early_close(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 10)
+        stream = self._write_batch(session, keys).execute_stream()
+        for _ in stream:
+            stream.close()
+            break
+        rec = session.query(keys[0]).execute().first_or_raise()
+        assert rec.record.bins["v"] == 0
+
+    def test_with_closes_on_normal_exit(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 3)
+        seen = 0
+        with self._write_batch(session, keys).execute_stream() as stream:
+            for _ in stream:
+                seen += 1
+        assert seen == 3
+        assert stream.collect() == []
+
+    def test_with_closes_on_early_break(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 10)
+        with self._write_batch(session, keys).execute_stream() as stream:
+            for _ in stream:
+                break
+        assert stream.collect() == []
+
+    def test_with_closes_on_exception(
+        self, client: SyncClient, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = self._seed(session, users, track_key, 10)
+        stream_ref = {}
+        with pytest.raises(RuntimeError, match="boom"):
+            with self._write_batch(session, keys).execute_stream() as stream:
+                stream_ref["s"] = stream
+                for _ in stream:
+                    raise RuntimeError("boom")
+        assert stream_ref["s"].collect() == []
+        rec = session.query(keys[1]).execute().first_or_raise()
+        assert rec.record.bins["v"] == 1

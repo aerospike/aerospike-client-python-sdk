@@ -43,9 +43,9 @@ from aerospike_sdk.operations_shared import (
     _WriteSegmentBuilderBase,
     _WriteVerbs,
 )
-from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
-from aerospike_sdk.error_strategy import OnError
+from aerospike_sdk.error_strategy import OnError, _resolve_disposition
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 
 # Bin builders are parent-generic; the same class serves both async write
@@ -101,7 +101,11 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
         """Open a sync write segment after a write verb on this query."""
         # Promote the current query into a write segment by recording the
         # op_type and target keys on this builder, then wrap in
-        # :class:`SyncWriteSegmentBuilder`.
+        # :class:`SyncWriteSegmentBuilder`. Finalize the pending read/query
+        # spec first — otherwise a mixed chain such as
+        # ``query(reads).upsert(...)`` would overwrite the read spec's
+        # op_type/keys before it was captured, silently dropping the reads.
+        self._finalize_current_spec()
         if isinstance(arg1, Key):
             keys = [arg1, *more_keys]
         elif isinstance(arg1, list):
@@ -214,6 +218,59 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
             f"{_describe_specs(self)}",
         )
 
+    def execute_stream(
+        self, on_error: Optional[OnError] = None,
+    ) -> SyncRecordStream:
+        """Execute lazily — results stream back as each node responds.
+
+        The streaming counterpart to :meth:`execute`. Where :meth:`execute`
+        materializes every result before returning (writes complete on
+        return), this dispatches the key-batch through PAC's blocking
+        ``batch_stream`` and yields each row as its node responds — the first
+        results are available as soon as the first node responds, without
+        waiting for the rest, and peak memory stays bounded to the in-flight
+        node responses. Results arrive in **completion order**, not input
+        order; use :attr:`RecordResult.index` to correlate.
+
+        **No writes-complete-on-return guarantee.** A caller that never
+        drains the returned stream may leave writes in-flight. For
+        writes-done-on-return semantics use :meth:`execute` (buffered).
+
+        Args:
+            on_error: A ``(key, index, exception) -> None`` callback for
+                per-key failures (dispatched as records arrive and excluded
+                from the stream). An :class:`~aerospike_sdk.error_strategy.ErrorStrategy`
+                enum collapses to inline errors (the stream default).
+
+        Returns:
+            A lazy :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
+        """
+        self._finalize_current_spec()
+        self._ensure_namespace_mode_blocking()
+
+        # Dataset/scan queries already stream lazily (Recordset); the
+        # order-sensitive sequential-spec case can't collapse to one batch.
+        # Both delegate to execute() (lazy dataset path / buffered sequential).
+        if not self._specs or self._specs_require_sequential_run():
+            return self.execute(on_error)
+
+        handler = on_error if callable(on_error) else None
+        disp = _resolve_disposition(on_error, is_single_key=False)
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops: list = []
+        all_keys: List[Key] = []
+        for spec in self._specs:
+            all_keys.extend(spec.keys)
+            all_ops.extend(self._spec_to_batch_ops(spec))
+        try:
+            pac_stream = self._client.batch_stream_blocking(
+                all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return SyncRecordStream.from_list(
+                self._handle_batch_error_list(all_keys, e, disp, handler))
+        return SyncRecordStream.from_pac_batch_stream(pac_stream, on_error=handler)
+
 
 class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     """Synchronous write-segment builder.
@@ -294,6 +351,13 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
         # Fall back to the QB's full sync dispatch (Tier 1b / 2).
         assert isinstance(self._qb, SyncQueryBuilder)
         return self._qb.execute(on_error)
+
+    def execute_stream(
+        self, on_error: Optional[OnError] = None,
+    ) -> SyncRecordStream:
+        """Lazy streaming variant — see :meth:`SyncQueryBuilder.execute_stream`."""
+        assert isinstance(self._qb, SyncQueryBuilder)
+        return self._qb.execute_stream(on_error)
 
 
 class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuilder):
@@ -405,3 +469,13 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
         # Slow path: promote then defer to the SyncQueryBuilder's blocking fast path.
         self._promote()
         return SyncWriteSegmentBuilder.execute(self, on_error)
+
+    def execute_stream(  # type: ignore[override]
+        self, on_error: Optional[OnError] = None,
+    ) -> SyncRecordStream:
+        """Lazy streaming variant — see :meth:`SyncQueryBuilder.execute_stream`."""
+        if self._qb is not None:
+            assert isinstance(self._qb, SyncQueryBuilder)
+            return self._qb.execute_stream(on_error)
+        # Still a single-key segment: one record, so buffered == lazy.
+        return self.execute(on_error)

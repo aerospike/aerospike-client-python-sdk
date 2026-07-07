@@ -339,7 +339,14 @@ class Session:
         """Start a multi-key batch of mixed write operations executed in one server round trip.
 
         Chain ``insert``, ``update``, ``upsert``, ``replace``, ``delete``, and related
-        bin builders, then ``await ...execute()`` to obtain per-key outcomes.
+        bin builders, then ``await ...execute()`` (buffered) or ``execute_stream()``
+        (lazy) to obtain per-key outcomes.
+
+        This is a write-focused convenience: it accepts write verbs and
+        expression reads (``bin(...).select_from(...)``) only. To combine plain
+        reads, ``touch``, or ``exists`` with writes in a single batch, use the
+        :meth:`query` chain, which accepts the same write verbs and is a
+        superset of this builder.
 
         Returns:
             A :class:`~aerospike_sdk.aio.operations.batch.BatchOperationBuilder`
@@ -362,6 +369,7 @@ class Session:
                 print(row.key, row.result_code)
 
         See Also:
+            :meth:`query`: Chainable builder for reads and mixed read+write batches (a superset of this write-focused builder).
             :meth:`upsert`: Single-record writes without batching.
         """
         if self._client._client is None:
