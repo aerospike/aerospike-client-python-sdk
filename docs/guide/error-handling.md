@@ -9,22 +9,47 @@ AerospikeError
 ├── TimeoutError
 ├── ConnectionError
 ├── SerializationError
-├── AuthenticationError
-├── AuthorizationError
 ├── SecurityError
+│   ├── AuthenticationError
+│   └── AuthorizationError
 ├── GenerationError
 ├── InvalidNamespaceError
 ├── InvalidNodeError
 ├── BackoffError
-├── CommitError
+│   └── MaxErrorRate
 ├── QuotaError
-└── QueryTerminatedError
+├── QueryTerminatedError
+├── RecordNotFoundError
+├── RecordExistsError
+├── RecordTooBigError
+├── FilteredOutError
+├── BinError
+│   ├── BinExistsError
+│   ├── BinNotFoundError
+│   ├── BinTypeError
+│   └── BinOpInvalidError
+├── ElementError
+│   ├── ElementNotFoundError
+│   └── ElementExistsError
+├── CapacityError
+│   └── KeyBusyError
+├── SecondaryIndexError
+│   ├── IndexNotFoundError
+│   └── IndexAlreadyExistsError
+└── TransactionError
+    └── CommitError
 ```
+
+Catch a base class to handle a whole family at once (for example `except BinError`
+covers `BinExistsError`, `BinNotFoundError`, `BinTypeError`, and
+`BinOpInvalidError`), or a leaf class for a specific outcome. The
+secondary-index base is named `SecondaryIndexError` rather than `IndexError` so
+it does not shadow Python's built-in `IndexError`.
 
 Import from the top-level package:
 
 ```python
-from aerospike_sdk import AerospikeError, TimeoutError, GenerationError
+from aerospike_sdk import AerospikeError, RecordExistsError, RecordNotFoundError
 ```
 
 ## Default Behavior
@@ -105,10 +130,22 @@ except GenerationError:
     pass
 ```
 
+### Create-Only Insert
+
+```python
+from aerospike_sdk import RecordExistsError
+
+try:
+    await session.insert(users.id(1)).put({"name": "Ada"}).execute()
+except RecordExistsError:
+    # Key already taken — fall back to an update or report a conflict
+    pass
+```
+
 ### Conditional Write with Filter
 
 ```python
-from aerospike_sdk import AerospikeError
+from aerospike_sdk import FilteredOutError
 
 stream = await (
     session.update(users.id(1))
@@ -119,6 +156,6 @@ stream = await (
 )
 try:
     result = await stream.first_or_raise()
-except AerospikeError:
-    print("Insufficient balance or record filtered out")
+except FilteredOutError:
+    print("Insufficient balance — filter matched no record")
 ```
