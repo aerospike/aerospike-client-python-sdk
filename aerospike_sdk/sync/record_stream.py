@@ -27,10 +27,13 @@ the same shape.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 
 from aerospike_async import Key, ResultCode
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from aerospike_async import Record
@@ -58,6 +61,11 @@ class SyncRecordStream:
 
     __slots__ = (
         "_source", "_closed", "_single_result",
+        # Underlying closeable PAC producer (BatchRecordStream / Recordset)
+        # when lazily fed from one; None for materialized sources. close()
+        # forwards to it for deterministic release. See the async
+        # RecordStream for the full rationale.
+        "_closeable",
         # Chunked-recordset state (set by from_chunked_pac_recordset; left
         # unset for non-chunked streams). Slotted to allow assignment.
         "_chunked", "_chunk_recordset", "_chunk_reexecute",
@@ -68,6 +76,7 @@ class SyncRecordStream:
         self._source = source
         self._closed = False
         self._single_result: Optional[RecordResult] = None
+        self._closeable: Any = None
 
     # -- factory constructors ------------------------------------------------
 
@@ -123,8 +132,14 @@ class SyncRecordStream:
                     )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
+            finally:
+                # Release on exhaustion / early GeneratorExit even without an
+                # explicit close() (e.g. the consumer breaks out of the loop).
+                pac_stream.close()
 
-        return cls(_gen())
+        inst = cls(_gen())
+        inst._closeable = pac_stream
+        return inst
 
     @classmethod
     def from_pac_recordset(cls, recordset: Any) -> "SyncRecordStream":
@@ -134,16 +149,21 @@ class SyncRecordStream:
         ``index=-1`` (queries have no positional index).
         """
         def _gen() -> Iterator[RecordResult]:
-            for record in recordset:
-                key = (
-                    record.key
-                    if hasattr(record, "key") and record.key is not None
-                    else Key("", "", 0)
-                )
-                yield RecordResult(
-                    key=key, record=record, result_code=ResultCode.OK,
-                )
-        return cls(_gen())
+            try:
+                for record in recordset:
+                    key = (
+                        record.key
+                        if hasattr(record, "key") and record.key is not None
+                        else Key("", "", 0)
+                    )
+                    yield RecordResult(
+                        key=key, record=record, result_code=ResultCode.OK,
+                    )
+            finally:
+                recordset.close()
+        inst = cls(_gen())
+        inst._closeable = recordset
+        return inst
 
     @classmethod
     def from_chunked_pac_recordset(
@@ -167,6 +187,10 @@ class SyncRecordStream:
         inst._chunk_first = True  # type: ignore[attr-defined]
         inst._counter_ref = [0]  # type: ignore[attr-defined]
         inst._source = _chunked_iter(recordset, limit, inst._counter_ref)  # type: ignore[attr-defined]
+        # No finally-close in _chunked_iter: has_more_chunks reads the
+        # recordset cursor after each chunk exhausts, so it must outlive
+        # iteration. Release happens on chunk advance and in close().
+        inst._closeable = recordset
         return inst
 
     @classmethod
@@ -222,8 +246,13 @@ class SyncRecordStream:
 
     # -- convenience helpers -------------------------------------------------
 
-    def first(self) -> Optional[RecordResult]:
-        """Consume and return the first row, or ``None`` if empty."""
+    def pop(self) -> Optional[RecordResult]:
+        """Advance one row and return it (or ``None``), keeping the stream open.
+
+        Non-closing counterpart of :meth:`first`. Per-record failures come back
+        as data on the :class:`RecordResult` (``is_ok=False``); cluster-level
+        errors raise from iteration.
+        """
         r = self._single_result
         if r is not None:
             self._single_result = None
@@ -234,8 +263,32 @@ class SyncRecordStream:
         except StopIteration:
             return None
 
+    def pop_or_raise(self) -> RecordResult:
+        """Advance one row and require success, keeping the stream open.
+
+        Non-closing counterpart of :meth:`first_or_raise`.
+        """
+        result = self.pop()
+        if result is None:
+            raise StopIteration("SyncRecordStream is empty")
+        return result.or_raise()
+
+    def first(self) -> Optional[RecordResult]:
+        """Return the first row (or ``None`` if empty), then close the stream.
+
+        Terminal convenience: takes one row via :meth:`pop`, then :meth:`close`\\ s
+        to release the underlying producer. Use :meth:`pop` to keep iterating.
+        """
+        try:
+            return self.pop()
+        finally:
+            self.close()
+
     def first_or_raise(self) -> RecordResult:
-        """Return the first row, or raise if the stream is empty / not OK."""
+        """Return the first row, require success, then close the stream.
+
+        Terminal counterpart of :meth:`pop_or_raise`.
+        """
         result = self.first()
         if result is None:
             raise StopIteration("SyncRecordStream is empty")
@@ -256,9 +309,44 @@ class SyncRecordStream:
         """Drain the stream, returning only rows whose ``is_ok`` is false."""
         return [r for r in self if not r.is_ok]
 
+    # -- context manager -----------------------------------------------------
+
+    def __enter__(self) -> "SyncRecordStream":
+        """Enter a ``with`` block, returning the stream itself.
+
+        Pairs with :meth:`__exit__` so the stream is always :meth:`close`\\ d
+        on block exit — the recommended way to consume a lazy stream::
+
+            with session.query(keys).execute_stream() as stream:
+                for row in stream:
+                    ...
+            # close() runs here, even on early break or exception.
+        """
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Close the stream on ``with`` exit; never suppresses exceptions."""
+        self.close()
+
     def close(self) -> None:
-        """Mark the stream closed; further iteration raises ``StopIteration``."""
+        """Stop iteration and release the underlying producer.
+
+        Marks the stream closed so further iteration raises ``StopIteration``,
+        and — for lazily-fed streams (a batch ``execute_stream`` or a query
+        recordset) — forwards to the underlying producer's ``close()`` so its
+        receiver / server-side scan is released now rather than at
+        garbage-collection time. In-flight batch requests still complete in the
+        background. Idempotent; always call it when abandoning a lazy stream
+        before it is fully drained.
+        """
         self._closed = True
+        closeable = self._closeable
+        if closeable is not None:
+            self._closeable = None
+            try:
+                closeable.close()
+            except Exception:
+                log.debug("underlying stream close() raised", exc_info=True)
 
     # -- chunked iteration (rare, only used by partition-resumable queries) --
 
@@ -301,7 +389,13 @@ class SyncRecordStream:
         new_recordset = self._chunk_reexecute(pf)  # type: ignore[attr-defined]
         if new_recordset is None:
             return False
+        # The prior chunk's recordset is consumed and its cursor read;
+        # release it now rather than at GC time before adopting the new one.
+        prior = self._closeable
+        if prior is not None and prior is not new_recordset:
+            prior.close()
         self._chunk_recordset = new_recordset  # type: ignore[attr-defined]
+        self._closeable = new_recordset
         self._chunk_count = counted_so_far  # type: ignore[attr-defined]
         self._source = _chunked_iter(
             new_recordset, self._chunk_limit, self._counter_ref,  # type: ignore[attr-defined]

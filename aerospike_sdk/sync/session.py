@@ -351,7 +351,12 @@ class SyncSession:
         )
 
     def batch(self) -> SyncBatchOperationBuilder:
-        """Start a multi-key batch of mixed write operations (synchronous)."""
+        """Start a multi-key batch of mixed write operations (synchronous).
+
+        Write-focused convenience (write verbs + ``select_from`` expression
+        reads). To mix plain reads, ``touch``, or ``exists`` with writes in one
+        batch, use the :meth:`query` chain — a superset of this builder.
+        """
         from aerospike_sdk.aio.operations.batch import BatchOperationBuilder as _Batch
 
         inner = _Batch(

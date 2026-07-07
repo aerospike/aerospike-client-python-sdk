@@ -832,6 +832,132 @@ class TestBatchExecuteStream:
         assert rec1.record.bins == {"A": 6, "B": 3}
 
 
+class TestBatchExecuteStreamClose:
+    """Closing a lazy WRITE-batch stream (``session.batch()``) releases the
+    producer and stops iteration. Early abandon, idempotent close,
+    close-on-exception via ``async with``, re-iterate, and
+    client-usable-after-close — asserted against a cluster. Complements the
+    read-batch stream close coverage in ``query_test.py``."""
+
+    @pytest_asyncio.fixture
+    async def track_key(self, client):
+        session = client.create_session()
+        created: list = []
+
+        def track(key):
+            created.append(key)
+            return key
+
+        yield track
+
+        for k in created:
+            try:
+                await session.delete(k).execute()
+            except Exception:
+                pass
+
+    async def _seed(self, session, users, track_key, n):
+        keys = [track_key(users.id(f"estream_close_{i}")) for i in range(n)]
+        for i, k in enumerate(keys):
+            await session.upsert(k).put({"v": i}).execute()
+        return keys
+
+    def _write_batch(self, session, keys):
+        """Build a multi-key write batch (one upsert per key)."""
+        b = session.batch()
+        for i, k in enumerate(keys):
+            b = b.upsert(k).put({"v": i})
+        return b
+
+    async def test_close_mid_stream_stops_iteration(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 10)
+
+        stream = await self._write_batch(session, keys).execute_stream()
+        seen = 0
+        async for _ in stream:
+            seen += 1
+            if seen == 1:
+                stream.close()
+                break
+        remaining = 0
+        async for _ in stream:
+            remaining += 1
+        assert remaining == 0
+
+    async def test_close_is_idempotent(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 3)
+        stream = await self._write_batch(session, keys).execute_stream()
+        stream.close()
+        stream.close()
+        stream.close()
+        assert await stream.collect() == []
+
+    async def test_reiterate_after_close_yields_nothing(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 4)
+        stream = await self._write_batch(session, keys).execute_stream()
+        stream.close()
+        assert [r async for r in stream] == []
+        assert [r async for r in stream] == []
+
+    async def test_client_usable_after_early_close(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 10)
+        stream = await self._write_batch(session, keys).execute_stream()
+        async for _ in stream:
+            stream.close()
+            break
+        rec = await (await session.query(keys[0]).execute()).first_or_raise()
+        assert rec.record.bins["v"] == 0
+
+    async def test_async_with_closes_on_normal_exit(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 3)
+        seen = 0
+        async with (await self._write_batch(session, keys).execute_stream()) as stream:
+            async for _ in stream:
+                seen += 1
+        assert seen == 3
+        assert await stream.collect() == []
+
+    async def test_async_with_closes_on_early_break(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 10)
+        async with (await self._write_batch(session, keys).execute_stream()) as stream:
+            async for _ in stream:
+                break
+        assert await stream.collect() == []
+
+    async def test_async_with_closes_on_exception(
+        self, client: Client, users: DataSet, track_key,
+    ):
+        session = client.create_session()
+        keys = await self._seed(session, users, track_key, 10)
+        stream_ref = {}
+        with pytest.raises(RuntimeError, match="boom"):
+            async with (await self._write_batch(session, keys).execute_stream()) as stream:
+                stream_ref["s"] = stream
+                async for _ in stream:
+                    raise RuntimeError("boom")
+        assert await stream_ref["s"].collect() == []
+        rec = await (await session.query(keys[1]).execute()).first_or_raise()
+        assert rec.record.bins["v"] == 1
+
+
 class TestBatchVerbExistenceEnforcement:
     """Verbs (``insert``/``update``/``replace``/``replace_if_exists``) carry a
     per-key :class:`BatchWritePolicy` with the right
