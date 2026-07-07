@@ -361,11 +361,11 @@ def _result_code_to_exception(
 
 
 # ---------------------------------------------------------------------------
-# Boundary converter: PAC exception -> PFC exception
+# Boundary converter: PAC exception -> PSDK exception
 # ---------------------------------------------------------------------------
 
 def _convert_pac_exception(exc: Exception) -> AerospikeError:
-    """Convert a PAC exception to the appropriate PFC typed exception.
+    """Convert a PAC exception to the appropriate PSDK typed exception.
 
     The original exception is **not** set as ``__cause__`` here; callers
     should use ``raise convert_pac_exception(e) from e``.

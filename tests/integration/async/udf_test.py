@@ -167,7 +167,7 @@ async def test_batch_udf_validation_error_in_stream(client_with_udf):
         assert r.result_code == ResultCode.UDF_BAD_RESPONSE
         assert r.record is not None
 
-async def test_batch_udf_respond_all_keys_includes_filtered_out(client_with_udf):
+async def test_batch_udf_include_missing_keys_includes_filtered_out(client_with_udf):
     session = client_with_udf.create_session()
     k1 = DS.id("batch_udf_rak_1")
     k2 = DS.id("batch_udf_rak_2")
@@ -175,7 +175,7 @@ async def test_batch_udf_respond_all_keys_includes_filtered_out(client_with_udf)
     await session.upsert(k1).put({"v": 5}).execute()
     await session.upsert(k2).put({"v": 20}).execute()
 
-    # Without respond_all_keys: filtered-out key is omitted
+    # Without include_missing_keys: filtered-out key is omitted
     stream = await (
         session.execute_udf(k1, k2)
             .function(MODULE, "writeBin")
@@ -188,13 +188,13 @@ async def test_batch_udf_respond_all_keys_includes_filtered_out(client_with_udf)
     assert results[0].key == k1
     assert results[0].is_ok
 
-    # With respond_all_keys: filtered-out key appears in stream
+    # With include_missing_keys: filtered-out key appears in stream
     stream = await (
         session.execute_udf(k1, k2)
             .function(MODULE, "writeBin")
             .passing("tag", "hit2")
             .where("$.v < 10")
-            .respond_all_keys()
+            .include_missing_keys()
             .execute()
     )
     results = await stream.collect()

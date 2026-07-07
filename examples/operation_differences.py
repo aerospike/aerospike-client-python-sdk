@@ -2,7 +2,7 @@
 """Demonstrates known AEL spec-vs-implementation incongruities.
 
 Each test targets a specific issue identified in the spec review:
-  2a: let...then keyword alignment (PFC uses let...then — aligned)
+  2a: let...then keyword alignment (PSDK uses let...then — aligned)
   2b: NAME_IDENTIFIER accepts digit-starting tokens → integer map key confusion
   2c: >> operator performs logical right shift instead of arithmetic
   2d: exists() path function behavior
@@ -131,7 +131,6 @@ async def test_2a_let_then(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expression:  let (x = $.x, y = $.y) then (${{x}} + ${{y}})")
@@ -167,7 +166,6 @@ async def test_2b_name_identifier_too_permissive(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    val_from_int_key_1 (integer key 1)")
@@ -191,7 +189,6 @@ async def test_2b_name_identifier_too_permissive(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      $.m.1 per spec should return: INTEGER_KEY_1")
@@ -231,7 +228,6 @@ async def test_2c_right_shift_reversed(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected (spec):     {expected_arithmetic} (arithmetic, sign preserved)")
@@ -257,7 +253,6 @@ async def test_2c_right_shift_reversed(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    8")
@@ -279,11 +274,10 @@ async def test_2c_right_shift_reversed(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Actual AEL >>>:      {result}")
-            check("2c-logical-rshift", True, ">>> is supported in PFC")
+            check("2c-logical-rshift", True, ">>> is supported in PSDK")
         else:
             check("2c-logical-rshift", False, "no result for >>>")
     except Exception as e:
@@ -312,7 +306,6 @@ async def test_2d_exists_silently_ignored(session) -> None:
         )
         first = await stream.first()
         found = first is not None and first.is_ok
-        stream.close()
         print(f"      Filter passed: {found}")
         if found:
             print("      Note: may pass for wrong reason if exists() is silently dropped")
@@ -333,7 +326,6 @@ async def test_2d_exists_silently_ignored(session) -> None:
         )
         first = await stream.first()
         found = first is not None and first.is_ok
-        stream.close()
         print(f"      Filter passed: {found}")
         if not found:
             print("      Record filtered out — but was it exists()==false or missing-bin error?")
@@ -353,7 +345,6 @@ async def test_2d_exists_silently_ignored(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    True (boolean)")
@@ -383,7 +374,6 @@ async def test_2e_mutation_operations_ignored(session) -> None:
 
     stream = await session.query(SET.id(5)).execute()
     first = await stream.first()
-    stream.close()
     if first and first.is_ok:
         print(f"  Original listBin: {first.record.bins.get('listBin')}")
     print()
@@ -397,7 +387,6 @@ async def test_2e_mutation_operations_ignored(session) -> None:
         )
         stream = await session.query(SET.id(5)).execute()
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("sortedList")
             original = first.record.bins.get("listBin")
@@ -423,7 +412,6 @@ async def test_2e_mutation_operations_ignored(session) -> None:
         )
         stream = await session.query(SET.id(5)).execute()
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("removedList")
             print(f"      Expected:    [50, 10, 40, 20] (list without 30)")
@@ -441,7 +429,6 @@ async def test_2e_mutation_operations_ignored(session) -> None:
     print("  [D] Verify original listBin is unchanged:")
     stream = await session.query(SET.id(5)).execute()
     first = await stream.first()
-    stream.close()
     if first and first.is_ok:
         list_bin = first.record.bins.get("listBin")
         print(f"      listBin now:  {list_bin}")
@@ -470,7 +457,6 @@ async def test_casting_as_int_as_float(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    error (type mismatch)")
@@ -494,7 +480,6 @@ async def test_casting_as_int_as_float(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    13")
@@ -517,7 +502,6 @@ async def test_casting_as_int_as_float(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    13.5")
@@ -540,7 +524,6 @@ async def test_casting_as_int_as_float(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    10 (unchanged)")
@@ -562,7 +545,6 @@ async def test_casting_as_int_as_float(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             result = first.record.bins.get("result")
             print(f"      Expected:    3.5 (unchanged)")

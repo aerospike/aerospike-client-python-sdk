@@ -438,7 +438,7 @@ class TestBatchTouch:
             results = (
                 session
                     .query(k_exists).bins(["a"])
-                    .touch(k_missing).respond_all_keys()
+                    .touch(k_missing).include_missing_keys()
                     .execute()
             ).collect()
             assert len(results) == 2
@@ -465,7 +465,7 @@ class TestChainedExists:
             results = (
                 session
                     .query(k1).bins(["a"])
-                    .exists(k2).respond_all_keys()
+                    .exists(k2).include_missing_keys()
                     .execute()
             ).collect()
             assert len(results) == 2
@@ -487,7 +487,7 @@ class TestChainedExists:
             results = (
                 session
                     .query(k_exists).bins(["a"])
-                    .exists(k_missing).respond_all_keys()
+                    .exists(k_missing).include_missing_keys()
                     .execute()
             ).collect()
             assert len(results) == 2
@@ -512,7 +512,7 @@ class TestChainedExists:
                 session
                     .query(k1).bins(["a"])
                     .touch(k2)
-                    .exists(k3).respond_all_keys()
+                    .exists(k3).include_missing_keys()
                     .execute()
             ).collect()
             assert len(results) == 3

@@ -174,7 +174,6 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"  onMapIndex(2).getValues(): {first.record.bins}")
-    stream.close()
 
     stream = await (
         session.query(SET.id(102))
@@ -184,7 +183,6 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"  onMapKey('room1').getValues(): {first.record.bins}")
-    stream.close()
 
     stream = await (
         session.query(SET.id(102))
@@ -194,7 +192,6 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"  onMapKeyRange('room1','room3').count(): {first.record.bins}")
-    stream.close()
 
     stream = await (
         session.query(SET.id(102))
@@ -204,7 +201,6 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"  onMapKeyRange('room1','room2').countAllOthers(): {first.record.bins}")
-    stream.close()
 
     # CDT write operations on rooms map
     await (
@@ -294,7 +290,7 @@ async def run_examples(session) -> None:
     stream.close()
 
     print("\nBatchRead where name = 'Tim' (includeMissingKeys):")
-    stream = await session.query(keys).respond_all_keys().where("$.name == 'Tim'").execute()
+    stream = await session.query(keys).include_missing_keys().where("$.name == 'Tim'").execute()
     await _print_stream(stream)
     stream.close()
 
@@ -303,7 +299,7 @@ async def run_examples(session) -> None:
         stream = await (
             session.query(keys)
             .where("$.name == 'Tim'")
-            .respond_all_keys()
+            .include_missing_keys()
             .fail_on_filtered_out()
             .execute()
         )
@@ -498,14 +494,12 @@ async def run_examples(session) -> None:
     print("Initial read, should be there")
     stream = await session.query(SET.id(1)).execute()
     print(await stream.first())
-    stream.close()
 
     await asyncio.sleep(6)
 
     print("Read after TTL expires, should not be there")
     stream = await session.query(SET.id(1)).execute()
     print(await stream.first())
-    stream.close()
 
     # ------------------------------------------------------------------
     # Read and write expressions
@@ -520,7 +514,6 @@ async def run_examples(session) -> None:
 
     stream = await session.query(SET.id(223)).execute()
     print(f"Base record: {await stream.first()}")
-    stream.close()
 
     print("Using a read expression")
     stream = await (
@@ -539,7 +532,6 @@ async def run_examples(session) -> None:
     )
     stream = await session.query(SET.id(223)).execute()
     print(f"Modified record: {await stream.first()}")
-    stream.close()
 
     # ------------------------------------------------------------------
     # Query hints
@@ -610,7 +602,6 @@ async def run_examples(session) -> None:
 
     stream = await session.query(SET.id(999)).execute()
     first = await stream.first()
-    stream.close()
     if first is None or not first.is_ok:
         await (
             session.upsert(SET.id(999))
@@ -620,7 +611,6 @@ async def run_examples(session) -> None:
         )
         stream = await session.query(SET.id(999)).execute()
         first = await stream.first()
-        stream.close()
 
     if first and first.is_ok:
         generation = first.record.generation
