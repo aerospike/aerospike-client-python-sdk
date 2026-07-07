@@ -135,10 +135,15 @@ class TestFromBatchRecords:
 
 
 class _FakeBatchStream:
-    """Minimal async-iterable stand-in for a PAC ``BatchRecordStream``."""
+    """Minimal async-iterable stand-in for a PAC ``BatchRecordStream``.
+
+    Models the real producer's ``close()`` contract so resource-release
+    behavior can be asserted.
+    """
 
     def __init__(self, tuples):
         self._items = iter(tuples)
+        self.close_calls = 0
 
     def __aiter__(self):
         return self
@@ -148,6 +153,9 @@ class _FakeBatchStream:
             return next(self._items)
         except StopIteration:
             raise StopAsyncIteration
+
+    def close(self):
+        self.close_calls += 1
 
 
 class TestFromPacBatchStreamOnError:
@@ -200,10 +208,15 @@ class TestFromPacBatchStreamOnError:
 # ---------------------------------------------------------------------------
 
 class _FakeRecordset:
-    """Minimal async-iterable stand-in for a PAC Recordset."""
+    """Minimal async-iterable stand-in for a PAC Recordset.
+
+    Models the real producer's ``close()`` contract so resource-release
+    behavior can be asserted.
+    """
 
     def __init__(self, recs):
         self._recs = iter(recs)
+        self.close_calls = 0
 
     def __aiter__(self):
         return self
@@ -213,6 +226,9 @@ class _FakeRecordset:
             return next(self._recs)
         except StopIteration:
             raise StopAsyncIteration
+
+    def close(self):
+        self.close_calls += 1
 
 
 class TestFromRecordset:
@@ -270,6 +286,108 @@ class TestFirst:
         stream = RecordStream.from_list([_fail_result()])
         with pytest.raises(AerospikeError):
             await stream.first_or_raise()
+
+
+# ---------------------------------------------------------------------------
+# pop (keep-open) vs first (terminal) — the 2x2
+# ---------------------------------------------------------------------------
+
+class TestPopKeepsOpen:
+    """pop() / pop_or_raise() advance one row and leave the stream open."""
+
+    async def test_pop_returns_head_and_keeps_open(self):
+        stream = RecordStream.from_list([_ok_result(0), _ok_result(1), _ok_result(2)])
+        head = await stream.pop()
+        assert head.index == 0
+        rest = await stream.collect()
+        assert [r.index for r in rest] == [1, 2]
+
+    async def test_pop_empty_returns_none(self):
+        stream = RecordStream.from_list([])
+        assert await stream.pop() is None
+
+    async def test_pop_returns_error_as_data(self):
+        # A non-OK row comes back as an envelope, not a raise.
+        stream = RecordStream.from_list([_fail_result()])
+        row = await stream.pop()
+        assert row is not None and not row.is_ok
+
+    async def test_pop_or_raise_ok_keeps_open(self):
+        stream = RecordStream.from_list([_ok_result(0), _ok_result(1)])
+        head = await stream.pop_or_raise()
+        assert head.index == 0
+        assert [r.index for r in await stream.collect()] == [1]
+
+    async def test_pop_or_raise_empty(self):
+        stream = RecordStream.from_list([])
+        with pytest.raises(StopAsyncIteration):
+            await stream.pop_or_raise()
+
+    async def test_pop_or_raise_error(self):
+        stream = RecordStream.from_list([_fail_result()])
+        with pytest.raises(AerospikeError):
+            await stream.pop_or_raise()
+
+    async def test_pop_does_not_close_producer(self):
+        fake = _FakeBatchStream([
+            (i, SimpleNamespace(key=_key(i), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False))
+            for i in range(3)
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        await stream.pop()
+        assert fake.close_calls == 0          # still open
+        rest = await stream.collect()          # drains → generator finally closes
+        assert len(rest) == 2
+        assert fake.close_calls >= 1
+
+
+class TestFirstIsTerminal:
+    """first() / first_or_raise() take one row, then close the stream and
+    forward to the underlying producer."""
+
+    async def test_first_closes_producer(self):
+        fake = _FakeBatchStream([
+            (i, SimpleNamespace(key=_key(i), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False))
+            for i in range(5)
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        head = await stream.first()
+        assert head.index == 0
+        assert fake.close_calls >= 1           # closed by first()
+        # And the stream is done: no more rows.
+        assert await stream.collect() == []
+
+    async def test_first_or_raise_closes_producer(self):
+        fake = _FakeBatchStream([
+            (0, SimpleNamespace(key=_key(0), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False)),
+            (1, SimpleNamespace(key=_key(1), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False)),
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        head = await stream.first_or_raise()
+        assert head.is_ok
+        assert fake.close_calls >= 1
+
+    async def test_first_or_raise_error_still_closes(self):
+        fake = _FakeBatchStream([
+            (0, SimpleNamespace(key=_key(0), record=None,
+                                result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+                                in_doubt=False)),
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        with pytest.raises(AerospikeError):
+            await stream.first_or_raise()
+        # close() ran despite the raise (first() closes in a finally).
+        assert fake.close_calls >= 1
+
+    async def test_first_empty_closes(self):
+        fake = _FakeBatchStream([])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        assert await stream.first() is None
+        assert fake.close_calls >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -341,3 +459,118 @@ class TestExhaustion:
         second = await stream.collect()
         assert len(first) == 2
         assert second == []
+
+
+# ---------------------------------------------------------------------------
+# close() resource release
+# ---------------------------------------------------------------------------
+
+class TestCloseReleasesProducer:
+    """close() must forward to the underlying PAC producer (deterministic
+    release) and stop further iteration."""
+
+    async def test_close_forwards_to_batch_stream(self):
+        fake = _FakeBatchStream([
+            (0, SimpleNamespace(key=_key(1), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False)),
+            (1, SimpleNamespace(key=_key(2), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False)),
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        # Consume one, then abandon.
+        first = await stream.__anext__()
+        assert first.key == _key(1)
+        stream.close()
+        assert fake.close_calls >= 1
+
+    async def test_close_stops_iteration(self):
+        fake = _FakeBatchStream([
+            (i, SimpleNamespace(key=_key(i), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False))
+            for i in range(5)
+        ])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        stream.close()
+        assert await stream.collect() == []
+
+    async def test_close_is_idempotent(self):
+        fake = _FakeBatchStream([])
+        stream = RecordStream.from_pac_batch_stream(fake)
+        stream.close()
+        stream.close()
+        stream.close()
+        # Exactly one forward despite repeated close() (producer ref cleared).
+        assert fake.close_calls == 1
+
+    async def test_full_drain_releases_producer(self):
+        fake = _FakeRecordset([
+            SimpleNamespace(bins={"a": 1}, key=_key(1)),
+            SimpleNamespace(bins={"b": 2}, key=_key(2)),
+        ])
+        stream = RecordStream.from_recordset(fake)
+        rows = await stream.collect()
+        assert len(rows) == 2
+        # Draining to exhaustion releases the recordset via the generator's
+        # finally, without an explicit close() call.
+        assert fake.close_calls >= 1
+
+    async def test_close_on_single_key_stream_is_safe(self):
+        # from_single bypasses __init__; close() must not raise (no producer).
+        stream = RecordStream.from_single(_key(1), _record())
+        stream.close()
+        assert await stream.collect() == []
+
+    async def test_close_on_materialized_stream_is_safe(self):
+        # from_list has no underlying producer; close() is a pure flag flip.
+        stream = RecordStream.from_list([_ok_result(0), _ok_result(1)])
+        stream.close()
+        assert await stream.collect() == []
+
+
+# ---------------------------------------------------------------------------
+# async context manager
+# ---------------------------------------------------------------------------
+
+class TestAsyncContextManager:
+    """`async with` must close the stream on exit, including on early break
+    and on exception, forwarding to the underlying producer."""
+
+    async def test_normal_exit_closes(self):
+        fake = _FakeBatchStream([
+            (i, SimpleNamespace(key=_key(i), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False))
+            for i in range(3)
+        ])
+        rows = []
+        async with RecordStream.from_pac_batch_stream(fake) as stream:
+            async for r in stream:
+                rows.append(r)
+        assert len(rows) == 3
+        assert fake.close_calls >= 1
+
+    async def test_early_break_closes(self):
+        fake = _FakeBatchStream([
+            (i, SimpleNamespace(key=_key(i), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False))
+            for i in range(10)
+        ])
+        async with RecordStream.from_pac_batch_stream(fake) as stream:
+            async for _ in stream:
+                break
+        assert fake.close_calls >= 1
+
+    async def test_exception_closes_and_propagates(self):
+        fake = _FakeBatchStream([
+            (0, SimpleNamespace(key=_key(0), record=_record(),
+                                result_code=ResultCode.OK, in_doubt=False)),
+        ])
+        with pytest.raises(RuntimeError, match="boom"):
+            async with RecordStream.from_pac_batch_stream(fake) as stream:
+                async for _ in stream:
+                    raise RuntimeError("boom")
+        assert fake.close_calls >= 1
+
+    async def test_aenter_returns_self(self):
+        stream = RecordStream.from_list([_ok_result(0)])
+        async with stream as entered:
+            assert entered is stream
