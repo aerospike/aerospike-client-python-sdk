@@ -47,7 +47,6 @@ async def main() -> None:
         stream = await session.query(key).execute()
         first = await stream.first_or_raise()
         print(f"\nRetrieved record: {first.record.bins}")
-        stream.close()
 
         await session.delete(key).execute()
         print("Cleaned up")

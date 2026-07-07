@@ -506,10 +506,14 @@ class _WriteSegmentBuilderBase:
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Include results for missing keys in the stream."""
         self._qb._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (underlying client's name); identical behavior."""
+        return self.include_missing_keys()
 
     def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code."""
@@ -930,9 +934,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().ensure_generation_is(generation)
 
-    def respond_all_keys(self):
+    def include_missing_keys(self):
         self._promote()
-        return super().respond_all_keys()
+        return super().include_missing_keys()
 
     def fail_on_filtered_out(self):
         self._promote()

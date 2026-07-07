@@ -146,17 +146,22 @@ class _UdfBuilderBase:
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> UdfBuilder:
+    def include_missing_keys(self) -> UdfBuilder:
         """For batch UDF, emit a row per requested key (including not-found).
 
         Returns:
             This builder for chaining.
 
         See Also:
-            :meth:`QueryBuilder.respond_all_keys`: Same flag for reads.
+            :meth:`QueryBuilder.include_missing_keys`: Same flag for reads.
+            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._qb._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> UdfBuilder:
+        """Alias for :meth:`include_missing_keys` (underlying client's ``respondAllKeys`` name)."""
+        return self.include_missing_keys()
 
     def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
         """Finalize this UDF operation and start another on *keys*.

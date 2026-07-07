@@ -256,7 +256,7 @@ class _FilterRecord:
         if self.method is None or self.args is None:
             raise ValueError(
                 "Cannot apply index_name/bin_name hint to a pre-built Filter. "
-                "Use Filter.*_by_index() directly or let the PFC generate the "
+                "Use Filter.*_by_index() directly or let the PSDK generate the "
                 "filter via parse_ael_with_index()."
             )
         if hint.index_name is not None:
@@ -536,11 +536,12 @@ class _QueryBuilderBase:
         Returns:
             This builder for method chaining.
 
-        Example:
-            >>> async with session.begin_transaction() as tx:
-            ...     await tx.upsert(k1).bin("v").set_to(1).execute()
-            ...     # Run this one write outside the transaction:
-            ...     await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
+        Example::
+
+            async with session.begin_transaction() as tx:
+                await tx.upsert(k1).bin("v").set_to(1).execute()
+                # Run this one write outside the transaction:
+                await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.get_current_transaction`
@@ -1067,12 +1068,12 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         See Also:
-            :meth:`respond_all_keys`: Include missing-key rows in batch reads.
+            :meth:`include_missing_keys`: Include missing-key rows in batch reads.
         """
         self._fail_on_filtered_out = True
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Ensure batch/point reads emit one row per requested key, including not-found.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
@@ -1083,9 +1084,24 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
+            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (the underlying client's ``respondAllKeys`` name).
+
+        Retained for callers familiar with the low-level client's policy name;
+        :meth:`include_missing_keys` is the preferred name and identical in behavior.
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`include_missing_keys`: Preferred name for this behavior.
+        """
+        return self.include_missing_keys()
 
     @overload
     def default_where(self, expression: str) -> QueryBuilder: ...
@@ -1995,24 +2011,17 @@ class _QueryBuilderBase:
         Handled shapes:
 
         - **Single key, single spec** — routes through
-          :meth:`_execute_single_key_direct_blocking` (PAC
-          ``get_blocking`` / ``operate_blocking``). Honors filter
-          expressions, generation / TTL / durable-delete overrides, and
-          record-delete ops via :meth:`_make_read_policy` /
-          :meth:`_make_write_policy`. Caller-supplied ``on_error`` still
-          falls back to the async path (handler dispositions on single-key
-          land in Phase 2b).
-        - **Multi-key plain read, single spec** — routes through
-          :meth:`_execute_batch_read_blocking` (PAC ``batch_read_blocking``).
-          Honors filter expressions via :meth:`_make_batch_read_policy` and
-          the resolved disposition (THROW / IN_STREAM / HANDLER).
+          :meth:`_execute_single_key_direct_blocking` (read, write, delete,
+          touch, exists, and UDF shapes).
+        - **Multi-key, single spec** — routes through the
+          ``_execute_batch_*_blocking`` family for plain reads, writes,
+          deletes, touch, exists, read-operate, and UDF.
 
         Returns:
             A list of :class:`RecordResult` on a hit. ``None`` when the
-            spec shape isn't yet handled by the blocking dispatch (delete /
-            touch / exists / udf single-key ops, multi-key with per-key
-            operate, dataset / SI queries, scans, UDF background — caller
-            falls back to the async path).
+            shape is not eligible for this fast path (for example: no specs,
+            more than one spec, dataset / SI queries, scans, or background
+            UDF), so the caller falls back to the async execution path.
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
@@ -2701,13 +2710,6 @@ class _QueryBuilderBase:
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp
-
-
-
-
-
-
-
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
@@ -2791,23 +2793,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     
 
     # -- Chain-level defaults -------------------------------------------------
-
-
-
-
-
-
-
-
     # -- Query stacking -------------------------------------------------------
-
-
     # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
-
-
-
-
-
     async def execute(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
@@ -3464,9 +3451,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return self._filtered_batch_stream(
             batch_records, disp, handler, op_type="delete")
 
-
-
-
     async def _execute_single_key_touch(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
@@ -3549,10 +3533,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return RecordStream.from_list(results)
 
     # -- Mixed-batch execution (multi-spec chains) ----------------------------
-
-
-
-
     async def _execute_dataset_query(self) -> RecordStream:
         log.debug(
             "dataset query: %s.%s filter=%s chunk=%s hint=%s",
@@ -3616,9 +3596,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return RecordStream.from_recordset(recordset)
 
 
-
-
-
 class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     """Accumulate scalar and CDT writes for the current operation's key(s).
 
@@ -3642,56 +3619,6 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     """
 
     __slots__ = ("_qb",)
-
-
-
-    # -- Bin operations -------------------------------------------------------
-
-
-
-
-
-
-    # -- Scalar bin operations (direct on segment) ----------------------------
-
-
-
-
-
-
-
-
-    # -- Record-level operations ----------------------------------------------
-
-
-
-    # -- Expression operations (direct on segment) ----------------------------
-
-
-
-
-
-    # -- Transition methods ---------------------------------------------------
-
-
-
-    # -- Per-operation settings ------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # -- Execution ------------------------------------------------------------
 
     async def execute(

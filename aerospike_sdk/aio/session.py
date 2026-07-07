@@ -206,12 +206,13 @@ class Session:
             The active :class:`~aerospike_async.Txn`, or ``None`` outside a
             transaction.
 
-        Example:
-            >>> session = client.create_session()
-            >>> session.get_current_transaction() is None
-            True
-            >>> async with session.begin_transaction() as tx:
-            ...     assert tx.get_current_transaction() is tx.txn
+        Example::
+
+            session = client.create_session()
+            session.get_current_transaction() is None
+            # True
+            async with session.begin_transaction() as tx:
+                assert tx.get_current_transaction() is tx.txn
 
         See Also:
             :meth:`begin_transaction`: Enter a multi-record transaction.
@@ -895,10 +896,11 @@ class Session:
         exception propagates out of the ``async with`` block the transaction
         is aborted.
 
-        Example:
-            >>> async with session.begin_transaction() as tx:
-            ...     await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-            ...     await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
+        Example::
+
+            async with session.begin_transaction() as tx:
+                await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
+                await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
         Returns:
             :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
@@ -1072,12 +1074,14 @@ class Session:
                 ``max_attempts`` exhausted retries, or any non-transient
                 error raised by ``operation``.
 
-        Example:
-            >>> async def transfer(tx):
-            ...     await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
-            ...     await tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
-            ...     return "ok"
-            >>> result = await session.do_in_transaction(transfer)
+        Example::
+
+            async def transfer(tx):
+                await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
+                await tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
+                return "ok"
+
+            result = await session.do_in_transaction(transfer)
 
         See Also:
             :meth:`begin_transaction`: Manual MRT lifecycle.

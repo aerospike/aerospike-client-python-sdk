@@ -230,6 +230,20 @@ class TestBuilderFlagWiring:
         wsb.respond_all_keys()
         assert qb._respond_all_keys is True
 
+    def test_query_builder_include_missing_keys_aliases_respond_all_keys(self):
+        _, qb = self._make_wsb()
+        assert qb._respond_all_keys is False
+        result = qb.include_missing_keys()
+        assert qb._respond_all_keys is True
+        assert result is qb
+
+    def test_write_segment_include_missing_keys_aliases_respond_all_keys(self):
+        wsb, qb = self._make_wsb()
+        assert qb._respond_all_keys is False
+        result = wsb.include_missing_keys()
+        assert qb._respond_all_keys is True
+        assert result is wsb
+
     def test_with_durable_delete_sets_flag(self):
         wsb, qb = self._make_wsb()
         assert qb._durable_delete is None

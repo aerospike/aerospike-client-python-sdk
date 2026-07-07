@@ -85,7 +85,7 @@ class TestDefaultDisposition:
 
         rs = await (
             session.query(k1, k2)
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         results = await rs.collect()
@@ -179,7 +179,7 @@ class TestErrorHandler:
             session
             .query(k1)
             .query(k2)
-            .respond_all_keys()
+            .include_missing_keys()
             .execute(on_error=lambda key, idx, exc: errors.append(exc))
         )
         results = await rs.collect()
@@ -449,7 +449,7 @@ class TestFilteredDeletePaths:
 
         await session.delete(k).where("$.v == 1").execute()
 
-        rs = await session.query(k).respond_all_keys().execute()
+        rs = await session.query(k).include_missing_keys().execute()
         rr = await rs.first()
         assert rr is not None
         assert rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR
@@ -484,7 +484,7 @@ class TestFilteredDeletePaths:
                 .execute()
         )
 
-        rs = await session.query(k).respond_all_keys().execute()
+        rs = await session.query(k).include_missing_keys().execute()
         rr = await rs.first()
         assert rr is not None
         assert rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR

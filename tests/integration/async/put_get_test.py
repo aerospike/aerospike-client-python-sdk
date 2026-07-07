@@ -628,7 +628,7 @@ async def test_touch_nonexistent_record(client):
     except Exception:
         pass
 
-    stream = await session.touch(k).respond_all_keys().execute()
+    stream = await session.touch(k).include_missing_keys().execute()
     first = await stream.first()
     assert first is not None
     assert not first.is_ok
