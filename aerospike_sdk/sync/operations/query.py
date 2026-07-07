@@ -221,15 +221,16 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
     def execute_stream(
         self, on_error: Optional[OnError] = None,
     ) -> SyncRecordStream:
-        """Execute lazily — records arrive per-RTT, peak memory bounded.
+        """Execute lazily — results stream back as each node responds.
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
         materializes every result before returning (writes complete on
         return), this dispatches the key-batch through PAC's blocking
-        ``batch_stream`` and yields each row as its node responds — first
-        record at first-RTT, memory bounded to the in-flight chunk. Results
-        arrive in **completion order**, not input order; use
-        :attr:`RecordResult.index` to correlate.
+        ``batch_stream`` and yields each row as its node responds — the first
+        results are available as soon as the first node responds, without
+        waiting for the rest, and peak memory stays bounded to the in-flight
+        node responses. Results arrive in **completion order**, not input
+        order; use :attr:`RecordResult.index` to correlate.
 
         **No writes-complete-on-return guarantee.** A caller that never
         drains the returned stream may leave writes in-flight. For

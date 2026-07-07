@@ -734,7 +734,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
     superset of this builder.
 
     Both terminals are available: :meth:`execute` (buffered) and
-    :meth:`execute_stream` (lazy, per-RTT).
+    :meth:`execute_stream` (lazy — streams each node's results as it responds).
 
     Example::
 
@@ -782,7 +782,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         iterate the returned stream are safe — the "fire-and-forget" shape
         works as expected.
 
-        For true per-record streaming (records arrive at first-RTT, peak
+        For lazy streaming (results stream back as each node responds, peak
         memory bounded), see :meth:`execute_stream` — note its different
         semantics (completion-order yields, no writes-complete-on-return
         guarantee, peak memory bounded).
@@ -872,8 +872,9 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         Builds a single mixed PAC ``batch_stream`` call covering all ops
         (reads, writes, deletes) and returns a :class:`RecordStream` whose
         ``__anext__`` pulls ``(idx, BatchRecord)`` tuples from the PAC
-        stream one at a time. First record arrives at first-RTT, not after
-        all keys complete; peak memory is bounded.
+        stream one at a time. The first results are available as soon as the
+        first node responds, without waiting for the rest; peak memory stays
+        bounded to the in-flight node responses.
 
         **Caveats** — differ from :meth:`execute`:
 

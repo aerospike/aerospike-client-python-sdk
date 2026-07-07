@@ -278,9 +278,10 @@ result-delivery semantics. **`execute()` is the default;** reach for
   the call and discard the returned stream). Use this for most workloads.
 
 - **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
-  `RecordResult` per `__anext__` (`__next__` on sync) as the cluster responds.
-  First record arrives at first-RTT, not after all keys complete. Peak memory
-  is bounded — useful for large batches where buffering the full result list
+  `RecordResult` per `__anext__` (`__next__` on sync) as each node responds.
+  The first results are available as soon as the first node responds, without
+  waiting for the rest. Peak memory stays bounded to the in-flight node
+  responses — useful for large batches where buffering the full result list
   would be expensive.
 
   **Caveats** for `execute_stream()`:

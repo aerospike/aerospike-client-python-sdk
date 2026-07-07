@@ -52,9 +52,10 @@ when a large result set makes buffering expensive.
   workloads.
 
 - **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
-  `RecordResult` per `__anext__` (`__next__` on sync) as the cluster responds.
-  The first record arrives at first-RTT rather than after all keys complete, so
-  peak memory stays bounded — useful for large batches and scans.
+  `RecordResult` per `__anext__` (`__next__` on sync) as each node responds.
+  The first results are available as soon as the first node responds, without
+  waiting for the rest, so peak memory stays bounded to the in-flight node
+  responses — useful for large batches and scans.
 
   Caveats:
 

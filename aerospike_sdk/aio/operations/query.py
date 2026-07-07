@@ -2982,15 +2982,17 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     async def execute_stream(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
-        """Execute lazily — records arrive per-RTT, peak memory bounded.
+        """Execute lazily — results stream back as each node responds.
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
         awaits every result then returns a materialized stream (writes
         complete on return), this dispatches the key-batch through PAC's
         lazy ``batch_stream`` and yields each ``(index, RecordResult)`` as
-        its node responds — first record at first-RTT, memory bounded to the
-        in-flight chunk. Results arrive in **completion order**, not input
-        order; use :attr:`RecordResult.index` to correlate.
+        its node responds — the first results are available as soon as the
+        first node responds, without waiting for the rest, and peak memory
+        stays bounded to the in-flight node responses. Results arrive in
+        **completion order**, not input order; use :attr:`RecordResult.index`
+        to correlate.
 
         **No writes-complete-on-return guarantee.** Per-node work dispatches
         lazily; a caller that awaits this but never drains the stream may
