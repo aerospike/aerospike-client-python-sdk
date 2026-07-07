@@ -2979,6 +2979,61 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             )
         return await self._execute_dataset_query()
 
+    async def execute_stream(
+        self, on_error: OnError | None = None,
+    ) -> RecordStream:
+        """Execute lazily — results stream back as each node responds.
+
+        The streaming counterpart to :meth:`execute`. Where :meth:`execute`
+        awaits every result then returns a materialized stream (writes
+        complete on return), this dispatches the key-batch through PAC's
+        lazy ``batch_stream`` and yields each ``(index, RecordResult)`` as
+        its node responds — the first results are available as soon as the
+        first node responds, without waiting for the rest, and peak memory
+        stays bounded to the in-flight node responses. Results arrive in
+        **completion order**, not input order; use :attr:`RecordResult.index`
+        to correlate.
+
+        **No writes-complete-on-return guarantee.** Per-node work dispatches
+        lazily; a caller that awaits this but never drains the stream may
+        leave writes in-flight. For writes-done-on-return semantics use
+        :meth:`execute` (buffered).
+
+        Args:
+            on_error: Same semantics as :meth:`execute`.
+
+        Returns:
+            A lazy :class:`RecordStream`.
+        """
+        self._finalize_current_spec()
+        await self._ensure_namespace_mode()
+
+        # Dataset/index queries and scans already stream lazily from the
+        # server; the order-sensitive sequential-spec case can't collapse to
+        # one batch. Both delegate to execute() (which is lazy for the
+        # dataset path and correct-but-buffered for sequential).
+        if not self._specs or self._specs_require_sequential_run():
+            return await self.execute(on_error)
+
+        handler = on_error if callable(on_error) else None
+        batch_policy = self._batch_policy_for(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops: list = []
+        all_keys: List[Key] = []
+        for spec in self._specs:
+            all_keys.extend(spec.keys)
+            all_ops.extend(self._spec_to_batch_ops(spec))
+        try:
+            pac_stream = await self._client.batch_stream(
+                all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            disp = _resolve_disposition(on_error, is_single_key=False)
+            return self._handle_batch_error(all_keys, e, disp, handler)
+        # The lazy path only honors the callback form of on_error; an
+        # ErrorStrategy enum collapses to inline errors (the stream default),
+        # matching session.batch().execute_stream.
+        return RecordStream.from_pac_batch_stream(pac_stream, on_error=handler)
+
 
 
     async def execute_background_task(self) -> ExecuteTask:
@@ -3660,6 +3715,12 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
         """
         return await self._qb.execute(on_error)
 
+    async def execute_stream(
+        self, on_error: OnError | None = None,
+    ) -> RecordStream:
+        """Lazy streaming variant — see :meth:`QueryBuilder.execute_stream`."""
+        return await self._qb.execute_stream(on_error)
+
 
 
 class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
@@ -3744,6 +3805,15 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
     # -- Execution -----------------------------------------------------------
 
+
+    async def execute_stream(  # type: ignore[override]
+        self, on_error: OnError | None = None,
+    ) -> RecordStream:
+        """Lazy streaming variant — see :meth:`QueryBuilder.execute_stream`."""
+        if self._qb is not None:
+            return await self._qb.execute_stream(on_error)
+        # Still a single-key segment: one record, so buffered == lazy.
+        return await self.execute(on_error)
 
     async def execute(  # type: ignore[override]
         self, on_error: OnError | None = None,
@@ -5840,6 +5910,12 @@ class WriteBinBuilder(_WriteVerbs):
     ) -> RecordStream:
         """Shortcut: execute all accumulated specs."""
         return await self._segment.execute(on_error)
+
+    async def execute_stream(
+        self, on_error: OnError | None = None,
+    ) -> RecordStream:
+        """Lazy streaming variant — see :meth:`QueryBuilder.execute_stream`."""
+        return await self._segment.execute_stream(on_error)
 
 
 # Bind the bin-builder factory hook now that WriteBinBuilder is defined.
