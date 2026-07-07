@@ -244,6 +244,210 @@ class SerializationError(AerospikeError):
 
 
 # ---------------------------------------------------------------------------
+# Record and key
+# ---------------------------------------------------------------------------
+
+class RecordNotFoundError(AerospikeError):
+    """Raised when no record exists for the requested key.
+
+    Surfaces on reads and on writes that require an existing record (update,
+    replace, touch), and on batch/point reads when
+    :meth:`~aerospike_sdk.aio.operations.query.QueryBuilder.include_missing_keys`
+    promotes a not-found key to an error result.
+
+    Attributes:
+        result_code: ``ResultCode.KEY_NOT_FOUND_ERROR``.
+
+    Example::
+
+        try:
+            await session.update(key).put({"count": 1}).execute_or_raise()
+        except RecordNotFoundError:
+            ...  # nothing to update
+    """
+
+
+class RecordExistsError(AerospikeError):
+    """Raised when a create-only write finds the key already present.
+
+    Produced by insert-style (create-only) writes when a record already exists
+    for the key; the idiomatic way to detect a duplicate on insert.
+
+    Attributes:
+        result_code: ``ResultCode.KEY_EXISTS_ERROR``.
+
+    Example::
+
+        try:
+            await session.insert(key).put({"count": 1}).execute_or_raise()
+        except RecordExistsError:
+            ...  # key already taken
+    """
+
+
+class RecordTooBigError(AerospikeError):
+    """Raised when a record exceeds the server's configured size limit.
+
+    Reduce the bin payload or raise the namespace's size ceiling; retrying the
+    same record unchanged will fail again.
+
+    Attributes:
+        result_code: ``ResultCode.RECORD_TOO_BIG``.
+    """
+
+
+class FilteredOutError(AerospikeError):
+    """Raised when an operation is skipped because its filter expression was false.
+
+    Only surfaces as an error when
+    :meth:`~aerospike_sdk.aio.operations.query.QueryBuilder.fail_on_filtered_out`
+    is set; otherwise a filtered record is silently omitted from results.
+
+    Attributes:
+        result_code: ``ResultCode.FILTERED_OUT``.
+
+    See Also:
+        :class:`RecordNotFoundError`: A missing record rather than a filter miss.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Bin
+# ---------------------------------------------------------------------------
+
+class BinError(AerospikeError):
+    """Base class for bin-level failures.
+
+    Covers an over-long bin name and serves as the parent for the more specific
+    bin errors below; catch this to handle any bin-scoped failure at once.
+
+    Attributes:
+        result_code: A bin-related code such as ``ResultCode.BIN_NAME_TOO_LONG``.
+    """
+
+
+class BinExistsError(BinError):
+    """Raised when a create-only bin operation finds the bin already present.
+
+    Attributes:
+        result_code: ``ResultCode.BIN_EXISTS_ERROR``.
+    """
+
+
+class BinNotFoundError(BinError):
+    """Raised when an update-only bin operation targets a missing bin.
+
+    Attributes:
+        result_code: ``ResultCode.BIN_NOT_FOUND``.
+    """
+
+
+class BinTypeError(BinError):
+    """Raised when an operation is incompatible with the bin's stored type.
+
+    For example, arithmetic on a bin holding a string. Distinct from
+    :class:`BinOpInvalidError`, which concerns the bin's current *value*.
+
+    Attributes:
+        result_code: ``ResultCode.BIN_TYPE_ERROR``.
+    """
+
+
+class BinOpInvalidError(BinError):
+    """Raised when an operation cannot be applied to the bin's current value.
+
+    For example, a list operation against a bin that does not hold a list.
+
+    Attributes:
+        result_code: ``ResultCode.OP_NOT_APPLICABLE``.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Collection (CDT) element
+# ---------------------------------------------------------------------------
+
+class ElementError(AerospikeError):
+    """Base class for list/map element-level failures inside CDT operations."""
+
+
+class ElementNotFoundError(ElementError):
+    """Raised when a list index or map key is absent under an update-only mode.
+
+    Attributes:
+        result_code: ``ResultCode.ELEMENT_NOT_FOUND``.
+    """
+
+
+class ElementExistsError(ElementError):
+    """Raised when a list index or map key is present under a create-only mode.
+
+    Attributes:
+        result_code: ``ResultCode.ELEMENT_EXISTS``.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Capacity / resource exhaustion
+# ---------------------------------------------------------------------------
+
+class CapacityError(AerospikeError):
+    """Raised on server or client resource exhaustion.
+
+    Covers server memory pressure, device I/O overload, and full server-side
+    queues. Handling is operational (throttle, retry with backoff, or add
+    capacity) rather than a single-record retry.
+
+    Attributes:
+        result_code: A capacity-related code such as
+            ``ResultCode.SERVER_MEM_ERROR`` or ``ResultCode.DEVICE_OVERLOAD``.
+    """
+
+
+class KeyBusyError(CapacityError):
+    """Raised when too many concurrent operations target one record (hot key).
+
+    A transient contention signal; a brief backoff before retry usually clears
+    it. Catch :class:`CapacityError` to handle it alongside other exhaustion.
+
+    Attributes:
+        result_code: ``ResultCode.KEY_BUSY``.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Secondary index
+# ---------------------------------------------------------------------------
+
+class SecondaryIndexError(AerospikeError):
+    """Base class for secondary-index management failures.
+
+    Named ``SecondaryIndexError`` rather than ``IndexError`` so it does not
+    shadow the built-in :exc:`IndexError`. Covers index creation limits,
+    out-of-memory, and not-readable states; catch this for any index failure.
+
+    Attributes:
+        result_code: An index-related code such as ``ResultCode.INDEX_OOM``.
+    """
+
+
+class IndexNotFoundError(SecondaryIndexError):
+    """Raised when a referenced secondary index does not exist.
+
+    Attributes:
+        result_code: ``ResultCode.INDEX_NOT_FOUND``.
+    """
+
+
+class IndexAlreadyExistsError(SecondaryIndexError):
+    """Raised when creating a secondary index that already exists.
+
+    Attributes:
+        result_code: ``ResultCode.INDEX_FOUND``.
+    """
+
+
+# ---------------------------------------------------------------------------
 # Operations
 # ---------------------------------------------------------------------------
 
@@ -286,7 +490,20 @@ class MaxErrorRate(BackoffError):
     """
 
 
-class CommitError(AerospikeError):
+class TransactionError(AerospikeError):
+    """Base class for multi-record transaction (MRT) failures.
+
+    Covers a transaction that is blocked, expired, aborted, already committed,
+    version-mismatched, or has exceeded its write limit. :class:`CommitError`
+    is the commit-phase specialization; catch this base to handle any MRT
+    failure at once.
+
+    Attributes:
+        result_code: An MRT-related code such as ``ResultCode.MRT_EXPIRED``.
+    """
+
+
+class CommitError(TransactionError):
     """Raised when a multi-record transaction commit does not complete successfully.
 
     Additional fields expose verify or roll-forward details when the underlying
@@ -344,6 +561,43 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.INVALID_NAMESPACE: InvalidNamespaceError,
     # Query terminated
     ResultCode.QUERY_ABORTED: QueryTerminatedError,
+    # Record / key
+    ResultCode.KEY_NOT_FOUND_ERROR: RecordNotFoundError,
+    ResultCode.KEY_EXISTS_ERROR: RecordExistsError,
+    ResultCode.RECORD_TOO_BIG: RecordTooBigError,
+    ResultCode.FILTERED_OUT: FilteredOutError,
+    # Bin
+    ResultCode.BIN_NAME_TOO_LONG: BinError,
+    ResultCode.BIN_EXISTS_ERROR: BinExistsError,
+    ResultCode.BIN_NOT_FOUND: BinNotFoundError,
+    ResultCode.BIN_TYPE_ERROR: BinTypeError,
+    ResultCode.OP_NOT_APPLICABLE: BinOpInvalidError,
+    # Collection (CDT) element
+    ResultCode.ELEMENT_NOT_FOUND: ElementNotFoundError,
+    ResultCode.ELEMENT_EXISTS: ElementExistsError,
+    # Capacity / resource exhaustion
+    ResultCode.SERVER_MEM_ERROR: CapacityError,
+    ResultCode.DEVICE_OVERLOAD: CapacityError,
+    ResultCode.QUERY_QUEUE_FULL: CapacityError,
+    ResultCode.KEY_BUSY: KeyBusyError,
+    ResultCode.XDR_KEY_BUSY: KeyBusyError,
+    # Secondary index
+    ResultCode.INDEX_NOT_FOUND: IndexNotFoundError,
+    ResultCode.INDEX_FOUND: IndexAlreadyExistsError,
+    ResultCode.INDEX_OOM: SecondaryIndexError,
+    ResultCode.INDEX_MAX_COUNT: SecondaryIndexError,
+    ResultCode.INDEX_NAME_MAX_LEN: SecondaryIndexError,
+    ResultCode.INDEX_NOT_READABLE: SecondaryIndexError,
+    ResultCode.INDEX_GENERIC: SecondaryIndexError,
+    # Transactions (multi-record)
+    ResultCode.MRT_BLOCKED: TransactionError,
+    ResultCode.MRT_EXPIRED: TransactionError,
+    ResultCode.MRT_VERSION_MISMATCH: TransactionError,
+    ResultCode.MRT_TOO_MANY_WRITES: TransactionError,
+    ResultCode.MRT_ABORTED: TransactionError,
+    ResultCode.MRT_COMMITTED: TransactionError,
+    ResultCode.MRT_ALREADY_LOCKED: TransactionError,
+    ResultCode.MRT_MONITOR_EXISTS: TransactionError,
 }
 
 

@@ -32,16 +32,34 @@ from aerospike_sdk.exceptions import (
     AuthenticationError,
     AuthorizationError,
     BackoffError,
+    BinError,
+    BinExistsError,
+    BinNotFoundError,
+    BinOpInvalidError,
+    BinTypeError,
+    CapacityError,
     CommitError,
     ConnectionError,
+    ElementError,
+    ElementExistsError,
+    ElementNotFoundError,
+    FilteredOutError,
     GenerationError,
+    IndexAlreadyExistsError,
+    IndexNotFoundError,
     InvalidNamespaceError,
     InvalidNodeError,
+    KeyBusyError,
     QueryTerminatedError,
     QuotaError,
+    RecordExistsError,
+    RecordNotFoundError,
+    RecordTooBigError,
+    SecondaryIndexError,
     SecurityError,
     SerializationError,
     TimeoutError,
+    TransactionError,
     _convert_pac_exception,
     _result_code_to_exception,
 )
@@ -65,7 +83,17 @@ class TestExceptionHierarchy:
             SerializationError,
             QueryTerminatedError,
             BackoffError,
-            CommitError,
+            # Record-level errors are flat (not grouped under a record base).
+            RecordNotFoundError,
+            RecordExistsError,
+            RecordTooBigError,
+            FilteredOutError,
+            # Family base classes.
+            BinError,
+            ElementError,
+            CapacityError,
+            SecondaryIndexError,
+            TransactionError,
         ]
         for cls in direct:
             assert issubclass(cls, AerospikeError), f"{cls.__name__} should be a subclass of AerospikeError"
@@ -76,11 +104,43 @@ class TestExceptionHierarchy:
         assert issubclass(AuthenticationError, AerospikeError)
         assert issubclass(AuthorizationError, AerospikeError)
 
+    def test_bin_subtree(self):
+        for cls in (BinExistsError, BinNotFoundError, BinTypeError, BinOpInvalidError):
+            assert issubclass(cls, BinError)
+            assert issubclass(cls, AerospikeError)
+
+    def test_element_subtree(self):
+        for cls in (ElementNotFoundError, ElementExistsError):
+            assert issubclass(cls, ElementError)
+            assert issubclass(cls, AerospikeError)
+
+    def test_capacity_subtree(self):
+        assert issubclass(KeyBusyError, CapacityError)
+        assert issubclass(KeyBusyError, AerospikeError)
+
+    def test_index_subtree(self):
+        for cls in (IndexNotFoundError, IndexAlreadyExistsError):
+            assert issubclass(cls, SecondaryIndexError)
+            assert issubclass(cls, AerospikeError)
+
+    def test_commit_is_transaction(self):
+        """CommitError specializes TransactionError so both catch it."""
+        assert issubclass(CommitError, TransactionError)
+        assert issubclass(CommitError, AerospikeError)
+
+    def test_secondary_index_does_not_shadow_builtin(self):
+        """The index error is deliberately not named IndexError (a builtin)."""
+        assert SecondaryIndexError is not IndexError
+        assert not issubclass(SecondaryIndexError, IndexError)
+
     def test_not_cross_linked(self):
         """Typed siblings should not be subclasses of each other."""
         assert not issubclass(GenerationError, SecurityError)
         assert not issubclass(TimeoutError, ConnectionError)
         assert not issubclass(QuotaError, SecurityError)
+        assert not issubclass(RecordExistsError, RecordNotFoundError)
+        assert not issubclass(BinExistsError, BinNotFoundError)
+        assert not issubclass(ElementExistsError, ElementNotFoundError)
 
 
 class TestAerospikeErrorFields:
@@ -168,10 +228,38 @@ class TestResultCodeToException:
         exc = _result_code_to_exception(ResultCode.QUERY_ABORTED, "aborted")
         assert type(exc) is QueryTerminatedError
 
+    @pytest.mark.parametrize("code,expected", [
+        (ResultCode.KEY_NOT_FOUND_ERROR, RecordNotFoundError),
+        (ResultCode.KEY_EXISTS_ERROR, RecordExistsError),
+        (ResultCode.RECORD_TOO_BIG, RecordTooBigError),
+        (ResultCode.FILTERED_OUT, FilteredOutError),
+        (ResultCode.BIN_NAME_TOO_LONG, BinError),
+        (ResultCode.BIN_EXISTS_ERROR, BinExistsError),
+        (ResultCode.BIN_NOT_FOUND, BinNotFoundError),
+        (ResultCode.BIN_TYPE_ERROR, BinTypeError),
+        (ResultCode.OP_NOT_APPLICABLE, BinOpInvalidError),
+        (ResultCode.ELEMENT_NOT_FOUND, ElementNotFoundError),
+        (ResultCode.ELEMENT_EXISTS, ElementExistsError),
+        (ResultCode.SERVER_MEM_ERROR, CapacityError),
+        (ResultCode.DEVICE_OVERLOAD, CapacityError),
+        (ResultCode.QUERY_QUEUE_FULL, CapacityError),
+        (ResultCode.KEY_BUSY, KeyBusyError),
+        (ResultCode.XDR_KEY_BUSY, KeyBusyError),
+        (ResultCode.INDEX_NOT_FOUND, IndexNotFoundError),
+        (ResultCode.INDEX_FOUND, IndexAlreadyExistsError),
+        (ResultCode.INDEX_OOM, SecondaryIndexError),
+        (ResultCode.MRT_EXPIRED, TransactionError),
+        (ResultCode.MRT_BLOCKED, TransactionError),
+    ])
+    def test_targeted_subclass_mapping(self, code, expected):
+        exc = _result_code_to_exception(code, "boom")
+        assert type(exc) is expected
+        assert exc.result_code == code
+
     def test_unmapped_code_falls_through(self):
-        exc = _result_code_to_exception(ResultCode.KEY_NOT_FOUND_ERROR, "not found")
+        exc = _result_code_to_exception(ResultCode.PARAMETER_ERROR, "bad param")
         assert type(exc) is AerospikeError
-        assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
 
     def test_in_doubt_propagated(self):
         exc = _result_code_to_exception(ResultCode.GENERATION_ERROR, "gen", in_doubt=True)
@@ -179,7 +267,7 @@ class TestResultCodeToException:
 
 
 class TestConvertPacException:
-    """Verify PAC-to-PFC exception conversion."""
+    """Verify PAC-to-PSDK exception conversion."""
 
     def test_server_error_mapped(self):
         pac = PacServerError("gen mismatch", ResultCode.GENERATION_ERROR)
