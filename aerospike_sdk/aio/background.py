@@ -290,7 +290,7 @@ class _BackgroundOperationBuilderBase:
         return self
 
     def expire_record_after(self, duration: timedelta) -> BackgroundOperationBuilder:
-        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        """Set record TTL using a :class:`datetime.timedelta` (-1/-2/0 select sentinels)."""
         self._ttl_seconds = _seconds_from_timedelta(duration)
         return self
 

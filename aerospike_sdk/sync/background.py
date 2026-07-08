@@ -95,7 +95,7 @@ class SyncBackgroundOperationBuilder:
         return self
 
     def expire_record_after(self, duration: timedelta) -> SyncBackgroundOperationBuilder:
-        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        """Set record TTL using a :class:`datetime.timedelta` (-1/-2/0 select sentinels)."""
         self._inner.expire_record_after(duration)
         return self
 

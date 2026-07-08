@@ -1152,16 +1152,15 @@ class _QueryBuilderBase:
         """Set a default TTL applied to chained operations that lack their own.
 
         Args:
-            seconds: Time-to-live in seconds (must be > 0).
+            seconds: Time-to-live in seconds. A positive value sets an explicit
+                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
+                and namespace-default respectively. Not range-checked here — a
+                value the client cannot represent is rejected when the write is
+                built.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If seconds is <= 0.
         """
-        if seconds <= 0:
-            raise ValueError("seconds must be greater than 0")
         self._default_ttl_seconds = seconds
         return self
 
@@ -1170,16 +1169,14 @@ class _QueryBuilderBase:
 
         Equivalent to :meth:`default_expire_record_after_seconds` with seconds
         derived from ``duration`` — applied to chained operations that lack
-        their own TTL.
+        their own TTL. A ``duration`` resolving to -1, -2, or 0 seconds selects
+        the corresponding TTL sentinel.
 
         Args:
-            duration: Positive time-to-live.
+            duration: Time-to-live.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If ``duration`` is not strictly positive.
         """
         self._default_ttl_seconds = _seconds_from_timedelta(duration)
         return self

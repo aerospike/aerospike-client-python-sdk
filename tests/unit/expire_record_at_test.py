@@ -47,14 +47,16 @@ def test_seconds_from_timedelta_truncates_fractional_seconds():
     assert _seconds_from_timedelta(timedelta(seconds=1.9)) == 1
 
 
-def test_seconds_from_timedelta_rejects_zero():
-    with pytest.raises(ValueError, match="must be positive"):
-        _seconds_from_timedelta(timedelta(seconds=0))
+def test_seconds_from_timedelta_passes_through_zero():
+    # 0 selects the namespace-default TTL sentinel; not rejected here.
+    assert _seconds_from_timedelta(timedelta(seconds=0)) == 0
 
 
-def test_seconds_from_timedelta_rejects_negative():
-    with pytest.raises(ValueError, match="must be positive"):
-        _seconds_from_timedelta(timedelta(seconds=-1))
+def test_seconds_from_timedelta_passes_through_sentinels():
+    # -1 (never expire) and -2 (no change) pass through unchanged; the
+    # Expiration type is the sole authority on representable values.
+    assert _seconds_from_timedelta(timedelta(seconds=-1)) == -1
+    assert _seconds_from_timedelta(timedelta(seconds=-2)) == -2
 
 
 def test_seconds_until_naive_future():
