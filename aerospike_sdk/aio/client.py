@@ -40,6 +40,10 @@ from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.query_selection import (
+    compute_query_selection_support,
+    compute_query_selection_support_blocking,
+)
 
 if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
@@ -125,6 +129,7 @@ class Client:
         self._policy = policy
         self._client: Optional[AsyncClient] = None
         self._connected = False
+        self._cached_supports_query_selection: Optional[bool] = None
         if indexes_monitor is not None:
             self._indexes_monitor = indexes_monitor
             self._owns_monitor = False
@@ -158,6 +163,9 @@ class Client:
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
+        self._cached_supports_query_selection = await compute_query_selection_support(
+            self._client,
+        )
         if log.isEnabledFor(logging.DEBUG):
             try:
                 build_by_node = await self._client.info("build")
@@ -191,6 +199,7 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
+        self._cached_supports_query_selection = None
         self._namespace_mode_cache.clear()
 
     def connect_blocking(self) -> None:
@@ -223,6 +232,9 @@ class Client:
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        self._cached_supports_query_selection = compute_query_selection_support_blocking(
+            self._client,
+        )
         # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close_blocking(self) -> None:
@@ -236,6 +248,7 @@ class Client:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+        self._cached_supports_query_selection = None
         self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:
@@ -260,6 +273,17 @@ class Client:
             ``True`` when :meth:`connect` has succeeded and :meth:`close` has not been called.
         """
         return self._connected
+
+    @property
+    def supports_query_selection(self) -> bool:
+        """``True`` when all cluster nodes support field ``44`` query selection (>= 8.1.3).
+
+        Computed at :meth:`connect` / :meth:`connect_blocking` from PAC
+        ``Version.supports_query_selection()`` on every node.
+        """
+        if not self._connected or self._client is None:
+            return False
+        return bool(self._cached_supports_query_selection)
 
     @property
     def _async_client(self) -> AsyncClient:
@@ -469,6 +493,8 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+                supports_query_selection=self.supports_query_selection,
             )
             builder._single_key = key
             return builder
@@ -486,6 +512,8 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+                supports_query_selection=self.supports_query_selection,
             )
             builder._keys = keys
             return builder
@@ -514,6 +542,7 @@ class Client:
             indexes_monitor=self._indexes_monitor,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+            supports_query_selection=self.supports_query_selection,
         )
 
     @overload

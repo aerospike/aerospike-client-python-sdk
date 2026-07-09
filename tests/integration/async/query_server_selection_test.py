@@ -61,7 +61,9 @@ async def qsel_client(
         index_refresh_interval=0.25,
     ) as client:
         pac = client.underlying_client
-        if not pac.supports_query_selection():
+        from aerospike_sdk.query_selection import compute_query_selection_support_blocking
+
+        if not compute_query_selection_support_blocking(pac):
             pytest.skip("cluster nodes do not support query selection")
 
         session = client.create_session()

@@ -348,6 +348,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
 
     def batch(self) -> SyncBatchOperationBuilder:
@@ -364,6 +365,7 @@ class SyncSession:
             behavior=self._behavior,
             txn=self._txn,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
         return SyncBatchOperationBuilder(inner)
 
@@ -489,6 +491,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
 
     def _build_write_segment(

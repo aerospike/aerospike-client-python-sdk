@@ -44,6 +44,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.query_selection import compute_query_selection_support_blocking
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -142,6 +143,7 @@ class SyncClient:
         self._current_thread_runtime = current_thread_runtime
         self._client: Optional[AsyncClient] = None
         self._connected = False
+        self._cached_supports_query_selection: Optional[bool] = None
         if indexes_monitor is not None:
             self._indexes_monitor = indexes_monitor
             self._owns_monitor = False
@@ -180,6 +182,9 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        self._cached_supports_query_selection = compute_query_selection_support_blocking(
+            self._client,
+        )
 
     def close(self) -> None:
         """Close the connection synchronously.
@@ -193,6 +198,7 @@ class SyncClient:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+        self._cached_supports_query_selection = None
         self._namespace_mode_cache.clear()
 
     def __enter__(self) -> SyncClient:
@@ -213,6 +219,13 @@ class SyncClient:
     def is_connected(self) -> bool:
         """``True`` once :meth:`connect` has succeeded and :meth:`close` hasn't run."""
         return self._connected
+
+    @property
+    def supports_query_selection(self) -> bool:
+        """``True`` when all cluster nodes support field ``44`` query selection (>= 8.1.3)."""
+        if not self._connected or self._client is None:
+            return False
+        return bool(self._cached_supports_query_selection)
 
     @property
     def underlying_client(self) -> AsyncClient:

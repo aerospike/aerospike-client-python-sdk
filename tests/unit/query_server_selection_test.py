@@ -28,23 +28,44 @@ from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
 
+try:
+    from aerospike_async import QueryWhereFlags
+except ImportError:
+    QueryWhereFlags = None
+
 
 class _ClientSupportsSelection:
-    def supports_query_selection(self) -> bool:
-        return True
+    """PAC client stub — capability is threaded via QueryBuilder kwarg."""
 
 
 class _ClientNoSelection:
-    def supports_query_selection(self) -> bool:
-        return False
+    """PAC client stub — capability is threaded via QueryBuilder kwarg."""
 
 
-def _async_builder(client: object) -> QueryBuilder:
-    return QueryBuilder(client=client, namespace="test", set_name="s")
+def _async_builder(
+    client: object,
+    *,
+    supports_query_selection: bool = True,
+) -> QueryBuilder:
+    return QueryBuilder(
+        client=client,
+        namespace="test",
+        set_name="s",
+        supports_query_selection=supports_query_selection,
+    )
 
 
-def _sync_builder(client: object) -> SyncQueryBuilder:
-    return SyncQueryBuilder(client=client, namespace="test", set_name="s")
+def _sync_builder(
+    client: object,
+    *,
+    supports_query_selection: bool = True,
+) -> SyncQueryBuilder:
+    return SyncQueryBuilder(
+        client=client,
+        namespace="test",
+        set_name="s",
+        supports_query_selection=supports_query_selection,
+    )
 
 
 class TestUseServerQuerySelection:
@@ -66,12 +87,15 @@ class TestUseServerQuerySelection:
         qb.filter(Filter.equal("age", 30))
         assert qb._use_server_query_selection(None) is False
 
-    def test_false_when_client_lacks_support(self):
-        qb = _async_builder(_ClientNoSelection()).where("$.age > 30")
+    def test_false_when_capability_off(self):
+        qb = _async_builder(
+            _ClientNoSelection(),
+            supports_query_selection=False,
+        ).where("$.age > 30")
         assert qb._use_server_query_selection(None) is False
 
-    def test_false_when_client_has_no_method(self):
-        qb = _async_builder(object()).where("$.age > 30")
+    def test_false_when_capability_not_enabled_on_builder(self):
+        qb = _async_builder(object(), supports_query_selection=False).where("$.age > 30")
         assert qb._use_server_query_selection(None) is False
 
     def test_index_name_hint_still_uses_server_path(self):
@@ -84,6 +108,25 @@ class TestUseServerQuerySelection:
         assert qb._use_server_query_selection(None) is True
 
 
+@pytest.mark.skipif(QueryWhereFlags is None, reason="PAC lacks QueryWhereFlags")
+class TestExplainWhereFlags:
+    def test_default_none(self):
+        qb = _async_builder(_ClientSupportsSelection())
+        assert qb._query_explain_where_flags(None) is None
+
+    def test_require_index(self):
+        qb = _async_builder(_ClientSupportsSelection())
+        hint = QueryHint(require_index=True)
+        flags = qb._query_explain_where_flags(hint)
+        assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)
+
+    def test_hard_hint_with_index_name(self):
+        qb = _async_builder(_ClientSupportsSelection())
+        hint = QueryHint(index_name="age_idx", hard_hint=True)
+        flags = qb._query_explain_where_flags(hint)
+        assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.HARD_HINT)
+
+
 class TestApplyDatasetQueryPolicyFilter:
     def test_skips_filter_expression_on_server_path(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
@@ -92,7 +135,10 @@ class TestApplyDatasetQueryPolicyFilter:
         assert policy.filter_expression is None
 
     def test_sets_filter_expression_on_legacy_path(self):
-        qb = _async_builder(_ClientNoSelection()).where("$.age > 30")
+        qb = _async_builder(
+            _ClientNoSelection(),
+            supports_query_selection=False,
+        ).where("$.age > 30")
         policy = QueryPolicy()
         qb._apply_dataset_query_policy_filter(policy, None)
         assert policy.filter_expression is not None
@@ -102,7 +148,6 @@ class TestApplyDatasetQueryPolicyFilter:
 class TestExecuteDatasetQueryRouting:
     async def test_server_path_calls_explain_and_with_plan(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = True
         plan = MagicMock()
         plan.is_filtered_out = False
         recordset = MagicMock()
@@ -110,7 +155,7 @@ class TestExecuteDatasetQueryRouting:
         client.query_with_plan = AsyncMock(return_value=recordset)
         client.query = AsyncMock()
 
-        qb = _async_builder(client).where("$.age > 30")
+        qb = _async_builder(client, supports_query_selection=True).where("$.age > 30")
         await qb._execute_dataset_query()
 
         client.query_explain.assert_awaited_once()
@@ -119,13 +164,12 @@ class TestExecuteDatasetQueryRouting:
 
     async def test_legacy_path_calls_query_only(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = False
         recordset = MagicMock()
         client.query = AsyncMock(return_value=recordset)
         client.query_explain = AsyncMock()
         client.query_with_plan = AsyncMock()
 
-        qb = _async_builder(client).where("$.age > 30")
+        qb = _async_builder(client, supports_query_selection=False).where("$.age > 30")
         await qb._execute_dataset_query()
 
         client.query.assert_awaited_once()
@@ -134,13 +178,14 @@ class TestExecuteDatasetQueryRouting:
 
     async def test_filtered_out_plan_skips_execute(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = True
         plan = MagicMock()
         plan.is_filtered_out = True
         client.query_explain = AsyncMock(return_value=plan)
         client.query_with_plan = AsyncMock()
 
-        qb = _async_builder(client).where("$.age > 100 and $.age < 10")
+        qb = _async_builder(client, supports_query_selection=True).where(
+            "$.age > 100 and $.age < 10",
+        )
         with pytest.raises(AerospikeError) as exc_info:
             await qb._execute_dataset_query()
 
@@ -152,7 +197,6 @@ class TestExecuteDatasetQueryRouting:
 class TestExecuteDatasetQueryBlockingRouting:
     def test_server_path_calls_explain_and_with_plan_blocking(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = True
         plan = MagicMock()
         plan.is_filtered_out = False
         recordset = MagicMock()
@@ -160,7 +204,7 @@ class TestExecuteDatasetQueryBlockingRouting:
         client.query_with_plan_blocking.return_value = recordset
         client.query_blocking = MagicMock()
 
-        qb = _sync_builder(client).where("$.age > 30")
+        qb = _sync_builder(client, supports_query_selection=True).where("$.age > 30")
         qb._execute_dataset_query_blocking()
 
         client.query_explain_blocking.assert_called_once()
@@ -169,13 +213,12 @@ class TestExecuteDatasetQueryBlockingRouting:
 
     def test_legacy_path_calls_query_blocking_only(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = False
         recordset = MagicMock()
         client.query_blocking.return_value = recordset
         client.query_explain_blocking = MagicMock()
         client.query_with_plan_blocking = MagicMock()
 
-        qb = _sync_builder(client).where("$.age > 30")
+        qb = _sync_builder(client, supports_query_selection=False).where("$.age > 30")
         qb._execute_dataset_query_blocking()
 
         client.query_blocking.assert_called_once()
@@ -184,13 +227,14 @@ class TestExecuteDatasetQueryBlockingRouting:
 
     def test_filtered_out_plan_skips_execute_blocking(self):
         client = MagicMock()
-        client.supports_query_selection.return_value = True
         plan = MagicMock()
         plan.is_filtered_out = True
         client.query_explain_blocking.return_value = plan
         client.query_with_plan_blocking = MagicMock()
 
-        qb = _sync_builder(client).where("$.age > 100 and $.age < 10")
+        qb = _sync_builder(client, supports_query_selection=True).where(
+            "$.age > 100 and $.age < 10",
+        )
         with pytest.raises(AerospikeError) as exc_info:
             qb._execute_dataset_query_blocking()
 

@@ -195,14 +195,21 @@ from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settin
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 from aerospike_sdk.record_stream import RecordStream
 
+try:
+    from aerospike_async import QueryWhereFlags
+except ImportError:  # pragma: no cover - older PAC without Tier-D flags
+    QueryWhereFlags = None  # type: ignore[misc, assignment]
+
 @dataclass(frozen=True)
 class QueryHint:
     """Hint for influencing secondary index selection and query scheduling.
 
-    Provide ``index_name`` to force a specific named secondary index, or
-    ``bin_name`` to redirect the filter to a different bin's index.  These two
-    are mutually exclusive.  ``query_duration`` overrides the policy's
-    ``expected_duration`` for this query only.
+    Provide ``index_name`` as a soft explain hint on the server-led path, or
+    ``bin_name`` to skip explain and use legacy client-side index selection.
+    ``index_name`` and ``bin_name`` are mutually exclusive.
+
+    On clusters that support field ``44`` query selection (>= 8.1.3),
+    ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
 
     Example::
 
@@ -212,18 +219,21 @@ class QueryHint:
         )
         stream = await (
             session.query(dataset)
-                .filter(Filter.equal("age", 30))
+                .where("$.age > 30")
                 .with_hint(hint)
                 .execute()
         )
 
     Args:
-        index_name: Force the query to use the named secondary index.
-        bin_name: Redirect the filter to use a different bin's index.
+        index_name: Soft index name hint (field ``21`` on explain).
+        bin_name: Legacy path — skip server explain; client picks index by bin.
         query_duration: Override ``expected_duration`` on the query policy.
+        require_index: Explain flag — reject primary-index fallback.
+        hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
-        ValueError: If both ``index_name`` and ``bin_name`` are provided.
+        ValueError: If both ``index_name`` and ``bin_name`` are provided, or
+            ``hard_hint`` without ``index_name``.
 
     See Also:
         :meth:`QueryBuilder.with_hint`
@@ -232,6 +242,8 @@ class QueryHint:
     index_name: Optional[str] = None
     bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
+    require_index: bool = False
+    hard_hint: bool = False
 
     def __post_init__(self) -> None:
         if self.index_name is not None and self.bin_name is not None:
@@ -239,6 +251,8 @@ class QueryHint:
                 "index_name and bin_name are mutually exclusive; "
                 "provide one or neither, not both"
             )
+        if self.hard_hint and not self.index_name:
+            raise ValueError("hard_hint requires index_name")
 
 
 @dataclass
@@ -399,6 +413,7 @@ class _QueryBuilderBase:
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
+        supports_query_selection: bool = False,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -423,8 +438,12 @@ class _QueryBuilderBase:
                 Session-scoped builders supply this; client-only builders omit it.
             namespace_mode_resolver_blocking: Sync counterpart used by
                 :meth:`execute_blocking` (the sync path bypassing asyncio).
+            supports_query_selection: When ``True``, string-AEL dataset
+                queries use field ``44`` explain→execute instead of client-side
+                index selection.
         """
         self._client = client
+        self._supports_query_selection = supports_query_selection
         self._namespace = namespace
         self._set_name = set_name
         self._behavior = behavior
@@ -1687,6 +1706,18 @@ class _QueryBuilderBase:
             return None
         return hint.index_name
 
+    def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
+        if hint is None or QueryWhereFlags is None:
+            return None
+        flags = QueryWhereFlags.EXPLAIN
+        if hint.require_index:
+            flags |= QueryWhereFlags.REQUIRE_INDEX
+        if hint.hard_hint:
+            flags |= QueryWhereFlags.HARD_HINT
+        if flags == QueryWhereFlags.EXPLAIN:
+            return None
+        return int(flags)
+
     def _raise_if_filtered_out_plan(self, plan: Any) -> None:
         """Phase-1 plan with no matching records; do not run execute."""
         if plan.is_filtered_out:
@@ -1700,10 +1731,7 @@ class _QueryBuilderBase:
             return False
         if hint is not None and hint.bin_name is not None:
             return False
-        supports = getattr(self._client, "supports_query_selection", None)
-        if supports is None:
-            return False
-        return bool(supports())
+        return self._supports_query_selection
 
     def _apply_dataset_query_policy_filter(
         self,
@@ -1782,6 +1810,7 @@ class _QueryBuilderBase:
             self._where_ael,
             set_name=self._dataset_set_name(),
             index_name_hint=self._query_explain_index_hint(hint),
+            explain_where_flags=self._query_explain_where_flags(hint),
             policy=policy,
         )
         self._raise_if_filtered_out_plan(plan)
@@ -1814,6 +1843,7 @@ class _QueryBuilderBase:
             self._where_ael,
             set_name=self._dataset_set_name(),
             index_name_hint=self._query_explain_index_hint(hint),
+            explain_where_flags=self._query_explain_where_flags(hint),
             policy=policy,
         )
         self._raise_if_filtered_out_plan(plan)

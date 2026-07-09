@@ -381,6 +381,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -470,6 +471,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -550,6 +552,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -568,6 +571,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -798,6 +802,7 @@ class Session:
             behavior=b,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            supports_query_selection=self._client.supports_query_selection,
         ))
 
     @typing.overload
