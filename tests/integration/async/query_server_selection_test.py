@@ -303,3 +303,13 @@ class TestQuerySelectionRouting:
         stream = await qsel_client.query(NS, SET_NAME).execute()
         count = await count_records_async(stream)
         assert count == SIZE
+
+    async def test_bad_ael_fails_explain_with_parameter(self, qsel_client):
+        """Invalid AEL at explain time returns ``PARAMETER_ERROR`` (Java D.9)."""
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                qsel_client.query(NS, SET_NAME)
+                .where("this is not valid AEL !!!")
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR

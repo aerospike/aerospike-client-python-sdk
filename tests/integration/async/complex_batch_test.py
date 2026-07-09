@@ -20,10 +20,11 @@ import asyncio
 import pytest
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
+
+from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
 
 
 @pytest.fixture
@@ -188,6 +189,7 @@ class TestWriteWithExpressions:
     """Expression-based writes in a chained context."""
 
     async def test_upsert_from_expression(self, session, ds):
+        xfail_if_server_compiled_ael_wire_active(session.client)
         k = ds.id("cb_exp_1")
         await _cleanup(session, k)
 
@@ -203,6 +205,10 @@ class TestWriteWithExpressions:
 
         rec_result = await (await session.query(k).execute()).first_or_raise()
         rec = rec_result.record
+        assert "computed" in rec.bins, (
+            "expected upsert_from to create bin 'computed'; "
+            f"bins={rec.bins!r}"
+        )
         assert rec.bins["computed"] == 1006
 
         await _cleanup(session, k)
@@ -471,7 +477,7 @@ class TestBatchExists:
     async def test_batch_exists(self, session, ds, seed_data):
         keys = seed_data["keys"]
 
-        rs = await session.exists(keys).respond_all_keys().execute()
+        rs = await session.exists(keys).include_missing_keys().execute()
         results = await rs.collect()
 
         assert len(results) == SIZE
@@ -558,8 +564,8 @@ class TestBatchReadComplex:
         # Missing key omitted → 6 results
         assert len(results) == 6
 
-    async def test_batch_read_complex_respond_all_keys(self, session, ds, seed_data):
-        """Missing key appears when respond_all_keys is set."""
+    async def test_batch_read_complex_include_missing_keys(self, session, ds, seed_data):
+        """Missing key appears when include_missing_keys is set."""
         k1 = seed_data["keys"][0]
         k_missing = ds.id("keynotfound")
 
@@ -567,7 +573,7 @@ class TestBatchReadComplex:
             session
                 .query(k1).bins([BIN_NAME])
                 .query(k_missing).bins([BIN_NAME])
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         results = await rs.collect()
@@ -593,21 +599,21 @@ class TestBatchDeleteLifecycle:
         del_keys = seed_data["del_keys"]
 
         # Verify all keys exist.
-        rs = await session.exists(del_keys).respond_all_keys().execute()
+        rs = await session.exists(del_keys).include_missing_keys().execute()
         exists = [r.as_bool() for r in await rs.collect()]
         assert len(exists) == len(del_keys)
         for status in exists:
             assert status is True
 
         # Delete all keys.
-        rs = await session.delete(del_keys).respond_all_keys().execute()
+        rs = await session.delete(del_keys).include_missing_keys().execute()
         deletes = [r.as_bool() for r in await rs.collect()]
         assert len(deletes) == len(del_keys)
         for status in deletes:
             assert status is True
 
         # Verify all keys are gone.
-        rs = await session.exists(del_keys).respond_all_keys().execute()
+        rs = await session.exists(del_keys).include_missing_keys().execute()
         exists_after = [r.as_bool() for r in await rs.collect()]
         assert len(exists_after) == len(del_keys)
         for status in exists_after:
@@ -664,7 +670,7 @@ class TestBatchWriteComplex:
                 .query(k1).bins([BIN_NAME2])
                 .query(k6).bins([BIN_NAME3])
                 .query(k_del)
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         verify = await rs2.collect()
@@ -909,7 +915,7 @@ class TestBatchTouch:
             rs = await (
                 session
                     .query(k_exists).bins(["a"])
-                    .touch(k_missing).respond_all_keys()
+                    .touch(k_missing).include_missing_keys()
                     .execute()
             )
             results = await rs.collect()
@@ -937,7 +943,7 @@ class TestChainedExists:
             rs = await (
                 session
                     .query(k1).bins(["a"])
-                    .exists(k2).respond_all_keys()
+                    .exists(k2).include_missing_keys()
                     .execute()
             )
             results = await rs.collect()
@@ -960,7 +966,7 @@ class TestChainedExists:
             rs = await (
                 session
                     .query(k_exists).bins(["a"])
-                    .exists(k_missing).respond_all_keys()
+                    .exists(k_missing).include_missing_keys()
                     .execute()
             )
             results = await rs.collect()
@@ -986,7 +992,7 @@ class TestChainedExists:
                 session
                     .query(k1).bins(["a"])
                     .touch(k2)
-                    .exists(k3).respond_all_keys()
+                    .exists(k3).include_missing_keys()
                     .execute()
             )
             results = await rs.collect()

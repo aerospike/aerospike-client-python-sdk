@@ -85,6 +85,11 @@ async def client(aerospike_host, client_policy, enterprise):
         except Exception:
             pass
 
+        # Index monitor tests exercise the client-side cache directly; start it
+        # explicitly because server query selection skips lazy monitor startup.
+        client._indexes_monitor.start(client.underlying_client)
+        await asyncio.to_thread(client._indexes_monitor.wait_until_ready)
+
         await asyncio.sleep(0.75 if not enterprise else 0.4)
 
         yield client

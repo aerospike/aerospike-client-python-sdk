@@ -179,6 +179,7 @@ from aerospike_sdk.background_shared import (
     reject_unsupported_background_write_ops,
 )
 from aerospike_sdk.ael.parser import parse_ael, parse_ael_with_index
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
     OnError,
@@ -413,7 +414,9 @@ class _QueryBuilderBase:
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
+        *,
         supports_query_selection: bool = False,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -441,9 +444,13 @@ class _QueryBuilderBase:
             supports_query_selection: When ``True``, string-AEL dataset
                 queries use field ``44`` explain→execute instead of client-side
                 index selection.
+            supports_server_compiled_ael: When ``True``, string :meth:`where`
+                uses server-compiled AEL on legacy field **43** paths; when
+                query selection is on, field **44** takes precedence.
         """
         self._client = client
         self._supports_query_selection = supports_query_selection
+        self._supports_server_compiled_ael = supports_server_compiled_ael
         self._namespace = namespace
         self._set_name = set_name
         self._behavior = behavior
@@ -478,6 +485,13 @@ class _QueryBuilderBase:
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+
+    def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
+        return filter_expression_from_ael_string(
+            ael,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
+        )
+
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -740,7 +754,7 @@ class _QueryBuilderBase:
         """
         if isinstance(expression, str):
             self._where_ael = expression
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = self._filter_expression_from_ael(expression)
         else:
             self._where_ael = None
             self._filter_expression = expression
@@ -1091,7 +1105,7 @@ class _QueryBuilderBase:
         self._fail_on_filtered_out = True
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Ensure batch/point reads emit one row per requested key, including not-found.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
@@ -1102,9 +1116,24 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
+            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (the underlying client's ``respondAllKeys`` name).
+
+        Retained for callers familiar with the low-level client's policy name;
+        :meth:`include_missing_keys` is the preferred name and identical in behavior.
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`include_missing_keys`: Preferred name for this behavior.
+        """
+        return self.include_missing_keys()
 
     @overload
     def default_where(self, expression: str) -> QueryBuilder: ...
@@ -1146,7 +1175,7 @@ class _QueryBuilderBase:
             :meth:`where`: Per-operation filter on the current operation.
         """
         if isinstance(expression, str):
-            self._default_filter_expression = parse_ael(expression)
+            self._default_filter_expression = self._filter_expression_from_ael(expression)
         else:
             self._default_filter_expression = expression
         return self
@@ -3915,6 +3944,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         "_write_policy", "_behavior_fast", "_read_policy",
         "_write_policy_sc", "_read_policy_sc",
         "_txn", "_namespace_mode_resolver", "_namespace_mode_resolver_blocking",
+        "_supports_query_selection", "_supports_server_compiled_ael",
         # _dd_command_default, _dd_override, _record_delete_in_fast_ops:
         # class-level defaults on _SingleKeyWriteSegmentBase (skip them
         # here so reads fall through to class default and writes go to
@@ -3955,6 +3985,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            supports_query_selection=self._supports_query_selection,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

@@ -230,6 +230,20 @@ class TestBuilderFlagWiring:
         wsb.respond_all_keys()
         assert qb._respond_all_keys is True
 
+    def test_query_builder_include_missing_keys_aliases_respond_all_keys(self):
+        _, qb = self._make_wsb()
+        assert qb._respond_all_keys is False
+        result = qb.include_missing_keys()
+        assert qb._respond_all_keys is True
+        assert result is qb
+
+    def test_write_segment_include_missing_keys_aliases_respond_all_keys(self):
+        wsb, qb = self._make_wsb()
+        assert qb._respond_all_keys is False
+        result = wsb.include_missing_keys()
+        assert qb._respond_all_keys is True
+        assert result is wsb
+
     def test_with_durable_delete_sets_flag(self):
         wsb, qb = self._make_wsb()
         assert qb._durable_delete is None
@@ -320,20 +334,19 @@ class TestBuilderValidation:
         wsb.ensure_generation_is(1)
         assert qb._generation == 1
 
-    def test_expire_record_after_seconds_zero_raises(self):
-        wsb, _ = self._make_wsb()
-        with pytest.raises(ValueError, match="greater than 0"):
-            wsb.expire_record_after_seconds(0)
+    def test_expire_record_after_seconds_passes_sentinels_through(self):
+        # 0/-1/-2 are TTL sentinels, not errors: the value is stored verbatim
+        # and mapped to an Expiration when the write is built.
+        wsb, qb = self._make_wsb()
+        wsb.expire_record_after_seconds(0)
+        assert qb._ttl_seconds == 0
+        wsb.expire_record_after_seconds(-1)
+        assert qb._ttl_seconds == -1
 
-    def test_expire_record_after_seconds_negative_raises(self):
-        wsb, _ = self._make_wsb()
-        with pytest.raises(ValueError, match="greater than 0"):
-            wsb.expire_record_after_seconds(-1)
-
-    def test_default_expire_record_after_seconds_zero_raises(self):
+    def test_default_expire_record_after_seconds_passes_zero_through(self):
         qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
-        with pytest.raises(ValueError, match="greater than 0"):
-            qb.default_expire_record_after_seconds(0)
+        qb.default_expire_record_after_seconds(0)
+        assert qb._default_ttl_seconds == 0
 
     def test_bins_empty_list_raises(self):
         qb = QueryBuilder(

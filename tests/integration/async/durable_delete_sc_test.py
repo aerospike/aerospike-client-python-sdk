@@ -448,7 +448,7 @@ class TestDurableDeleteOperate:
         assert first.record is not None
         assert first.record.bins[bin_name] == 1
 
-        ex = await session.exists(key).respond_all_keys().execute()
+        ex = await session.exists(key).include_missing_keys().execute()
         row = await ex.first()
         assert row is not None
         assert row.as_bool() is False
@@ -468,7 +468,7 @@ class TestDurableDeleteBatchReset:
         for k in keys:
             await delete_keys_durable(session, [k])
 
-        del_stream = await session.delete(*keys).with_durable_delete().respond_all_keys().execute(
+        del_stream = await session.delete(*keys).with_durable_delete().include_missing_keys().execute(
             on_error=ErrorStrategy.IN_STREAM,
         )
         del_rows = await del_stream.collect()
@@ -588,7 +588,7 @@ class TestDurableDeleteForbiddenBatch:
                 "expected non-durable batch delete to be forbidden on SC"
             )
 
-        ex = await session.exists(*keys).respond_all_keys().execute()
+        ex = await session.exists(*keys).include_missing_keys().execute()
         ex_rows = await ex.collect()
         for i, rr in enumerate(ex_rows):
             assert rr.as_bool(), f"record should still exist after forbidden delete; index {i}"
@@ -627,7 +627,7 @@ class TestDurableDeleteForbiddenBatch:
         for rr in rows:
             assert rr.result_code == ResultCode.FAIL_FORBIDDEN
 
-        ex = await session.exists(*keys).respond_all_keys().execute()
+        ex = await session.exists(*keys).include_missing_keys().execute()
         ex_rows = await ex.collect()
         for i, rr in enumerate(ex_rows):
             assert rr.as_bool(), f"record should still exist; index {i}"
@@ -697,7 +697,7 @@ class TestDurableDeleteDefaultPointDelete:
         del_stream = await session.delete(key).execute()
         assert (await del_stream.first_or_raise()).as_bool()
 
-        ex = await session.exists(key).respond_all_keys().execute()
+        ex = await session.exists(key).include_missing_keys().execute()
         row = await ex.first()
         assert row is not None
         assert row.as_bool() is False
@@ -721,7 +721,7 @@ class TestDurableDeleteDefaultPointDelete:
         del_stream = await session.delete(key).execute()
         assert (await del_stream.first_or_raise()).as_bool()
 
-        ex = await session.exists(key).respond_all_keys().execute()
+        ex = await session.exists(key).include_missing_keys().execute()
         row = await ex.first()
         assert row is not None
         assert row.as_bool() is False

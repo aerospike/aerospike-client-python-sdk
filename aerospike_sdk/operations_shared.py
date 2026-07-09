@@ -395,7 +395,7 @@ class _WriteSegmentBuilderBase:
             self for method chaining.
         """
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self
@@ -506,10 +506,14 @@ class _WriteSegmentBuilderBase:
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Include results for missing keys in the stream."""
         self._qb._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys`."""
+        return self.include_missing_keys()
 
     def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code."""
@@ -799,6 +803,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
         write_policy_sc: Optional[WritePolicy] = None,
         read_policy_sc: Optional[ReadPolicy] = None,
+        *,
+        supports_query_selection: bool = False,
+        supports_server_compiled_ael: bool = False,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -822,6 +829,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
+        self._supports_query_selection = supports_query_selection
+        self._supports_server_compiled_ael = supports_server_compiled_ael
         # _dd_command_default, _dd_override, _record_delete_in_fast_ops
         # are class-level defaults; reads fall through, chained-method
         # writes shadow.
@@ -929,6 +938,10 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def ensure_generation_is(self, generation):
         self._promote()
         return super().ensure_generation_is(generation)
+
+    def include_missing_keys(self):
+        self._promote()
+        return super().include_missing_keys()
 
     def respond_all_keys(self):
         self._promote()

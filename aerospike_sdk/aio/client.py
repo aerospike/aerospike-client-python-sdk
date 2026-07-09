@@ -44,6 +44,10 @@ from aerospike_sdk.query_selection import (
     compute_query_selection_support,
     compute_query_selection_support_blocking,
 )
+from aerospike_sdk.server_compiled_ael import (
+    compute_server_compiled_ael_support,
+    compute_server_compiled_ael_support_blocking,
+)
 
 if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
@@ -130,6 +134,7 @@ class Client:
         self._client: Optional[AsyncClient] = None
         self._connected = False
         self._cached_supports_query_selection: Optional[bool] = None
+        self._cached_supports_server_compiled_ael: Optional[bool] = None
         if indexes_monitor is not None:
             self._indexes_monitor = indexes_monitor
             self._owns_monitor = False
@@ -166,6 +171,9 @@ class Client:
         self._cached_supports_query_selection = await compute_query_selection_support(
             self._client,
         )
+        self._cached_supports_server_compiled_ael = (
+            await compute_server_compiled_ael_support(self._client)
+        )
         if log.isEnabledFor(logging.DEBUG):
             try:
                 build_by_node = await self._client.info("build")
@@ -200,6 +208,7 @@ class Client:
             self._client = None
             self._connected = False
         self._cached_supports_query_selection = None
+        self._cached_supports_server_compiled_ael = None
         self._namespace_mode_cache.clear()
 
     def connect_blocking(self) -> None:
@@ -235,6 +244,9 @@ class Client:
         self._cached_supports_query_selection = compute_query_selection_support_blocking(
             self._client,
         )
+        self._cached_supports_server_compiled_ael = (
+            compute_server_compiled_ael_support_blocking(self._client)
+        )
         # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close_blocking(self) -> None:
@@ -249,6 +261,7 @@ class Client:
             self._client = None
             self._connected = False
         self._cached_supports_query_selection = None
+        self._cached_supports_server_compiled_ael = None
         self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:
@@ -284,6 +297,17 @@ class Client:
         if not self._connected or self._client is None:
             return False
         return bool(self._cached_supports_query_selection)
+
+    @property
+    def supports_server_compiled_ael(self) -> bool:
+        """``True`` when server-compiled AEL filters are usable on this connection.
+
+        Requires all nodes >= 8.1.3 (PAC ``Version.supports_server_compiled_ael``)
+        and PAC ``FilterExpression.from_server_compiled_ael``. Cached at connect.
+        """
+        if not self._connected or self._client is None:
+            return False
+        return bool(self._cached_supports_server_compiled_ael)
 
     @property
     def _async_client(self) -> AsyncClient:
@@ -495,6 +519,7 @@ class Client:
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 supports_query_selection=self.supports_query_selection,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -514,6 +539,7 @@ class Client:
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 supports_query_selection=self.supports_query_selection,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -543,6 +569,7 @@ class Client:
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
             supports_query_selection=self.supports_query_selection,
+            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload

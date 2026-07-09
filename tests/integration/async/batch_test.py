@@ -132,7 +132,7 @@ class TestBatchOperations:
         assert record1.record.bins["counter"] == 15
 
         # Verify delete worked
-        exists_stream = await session.exists(key2).respond_all_keys().execute()
+        exists_stream = await session.exists(key2).include_missing_keys().execute()
         result = await exists_stream.first()
         assert result is not None and result.as_bool() is False
 
@@ -221,7 +221,7 @@ class TestBatchOperations:
         
         # Verify all deleted
         for k in (key1, key2, key3):
-            exists_stream = await session.exists(k).respond_all_keys().execute()
+            exists_stream = await session.exists(k).include_missing_keys().execute()
             result = await exists_stream.first()
             assert result is not None and result.as_bool() is False
 
@@ -333,7 +333,7 @@ class TestHomogeneousBatchOperations:
         keys = users.ids(*[f"{key_prefix}{i}" for i in range(1, size + 1)])
 
         # Check existence of all keys
-        stream = await session.exists(*keys).respond_all_keys().execute()
+        stream = await session.exists(*keys).include_missing_keys().execute()
         results = await stream.collect()
 
         assert len(results) == size
@@ -416,19 +416,19 @@ class TestHomogeneousBatchOperations:
             await session.upsert(key).put({"bbin": first_key + i}).execute()
 
         # Ensure keys exist
-        exists_stream = await session.exists(*keys).respond_all_keys().execute()
+        exists_stream = await session.exists(*keys).include_missing_keys().execute()
         exists_results = await exists_stream.collect()
         assert len(exists_results) == num_keys
         for result in exists_results:
             assert result.as_bool() is True
 
         # Delete all keys using homogeneous batch delete
-        delete_stream = await session.delete(*keys).respond_all_keys().execute()
+        delete_stream = await session.delete(*keys).include_missing_keys().execute()
         delete_results = await delete_stream.collect()
         assert len(delete_results) == num_keys
 
         # Ensure keys no longer exist
-        exists_after_stream = await session.exists(*keys).respond_all_keys().execute()
+        exists_after_stream = await session.exists(*keys).include_missing_keys().execute()
         exists_after = await exists_after_stream.collect()
         assert len(exists_after) == num_keys
         for result in exists_after:
@@ -449,8 +449,8 @@ class TestHomogeneousBatchOperations:
         await session.upsert(key2).put({"data": "2"}).execute()
         # key3 intentionally not created
 
-        # Check exists using varargs (respond_all_keys to include non-existent key3)
-        stream = await session.exists(key1, key2, key3).respond_all_keys().execute()
+        # Check exists using varargs (include_missing_keys to include non-existent key3)
+        stream = await session.exists(key1, key2, key3).include_missing_keys().execute()
         results = await stream.collect()
 
         assert len(results) == 3
@@ -509,7 +509,7 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key_exists, key_missing)
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         results = await stream.collect()
@@ -538,7 +538,7 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key_exists, key_missing)
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         results = await stream.collect()
@@ -571,7 +571,7 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key1, key2, key3)
-                .respond_all_keys()
+                .include_missing_keys()
                 .execute()
         )
         fails = await stream.failures()
@@ -613,10 +613,10 @@ class TestRecordResultIntegration:
             pass
 
         # Single-element batch is optimised to a point query; errors are
-        # wrapped (not thrown) so respond_all_keys is needed to surface
+        # wrapped (not thrown) so include_missing_keys is needed to surface
         # KEY_NOT_FOUND in the stream.
         keys = users.ids("rr_first_or_raise_miss")
-        stream = await session.query(keys).respond_all_keys().execute()
+        stream = await session.query(keys).include_missing_keys().execute()
 
         with pytest.raises(AerospikeError):
             await stream.first_or_raise()

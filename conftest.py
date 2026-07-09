@@ -44,6 +44,14 @@ def load_env_file(env_file_path, *, override: bool = True) -> None:
 
 def pytest_configure(config):
     """Called after command line options have been parsed and all plugins and initial conftest files been loaded."""
+    config.addinivalue_line(
+        "markers",
+        "requires_server_compiled_ael: integration test needs server-compiled AEL wire path",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_client_side_ael: integration test needs client-side AEL parse for where(str)",
+    )
     root = Path(__file__).parent
     env_local = root / "aerospike.env"
     env_example = root / "aerospike.env.example"

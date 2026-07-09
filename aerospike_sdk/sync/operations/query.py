@@ -386,6 +386,8 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            supports_query_selection=self._supports_query_selection,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

@@ -179,3 +179,10 @@ class TestSyncQueryExecute:
     def test_no_where_scan(self, qsel_client):
         count = count_records_sync(qsel_client.query(NS, SET_NAME).execute())
         assert count == SIZE
+
+    def test_bad_ael_fails_explain_with_parameter(self, qsel_client):
+        with pytest.raises(AerospikeError) as exc_info:
+            qsel_client.query(NS, SET_NAME).where(
+                "this is not valid AEL !!!",
+            ).execute()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR

@@ -38,7 +38,7 @@ from aerospike_sdk.background_shared import (
     reject_unsupported_background_write_ops,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
 
@@ -243,7 +243,10 @@ class _BackgroundOperationBuilderBase:
                 "use one narrowing mechanism.",
             )
         if isinstance(expression, str):
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=self._session.client.supports_server_compiled_ael,
+            )
         else:
             self._filter_expression = expression
         return self
@@ -580,7 +583,10 @@ class _BackgroundUdfBuilderBase:
     ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""
         if isinstance(expression, str):
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=self._session.client.supports_server_compiled_ael,
+            )
         else:
             self._filter_expression = expression
         return self

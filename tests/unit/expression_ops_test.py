@@ -44,6 +44,8 @@ from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.operations_shared import BatchOpType, _build_exp_write_flags
 
+from tests.pac_compat import xfail_if_server_compiled_ael_factory_exposed
+
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT
 _EXP_READ_EVAL_NO_FAIL = ExpReadFlags.EVAL_NO_FAIL
 _EXP_WRITE_DEFAULT = ExpWriteFlags.DEFAULT
@@ -130,6 +132,7 @@ class TestParseAel:
 class TestQueryBinBuilderSelectFrom:
 
     def test_select_from_string(self):
+        xfail_if_server_compiled_ael_factory_exposed()
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         result = qbb.select_from("$.A + 4")
@@ -144,12 +147,14 @@ class TestQueryBinBuilderSelectFrom:
         assert len(collector.operations) == 1
 
     def test_select_from_ignore_eval_failure(self):
+        xfail_if_server_compiled_ael_factory_exposed()
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         qbb.select_from("$.A + 4", ignore_eval_failure=True)
         assert len(collector.operations) == 1
 
     def test_multiple_select_from(self):
+        xfail_if_server_compiled_ael_factory_exposed()
         collector = _OpCollector()
         QueryBinBuilder(collector, "r1").select_from("$.A == 0 and $.D == 2")
         QueryBinBuilder(collector, "r2").select_from("$.A == 0 or $.D == 2")
