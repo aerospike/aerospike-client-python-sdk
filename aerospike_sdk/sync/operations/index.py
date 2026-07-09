@@ -68,6 +68,10 @@ class SyncIndexBuilder:
                 builder.numeric()
             elif self._index_type == IndexType.STRING:
                 builder.string()
+            elif self._index_type == IndexType.GEO2D_SPHERE:
+                builder.geo2dsphere()
+            elif self._index_type == IndexType.BLOB:
+                builder.blob()
         if self._collection_index_type:
             builder.collection(self._collection_index_type)
         if self._ctx:
@@ -97,6 +101,11 @@ class SyncIndexBuilder:
     def geo2dsphere(self) -> SyncIndexBuilder:
         """Set the secondary index type to GEO2DSPHERE (for GeoJSON bin values)."""
         self._index_type = IndexType.GEO2D_SPHERE
+        return self
+
+    def blob(self) -> SyncIndexBuilder:
+        """Set the secondary index type to BLOB (for blob bin values)."""
+        self._index_type = IndexType.BLOB
         return self
 
     def collection(

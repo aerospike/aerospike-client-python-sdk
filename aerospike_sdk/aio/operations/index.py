@@ -115,6 +115,18 @@ class _IndexBuilderBase:
         self._index_type = IndexType.GEO2D_SPHERE
         return self
 
+    def blob(self) -> IndexBuilder:
+        """Set the secondary index type to BLOB (for blob bin values).
+
+        Requires server version 7.0+. Call before :meth:`create`, optionally
+        with :meth:`collection` for LIST / MAP_KEYS / MAP_VALUES indexes.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        self._index_type = IndexType.BLOB
+        return self
+
     def collection(
         self, collection_index_type: CollectionIndexType
     ) -> IndexBuilder:

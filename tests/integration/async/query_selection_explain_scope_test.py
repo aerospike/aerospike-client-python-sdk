@@ -81,7 +81,7 @@ async def qscexp_client(
             set_name=SCOPE_SET_NAME,
             bin_name=SCOPE_BLOB_BIN,
             index_name=SCOPE_BLOB_INDEX,
-            index_type="BLOB",
+            index_type=IndexType.BLOB,
         )
         await create_index_quiet_async(
             pac,

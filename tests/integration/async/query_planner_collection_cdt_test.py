@@ -79,7 +79,7 @@ async def qp_cdt_client(
             set_name=CDT_SET_NAME,
             bin_name=CDT_LIST_BIN,
             index_name=CDT_LIST_INDEX,
-            index_type="BLOB",
+            index_type=IndexType.BLOB,
             collection_type=CollectionIndexType.LIST,
         )
 

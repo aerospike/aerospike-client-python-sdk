@@ -79,7 +79,7 @@ def qscexp_client(
             set_name=SCOPE_SET_NAME,
             bin_name=SCOPE_BLOB_BIN,
             index_name=SCOPE_BLOB_INDEX,
-            index_type="BLOB",
+            index_type=IndexType.BLOB,
         )
         create_index_quiet_blocking(
             pac,

@@ -135,17 +135,6 @@ async def create_index_quiet_async(
 ) -> None:
     from aerospike_async import ResultCode
 
-    if getattr(index_type, "name", "") == "BLOB" or index_type == "BLOB":
-        await create_sindex_via_info_async(
-            pac,
-            set_name=set_name,
-            bin_name=bin_name,
-            index_name=index_name,
-            index_type_str="BLOB",
-            collection_type=collection_type,
-        )
-        return
-
     try:
         await pac.create_index(
             NS, set_name, bin_name, index_name, index_type, collection_type,
@@ -166,17 +155,6 @@ def create_index_quiet_blocking(
 ) -> None:
     from aerospike_async import ResultCode
 
-    if getattr(index_type, "name", "") == "BLOB" or index_type == "BLOB":
-        create_sindex_via_info_blocking(
-            pac,
-            set_name=set_name,
-            bin_name=bin_name,
-            index_name=index_name,
-            index_type_str="BLOB",
-            collection_type=collection_type,
-        )
-        return
-
     try:
         pac.create_index_blocking(
             NS, set_name, bin_name, index_name, index_type, collection_type,
@@ -184,94 +162,6 @@ def create_index_quiet_blocking(
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
             raise
-
-
-def _collection_type_info_name(collection_type) -> str | None:
-    if collection_type is None:
-        return None
-    name = getattr(collection_type, "name", None)
-    if name == "MAP_KEYS":
-        return "MAPKEYS"
-    if name == "LIST":
-        return "LIST"
-    if name == "MAP_VALUES":
-        return "MAPVALUES"
-    return None
-
-
-def _sindex_create_command(
-    *,
-    set_name: str,
-    bin_name: str,
-    index_name: str,
-    index_type_str: str,
-    collection_type=None,
-) -> str:
-    parts = [
-        f"sindex-create:namespace={NS}",
-        f"set={set_name}",
-        f"indexname={index_name}",
-        f"bin={bin_name}",
-        f"type={index_type_str}",
-    ]
-    cit = _collection_type_info_name(collection_type)
-    if cit is not None:
-        parts.append(f"indextype={cit}")
-    return ";".join(parts)
-
-
-def _info_ok(response: dict) -> bool:
-    for raw in response.values():
-        if not raw:
-            continue
-        text = raw.strip().lower()
-        if "ok" in text and "fail" not in text:
-            return True
-        if "already exists" in text or "index_found" in text:
-            return True
-    return False
-
-
-async def create_sindex_via_info_async(
-    pac,
-    *,
-    set_name: str,
-    bin_name: str,
-    index_name: str,
-    index_type_str: str,
-    collection_type=None,
-) -> None:
-    cmd = _sindex_create_command(
-        set_name=set_name,
-        bin_name=bin_name,
-        index_name=index_name,
-        index_type_str=index_type_str,
-        collection_type=collection_type,
-    )
-    response = await pac.info(cmd)
-    if not _info_ok(response):
-        raise RuntimeError(f"sindex-create failed: {response!r}")
-
-
-def create_sindex_via_info_blocking(
-    pac,
-    *,
-    set_name: str,
-    bin_name: str,
-    index_name: str,
-    index_type_str: str,
-    collection_type=None,
-) -> None:
-    cmd = _sindex_create_command(
-        set_name=set_name,
-        bin_name=bin_name,
-        index_name=index_name,
-        index_type_str=index_type_str,
-        collection_type=collection_type,
-    )
-    response = pac.info_blocking(cmd)
-    if not _info_ok(response):
-        raise RuntimeError(f"sindex-create failed: {response!r}")
 
 
 async def collect_scores_async(stream) -> list[int]:
