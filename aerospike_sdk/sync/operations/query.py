@@ -175,8 +175,8 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     txn=self._txn,
                 )
             except Exception as e:
-                pfc = _convert_pac_exception(e)
-                rc = pfc.result_code
+                psdk_exc = _convert_pac_exception(e)
+                rc = psdk_exc.result_code
                 # Mirror _is_actionable / _should_include_result semantics for
                 # the slow path: KEY_NOT_FOUND_ERROR on a plain read is
                 # idempotent — return an empty stream (or a not-found
@@ -186,10 +186,10 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     if self._respond_all_keys:
                         return SyncRecordStream.from_list([RecordResult(
                             key=self._single_key, record=None,
-                            result_code=rc, exception=pfc, index=0,
+                            result_code=rc, exception=psdk_exc, index=0,
                         )])
                     return SyncRecordStream.from_list([])
-                raise pfc from e
+                raise psdk_exc from e
             return SyncRecordStream.from_list([RecordResult(
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
@@ -455,14 +455,14 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                 # (update, replace_if_exists). For upsert/insert/replace,
                 # it's idempotent. KEY_EXISTS_ERROR is always actionable
                 # (e.g. insert into existing record).
-                pfc = _convert_pac_exception(e)
-                rc = pfc.result_code
+                psdk_exc = _convert_pac_exception(e)
+                rc = psdk_exc.result_code
                 if (
                     rc == ResultCode.KEY_NOT_FOUND_ERROR
                     and self._op_type_fast not in ("update", "replace_if_exists")
                 ):
                     return SyncRecordStream.from_list([])
-                raise pfc from e
+                raise psdk_exc from e
             return SyncRecordStream.from_list([RecordResult(
                 key=self._key, record=record, result_code=ResultCode.OK,
             )])

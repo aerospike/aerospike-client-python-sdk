@@ -125,15 +125,14 @@ _TTL_SERVER_DEFAULT = 0
 
 
 def _seconds_from_timedelta(duration: timedelta) -> int:
-    """Convert a positive ``timedelta`` into an integer TTL in seconds.
+    """Convert a ``timedelta`` into an integer TTL in seconds.
 
-    Raises:
-        ValueError: If the resulting interval is not strictly positive.
+    The value is passed through unchanged: a duration resolving to -1, -2, or 0
+    selects the TTL sentinels (never expire, no change, namespace default). The
+    underlying ``Expiration`` type is the sole authority on which remaining
+    values are representable.
     """
-    seconds = int(duration.total_seconds())
-    if seconds <= 0:
-        raise ValueError(f"duration must be positive, got {duration!r}")
-    return seconds
+    return int(duration.total_seconds())
 
 
 def _seconds_until(when: datetime) -> int:
@@ -419,16 +418,17 @@ class _WriteSegmentBuilderBase:
         """Set the TTL on the current write segment.
 
         Args:
-            seconds: Time-to-live in seconds (must be > 0).
+            seconds: Time-to-live in seconds. A positive value sets an explicit
+                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
+                and namespace-default respectively (see :meth:`never_expire`,
+                :meth:`with_no_change_in_expiration`, and
+                :meth:`expiry_from_server_default` for named equivalents). The
+                value is not range-checked here — one the client cannot
+                represent is rejected when the write is built.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If seconds is <= 0.
         """
-        if seconds <= 0:
-            raise ValueError("seconds must be greater than 0")
         self._qb._ttl_seconds = seconds
         return self
 
@@ -437,16 +437,14 @@ class _WriteSegmentBuilderBase:
 
         Equivalent to :meth:`expire_record_after_seconds` with seconds derived
         from ``duration`` — convenient when the caller already has a
-        ``timedelta`` (``timedelta(days=30)``, etc.).
+        ``timedelta`` (``timedelta(days=30)``, etc.). A ``timedelta`` resolving
+        to -1, -2, or 0 seconds selects the corresponding TTL sentinel.
 
         Args:
-            duration: Positive time-to-live.
+            duration: Time-to-live.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If ``duration`` is not strictly positive.
         """
         self._qb._ttl_seconds = _seconds_from_timedelta(duration)
         return self
@@ -521,10 +519,14 @@ class _WriteSegmentBuilderBase:
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Include results for missing keys in the stream."""
         self._qb._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (underlying client's name); identical behavior."""
+        return self.include_missing_keys()
 
     def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code."""
@@ -948,9 +950,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().ensure_generation_is(generation)
 
-    def respond_all_keys(self):
+    def include_missing_keys(self):
         self._promote()
-        return super().respond_all_keys()
+        return super().include_missing_keys()
 
     def fail_on_filtered_out(self):
         self._promote()

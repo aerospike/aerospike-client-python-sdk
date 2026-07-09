@@ -86,7 +86,7 @@ class TestSyncBatchOperations:
         assert len(stream.collect()) == 3
 
         assert session.query(key1).execute().first_or_raise().record.bins["counter"] == 15
-        ex = session.exists(key2).respond_all_keys().execute().first()
+        ex = session.exists(key2).include_missing_keys().execute().first()
         assert ex is not None and ex.as_bool() is False
         assert session.query(key3).execute().first_or_raise().record.bins["status"] == "new"
 
