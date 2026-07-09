@@ -383,6 +383,8 @@ class SyncClient:
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=nmrb,
+                supports_query_selection=self.supports_query_selection,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._single_key = key
             return builder
@@ -398,6 +400,8 @@ class SyncClient:
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=nmrb,
+                supports_query_selection=self.supports_query_selection,
+                supports_server_compiled_ael=self.supports_server_compiled_ael,
             )
             builder._keys = keys
             return builder
@@ -419,6 +423,8 @@ class SyncClient:
             indexes_monitor=self._indexes_monitor,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=nmrb,
+            supports_query_selection=self.supports_query_selection,
+            supports_server_compiled_ael=self.supports_server_compiled_ael,
         )
 
     @overload

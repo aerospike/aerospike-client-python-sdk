@@ -17,19 +17,283 @@
 
 from __future__ import annotations
 
+import struct
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from aerospike_sdk import QueryHint
+
 NS = "test"
 SET_NAME = "qselint"
 INDEX_NAME = "qsel_age_idx"
 SCORE_INDEX_NAME = "qsel_score_idx"
+BOGUS_INDEX_NAME = "qsel_nonexistent_idx"
 BIN_AGE = "age"
 BIN_SCORE = "score"
 BIN_COUNTRY = "country"
 KEY_PREFIX = "qselkey"
 SIZE = 50
 
+# QuerySelectionHintFlagsTest fixture (Java qselhint set)
+HINT_SET_NAME = "qselhint"
+HINT_INDEX_NAME = "qselhint_age_idx"
+HINT_SCORE_INDEX_NAME = "qselhint_score_idx"
+HINT_BOGUS_INDEX_NAME = "qselhint_missing_idx"
+HINT_KEY_PREFIX = "qselhintkey"
+
+# QuerySelectionExplainScopeTest fixture (Java qscexp set)
+SCOPE_SET_NAME = "qscexp"
+SCOPE_INT_INDEX = "qscexp_age_idx"
+SCOPE_BLOB_INDEX = "qscexp_bb_idx"
+SCOPE_MAP_INDEX = "qscexp_map_idx"
+SCOPE_AGE_BIN = "age"
+SCOPE_COUNTRY_BIN = "country"
+SCOPE_BLOB_BIN = "bb"
+SCOPE_MAP_BIN = "map_bin"
+SCOPE_MAP_KEY = "mkey2"
+
+# QueryPlannerCollectionCdtTest fixture (Java qp_cdt set)
+CDT_SET_NAME = "qp_cdt"
+CDT_KEY_PREFIX = "qpcdt"
+CDT_MAP_BIN = "map_bin"
+CDT_LIST_BIN = "list_bin"
+CDT_MAP_KEY = "mkey2"
+CDT_MAP_INDEX = "qp_mapkeys_idx"
+CDT_LIST_INDEX = "qp_list_idx"
+CDT_SIZE = 20
+
 
 def key_name(i: int) -> str:
     return f"{KEY_PREFIX}{i}"
+
+
+def hint_key_name(suffix: str) -> str:
+    return f"{HINT_KEY_PREFIX}{suffix}"
+
+
+def cdt_key_name(i: int) -> str:
+    return f"{CDT_KEY_PREFIX}{i}"
+
+
+def long_bytes_be(value: int) -> bytes:
+    """8-byte big-endian integer (Java ``Buffer.longToBytes``)."""
+    return struct.pack(">q", value)
+
+
+def blob_hex_literal(blob_bytes: bytes) -> str:
+    """Server AEL hex blob literal for equality (Java ``x'...'``)."""
+    return blob_bytes.hex()
+
+
+def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
+    """Map :class:`QueryHint` to PAC ``explain_where_flags`` (field ``44``)."""
+    from aerospike_async import QueryWhereFlags
+
+    if hint is None:
+        return None
+    flags = QueryWhereFlags.EXPLAIN
+    if hint.require_index:
+        flags |= QueryWhereFlags.REQUIRE_INDEX
+    if hint.hard_hint:
+        flags |= QueryWhereFlags.HARD_HINT
+    if flags == QueryWhereFlags.EXPLAIN:
+        return None
+    return int(flags)
+
+
+async def explain_plan_async(pac, where: str, *, set_name: str = SET_NAME, hint=None):
+    """Run phase-1 explain (mirrors Java ``IndexProbePlanner.plan``)."""
+    index_name_hint = hint.index_name if hint is not None else None
+    return await pac.query_explain(
+        NS,
+        where,
+        set_name=set_name,
+        index_name_hint=index_name_hint,
+        explain_where_flags=explain_where_flags(hint),
+    )
+
+
+def explain_plan_blocking(pac, where: str, *, set_name: str = SET_NAME, hint=None):
+    index_name_hint = hint.index_name if hint is not None else None
+    return pac.query_explain_blocking(
+        NS,
+        where,
+        set_name=set_name,
+        index_name_hint=index_name_hint,
+        explain_where_flags=explain_where_flags(hint),
+    )
+
+
+async def create_index_quiet_async(
+    pac,
+    *,
+    set_name: str,
+    bin_name: str,
+    index_name: str,
+    index_type,
+    collection_type=None,
+) -> None:
+    from aerospike_async import ResultCode
+
+    if getattr(index_type, "name", "") == "BLOB" or index_type == "BLOB":
+        await create_sindex_via_info_async(
+            pac,
+            set_name=set_name,
+            bin_name=bin_name,
+            index_name=index_name,
+            index_type_str="BLOB",
+            collection_type=collection_type,
+        )
+        return
+
+    try:
+        await pac.create_index(
+            NS, set_name, bin_name, index_name, index_type, collection_type,
+        )
+    except Exception as exc:
+        if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
+            raise
+
+
+def create_index_quiet_blocking(
+    pac,
+    *,
+    set_name: str,
+    bin_name: str,
+    index_name: str,
+    index_type,
+    collection_type=None,
+) -> None:
+    from aerospike_async import ResultCode
+
+    if getattr(index_type, "name", "") == "BLOB" or index_type == "BLOB":
+        create_sindex_via_info_blocking(
+            pac,
+            set_name=set_name,
+            bin_name=bin_name,
+            index_name=index_name,
+            index_type_str="BLOB",
+            collection_type=collection_type,
+        )
+        return
+
+    try:
+        pac.create_index_blocking(
+            NS, set_name, bin_name, index_name, index_type, collection_type,
+        )
+    except Exception as exc:
+        if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
+            raise
+
+
+def _collection_type_info_name(collection_type) -> str | None:
+    if collection_type is None:
+        return None
+    name = getattr(collection_type, "name", None)
+    if name == "MAP_KEYS":
+        return "MAPKEYS"
+    if name == "LIST":
+        return "LIST"
+    if name == "MAP_VALUES":
+        return "MAPVALUES"
+    return None
+
+
+def _sindex_create_command(
+    *,
+    set_name: str,
+    bin_name: str,
+    index_name: str,
+    index_type_str: str,
+    collection_type=None,
+) -> str:
+    parts = [
+        f"sindex-create:namespace={NS}",
+        f"set={set_name}",
+        f"indexname={index_name}",
+        f"bin={bin_name}",
+        f"type={index_type_str}",
+    ]
+    cit = _collection_type_info_name(collection_type)
+    if cit is not None:
+        parts.append(f"indextype={cit}")
+    return ";".join(parts)
+
+
+def _info_ok(response: dict) -> bool:
+    for raw in response.values():
+        if not raw:
+            continue
+        text = raw.strip().lower()
+        if "ok" in text and "fail" not in text:
+            return True
+        if "already exists" in text or "index_found" in text:
+            return True
+    return False
+
+
+async def create_sindex_via_info_async(
+    pac,
+    *,
+    set_name: str,
+    bin_name: str,
+    index_name: str,
+    index_type_str: str,
+    collection_type=None,
+) -> None:
+    cmd = _sindex_create_command(
+        set_name=set_name,
+        bin_name=bin_name,
+        index_name=index_name,
+        index_type_str=index_type_str,
+        collection_type=collection_type,
+    )
+    response = await pac.info(cmd)
+    if not _info_ok(response):
+        raise RuntimeError(f"sindex-create failed: {response!r}")
+
+
+def create_sindex_via_info_blocking(
+    pac,
+    *,
+    set_name: str,
+    bin_name: str,
+    index_name: str,
+    index_type_str: str,
+    collection_type=None,
+) -> None:
+    cmd = _sindex_create_command(
+        set_name=set_name,
+        bin_name=bin_name,
+        index_name=index_name,
+        index_type_str=index_type_str,
+        collection_type=collection_type,
+    )
+    response = pac.info_blocking(cmd)
+    if not _info_ok(response):
+        raise RuntimeError(f"sindex-create failed: {response!r}")
+
+
+async def collect_scores_async(stream) -> list[int]:
+    scores: list[int] = []
+    try:
+        async for result in stream:
+            rec = result.record_or_raise()
+            scores.append(rec.bins[BIN_SCORE])
+    finally:
+        stream.close()
+    return sorted(scores)
+
+
+def collect_scores_sync(stream) -> list[int]:
+    scores: list[int] = []
+    try:
+        for result in stream:
+            rec = result.record_or_raise()
+            scores.append(rec.bins[BIN_SCORE])
+    finally:
+        stream.close()
+    return sorted(scores)
 
 
 async def collect_ages_async(stream) -> list[int]:

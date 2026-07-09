@@ -15,31 +15,33 @@
 
 """Integration tests for two-phase server query selection (explain → execute).
 
-Requires Aerospike server >= 8.1.3 on ``AEROSPIKE_HOST``. Tests are skipped
-when the cluster does not support field ``44`` query selection.
+Requires Aerospike cluster on ``AEROSPIKE_HOST``. Tests are skipped when PAC
+reports no query-selection support (``Version.supports_query_selection()``).
 """
 
 from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, QuerySelection, ResultCode
+from aerospike_async import Filter, QueryDuration, QuerySelection, ResultCode
 
-from aerospike_sdk import Client, DataSet, QueryHint
+from aerospike_sdk import Client, DataSet, Exp, QueryHint, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
     BIN_AGE,
     BIN_COUNTRY,
     BIN_SCORE,
+    BOGUS_INDEX_NAME,
     INDEX_NAME,
-    KEY_PREFIX,
     NS,
     SCORE_INDEX_NAME,
     SET_NAME,
     SIZE,
     collect_ages_async,
+    collect_scores_async,
     count_records_async,
+    explain_plan_async,
     key_name,
 )
 
@@ -53,7 +55,7 @@ async def qsel_client(
     wait_for_set_visible,
 ):
     if not supports_query_selection:
-        pytest.skip("server does not support query selection (requires 8.1.3+)")
+        pytest.skip("cluster does not support query selection (PAC)")
 
     async with Client(
         seeds=aerospike_host,
@@ -61,11 +63,6 @@ async def qsel_client(
         index_refresh_interval=0.25,
     ) as client:
         pac = client.underlying_client
-        from aerospike_sdk.query_selection import compute_query_selection_support_blocking
-
-        if not compute_query_selection_support_blocking(pac):
-            pytest.skip("cluster nodes do not support query selection")
-
         session = client.create_session()
         ds = DataSet.of(NS, SET_NAME)
 
@@ -155,12 +152,66 @@ class TestQueryExplain:
     async def test_for_index_hint(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
-        plan = await pac.query_explain(
-            NS, where, set_name=SET_NAME, index_name_hint=INDEX_NAME,
+        plan = await explain_plan_async(
+            pac, where, hint=QueryHint(index_name=INDEX_NAME),
         )
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
+
+    async def test_plan_bytes_stable_across_repeated_probes(self, qsel_client):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+
+        first = await explain_plan_async(pac, where)
+        second = await explain_plan_async(pac, where)
+
+        assert first.selection == QuerySelection.SECONDARY_INDEX
+        assert first.index_name == INDEX_NAME
+        assert second.selection == first.selection
+        assert second.index_name == first.index_name
+        assert second.ael == first.ael
+
+    async def test_index_probe_planner_smoke(self, qsel_client):
+        """PAC explain path (Python equivalent of Java ``IndexProbePlanner.plan``)."""
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+        plan = await explain_plan_async(pac, where)
+
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+        assert plan.ael is not None
+
+    async def test_for_index_hint_on_nonexistent_index(self, qsel_client):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+        plan = await explain_plan_async(
+            pac, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
+        )
+
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name != BOGUS_INDEX_NAME
+        assert plan.index_name == INDEX_NAME
+
+    async def test_for_index_hint_on_wrong_existing_index(self, qsel_client):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+        hint = QueryHint(index_name=SCORE_INDEX_NAME)
+        plan = await explain_plan_async(pac, where, hint=hint)
+
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .with_hint(hint)
+            .execute()
+        )
+        ages = await collect_ages_async(stream)
+
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name != SCORE_INDEX_NAME
+        assert plan.index_name == INDEX_NAME
+        assert ages == [14, 15, 16, 17, 18]
 
 
 class TestQueryExecute:
@@ -202,16 +253,66 @@ class TestQueryExecute:
         assert len(countries) == 25
         assert all(c == "US" for c in countries)
 
+    async def test_plan_then_execute_consistency_for_secondary_index(
+        self, qsel_client,
+    ):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+
+        plan = await explain_plan_async(pac, where)
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .execute()
+        )
+        assert await collect_ages_async(stream) == [14, 15, 16, 17, 18]
+
     async def test_compound_predicate(self, qsel_client):
+        pac = qsel_client.underlying_client
         where = "$.age > 30 and $.country == 'US'"
+
+        plan = await explain_plan_async(pac, where)
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+
         stream = await (
             qsel_client.query(NS, SET_NAME)
             .bins([BIN_AGE, BIN_COUNTRY])
             .where(where)
             .execute()
         )
-        ages = await collect_ages_async(stream)
-        assert ages == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
+        ages = []
+        try:
+            async for result in stream:
+                rec = result.record_or_raise()
+                assert rec.bins[BIN_COUNTRY] == "US"
+                assert rec.bins[BIN_AGE] > 30
+                ages.append(rec.bins[BIN_AGE])
+        finally:
+            stream.close()
+        assert sorted(ages) == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
+
+    async def test_reading_only_bins_projects_requested_bins(self, qsel_client):
+        where = "$.age >= 14 and $.age <= 18"
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .execute()
+        )
+        ages = []
+        try:
+            async for result in stream:
+                rec = result.record_or_raise()
+                ages.append(rec.bins[BIN_AGE])
+                assert BIN_COUNTRY not in rec.bins
+        finally:
+            stream.close()
+        assert sorted(ages) == [14, 15, 16, 17, 18]
 
     async def test_contradiction_raises_filtered_out(self, qsel_client):
         with pytest.raises(AerospikeError) as exc_info:
@@ -240,6 +341,81 @@ class TestQueryExecute:
 
 
 class TestQuerySelectionRouting:
+    async def test_for_bin_hint_uses_legacy_execute_path(self, qsel_client):
+        where = "$.age >= 14 and $.age <= 18"
+
+        default_stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .execute()
+        )
+        for_bin_stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .with_hint(QueryHint(bin_name=BIN_AGE))
+            .execute()
+        )
+
+        default_ages = await collect_ages_async(default_stream)
+        for_bin_ages = await collect_ages_async(for_bin_stream)
+        assert default_ages == for_bin_ages == [14, 15, 16, 17, 18]
+
+    async def test_for_index_hint_probes_and_executes(self, qsel_client):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+        hint = QueryHint(index_name=INDEX_NAME)
+
+        plan = await explain_plan_async(pac, where, hint=hint)
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .with_hint(hint)
+            .execute()
+        )
+        ages = await collect_ages_async(stream)
+
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+        assert ages == [14, 15, 16, 17, 18]
+
+    async def test_query_duration_only_hint_still_probes_and_executes(
+        self, qsel_client,
+    ):
+        pac = qsel_client.underlying_client
+        where = "$.age >= 14 and $.age <= 18"
+        hint = QueryHint(query_duration=QueryDuration.SHORT)
+
+        plan = await explain_plan_async(pac, where, hint=hint)
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .with_hint(hint)
+            .execute()
+        )
+        ages = await collect_ages_async(stream)
+
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+        assert ages == [14, 15, 16, 17, 18]
+
+    async def test_where_exp_uses_non_probe_execute_path(self, qsel_client):
+        stream = await (
+            qsel_client.query(NS, SET_NAME)
+            .bins([BIN_AGE])
+            .where(
+                Exp.and_([
+                    Exp.ge(Exp.int_bin(BIN_AGE), val(14)),
+                    Exp.le(Exp.int_bin(BIN_AGE), val(18)),
+                ]),
+            )
+            .execute()
+        )
+        assert await collect_ages_async(stream) == [14, 15, 16, 17, 18]
+
     async def test_server_led_matches_legacy_for_bin(self, qsel_client):
         where = "$.age > 30 and $.country == 'US'"
 
@@ -268,11 +444,8 @@ class TestQuerySelectionRouting:
         age_where = "$.age >= 14 and $.age <= 18"
         score_where = "$.score >= 40 and $.score <= 44"
 
-        age_plan = await pac.query_explain(NS, age_where, set_name=SET_NAME)
-        score_plan = await pac.query_explain(NS, score_where, set_name=SET_NAME)
-
-        assert age_plan.index_name == INDEX_NAME
-        assert score_plan.index_name == SCORE_INDEX_NAME
+        age_plan = await explain_plan_async(pac, age_where)
+        score_plan = await explain_plan_async(pac, score_where)
 
         age_stream = await (
             qsel_client.query(NS, SET_NAME)
@@ -287,29 +460,16 @@ class TestQuerySelectionRouting:
             .execute()
         )
         ages = await collect_ages_async(age_stream)
-        scores = []
-        try:
-            async for result in score_stream:
-                rec = result.record_or_raise()
-                scores.append(rec.bins[BIN_SCORE])
-        finally:
-            score_stream.close()
-        scores.sort()
+        scores = await collect_scores_async(score_stream)
 
+        assert age_plan.selection == QuerySelection.SECONDARY_INDEX
+        assert age_plan.index_name == INDEX_NAME
         assert ages == [14, 15, 16, 17, 18]
+        assert score_plan.selection == QuerySelection.SECONDARY_INDEX
+        assert score_plan.index_name == SCORE_INDEX_NAME
         assert scores == [40, 41, 42, 43, 44]
 
     async def test_no_where_scan_returns_all_records(self, qsel_client):
         stream = await qsel_client.query(NS, SET_NAME).execute()
         count = await count_records_async(stream)
         assert count == SIZE
-
-    async def test_bad_ael_fails_explain_with_parameter(self, qsel_client):
-        """Invalid AEL at explain time returns ``PARAMETER_ERROR`` (Java D.9)."""
-        with pytest.raises(AerospikeError) as exc_info:
-            await (
-                qsel_client.query(NS, SET_NAME)
-                .where("this is not valid AEL !!!")
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR

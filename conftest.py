@@ -469,14 +469,26 @@ async def supports_query_ops_projection_ext(server_version):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_query_selection(server_version):
-    """``True`` when the seed cluster supports two-phase server query selection.
+async def supports_query_selection(aerospike_host, client_policy):
+    """``True`` when connected nodes report query-selection support via PAC.
 
-    Mirrors the per-node feature in the Rust core (server >= 8.1.3). Tests
-    that exercise field ``44`` explain→execute should ``pytest.skip`` when
-    this is ``False``.
+    Uses :func:`aerospike_sdk.query_selection.compute_query_selection_support`
+    (PAC ``Version.supports_query_selection()`` on every node), not the raw
+    server ``build`` string. Tests that exercise field ``44`` explain→execute
+    should ``pytest.skip`` when this is ``False``.
     """
-    return server_version is not None and server_version >= (8, 1, 3, 0)
+    if not aerospike_host:
+        return False
+    from aerospike_sdk.query_selection import compute_query_selection_support
+
+    try:
+        client = await new_client(client_policy, aerospike_host)
+    except Exception:
+        return False
+    try:
+        return await compute_query_selection_support(client)
+    finally:
+        await client.close()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
