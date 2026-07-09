@@ -20,6 +20,7 @@ from datetime import timedelta
 import pytest
 from aerospike_async import (
     BatchPolicy,
+    BatchReadPolicy,
     CommitLevel,
     ReadModeAP,
     ReadModeSC,
@@ -33,6 +34,7 @@ from aerospike_sdk.policy.policy_mapper import (
     apply_to_read_policy,
     apply_to_write_policy,
     to_batch_policy,
+    to_batch_read_policy,
     to_read_policy,
     to_query_policy,
     to_write_policy,
@@ -75,6 +77,22 @@ class TestToReadPolicy:
         p = to_read_policy(s)
         assert p.use_compression is True
         assert p.compression_threshold == 1024
+
+    def test_read_touch_ttl_percent_valid(self):
+        p = to_read_policy(Settings(read_touch_ttl_percent=80))
+        assert p.read_touch_ttl == 80
+
+    @pytest.mark.parametrize("bad", [-2, 101, 3600])
+    def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
+        # Out-of-range values are rejected by the underlying client. The SDK
+        # surfaces this as a built-in ValueError (matching the rest of the
+        # SDK's input validation), NOT a leaked aerospike_async exception, and
+        # preserves the original PAC error as the cause.
+        from aerospike_async.exceptions import ValueError as PacValueError
+        with pytest.raises(ValueError) as exc_info:
+            to_read_policy(Settings(read_touch_ttl_percent=bad))
+        assert not isinstance(exc_info.value, PacValueError)
+        assert isinstance(exc_info.value.__cause__, PacValueError)
 
 
 class TestToWritePolicy:
@@ -175,6 +193,26 @@ class TestToBatchPolicy:
         assert p.compression_threshold == 4096
 
 
+class TestToBatchReadPolicy:
+    """Verify to_batch_read_policy() maps read_touch_ttl_percent and rejects
+    out-of-range values with a built-in ValueError."""
+    def test_read_touch_ttl_percent_valid(self):
+        p = to_batch_read_policy(Settings(read_touch_ttl_percent=-1))
+        assert p.read_touch_ttl == -1
+
+    def test_none_not_set(self):
+        p = to_batch_read_policy(Settings())
+        assert isinstance(p, BatchReadPolicy)
+
+    @pytest.mark.parametrize("bad", [-2, 101, 3600])
+    def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
+        from aerospike_async.exceptions import ValueError as PacValueError
+        with pytest.raises(ValueError) as exc_info:
+            to_batch_read_policy(Settings(read_touch_ttl_percent=bad))
+        assert not isinstance(exc_info.value, PacValueError)
+        assert isinstance(exc_info.value.__cause__, PacValueError)
+
+
 class TestApplyToReadPolicy:
     """Verify apply_to_read_policy() fills unset numeric fields (zero-check)
     while always applying enum fields like replica. Explicitly-set policy
@@ -191,6 +229,19 @@ class TestApplyToReadPolicy:
         p.total_timeout = 3000
         result = apply_to_read_policy(s, p)
         assert result.total_timeout == 3000
+
+    def test_fills_read_touch_ttl_percent(self):
+        # read_touch_ttl_percent from behavior settings must reach an explicit
+        # policy (previously silently dropped on this path).
+        result = apply_to_read_policy(Settings(read_touch_ttl_percent=50), ReadPolicy())
+        assert result.read_touch_ttl == 50
+
+    def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
+        from aerospike_async.exceptions import ValueError as PacValueError
+        with pytest.raises(ValueError) as exc_info:
+            apply_to_read_policy(Settings(read_touch_ttl_percent=101), ReadPolicy())
+        assert not isinstance(exc_info.value, PacValueError)
+        assert isinstance(exc_info.value.__cause__, PacValueError)
 
 
 class TestApplyToWritePolicy:
