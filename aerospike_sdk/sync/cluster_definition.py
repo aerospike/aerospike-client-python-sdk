@@ -26,6 +26,15 @@ from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.tls_builder import TlsBuilder
 from aerospike_sdk.policy.system_settings import SystemSettings
 
+# Client identifier sent to the server (user-agent), overriding the underlying
+# async client's own id so PSDK usage is distinguishable on the wire.
+try:
+    from importlib.metadata import version as _pkg_version
+
+    _SDK_CLIENT_ID = f"python-sdk-{_pkg_version('aerospike-sdk')}"
+except Exception:
+    _SDK_CLIENT_ID = "python-sdk-0.0.0"
+
 
 class Host:
     """Represents an Aerospike server host."""
@@ -130,7 +139,30 @@ class ClusterDefinition:
         self._ip_map: Optional[dict[str, str]] = None
         self._tls_builder: Optional[TlsBuilder] = None
         self._system_settings: Optional[SystemSettings] = None
+        self._app_id: Optional[str] = None
     
+    def app_id(self, app_id: str) -> ClusterDefinition:
+        """Tag this client's traffic with an application identifier.
+
+        The identifier is reported to the server (as the application portion of
+        the client's user-agent), letting operators attribute load per calling
+        application. It is distinct from the client-library identifier the SDK
+        sets automatically.
+
+        Args:
+            app_id: A short label for the calling application, e.g.
+                ``"billing-service"``.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            cd = ClusterDefinition("localhost", 3000).app_id("billing-service")
+        """
+        self._app_id = app_id
+        return self
+
     def with_native_credentials(
         self,
         user_name: str,
@@ -335,6 +367,11 @@ class ClusterDefinition:
     def _get_policy(self) -> ClientPolicy:
         """Build a ClientPolicy from the configuration."""
         policy = ClientPolicy()
+
+        # Override the underlying client's user-agent id with PSDK's own.
+        policy.custom_client_id = _SDK_CLIENT_ID
+        if self._app_id is not None:
+            policy.application_id = self._app_id
 
         policy.use_services_alternate = self._use_services_alternate
         policy.fail_if_not_connected = self._fail_if_not_connected

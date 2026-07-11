@@ -19,6 +19,7 @@ import pytest
 from aerospike_async import AuthMode
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
+from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition
 
 
 class TestAuthMode:
@@ -250,3 +251,16 @@ class TestFailIfNotConnected:
         assert cd._fail_if_not_connected is False
         assert cd.auth_mode == AuthMode.INTERNAL
         assert cd._use_services_alternate is True
+
+
+class TestClientId:
+    """The built policy stamps PSDK's own user-agent id, overriding the
+    underlying async client's, so PSDK usage is distinguishable on the wire."""
+
+    def test_aio_overrides_client_id(self):
+        policy = ClusterDefinition("localhost", 3000)._get_policy()
+        assert policy.custom_client_id.startswith("python-sdk-")
+
+    def test_sync_overrides_client_id(self):
+        policy = SyncClusterDefinition("localhost", 3000)._get_policy()
+        assert policy.custom_client_id.startswith("python-sdk-")
