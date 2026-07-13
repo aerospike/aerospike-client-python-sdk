@@ -25,8 +25,10 @@ used by the batch dispatchers.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from enum import Enum
+from time import perf_counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -65,6 +67,7 @@ from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
@@ -80,6 +83,63 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.op
 
 
 NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
+
+_cmd_log = logging.getLogger(SdkLoggers.COMMAND)
+
+# Hot-path guard for command summaries. Callers start a timer with
+#   cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+# and treat a falsy value as "summaries off". The pre-bound method + constant
+# keep the disabled cost to one cached level check (~25 ns) per operation;
+# level changes still apply live because isEnabledFor consults the logging
+# manager on every call.
+_cmd_enabled = _cmd_log.isEnabledFor
+_CMD_DEBUG = logging.DEBUG
+
+
+def _cmd_cluster(client: Any) -> Optional[str]:
+    """Configured cluster name for summary tagging, or ``None``.
+
+    Read lazily at emit time (only when summaries are enabled), so there is
+    no cost on the disabled hot path and no per-operation plumbing. ``client``
+    is the PAC client held by the builder; it exposes ``cluster_name`` when the
+    app configured cluster-name validation, else ``None``. ``getattr`` keeps
+    this a no-op on client surfaces that predate the attribute.
+    """
+    return getattr(client, "cluster_name", None)
+
+
+def _cmd_done(
+    op_type: Optional[str], namespace: Optional[str], set_name: Optional[str],
+    key_count: int, t0: float, client: Any = None,
+) -> None:
+    """Emit one DEBUG command summary. Only call when ``t0`` is truthy.
+
+    Operational fields only — never keys, bin names, or values. The cluster
+    name (when configured) rides along as an ``aerospike.cluster`` structured
+    field for JSON log pipelines.
+    """
+    _cmd_log.debug(
+        "%s %s.%s keys=%d latency_ms=%.3f",
+        op_type or "read", namespace, set_name, key_count,
+        (perf_counter() - t0) * 1000.0,
+        extra={"aerospike.cluster": _cmd_cluster(client)},
+    )
+
+
+def _cmd_failed(
+    op_type: Optional[str], rc: int, exc: Exception, client: Any = None,
+) -> None:
+    """Emit one DEBUG line for a command routed through an error funnel.
+
+    Logs the exception type and result code, not the message — error text
+    can echo user data.
+    """
+    if _cmd_log.isEnabledFor(logging.DEBUG):
+        _cmd_log.debug(
+            "%s failed rc=%s exc=%s",
+            op_type or "read", rc, type(exc).__name__,
+            extra={"aerospike.cluster": _cmd_cluster(client)},
+        )
 
 
 class BatchOpType(Enum):
@@ -954,6 +1014,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     ) -> RecordStream:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
+        _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:
             if op_type in _FAST_WRITES_REQUIRING_KEY:
                 raise pfc_exc from exc

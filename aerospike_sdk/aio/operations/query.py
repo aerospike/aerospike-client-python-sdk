@@ -21,6 +21,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import (
     Protocol,
     TYPE_CHECKING,
@@ -101,10 +102,16 @@ from aerospike_sdk.aio.operations.cdt_write import (
     _resolve_list_policy,
     _resolve_map_policy,
 )
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.operations_shared import (
     NamespaceModeResolver,
     _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
+    _cmd_cluster,
+    _cmd_done,
+    _cmd_failed,
+    _CMD_DEBUG,
+    _cmd_enabled,
     _TTL_DONT_UPDATE,
     _TTL_NEVER_EXPIRE,
     _TTL_SERVER_DEFAULT,
@@ -116,7 +123,7 @@ from aerospike_sdk.operations_shared import (
     _WriteVerbs,
 )
 
-log = logging.getLogger("aerospike_sdk.query")
+log = logging.getLogger(SdkLoggers.QUERY)
 
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
@@ -1473,6 +1480,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed(op_type, rc, pfc_exc, self._client)
 
         if self._is_actionable(rc, op_type):
             if disp is _ErrorDisposition.THROW:
@@ -1503,6 +1511,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed("batch", rc, pfc_exc, self._client)
 
         if disp is _ErrorDisposition.THROW:
             raise pfc_exc from exc
@@ -2317,6 +2326,7 @@ class _QueryBuilderBase:
             self._filter_expression is not None or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
+            extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         if self._policy is not None:
             policy = self._policy
@@ -2383,6 +2393,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed(op_type, rc, pfc_exc, self._client)
 
         if self._is_actionable(rc, op_type):
             if disp is _ErrorDisposition.THROW:
@@ -2870,6 +2881,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             rp_sc = self._base_read_policy_sc
             if rp_ap is not None and rp_sc is not None:
                 key = self._single_key
+                cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
                 try:
                     record = await self._client.get(
                         key, None,
@@ -2880,6 +2892,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 except Exception as e:
                     return self._handle_error(
                         key, e, _ErrorDisposition.THROW, None)
+                if cmd_t0:
+                    _cmd_done(
+                        None, key.namespace, key.set_name, 1, cmd_t0,
+                        self._client,
+                    )
                 return RecordStream.from_single(key, record)
             # Fall through when an AP-only policy is cached (e.g. txn nulled
             # them): legacy path with explicit mode resolution.
@@ -2893,6 +2910,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             if len(self._specs) == 1:
                 spec0 = self._specs[0]
                 is_single = len(spec0.keys) == 1
+                cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
                 # Ultra-fast path: single-key operations with no spec-level
                 # overrides bypass the full _execute_spec → policy-build →
@@ -2913,23 +2931,29 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 ):
                     result = await self._execute_single_key_direct(spec0)
                     if result is not None:
+                        if cmd_t0:
+                            _cmd_done(
+                                spec0.op_type, self._namespace,
+                                self._set_name, 1, cmd_t0, self._client,
+                            )
                         return result
 
-                if __debug__ and log.isEnabledFor(logging.DEBUG):
-                    log.debug(
-                        "execute: %s.%s specs=1 keys=%d",
-                        self._namespace, self._set_name,
-                        len(spec0.keys),
-                    )
                 disp = _resolve_disposition(on_error, is_single)
                 handler = on_error if callable(on_error) else None
-                return await self._execute_spec(spec0, disp, handler)
-            total_keys = sum(len(s.keys) for s in self._specs)
-            log.debug(
-                "execute: %s.%s specs=%d keys=%d",
-                self._namespace, self._set_name,
-                len(self._specs), total_keys,
-            )
+                stream = await self._execute_spec(spec0, disp, handler)
+                if cmd_t0:
+                    _cmd_done(
+                        spec0.op_type, self._namespace, self._set_name,
+                        len(spec0.keys), cmd_t0, self._client,
+                    )
+                return stream
+            if __debug__ and log.isEnabledFor(logging.DEBUG):
+                log.debug(
+                    "execute: %s.%s specs=%d keys=%d",
+                    self._namespace, self._set_name,
+                    len(self._specs), sum(len(s.keys) for s in self._specs),
+                    extra={"aerospike.cluster": _cmd_cluster(self._client)},
+                )
             is_single = False
             disp = _resolve_disposition(on_error, is_single)
             handler = on_error if callable(on_error) else None
@@ -2947,11 +2971,17 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             for spec in self._specs:
                 all_keys.extend(spec.keys)
                 all_ops.extend(self._spec_to_batch_ops(spec))
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 batch_records = await self._client.batch(
                     all_ops, batch_policy=batch_policy)
             except Exception as e:
                 return self._handle_batch_error(all_keys, e, disp, handler)
+            if cmd_t0:
+                _cmd_done(
+                    "batch", self._namespace, self._set_name,
+                    len(all_keys), cmd_t0, self._client,
+                )
             return self._filtered_batch_stream(batch_records, disp, handler)
 
         # Dataset query path (no keys were specified)
@@ -3537,6 +3567,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             self._filter_expression is not None or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
+            extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         if self._policy is not None:
             policy = self._policy
@@ -3757,6 +3788,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         key = self._key
         op_type = self._op_type_fast
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the
         # common no-txn case), hand them to PAC and let Rust resolve
@@ -3781,6 +3813,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 )
             except Exception as exc:
                 return self._handle_fast_error(exc, op_type or "upsert")
+            if cmd_t0:
+                _cmd_done(
+                    op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                    self._client_fast)
             return RecordStream.from_single(key, record)
 
         # Fallback (delete/touch/exists + txn-bound cells): resolve mode
@@ -3803,6 +3839,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 existed = await self._client_fast.delete(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "delete")
+            if cmd_t0:
+                _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             if existed:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -3815,6 +3854,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 await self._client_fast.touch(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "touch")
+            if cmd_t0:
+                _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             return RecordStream.from_error(key, ResultCode.OK)
 
         # -- exists (uses ReadPolicy, returns bool) --
@@ -3831,6 +3873,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 found = await self._client_fast.exists(key, policy=rp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "exists")
+            if cmd_t0:
+                _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             if found:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -3851,6 +3896,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 )
             except Exception as exc:
                 return self._handle_fast_error(exc, op_type or "upsert")
+            if cmd_t0:
+                _cmd_done(
+                    op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                    self._client_fast)
             return RecordStream.from_single(key, record)
 
         # Fall back to the legacy build-policy-in-Python path.
@@ -3872,6 +3921,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 key, self._ops, policy=wp)
         except Exception as exc:
             return self._handle_fast_error(exc, op_type or "upsert")
+        if cmd_t0:
+            _cmd_done(op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                      self._client_fast)
         return RecordStream.from_single(key, record)
 
 

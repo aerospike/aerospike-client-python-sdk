@@ -33,7 +33,9 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 from aerospike_async import Key, ResultCode
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.RECORD_STREAM)
 
 if TYPE_CHECKING:
     from aerospike_async import Record

@@ -22,7 +22,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
-log = logging.getLogger("aerospike_sdk.background")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.BACKGROUND)
 
 from aerospike_async import (
     Client,

@@ -23,7 +23,9 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
 
-log = logging.getLogger("aerospike_sdk.info")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.INFO)
 
 
 class InfoCommands:
