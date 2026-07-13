@@ -9,10 +9,7 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    # Pre-release window: pin the PAC dev commit that exposes
-    # BatchRecordStream.close() (CLIENT-5024). CI reads this ref and builds PAC
-    # from source. Swap back to a published `==x.y.z` once PAC releases.
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@6f92350f983fe9d868fa46c830ec04195960da05",
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@e563593cef2ce88bc42ae352bed39fc4ec3c632f",
     "antlr4-python3-runtime>=4.13.0",
     "typing_extensions>=4.0.0",
 ]

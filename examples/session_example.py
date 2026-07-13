@@ -43,7 +43,6 @@ async def main() -> None:
         stream = await session.exists(key).execute()
         first = await stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
-        stream.close()
 
         # Delete
         await session.delete(key).execute()

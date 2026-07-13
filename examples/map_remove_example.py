@@ -49,7 +49,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins.get('result')}")
         else:
@@ -70,7 +69,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins}")
         else:
@@ -91,7 +89,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins}")
         else:
@@ -112,7 +109,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins}")
         else:
@@ -134,7 +130,6 @@ async def run_examples(session) -> None:
         )
         stream = await session.query(SET.id(1)).execute()
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins.get('m')}")
         else:
@@ -162,7 +157,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins}")
         else:
@@ -183,7 +177,6 @@ async def run_examples(session) -> None:
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins}")
         else:
@@ -211,7 +204,6 @@ async def run_examples(session) -> None:
         )
         stream = await session.query(SET.id(2)).execute()
         first = await stream.first()
-        stream.close()
         if first and first.is_ok:
             print(f"Actual:   {first.record.bins.get('m')}")
         else:
@@ -234,7 +226,6 @@ async def run_examples(session) -> None:
         )
         first = await stream.first()
         found = first is not None and first.is_ok
-        stream.close()
         print(f"Actual:   {'record returned (filter passed)' if found else 'filtered out'}")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
@@ -246,7 +237,6 @@ async def run_examples(session) -> None:
     print("=== Verify original map (record 1) is unchanged ===")
     stream = await session.query(SET.id(1)).execute()
     first = await stream.first()
-    stream.close()
     if first and first.is_ok:
         print(f"Original map after all tests: {first.record.bins.get('m')}")
 

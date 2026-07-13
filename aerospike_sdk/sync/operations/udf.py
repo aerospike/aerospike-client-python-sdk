@@ -97,14 +97,18 @@ class SyncUdfBuilder:
         self._inner.where(expression)
         return self
 
-    def respond_all_keys(self) -> SyncUdfBuilder:
+    def include_missing_keys(self) -> SyncUdfBuilder:
         """Include results for missing keys in the stream.
 
         Returns:
             self for method chaining.
         """
-        self._inner.respond_all_keys()
+        self._inner.include_missing_keys()
         return self
+
+    def respond_all_keys(self) -> SyncUdfBuilder:
+        """Alias for :meth:`include_missing_keys` (underlying client's name)."""
+        return self.include_missing_keys()
 
     def execute_udf(self, *keys: Key) -> SyncUdfFunctionBuilder:
         """Finalize this UDF spec and start another on *keys*."""

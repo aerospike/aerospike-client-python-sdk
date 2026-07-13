@@ -122,6 +122,21 @@ cluster = (
 )
 ```
 
+### Application Identifier
+
+Tag this client's traffic with an application identifier via `app_id`. The
+server records it (as part of the client's user-agent), letting operators
+attribute load per calling application. It is separate from the client-library
+identifier the SDK reports automatically.
+
+```python
+cluster = (
+    ClusterDefinition("localhost", 3000)
+    .app_id("billing-service")
+    .connect()
+)
+```
+
 ## Sessions
 
 A **Session** binds a connected client to a set of policy defaults via a

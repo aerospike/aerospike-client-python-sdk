@@ -243,10 +243,23 @@ await session.upsert(users.id(1)).expire_record_after(timedelta(hours=1)).put({"
 await session.upsert(users.id(1)).expire_record_at(datetime.now(timezone.utc) + timedelta(hours=1)).put({"session_token": "abc123"}).execute()
 ```
 
-`expire_record_at` accepts either a timezone-aware or naive `datetime`. A naive
-value is interpreted in local time. Both methods raise `ValueError` if the
-resolved interval is not strictly positive (past `datetime` or non-positive
-`timedelta`).
+`expire_record_at` accepts either a timezone-aware or naive `datetime` (a naive
+value is interpreted in local time) and raises `ValueError` if the `datetime`
+is in the past.
+
+The `expire_record_after_seconds` / `expire_record_after` forms are
+pass-through — they do not range-check the value. Non-positive values select
+the TTL sentinels:
+
+| Value | Meaning | Named equivalent |
+|-------|---------|------------------|
+| `-1` | never expire | `never_expire()` |
+| `-2` | keep the existing TTL | `with_no_change_in_expiration()` |
+| `0` | use the namespace default | `expiry_from_server_default()` |
+
+So `expire_record_after_seconds(-1)` is equivalent to `never_expire()`. Only a
+value the client cannot represent — a negative other than the sentinels, or one
+outside the 32-bit range — is rejected, and only when the write is built.
 
 ## Batch Writes
 

@@ -23,19 +23,16 @@ def main() -> None:
         stream = session.query(key).execute()
         first = stream.first_or_raise()
         print(f"Got record: {first.record.bins}")
-        stream.close()
 
         # GET with selected bins
         stream = session.query(key).bins(["name"]).execute()
         first = stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
-        stream.close()
 
         # EXISTS
         stream = session.exists(key).execute()
         first = stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
-        stream.close()
 
         # DELETE
         session.delete(key).execute()

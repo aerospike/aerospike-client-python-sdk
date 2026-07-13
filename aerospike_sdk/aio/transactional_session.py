@@ -44,10 +44,11 @@ class TransactionalSession(Session):
     :meth:`abort`, and :meth:`rollback` (alias for ``abort``) are also
     available for manual control.
 
-    Example:
-        >>> async with client.create_session().begin_transaction() as tx:
-        ...     await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-        ...     await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
+    Example::
+
+        async with client.create_session().begin_transaction() as tx:
+            await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
+            await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
         # Auto-committed on clean exit; auto-aborted on exception.
 
     See Also:
