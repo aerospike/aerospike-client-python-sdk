@@ -32,7 +32,7 @@ from typing import Any, Protocol
 
 import pytest
 from aerospike_async import FilterExpression
-from aerospike_async.exceptions import ResultCode
+from aerospike_async.exceptions import InvalidRequest, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -102,13 +102,25 @@ def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> 
 async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
     """Assert invalid string AEL on a dataset query is rejected by the server.
 
-    With server-compiled AEL and/or query selection enabled, the client does not
-    parse ``where(str)`` locally; ``PARAMETER_ERROR`` is raised from ``execute()``
-    (explain or query), not while iterating the record stream.
+    With query selection (explain→execute), ``PARAMETER_ERROR`` is raised from
+    ``execute()``. With server-compiled AEL on field **43**, ``execute()`` may
+    return a stream and the cluster rejects the filter while reading rows.
     """
-    with pytest.raises(AerospikeError) as exc_info:
-        await execute_coro
-    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    stream = None
+    try:
+        try:
+            stream = await execute_coro
+        except AerospikeError as exc:
+            assert exc.result_code == ResultCode.PARAMETER_ERROR
+            return
+
+        with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+            async for _ in stream:
+                pass
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    finally:
+        if stream is not None:
+            stream.close()
 
 
 # Integration tests: use with tests/integration/conftest.py autouse gate (resolves ``client``).
