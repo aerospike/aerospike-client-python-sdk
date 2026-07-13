@@ -29,7 +29,9 @@ if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotation
     from aerospike_sdk.error_strategy import ErrorHandler
     from aerospike_sdk.exceptions import AerospikeError
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.RECORD_STREAM)
 
 
 class _SingleResultIter:

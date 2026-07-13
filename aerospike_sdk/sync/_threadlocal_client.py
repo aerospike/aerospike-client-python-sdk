@@ -70,6 +70,12 @@ class _ThreadLocalLocalClient:
             self._tls.client = c
         return c
 
+    @property
+    def cluster_name(self) -> Any:
+        # Served from the policy, not `_get()`: reading the configured name
+        # must never spin up a per-thread client (e.g. for a log summary).
+        return self._policy.cluster_name
+
     # -- Hot-path methods forwarded explicitly (every µs counts) ----------
 
     def get_blocking(self, *args: Any, **kwargs: Any) -> Any:
