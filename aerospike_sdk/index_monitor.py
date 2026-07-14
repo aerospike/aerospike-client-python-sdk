@@ -39,7 +39,9 @@ from aerospike_sdk.ael.filter_gen import Index, IndexContext, IndexTypeEnum
 if TYPE_CHECKING:  # avoids circular import; used in type annotations only.
     from aerospike_async import Client as PacClient
 
-log = logging.getLogger("aerospike_sdk.index_monitor")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.INDEX_MONITOR)
 
 _DEFAULT_REFRESH_INTERVAL: float = 5.0
 _DEFAULT_READY_TIMEOUT: float = 30.0

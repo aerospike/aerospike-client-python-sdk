@@ -98,7 +98,6 @@ async def run_examples(session) -> None:
     stream = await session.exists(SET.id(13)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
-    stream.close()
 
     # ------------------------------------------------------------------
     # Touch
@@ -115,30 +114,30 @@ async def run_examples(session) -> None:
     print("  Done")
 
     # ------------------------------------------------------------------
-    # Batch exists (with respond_all_keys)
+    # Batch exists (with include_missing_keys)
     # ------------------------------------------------------------------
     print("Batch exists")
-    stream = await session.exists(SET.id(13), SET.id(14), SET.id(999)).respond_all_keys().execute()
+    stream = await session.exists(SET.id(13), SET.id(14), SET.id(999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
     # ------------------------------------------------------------------
-    # Batch touch (with respond_all_keys)
+    # Batch touch (with include_missing_keys)
     # ------------------------------------------------------------------
     print("Batch touch")
-    stream = await session.touch(SET.id(13), SET.id(14), SET.id(999)).respond_all_keys().execute()
+    stream = await session.touch(SET.id(13), SET.id(14), SET.id(999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
     # ------------------------------------------------------------------
-    # Batch delete (with respond_all_keys)
+    # Batch delete (with include_missing_keys)
     # ------------------------------------------------------------------
     print("Batch delete")
     await session.upsert(SET.id(13)).put({"name": "Tim", "age": 200}).execute()
     await session.upsert(SET.id(14)).put({"name": "User1", "age": 201}).execute()
-    stream = await session.delete(SET.id(13), SET.id(14), SET.id(999)).respond_all_keys().execute()
+    stream = await session.delete(SET.id(13), SET.id(14), SET.id(999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
@@ -176,19 +175,19 @@ async def run_examples(session) -> None:
     stream.close()
 
     # ------------------------------------------------------------------
-    # respond_all_keys + AEL filter
+    # include_missing_keys + AEL filter
     # ------------------------------------------------------------------
     stream = await (
         session.query(SET.id(2))
         .where("$.name == 'Fred'")
-        .respond_all_keys()
+        .include_missing_keys()
         .execute()
     )
     first = await stream.first()
     if first:
-        print(f"  With respond_all_keys — Key: {first.key}, is_ok: {first.is_ok}")
+        print(f"  With include_missing_keys — Key: {first.key}, is_ok: {first.is_ok}")
     else:
-        print("  ERROR: No result even with respond_all_keys")
+        print("  ERROR: No result even with include_missing_keys")
     stream.close()
 
     # ------------------------------------------------------------------
@@ -299,7 +298,6 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"  Single read expression: {first.record.bins}")
-    stream.close()
 
     # Batch read expression
     stream = await (

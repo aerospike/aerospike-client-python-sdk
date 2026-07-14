@@ -49,7 +49,9 @@ from typing import (
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.index_monitor import IndexesMonitor
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.POOL)
 
 T = TypeVar("T")
 X = TypeVar("X")
@@ -401,7 +403,7 @@ class AsyncPool:
         # ``dict.get()`` calls — safe under both GIL and free-threading.
 
         self._started = True
-        log.debug(
+        log.info(
             "AsyncPool started: %d loops, %d clients, 1 shared monitor",
             self._n,
             len(self._clients),
@@ -469,7 +471,7 @@ class AsyncPool:
         self._threads.clear()
         # Hygiene: drop the round-robin iterator so its captured range() can GC.
         self._rr = itertools.cycle(range(0))
-        log.debug("AsyncPool closed")
+        log.info("AsyncPool closed")
 
     async def __aenter__(self) -> AsyncPool:
         """Async context manager: start the pool."""

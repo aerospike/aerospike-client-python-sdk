@@ -64,6 +64,7 @@ Shared types used by both async and sync APIs.
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
 | [`IndexesMonitor`](indexes-monitor.md) | Background secondary index discovery |
+| [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
 
 ## AEL
 
@@ -121,6 +122,7 @@ error-strategy
 exceptions
 query-hint
 indexes-monitor
+loggers
 ael-parser
 ael-filter-gen
 exp

@@ -25,7 +25,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Set
 
-log = logging.getLogger("aerospike_sdk.sync.info")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.INFO)
 
 
 def _merge_set_values(responses: Dict[str, Dict[str, str]]) -> Set[str]:

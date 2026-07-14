@@ -13,6 +13,40 @@ permissions:
   contents: read
 
 jobs:
+  # Advisory only (never fails the build): flag when the pinned PAC commit has
+  # fallen behind PAC's dev branch, so a stale pin surfaces as a clear warning
+  # instead of a cryptic downstream test failure. Bumping the pin stays manual.
+  pac-pin-check:
+    name: PAC pin freshness (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Warn if the PAC pin is behind PAC dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref=$(grep -oE 'aerospike-client-python-async\.git@[0-9a-f]+' pyproject.toml | head -1 | cut -d@ -f2)
+          echo "Pinned PAC commit: $ref"
+          if ! gh api "repos/aerospike/aerospike-client-python-async/compare/${ref}...dev" > cmp.json; then
+            echo "::warning title=PAC pin check skipped::Could not compare pin to PAC dev (auth/network)."; exit 0
+          fi
+          # compare base=pin, head=dev: ahead_by = commits dev has that the pin
+          # lacks (= how far the pin is BEHIND dev); behind_by = commits the pin
+          # has that dev lacks (= pin is AHEAD of dev, e.g. an unmerged commit).
+          behind=$(jq -r '.ahead_by' cmp.json)
+          ahead=$(jq -r '.behind_by' cmp.json)
+          newest=$(jq -r '(.commits[-1].sha // "")[0:9]' cmp.json)
+          echo "PAC pin is $behind behind / $ahead ahead of dev (dev tip $newest)"
+          if [ "$behind" = 0 ] && [ "$ahead" = 0 ]; then
+            echo "PAC pin is at dev tip."
+          elif [ "$ahead" = 0 ]; then
+            echo "::warning title=PAC pin is behind dev::Pinned PAC is $behind commit(s) behind origin/dev (dev tip $newest). Bump the pin in pyproject.toml if you need newer PAC changes."
+          elif [ "$behind" = 0 ]; then
+            echo "::notice title=PAC pin ahead of dev::Pinned PAC is $ahead commit(s) ahead of origin/dev — likely an unmerged feature-branch commit. Fine for co-dev; land it on PAC dev before merging."
+          else
+            echo "::warning title=PAC pin diverged from dev::Pinned PAC has diverged from origin/dev ($ahead ahead, $behind behind). Confirm the pin is intentional."
+          fi
+
   unit:
     runs-on: ubuntu-latest
     strategy:

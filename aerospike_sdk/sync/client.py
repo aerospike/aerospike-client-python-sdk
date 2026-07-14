@@ -52,7 +52,9 @@ if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.sync.session import SyncSession
     from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
+
+log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class SyncClient:
@@ -171,6 +173,9 @@ class SyncClient:
         """
         if self._connected and self._client is not None:
             return
+        # Rust-emitted log levels are cached at first emission; re-sync so
+        # logging configured between import and connect is honored.
+        refresh_log_levels()
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         if self._current_thread_runtime:
@@ -180,6 +185,10 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        log.info(
+            "Connected seeds=%r", self._seeds,
+            extra={"aerospike.cluster": self._policy.cluster_name},
+        )
 
     def close(self) -> None:
         """Close the connection synchronously.
@@ -193,6 +202,7 @@ class SyncClient:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+            log.info("Client closed")
         self._namespace_mode_cache.clear()
 
     def __enter__(self) -> SyncClient:

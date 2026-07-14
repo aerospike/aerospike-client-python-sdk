@@ -25,6 +25,7 @@ the sync namespace.
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, List, Optional, Sequence, Union
 
 from aerospike_async import ExecuteTask, Key
@@ -42,6 +43,9 @@ from aerospike_sdk.operations_shared import (
     _SingleKeyWriteSegmentBase,
     _WriteSegmentBuilderBase,
     _WriteVerbs,
+    _cmd_done,
+    _CMD_DEBUG,
+    _cmd_enabled,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
@@ -165,6 +169,7 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
             and self._base_read_policy is not None
             and self._read_policy is None
         ):
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client.get_blocking(
                     self._single_key,
@@ -175,31 +180,53 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     txn=self._txn,
                 )
             except Exception as e:
-                pfc = _convert_pac_exception(e)
-                rc = pfc.result_code
+                psdk_exc = _convert_pac_exception(e)
+                rc = psdk_exc.result_code
                 # Mirror _is_actionable / _should_include_result semantics for
                 # the slow path: KEY_NOT_FOUND_ERROR on a plain read is
                 # idempotent — return an empty stream (or a not-found
                 # RecordResult when respond_all_keys is set) instead of
                 # raising. Anything else propagates.
                 if rc == ResultCode.KEY_NOT_FOUND_ERROR:
+                    if cmd_t0:
+                        _cmd_done(
+                            None, self._single_key.namespace,
+                            self._single_key.set_name, 1, cmd_t0, self._client,
+                        )
                     if self._respond_all_keys:
                         return SyncRecordStream.from_list([RecordResult(
                             key=self._single_key, record=None,
-                            result_code=rc, exception=pfc, index=0,
+                            result_code=rc, exception=psdk_exc, index=0,
                         )])
                     return SyncRecordStream.from_list([])
-                raise pfc from e
+                raise psdk_exc from e
+            if cmd_t0:
+                _cmd_done(
+                    None, self._single_key.namespace,
+                    self._single_key.set_name, 1, cmd_t0, self._client,
+                )
             return SyncRecordStream.from_list([RecordResult(
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self.execute_blocking_fast_path(on_error)
         if fast is not None:
+            if cmd_t0:
+                spec0 = self._specs[0]
+                _cmd_done(
+                    spec0.op_type, self._namespace, self._set_name,
+                    len(spec0.keys), cmd_t0, self._client,
+                )
             return SyncRecordStream.from_list(fast)
 
         multispec = self.execute_multispec_blocking(on_error)
         if multispec is not None:
+            if cmd_t0:
+                _cmd_done(
+                    "batch", self._namespace, self._set_name,
+                    sum(len(s.keys) for s in self._specs), cmd_t0, self._client,
+                )
             return SyncRecordStream.from_list(multispec)
 
         stream_kind = self.execute_blocking_stream(on_error)
@@ -345,8 +372,16 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
         Tries the inherited blocking fast path first; otherwise delegates
         to the wrapped query builder's full dispatch.
         """
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self.execute_blocking_fast_path(on_error)
         if fast is not None:
+            if cmd_t0:
+                spec0 = self._qb._specs[0]
+                _cmd_done(
+                    spec0.op_type, self._qb._namespace,
+                    self._qb._set_name, len(spec0.keys), cmd_t0,
+                    self._qb._client,
+                )
             return SyncRecordStream.from_list(fast)
         # Fall back to the QB's full sync dispatch (Tier 1b / 2).
         assert isinstance(self._qb, SyncQueryBuilder)
@@ -438,6 +473,7 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                     # Neither AP nor SC available — fall through to slow path.
                     self._promote()
                     return SyncWriteSegmentBuilder.execute(self, on_error)
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client_fast.operate_blocking(
                     self._key,
@@ -454,14 +490,24 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                 # (update, replace_if_exists). For upsert/insert/replace,
                 # it's idempotent. KEY_EXISTS_ERROR is always actionable
                 # (e.g. insert into existing record).
-                pfc = _convert_pac_exception(e)
-                rc = pfc.result_code
+                psdk_exc = _convert_pac_exception(e)
+                rc = psdk_exc.result_code
                 if (
                     rc == ResultCode.KEY_NOT_FOUND_ERROR
                     and self._op_type_fast not in ("update", "replace_if_exists")
                 ):
+                    if cmd_t0:
+                        _cmd_done(
+                            self._op_type_fast, self._key.namespace,
+                            self._key.set_name, 1, cmd_t0, self._client_fast,
+                        )
                     return SyncRecordStream.from_list([])
-                raise pfc from e
+                raise psdk_exc from e
+            if cmd_t0:
+                _cmd_done(
+                    self._op_type_fast, self._key.namespace,
+                    self._key.set_name, 1, cmd_t0, self._client_fast,
+                )
             return SyncRecordStream.from_list([RecordResult(
                 key=self._key, record=record, result_code=ResultCode.OK,
             )])

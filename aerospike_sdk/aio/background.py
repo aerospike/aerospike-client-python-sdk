@@ -22,7 +22,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
-log = logging.getLogger("aerospike_sdk.background")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.BACKGROUND)
 
 from aerospike_async import (
     Client,
@@ -53,7 +55,7 @@ class _OpType(enum.Enum):
 
 
 _BG_UNSUPPORTED = (
-    "fail_on_filtered_out and respond_all_keys apply to foreground reads; "
+    "fail_on_filtered_out and include_missing_keys apply to foreground reads; "
     "they are not supported for background tasks."
 )
 
@@ -290,7 +292,7 @@ class _BackgroundOperationBuilderBase:
         return self
 
     def expire_record_after(self, duration: timedelta) -> BackgroundOperationBuilder:
-        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        """Set record TTL using a :class:`datetime.timedelta` (-1/-2/0 select sentinels)."""
         self._ttl_seconds = _seconds_from_timedelta(duration)
         return self
 
@@ -313,9 +315,13 @@ class _BackgroundOperationBuilderBase:
         """Unsupported for background tasks (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def respond_all_keys(self) -> BackgroundOperationBuilder:
+    def include_missing_keys(self) -> BackgroundOperationBuilder:
         """Unsupported for background tasks (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
+
+    def respond_all_keys(self) -> BackgroundOperationBuilder:
+        """Alias for :meth:`include_missing_keys`; unsupported for background (raises ``TypeError``)."""
+        return self.include_missing_keys()
 
     def _pac_client(self) -> Client:
         fc = self._session.client
@@ -594,9 +600,13 @@ class _BackgroundUdfBuilderBase:
         """Unsupported (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def respond_all_keys(self) -> BackgroundUdfBuilder:
+    def include_missing_keys(self) -> BackgroundUdfBuilder:
         """Unsupported (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
+
+    def respond_all_keys(self) -> BackgroundUdfBuilder:
+        """Alias for :meth:`include_missing_keys`; unsupported for background (raises ``TypeError``)."""
+        return self.include_missing_keys()
 
     def _pac_client(self) -> Client:
         fc = self._session.client

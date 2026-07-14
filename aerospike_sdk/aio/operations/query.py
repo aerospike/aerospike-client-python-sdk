@@ -21,6 +21,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import (
     Protocol,
     TYPE_CHECKING,
@@ -105,10 +106,16 @@ from aerospike_sdk.aio.operations.cdt_write import (
     _resolve_list_policy,
     _resolve_map_policy,
 )
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.operations_shared import (
     NamespaceModeResolver,
     _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
+    _cmd_cluster,
+    _cmd_done,
+    _cmd_failed,
+    _CMD_DEBUG,
+    _cmd_enabled,
     _TTL_DONT_UPDATE,
     _TTL_NEVER_EXPIRE,
     _TTL_SERVER_DEFAULT,
@@ -120,7 +127,7 @@ from aerospike_sdk.operations_shared import (
     _WriteVerbs,
 )
 
-log = logging.getLogger("aerospike_sdk.query")
+log = logging.getLogger(SdkLoggers.QUERY)
 
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
@@ -260,7 +267,7 @@ class _FilterRecord:
         if self.method is None or self.args is None:
             raise ValueError(
                 "Cannot apply index_name/bin_name hint to a pre-built Filter. "
-                "Use Filter.*_by_index() directly or let the PFC generate the "
+                "Use Filter.*_by_index() directly or let the PSDK generate the "
                 "filter via parse_ael_with_index()."
             )
         if hint.index_name is not None:
@@ -540,11 +547,12 @@ class _QueryBuilderBase:
         Returns:
             This builder for method chaining.
 
-        Example:
-            >>> async with session.begin_transaction() as tx:
-            ...     await tx.upsert(k1).bin("v").set_to(1).execute()
-            ...     # Run this one write outside the transaction:
-            ...     await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
+        Example::
+
+            async with session.begin_transaction() as tx:
+                await tx.upsert(k1).bin("v").set_to(1).execute()
+                # Run this one write outside the transaction:
+                await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.get_current_transaction`
@@ -1071,12 +1079,12 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         See Also:
-            :meth:`respond_all_keys`: Include missing-key rows in batch reads.
+            :meth:`include_missing_keys`: Include missing-key rows in batch reads.
         """
         self._fail_on_filtered_out = True
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Ensure batch/point reads emit one row per requested key, including not-found.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
@@ -1087,9 +1095,24 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
+            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (the underlying client's ``respondAllKeys`` name).
+
+        Retained for callers familiar with the low-level client's policy name;
+        :meth:`include_missing_keys` is the preferred name and identical in behavior.
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`include_missing_keys`: Preferred name for this behavior.
+        """
+        return self.include_missing_keys()
 
     @overload
     def default_where(self, expression: str) -> QueryBuilder: ...
@@ -1140,16 +1163,15 @@ class _QueryBuilderBase:
         """Set a default TTL applied to chained operations that lack their own.
 
         Args:
-            seconds: Time-to-live in seconds (must be > 0).
+            seconds: Time-to-live in seconds. A positive value sets an explicit
+                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
+                and namespace-default respectively. Not range-checked here — a
+                value the client cannot represent is rejected when the write is
+                built.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If seconds is <= 0.
         """
-        if seconds <= 0:
-            raise ValueError("seconds must be greater than 0")
         self._default_ttl_seconds = seconds
         return self
 
@@ -1158,16 +1180,14 @@ class _QueryBuilderBase:
 
         Equivalent to :meth:`default_expire_record_after_seconds` with seconds
         derived from ``duration`` — applied to chained operations that lack
-        their own TTL.
+        their own TTL. A ``duration`` resolving to -1, -2, or 0 seconds selects
+        the corresponding TTL sentinel.
 
         Args:
-            duration: Positive time-to-live.
+            duration: Time-to-live.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If ``duration`` is not strictly positive.
         """
         self._default_ttl_seconds = _seconds_from_timedelta(duration)
         return self
@@ -1464,6 +1484,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed(op_type, rc, pfc_exc, self._client)
 
         if self._is_actionable(rc, op_type):
             if disp is _ErrorDisposition.THROW:
@@ -1494,6 +1515,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed("batch", rc, pfc_exc, self._client)
 
         if disp is _ErrorDisposition.THROW:
             raise pfc_exc from exc
@@ -1999,24 +2021,17 @@ class _QueryBuilderBase:
         Handled shapes:
 
         - **Single key, single spec** — routes through
-          :meth:`_execute_single_key_direct_blocking` (PAC
-          ``get_blocking`` / ``operate_blocking``). Honors filter
-          expressions, generation / TTL / durable-delete overrides, and
-          record-delete ops via :meth:`_make_read_policy` /
-          :meth:`_make_write_policy`. Caller-supplied ``on_error`` still
-          falls back to the async path (handler dispositions on single-key
-          land in Phase 2b).
-        - **Multi-key plain read, single spec** — routes through
-          :meth:`_execute_batch_read_blocking` (PAC ``batch_read_blocking``).
-          Honors filter expressions via :meth:`_make_batch_read_policy` and
-          the resolved disposition (THROW / IN_STREAM / HANDLER).
+          :meth:`_execute_single_key_direct_blocking` (read, write, delete,
+          touch, exists, and UDF shapes).
+        - **Multi-key, single spec** — routes through the
+          ``_execute_batch_*_blocking`` family for plain reads, writes,
+          deletes, touch, exists, read-operate, and UDF.
 
         Returns:
             A list of :class:`RecordResult` on a hit. ``None`` when the
-            spec shape isn't yet handled by the blocking dispatch (delete /
-            touch / exists / udf single-key ops, multi-key with per-key
-            operate, dataset / SI queries, scans, UDF background — caller
-            falls back to the async path).
+            shape is not eligible for this fast path (for example: no specs,
+            more than one spec, dataset / SI queries, scans, or background
+            UDF), so the caller falls back to the async execution path.
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
@@ -2315,6 +2330,7 @@ class _QueryBuilderBase:
             self._filter_expression is not None or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
+            extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         if self._policy is not None:
             policy = self._policy
@@ -2381,6 +2397,7 @@ class _QueryBuilderBase:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
+        _cmd_failed(op_type, rc, pfc_exc, self._client)
 
         if self._is_actionable(rc, op_type):
             if disp is _ErrorDisposition.THROW:
@@ -2706,13 +2723,6 @@ class _QueryBuilderBase:
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp
-
-
-
-
-
-
-
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
@@ -2796,23 +2806,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     
 
     # -- Chain-level defaults -------------------------------------------------
-
-
-
-
-
-
-
-
     # -- Query stacking -------------------------------------------------------
-
-
     # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
-
-
-
-
-
     async def execute(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
@@ -2891,6 +2886,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             rp_sc = self._base_read_policy_sc
             if rp_ap is not None and rp_sc is not None:
                 key = self._single_key
+                cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
                 try:
                     record = await self._client.get(
                         key, None,
@@ -2901,6 +2897,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 except Exception as e:
                     return self._handle_error(
                         key, e, _ErrorDisposition.THROW, None)
+                if cmd_t0:
+                    _cmd_done(
+                        None, key.namespace, key.set_name, 1, cmd_t0,
+                        self._client,
+                    )
                 return RecordStream.from_single(key, record)
             # Fall through when an AP-only policy is cached (e.g. txn nulled
             # them): legacy path with explicit mode resolution.
@@ -2914,6 +2915,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             if len(self._specs) == 1:
                 spec0 = self._specs[0]
                 is_single = len(spec0.keys) == 1
+                cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
                 # Ultra-fast path: single-key operations with no spec-level
                 # overrides bypass the full _execute_spec → policy-build →
@@ -2934,23 +2936,29 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 ):
                     result = await self._execute_single_key_direct(spec0)
                     if result is not None:
+                        if cmd_t0:
+                            _cmd_done(
+                                spec0.op_type, self._namespace,
+                                self._set_name, 1, cmd_t0, self._client,
+                            )
                         return result
 
-                if __debug__ and log.isEnabledFor(logging.DEBUG):
-                    log.debug(
-                        "execute: %s.%s specs=1 keys=%d",
-                        self._namespace, self._set_name,
-                        len(spec0.keys),
-                    )
                 disp = _resolve_disposition(on_error, is_single)
                 handler = on_error if callable(on_error) else None
-                return await self._execute_spec(spec0, disp, handler)
-            total_keys = sum(len(s.keys) for s in self._specs)
-            log.debug(
-                "execute: %s.%s specs=%d keys=%d",
-                self._namespace, self._set_name,
-                len(self._specs), total_keys,
-            )
+                stream = await self._execute_spec(spec0, disp, handler)
+                if cmd_t0:
+                    _cmd_done(
+                        spec0.op_type, self._namespace, self._set_name,
+                        len(spec0.keys), cmd_t0, self._client,
+                    )
+                return stream
+            if __debug__ and log.isEnabledFor(logging.DEBUG):
+                log.debug(
+                    "execute: %s.%s specs=%d keys=%d",
+                    self._namespace, self._set_name,
+                    len(self._specs), sum(len(s.keys) for s in self._specs),
+                    extra={"aerospike.cluster": _cmd_cluster(self._client)},
+                )
             is_single = False
             disp = _resolve_disposition(on_error, is_single)
             handler = on_error if callable(on_error) else None
@@ -2968,11 +2976,17 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             for spec in self._specs:
                 all_keys.extend(spec.keys)
                 all_ops.extend(self._spec_to_batch_ops(spec))
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 batch_records = await self._client.batch(
                     all_ops, batch_policy=batch_policy)
             except Exception as e:
                 return self._handle_batch_error(all_keys, e, disp, handler)
+            if cmd_t0:
+                _cmd_done(
+                    "batch", self._namespace, self._set_name,
+                    len(all_keys), cmd_t0, self._client,
+                )
             return self._filtered_batch_stream(batch_records, disp, handler)
 
         # Dataset query path (no keys were specified)
@@ -3469,9 +3483,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return self._filtered_batch_stream(
             batch_records, disp, handler, op_type="delete")
 
-
-
-
     async def _execute_single_key_touch(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
@@ -3554,10 +3565,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return RecordStream.from_list(results)
 
     # -- Mixed-batch execution (multi-spec chains) ----------------------------
-
-
-
-
     async def _execute_dataset_query(self) -> RecordStream:
         log.debug(
             "dataset query: %s.%s filter=%s chunk=%s hint=%s",
@@ -3565,6 +3572,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             self._filter_expression is not None or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
+            extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         if self._policy is not None:
             policy = self._policy
@@ -3621,9 +3629,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         return RecordStream.from_recordset(recordset)
 
 
-
-
-
 class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     """Accumulate scalar and CDT writes for the current operation's key(s).
 
@@ -3647,56 +3652,6 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     """
 
     __slots__ = ("_qb",)
-
-
-
-    # -- Bin operations -------------------------------------------------------
-
-
-
-
-
-
-    # -- Scalar bin operations (direct on segment) ----------------------------
-
-
-
-
-
-
-
-
-    # -- Record-level operations ----------------------------------------------
-
-
-
-    # -- Expression operations (direct on segment) ----------------------------
-
-
-
-
-
-    # -- Transition methods ---------------------------------------------------
-
-
-
-    # -- Per-operation settings ------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # -- Execution ------------------------------------------------------------
 
     async def execute(
@@ -3838,6 +3793,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         key = self._key
         op_type = self._op_type_fast
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the
         # common no-txn case), hand them to PAC and let Rust resolve
@@ -3862,6 +3818,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 )
             except Exception as exc:
                 return self._handle_fast_error(exc, op_type or "upsert")
+            if cmd_t0:
+                _cmd_done(
+                    op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                    self._client_fast)
             return RecordStream.from_single(key, record)
 
         # Fallback (delete/touch/exists + txn-bound cells): resolve mode
@@ -3884,6 +3844,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 existed = await self._client_fast.delete(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "delete")
+            if cmd_t0:
+                _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             if existed:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -3896,6 +3859,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 await self._client_fast.touch(key, policy=wp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "touch")
+            if cmd_t0:
+                _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             return RecordStream.from_error(key, ResultCode.OK)
 
         # -- exists (uses ReadPolicy, returns bool) --
@@ -3912,6 +3878,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 found = await self._client_fast.exists(key, policy=rp)
             except Exception as exc:
                 return self._handle_fast_error(exc, "exists")
+            if cmd_t0:
+                _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0,
+                          self._client_fast)
             if found:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -3932,6 +3901,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 )
             except Exception as exc:
                 return self._handle_fast_error(exc, op_type or "upsert")
+            if cmd_t0:
+                _cmd_done(
+                    op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                    self._client_fast)
             return RecordStream.from_single(key, record)
 
         # Fall back to the legacy build-policy-in-Python path.
@@ -3953,6 +3926,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 key, self._ops, policy=wp)
         except Exception as exc:
             return self._handle_fast_error(exc, op_type or "upsert")
+        if cmd_t0:
+            _cmd_done(op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
+                      self._client_fast)
         return RecordStream.from_single(key, record)
 
 

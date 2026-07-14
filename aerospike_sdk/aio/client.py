@@ -45,7 +45,9 @@ if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.session import Session
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
+
+log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class Client:
@@ -154,10 +156,17 @@ class Client:
         if self._connected and self._client is not None:
             return
 
+        # Rust-emitted log levels are cached at first emission; re-sync so
+        # logging configured between import and connect is honored.
+        refresh_log_levels()
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
+        log.info(
+            "Connected seeds=%r", self._seeds,
+            extra={"aerospike.cluster": self._policy.cluster_name},
+        )
         if log.isEnabledFor(logging.DEBUG):
             try:
                 build_by_node = await self._client.info("build")
@@ -191,6 +200,7 @@ class Client:
             await self._client.close()
             self._client = None
             self._connected = False
+            log.info("Client closed")
         self._namespace_mode_cache.clear()
 
     def connect_blocking(self) -> None:
@@ -219,10 +229,15 @@ class Client:
         """
         if self._connected and self._client is not None:
             return
+        refresh_log_levels()
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        log.info(
+            "Connected seeds=%r", self._seeds,
+            extra={"aerospike.cluster": self._policy.cluster_name},
+        )
         # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close_blocking(self) -> None:
@@ -236,6 +251,7 @@ class Client:
             self._client.close_blocking()
             self._client = None
             self._connected = False
+            log.info("Client closed")
         self._namespace_mode_cache.clear()
 
     async def __aenter__(self) -> Client:

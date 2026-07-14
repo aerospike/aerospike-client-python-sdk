@@ -95,7 +95,7 @@ class SyncBackgroundOperationBuilder:
         return self
 
     def expire_record_after(self, duration: timedelta) -> SyncBackgroundOperationBuilder:
-        """Set record TTL using a :class:`datetime.timedelta` (must be positive)."""
+        """Set record TTL using a :class:`datetime.timedelta` (-1/-2/0 select sentinels)."""
         self._inner.expire_record_after(duration)
         return self
 
@@ -118,10 +118,14 @@ class SyncBackgroundOperationBuilder:
         self._inner.fail_on_filtered_out()
         return self
 
-    def respond_all_keys(self) -> SyncBackgroundOperationBuilder:
-        """Unsupported for background tasks."""
-        self._inner.respond_all_keys()
+    def include_missing_keys(self) -> SyncBackgroundOperationBuilder:
+        """Unsupported for background tasks (raises ``TypeError``)."""
+        self._inner.include_missing_keys()
         return self
+
+    def respond_all_keys(self) -> SyncBackgroundOperationBuilder:
+        """Alias for :meth:`include_missing_keys`; unsupported for background."""
+        return self.include_missing_keys()
 
     def execute(self) -> ExecuteTask:
         """Submit the job and return a task handle (blocks until accepted).
@@ -193,10 +197,14 @@ class SyncBackgroundUdfBuilder:
         self._inner.fail_on_filtered_out()
         return self
 
-    def respond_all_keys(self) -> SyncBackgroundUdfBuilder:
-        """Unsupported for background tasks."""
-        self._inner.respond_all_keys()
+    def include_missing_keys(self) -> SyncBackgroundUdfBuilder:
+        """Unsupported for background tasks (raises ``TypeError``)."""
+        self._inner.include_missing_keys()
         return self
+
+    def respond_all_keys(self) -> SyncBackgroundUdfBuilder:
+        """Alias for :meth:`include_missing_keys`; unsupported for background."""
+        return self.include_missing_keys()
 
     def execute(self) -> ExecuteTask:
         """Submit the background UDF job (blocks until accepted).

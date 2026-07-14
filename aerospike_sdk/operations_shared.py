@@ -25,8 +25,10 @@ used by the batch dispatchers.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from enum import Enum
+from time import perf_counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -65,6 +67,7 @@ from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
@@ -80,6 +83,63 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.op
 
 
 NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
+
+_cmd_log = logging.getLogger(SdkLoggers.COMMAND)
+
+# Hot-path guard for command summaries. Callers start a timer with
+#   cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+# and treat a falsy value as "summaries off". The pre-bound method + constant
+# keep the disabled cost to one cached level check (~25 ns) per operation;
+# level changes still apply live because isEnabledFor consults the logging
+# manager on every call.
+_cmd_enabled = _cmd_log.isEnabledFor
+_CMD_DEBUG = logging.DEBUG
+
+
+def _cmd_cluster(client: Any) -> Optional[str]:
+    """Configured cluster name for summary tagging, or ``None``.
+
+    Read lazily at emit time (only when summaries are enabled), so there is
+    no cost on the disabled hot path and no per-operation plumbing. ``client``
+    is the PAC client held by the builder; it exposes ``cluster_name`` when the
+    app configured cluster-name validation, else ``None``. ``getattr`` keeps
+    this a no-op on client surfaces that predate the attribute.
+    """
+    return getattr(client, "cluster_name", None)
+
+
+def _cmd_done(
+    op_type: Optional[str], namespace: Optional[str], set_name: Optional[str],
+    key_count: int, t0: float, client: Any = None,
+) -> None:
+    """Emit one DEBUG command summary. Only call when ``t0`` is truthy.
+
+    Operational fields only — never keys, bin names, or values. The cluster
+    name (when configured) rides along as an ``aerospike.cluster`` structured
+    field for JSON log pipelines.
+    """
+    _cmd_log.debug(
+        "%s %s.%s keys=%d latency_ms=%.3f",
+        op_type or "read", namespace, set_name, key_count,
+        (perf_counter() - t0) * 1000.0,
+        extra={"aerospike.cluster": _cmd_cluster(client)},
+    )
+
+
+def _cmd_failed(
+    op_type: Optional[str], rc: int, exc: Exception, client: Any = None,
+) -> None:
+    """Emit one DEBUG line for a command routed through an error funnel.
+
+    Logs the exception type and result code, not the message — error text
+    can echo user data.
+    """
+    if _cmd_log.isEnabledFor(logging.DEBUG):
+        _cmd_log.debug(
+            "%s failed rc=%s exc=%s",
+            op_type or "read", rc, type(exc).__name__,
+            extra={"aerospike.cluster": _cmd_cluster(client)},
+        )
 
 
 class BatchOpType(Enum):
@@ -125,15 +185,14 @@ _TTL_SERVER_DEFAULT = 0
 
 
 def _seconds_from_timedelta(duration: timedelta) -> int:
-    """Convert a positive ``timedelta`` into an integer TTL in seconds.
+    """Convert a ``timedelta`` into an integer TTL in seconds.
 
-    Raises:
-        ValueError: If the resulting interval is not strictly positive.
+    The value is passed through unchanged: a duration resolving to -1, -2, or 0
+    selects the TTL sentinels (never expire, no change, namespace default). The
+    underlying ``Expiration`` type is the sole authority on which remaining
+    values are representable.
     """
-    seconds = int(duration.total_seconds())
-    if seconds <= 0:
-        raise ValueError(f"duration must be positive, got {duration!r}")
-    return seconds
+    return int(duration.total_seconds())
 
 
 def _seconds_until(when: datetime) -> int:
@@ -404,16 +463,17 @@ class _WriteSegmentBuilderBase:
         """Set the TTL on the current write segment.
 
         Args:
-            seconds: Time-to-live in seconds (must be > 0).
+            seconds: Time-to-live in seconds. A positive value sets an explicit
+                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
+                and namespace-default respectively (see :meth:`never_expire`,
+                :meth:`with_no_change_in_expiration`, and
+                :meth:`expiry_from_server_default` for named equivalents). The
+                value is not range-checked here — one the client cannot
+                represent is rejected when the write is built.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If seconds is <= 0.
         """
-        if seconds <= 0:
-            raise ValueError("seconds must be greater than 0")
         self._qb._ttl_seconds = seconds
         return self
 
@@ -422,16 +482,14 @@ class _WriteSegmentBuilderBase:
 
         Equivalent to :meth:`expire_record_after_seconds` with seconds derived
         from ``duration`` — convenient when the caller already has a
-        ``timedelta`` (``timedelta(days=30)``, etc.).
+        ``timedelta`` (``timedelta(days=30)``, etc.). A ``timedelta`` resolving
+        to -1, -2, or 0 seconds selects the corresponding TTL sentinel.
 
         Args:
-            duration: Positive time-to-live.
+            duration: Time-to-live.
 
         Returns:
             self for method chaining.
-
-        Raises:
-            ValueError: If ``duration`` is not strictly positive.
         """
         self._qb._ttl_seconds = _seconds_from_timedelta(duration)
         return self
@@ -506,10 +564,14 @@ class _WriteSegmentBuilderBase:
         self._qb._durable_delete = False
         return self
 
-    def respond_all_keys(self) -> Self:
+    def include_missing_keys(self) -> Self:
         """Include results for missing keys in the stream."""
         self._qb._respond_all_keys = True
         return self
+
+    def respond_all_keys(self) -> Self:
+        """Alias for :meth:`include_missing_keys` (underlying client's name); identical behavior."""
+        return self.include_missing_keys()
 
     def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code."""
@@ -933,9 +995,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().ensure_generation_is(generation)
 
-    def respond_all_keys(self):
+    def include_missing_keys(self):
         self._promote()
-        return super().respond_all_keys()
+        return super().include_missing_keys()
 
     def fail_on_filtered_out(self):
         self._promote()
@@ -955,6 +1017,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     ) -> RecordStream:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
+        _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:
             if op_type in _FAST_WRITES_REQUIRING_KEY:
                 raise pfc_exc from exc

@@ -26,8 +26,21 @@ from aerospike_async import (
     QueryPolicy,
     WritePolicy,
 )
+from aerospike_async.exceptions import ValueError as _PacValueError
 
 from aerospike_sdk.policy.behavior_settings import Settings
+
+
+def _to_value_error(exc: _PacValueError) -> ValueError:
+    """Translate a PAC policy-validation error into a built-in ``ValueError``.
+
+    ``read_touch_ttl`` is the only policy field the underlying async client
+    (PAC) validates on assignment, raising ``aerospike_async.exceptions``. We
+    surface it as a built-in :exc:`ValueError` so callers only ever catch
+    Python/SDK exceptions, consistent with the rest of the SDK's input
+    validation, rather than reaching into ``aerospike_async``.
+    """
+    return ValueError(str(exc))
 
 
 def resolve_durable_delete(
@@ -53,28 +66,35 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
 
     Uses :meth:`ReadPolicy.from_fields` so that the full policy crosses the
     Rust boundary exactly once instead of once per field.
+
+    Raises:
+        ValueError: If ``read_touch_ttl_percent`` is out of range (must be -1,
+            0, or 1-100).
     """
-    return ReadPolicy.from_fields(
-        total_timeout=(
-            _ms(settings.total_timeout)
-            if settings.total_timeout is not None else None
-        ),
-        socket_timeout=(
-            _ms(settings.socket_timeout)
-            if settings.socket_timeout is not None else None
-        ),
-        max_retries=settings.max_retries,
-        sleep_between_retries=(
-            _ms(settings.retry_delay)
-            if settings.retry_delay is not None else None
-        ),
-        replica=settings.replica,
-        read_mode_ap=settings.read_mode_ap,
-        read_mode_sc=settings.read_mode_sc,
-        read_touch_ttl=settings.read_touch_ttl_percent,
-        use_compression=settings.use_compression,
-        compression_threshold=settings.compression_threshold,
-    )
+    try:
+        return ReadPolicy.from_fields(
+            total_timeout=(
+                _ms(settings.total_timeout)
+                if settings.total_timeout is not None else None
+            ),
+            socket_timeout=(
+                _ms(settings.socket_timeout)
+                if settings.socket_timeout is not None else None
+            ),
+            max_retries=settings.max_retries,
+            sleep_between_retries=(
+                _ms(settings.retry_delay)
+                if settings.retry_delay is not None else None
+            ),
+            replica=settings.replica,
+            read_mode_ap=settings.read_mode_ap,
+            read_mode_sc=settings.read_mode_sc,
+            read_touch_ttl=settings.read_touch_ttl_percent,
+            use_compression=settings.use_compression,
+            compression_threshold=settings.compression_threshold,
+        )
+    except _PacValueError as e:
+        raise _to_value_error(e) from e
 
 
 def to_write_policy(settings: Settings) -> WritePolicy:
@@ -138,10 +158,18 @@ def to_query_policy(settings: Settings) -> QueryPolicy:
 
 
 def to_batch_read_policy(settings: Settings) -> BatchReadPolicy:
-    """Build a BatchReadPolicy from resolved Settings."""
+    """Build a BatchReadPolicy from resolved Settings.
+
+    Raises:
+        ValueError: If ``read_touch_ttl_percent`` is out of range (must be -1,
+            0, or 1-100).
+    """
     p = BatchReadPolicy()
     if settings.read_touch_ttl_percent is not None:
-        p.read_touch_ttl = settings.read_touch_ttl_percent
+        try:
+            p.read_touch_ttl = settings.read_touch_ttl_percent
+        except _PacValueError as e:
+            raise _to_value_error(e) from e
     return p
 
 
@@ -190,6 +218,13 @@ def apply_to_read_policy(settings: Settings, policy: ReadPolicy) -> ReadPolicy:
         policy.read_mode_ap = settings.read_mode_ap
     if settings.read_mode_sc is not None:
         policy.read_mode_sc = settings.read_mode_sc
+    # 0 is the ReadPolicy default (server-default touch TTL); treat it as unset
+    # so behavior settings fill it without clobbering an explicit non-default.
+    if settings.read_touch_ttl_percent is not None and policy.read_touch_ttl == 0:
+        try:
+            policy.read_touch_ttl = settings.read_touch_ttl_percent
+        except _PacValueError as e:
+            raise _to_value_error(e) from e
     if settings.use_compression is not None:
         policy.use_compression = settings.use_compression
     if settings.compression_threshold is not None:

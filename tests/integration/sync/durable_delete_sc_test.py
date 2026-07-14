@@ -161,7 +161,7 @@ class TestDurableDeleteOperate:
         assert first.record is not None
         assert first.record.bins[bin_name] == 1
 
-        row = session.exists(key).respond_all_keys().execute().first()
+        row = session.exists(key).include_missing_keys().execute().first()
         assert row is not None
         assert row.as_bool() is False
 
@@ -179,7 +179,7 @@ class TestDurableDeleteBatchReset:
         _delete_keys_durable(session, keys)
 
         del_rows = (
-            session.delete(*keys).with_durable_delete().respond_all_keys()
+            session.delete(*keys).with_durable_delete().include_missing_keys()
             .execute(on_error=ErrorStrategy.IN_STREAM)
         ).collect()
         _assert_batch_delete_stream_ok(del_rows, len(keys))
@@ -261,7 +261,7 @@ class TestDurableDeleteForbiddenBatch:
                 "expected non-durable batch delete to be forbidden on SC"
             )
 
-        ex_rows = session.exists(*keys).respond_all_keys().execute().collect()
+        ex_rows = session.exists(*keys).include_missing_keys().execute().collect()
         for i, rr in enumerate(ex_rows):
             assert rr.as_bool(), f"record should still exist after forbidden delete; index {i}"
 

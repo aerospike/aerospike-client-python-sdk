@@ -40,7 +40,6 @@ async def read_check(
             .execute()
         )
         first = await stream.first()
-        stream.close()
         if first is None or not first.is_ok:
             failed_tests += 1
             print(f"      ** FAIL ** — No record returned")
@@ -80,7 +79,6 @@ async def read_print(test_id: str, session, pk: int, ael: str, description: str)
             .execute()
         )
         first = await stream.first()
-        stream.close()
         actual = first.record.bins.get("r") if first and first.is_ok else None
         passed_tests += 1
         print(f"      => {actual}")
@@ -102,7 +100,6 @@ async def read_expect_error(test_id: str, session, pk: int, ael: str, descriptio
             .execute()
         )
         first = await stream.first()
-        stream.close()
         failed_tests += 1
         actual = first.record.bins.get("r") if first and first.is_ok else "N/A"
         print(f"      ** FAIL ** — Expected error, got: {actual}")
@@ -119,7 +116,6 @@ async def filter_check(test_id: str, session, pk: int, ael: str, expect_found: b
     try:
         stream = await session.query(SET.id(pk)).where(ael).execute()
         first = await stream.first()
-        stream.close()
         found = first is not None and first.is_ok
         if found == expect_found:
             passed_tests += 1
@@ -141,7 +137,6 @@ async def filter_print(test_id: str, session, pk: int, ael: str, description: st
     try:
         stream = await session.query(SET.id(pk)).where(ael).execute()
         first = await stream.first()
-        stream.close()
         found = first is not None and first.is_ok
         passed_tests += 1
         print(f"      => found={found}")
@@ -287,7 +282,7 @@ async def test_type_casting(session) -> None:
     await read_check("T06", session, 10, "$.a + $.c.asInt()", 40)
     await read_check("T07", session, 10, "$.a.asFloat() + $.c", 40.5)
     await read_print("T08", session, 1, "$.floatBin.asInt().asFloat()",
-                     "Expect 3.0 — chained casts not yet supported in PFC grammar")
+                     "Expect 3.0 — chained casts not yet supported in PSDK grammar")
     await read_print("T09", session, 1, "$.intBin.asInt()",
                      "Expect 42 — Rust core strict typed-bin-read: float_bin fails on INT bin")
     await read_print("T10", session, 1, "$.floatBin.asFloat()",
@@ -452,7 +447,7 @@ async def test_bitwise(session) -> None:
     await read_print("B07", session, 1, "$.negInt >> 1",
                      ">> is logical, not arithmetic. Expect -4 but may get large positive")
     await read_print("B08", session, 1, "$.negInt >>> 1",
-                     "Unsigned right shift — PFC grammar supports this")
+                     "Unsigned right shift — PSDK grammar supports this")
     await filter_check("B09", session, 1, "($.intBin & 1) == 0", True)
     await filter_check("B10", session, 1, "(($.intBin >> 3) & 1) == 1", True)
 
@@ -508,7 +503,7 @@ async def test_logical(session) -> None:
 
 async def test_control_structures(session) -> None:
     section("10. CONTROL STRUCTURES")
-    # PFC uses unquoted variable names: let (x = ...) not let ('x' = ...)
+    # PSDK uses unquoted variable names: let (x = ...) not let ('x' = ...)
     await read_check("CS01", session, 7, "let (x = $.price) then (${x} + 1)", 101)
     await read_check("CS02", session, 7,
                      "let (x = $.price, y = $.qty) then (${x} * ${y})", 500)

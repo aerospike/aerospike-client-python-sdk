@@ -109,7 +109,7 @@ def test_sync_batch_udf_validation_errors_in_stream(client_with_udf):
         assert r.record is not None
 
 
-def test_sync_batch_udf_respond_all_keys_includes_filtered_out(client_with_udf):
+def test_sync_batch_udf_include_missing_keys_includes_filtered_out(client_with_udf):
     session = client_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")
     k2 = DS.id("sync_batch_udf_rak_2")
@@ -134,7 +134,7 @@ def test_sync_batch_udf_respond_all_keys_includes_filtered_out(client_with_udf):
             .function(MODULE, "writeBin")
             .passing("tag", "hit2")
             .where("$.v < 10")
-            .respond_all_keys()
+            .include_missing_keys()
             .execute()
     )
     results = stream.collect()
