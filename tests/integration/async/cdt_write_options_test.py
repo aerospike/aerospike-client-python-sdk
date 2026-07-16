@@ -45,7 +45,7 @@ class TestListUniqueFlag:
                     .execute()
             )
 
-        rs = await client.query(key=k).bin("lst").get().execute()
+        rs = await session.query(key=k).bin("lst").get().execute()
         result = await rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3]
 
@@ -74,7 +74,7 @@ class TestListUniqueFlag:
                 .execute()
         )
 
-        rs = await client.query(key=k).bin("lst").get().execute()
+        rs = await session.query(key=k).bin("lst").get().execute()
         result = await rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3, 4]
 
@@ -93,7 +93,7 @@ class TestListCombinedFlags:
                 .execute()
         )
 
-        rs = await client.query(key=k).bin("lst").get().execute()
+        rs = await session.query(key=k).bin("lst").get().execute()
         result = await rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2]
 
@@ -128,7 +128,7 @@ class TestMapNoFail:
                 .execute()
         )
 
-        rs = await client.query(key=k).bin("m").get().execute()
+        rs = await session.query(key=k).bin("m").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["m"]["a"] == 2
         assert result.record.bins["m"]["b"] == 3
@@ -148,7 +148,7 @@ class TestMapNoFail:
                 .execute()
         )
 
-        rs = await client.query(key=k).bin("m").get().execute()
+        rs = await session.query(key=k).bin("m").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["m"]["a"] == 1
         assert result.record.bins["m"]["b"] == 2

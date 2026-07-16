@@ -15,7 +15,6 @@
 
 """Integration tests for QueryHint with index_name, bin_name, and query_duration."""
 
-import pytest
 import pytest_asyncio
 from aerospike_async import Filter, QueryDuration
 
@@ -84,12 +83,17 @@ async def client(
             pass
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(client):
+    return client.create_session()
+
+
 class TestQueryDurationHint:
     """query_duration hint overrides policy.expected_duration."""
 
-    async def test_query_duration_short(self, client):
+    async def test_query_duration_short(self, session):
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
             .execute()
         )
@@ -102,9 +106,9 @@ class TestQueryDurationHint:
         stream.close()
         assert count > 0
 
-    async def test_query_duration_long(self, client):
+    async def test_query_duration_long(self, session):
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .with_hint(QueryHint(query_duration=QueryDuration.LONG))
             .execute()
         )
@@ -121,10 +125,10 @@ class TestQueryDurationHint:
 class TestIndexNameHint:
     """index_name hint directs the query to a specific named secondary index."""
 
-    async def test_filter_with_index_name_hint(self, client):
+    async def test_filter_with_index_name_hint(self, session):
         """Filter.range + index_name hint on a named numeric index."""
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .filter(Filter.range_by_index(INDEX_NAME, 22, 26))
             .execute()
         )
@@ -136,10 +140,10 @@ class TestIndexNameHint:
         stream.close()
         assert count == 5
 
-    async def test_index_name_via_ael(self, client):
+    async def test_index_name_via_ael(self, session):
         """AEL where() + index_name hint with auto-discovered index."""
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .where("$.age >= 25")
             .with_hint(QueryHint(index_name=INDEX_NAME))
             .execute()
@@ -152,10 +156,10 @@ class TestIndexNameHint:
         stream.close()
         assert count == 5
 
-    async def test_index_name_with_query_duration(self, client):
+    async def test_index_name_with_query_duration(self, session):
         """Combine index_name and query_duration in a single hint."""
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .where("$.age == 27")
             .with_hint(QueryHint(
                 index_name=INDEX_NAME,
@@ -174,10 +178,10 @@ class TestIndexNameHint:
 class TestBinNameHint:
     """bin_name hint redirects the filter to a different bin."""
 
-    async def test_bin_name_via_ael(self, client):
+    async def test_bin_name_via_ael(self, session):
         """AEL referencing $.age with bin_name hint and auto-discovered index."""
         stream = await (
-            client.query("test", SET_NAME)
+            session.query("test", SET_NAME)
             .where("$.age == 25")
             .with_hint(QueryHint(bin_name="age"))
             .execute()

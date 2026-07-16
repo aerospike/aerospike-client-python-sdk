@@ -114,13 +114,18 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
             pass
 
 
+@pytest.fixture
+async def session(geo_seeded_client):
+    return geo_seeded_client.create_session()
+
+
 class TestGeoQuery:
     """``geoCompare(...)`` over a GEO2DSPHERE index returns the expected hits."""
 
-    async def test_ael_geo_compare_returns_5_intersecting_regions(self, geo_seeded_client):
+    async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}, geoJson('{QUERY_POINT}'))")
             .execute()
         )
@@ -130,10 +135,10 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    async def test_ael_with_explicit_get_type_geo(self, geo_seeded_client):
+    async def test_ael_with_explicit_get_type_geo(self, session):
         """Same query expressed with explicit ``.get(type: GEO)`` cast on the bin."""
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}.get(type: GEO), geoJson('{QUERY_POINT}'))")
             .execute()
         )
@@ -143,7 +148,7 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    async def test_programmatic_exp_geo_compare_returns_5(self, geo_seeded_client):
+    async def test_programmatic_exp_geo_compare_returns_5(self, session):
         """Programmatic ``Exp.geo_compare(...)`` via ``.where(FilterExpression)``.
 
         Bypasses the AEL parser so the underlying FilterExpression path is
@@ -155,7 +160,7 @@ class TestGeoQuery:
             Exp.geo_val(QUERY_POINT),
         )
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(filter_exp)
             .execute()
         )

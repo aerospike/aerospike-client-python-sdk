@@ -194,7 +194,7 @@ async def test_transactional_session_context_manager(client):
     NOTE: requires a namespace in strong-consistency (SC) mode to commit.
     Marked xfail when running against an AP-only cluster.
     """
-    tx_session = client.transaction_session()
+    tx_session = client.transaction()
     assert tx_session.active is False
 
     try:

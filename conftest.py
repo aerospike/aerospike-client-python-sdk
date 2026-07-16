@@ -258,9 +258,10 @@ def wait_for_index():
     async def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
         deadline = time.monotonic() + timeout
         last_err = None
+        session = client.create_session()
         while time.monotonic() < deadline:
             try:
-                stream = await client.query(ns, set_name).filter(sindex_filter).execute()
+                stream = await session.query(ns, set_name).filter(sindex_filter).execute()
                 async for _ in stream:
                     break
                 stream.close()
@@ -334,9 +335,10 @@ def sync_wait_for_index():
     def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
         deadline = time.monotonic() + timeout
         last_err = None
+        session = client.create_session()
         while time.monotonic() < deadline:
             try:
-                stream = client.query(ns, set_name).filter(sindex_filter).execute()
+                stream = session.query(ns, set_name).filter(sindex_filter).execute()
                 for _ in stream:
                     break
                 stream.close()

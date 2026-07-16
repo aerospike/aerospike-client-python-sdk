@@ -17,6 +17,7 @@
 
 from aerospike_async import (
     AbortStatus,
+    AdminPolicy,
     AuthMode,
     BitPolicy,
     BitwiseOverflowActions,
@@ -34,10 +35,12 @@ from aerospike_async import (
     MapWriteFlags,
     ModifyFlags,
     RegexFlag,
+    RegisterTask,
     SelectFlags,
     SpecialValue,
     Txn,
     TxnState,
+    UDFLang,
 )
 
 from aerospike_sdk.aio import AsyncPool, Client, Session, TransactionalSession, ClusterDefinition, Host
@@ -101,6 +104,7 @@ except Exception:
 
 __all__ = [
     "AbortStatus",
+    "AdminPolicy",
     "AerospikeError",
     "AsyncPool",
     "AuthenticationError",
@@ -170,6 +174,7 @@ __all__ = [
     "RecordStream",
     "RecordTooBigError",
     "RegexFlag",
+    "RegisterTask",
     "SdkLoggers",
     "SecondaryIndexError",
     "SecurityError",
@@ -186,6 +191,7 @@ __all__ = [
     "TransactionalSession",
     "Txn",
     "TxnState",
+    "UDFLang",
     "map_keys",
     "map_values",
     "refresh_log_levels",

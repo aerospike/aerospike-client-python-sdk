@@ -24,6 +24,7 @@ from aerospike_async import UDFLang
 from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk.sync import ClusterDefinition
 
 NS = "test"
 SET = "test"
@@ -43,16 +44,17 @@ def _wait_task(client: SyncClient, task) -> bool:
 @pytest.fixture
 def client_with_udf(aerospike_host, client_policy):
     with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
+        udf_session = client.create_session()
         try:
-            rm = client.remove_udf(SERVER_PATH)
+            rm = udf_session.remove_udf(SERVER_PATH)
             _wait_task(client, rm)
         except Exception:
             pass
-        reg = client.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
+        reg = udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
         assert _wait_task(client, reg)
         yield client
         try:
-            rm = client.remove_udf(SERVER_PATH)
+            rm = udf_session.remove_udf(SERVER_PATH)
             _wait_task(client, rm)
         except Exception:
             pass
@@ -74,19 +76,64 @@ def test_sync_write_using_udf(client_with_udf):
     assert rr.record.bins.get("sb1") == "sync val"
 
 
-def test_sync_register_udf_from_bytes(client_with_udf):
+def test_sync_list_udf(client_with_udf):
+    """Sync ``list_udf`` reports name/hash/type and reflects register + remove."""
+    session = client_with_udf.create_session()
     with open(LUA_FILE, "rb") as f:
         body = f.read()
-    path = "record_example_sync_dup.lua"
+    path = "psdk_list_udf_probe_sync.lua"
     try:
-        rm = client_with_udf.remove_udf(path)
+        rm = session.remove_udf(path)
         _wait_task(client_with_udf, rm)
     except Exception:
         pass
-    task = client_with_udf.register_udf(body, path, UDFLang.LUA)
+    assert not any(m["name"] == path for m in session.list_udf())
+
+    task = session.register_udf(body, path, UDFLang.LUA)
     assert _wait_task(client_with_udf, task)
-    rm = client_with_udf.remove_udf(path)
+
+    mine = [m for m in session.list_udf() if m["name"] == path]
+    assert mine, "module not listed after register"
+    (entry,) = mine
+    assert entry["type"] == "LUA"
+    assert entry["hash"]
+    assert set(entry) == {"name", "hash", "type"}
+
+    rm = session.remove_udf(path)
     _wait_task(client_with_udf, rm)
+    assert not any(m["name"] == path for m in session.list_udf())
+
+
+def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
+    """Sync UDF admin works through ClusterDefinition -> Cluster -> Session."""
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname, port = aerospike_host, 3000
+    path = "psdk_udf_via_cluster_sync.lua"
+    with open(LUA_FILE, "rb") as f:
+        body = f.read()
+
+    cluster = ClusterDefinition(hostname, port).connect()
+    try:
+        try:
+            rm = cluster.remove_udf(path)
+            rm.wait_till_complete_blocking(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+        reg = cluster.register_udf(body, path, UDFLang.LUA)
+        assert reg.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+
+        session = cluster.create_session()
+        assert any(m["name"] == path for m in session.list_udf())
+
+        rm = session.remove_udf(path)
+        assert rm.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+        assert not any(m["name"] == path for m in cluster.list_udf())
+    finally:
+        cluster.close()
 
 
 def test_sync_batch_udf_validation_errors_in_stream(client_with_udf):

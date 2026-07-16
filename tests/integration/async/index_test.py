@@ -211,7 +211,7 @@ async def test_create_index_with_cdt_context(client, enterprise, wait_for_index)
     await wait_for_index(client, "test", "test", flt)
 
     try:
-        stream = await client.query("test", "test").filter(flt).bins([bin_name]).execute()
+        stream = await session.query("test", "test").filter(flt).bins([bin_name]).execute()
         results = []
         try:
             async for res in stream:

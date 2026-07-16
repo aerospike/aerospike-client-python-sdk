@@ -26,7 +26,9 @@ import time
 import typing
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
-from aerospike_async import Key, Record, Txn
+from typing_extensions import deprecated
+
+from aerospike_async import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.session_shared import NamespaceScStatus
@@ -43,6 +45,7 @@ from aerospike_sdk.sync.operations.query import (
 from aerospike_sdk.sync.operations.udf import SyncUdfFunctionBuilder
 
 if TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.sync.client import SyncClient
     from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
@@ -414,15 +417,124 @@ class SyncSession:
             set_name=set_name,
         )
 
-    def transaction_session(self) -> SyncTransactionalSession:
-        """Alias for :meth:`begin_transaction`."""
-        return self.begin_transaction()
-
-    def begin_transaction(self) -> SyncTransactionalSession:
+    def transaction(self) -> SyncTransactionalSession:
         """Start a multi-record transaction (synchronous)."""
         from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
         return SyncTransactionalSession(client=self._client, behavior=self._behavior)
+
+    @deprecated("Renamed to transaction(); begin_transaction() will be removed after preview.")
+    def begin_transaction(self) -> SyncTransactionalSession:
+        """Deprecated alias for :meth:`transaction` (preview back-compat).
+
+        :meta private:
+        """
+        return self.transaction()
+
+    def register_udf(
+        self,
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from bytes (synchronous).
+
+        Exposed here so the ``ClusterDefinition`` ➜ ``Cluster`` ➜ ``Session``
+        path is self-sufficient.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf`
+        """
+        return self._client._register_udf(
+            body, server_path, language, policy=policy)
+
+    def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from a local file (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
+        """
+        return self._client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
+        """
+        return self._client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a UDF module from the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.remove_udf`
+        """
+        return self._client._remove_udf(server_path, policy=policy)
+
+    def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_udf`
+        """
+        return self._client._list_udf()
+
+    def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_indexes`
+        """
+        return self._client._list_indexes()
 
     def do_in_transaction(
         self,
@@ -449,7 +561,7 @@ class SyncSession:
         last_exc: Optional[BaseException] = None
         for attempt in range(max_attempts):
             try:
-                with self.begin_transaction() as tx_session:
+                with self.transaction() as tx_session:
                     return operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc

@@ -545,7 +545,7 @@ class _QueryBuilderBase:
 
         Example::
 
-            async with session.begin_transaction() as tx:
+            async with session.transaction() as tx:
                 await tx.upsert(k1).bin("v").set_to(1).execute()
                 # Run this one write outside the transaction:
                 await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
@@ -691,7 +691,7 @@ class _QueryBuilderBase:
                     FilterExpression.string_val("Sports")
                 )
             ])
-            recordset = await client.query("test", "products").filter_expression(filter_exp).execute()
+            recordset = await session.query("test", "products").filter_expression(filter_exp).execute()
 
         """
         self._filter_expression = expression
@@ -2722,7 +2722,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
     Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.aio.client.Client.query`. Use :meth:`where`
+    :meth:`~aerospike_sdk.aio.session.Session.query`. Use :meth:`where`
     or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.

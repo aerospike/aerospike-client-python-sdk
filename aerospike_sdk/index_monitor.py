@@ -102,6 +102,34 @@ def _parse_sindex_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[st
     return list(index_map.values())
 
 
+def parse_index_list(
+    raw_responses: Dict[str, Dict[str, str]]
+) -> List[Dict[str, str]]:
+    """Parse a raw ``sindex-list`` response into public index descriptors.
+
+    Wraps :func:`_parse_sindex_list` and normalizes the server's field names
+    to the public shape returned by ``list_indexes``: ``namespace``, ``set``,
+    ``bin``, ``name``, plus ``type`` / ``index_type`` / ``context`` when the
+    server reports them.
+    """
+    indexes: List[Dict[str, str]] = []
+    for entry in _parse_sindex_list(raw_responses):
+        rec: Dict[str, str] = {
+            "namespace": entry.get("ns", ""),
+            "set": entry.get("set", ""),
+            "bin": entry.get("bin", ""),
+            "name": entry.get("indexname", ""),
+        }
+        if "type" in entry:
+            rec["type"] = entry["type"]
+        if "indextype" in entry:
+            rec["index_type"] = entry["indextype"]
+        if "context" in entry:
+            rec["context"] = entry["context"]
+        indexes.append(rec)
+    return indexes
+
+
 def _parse_entries_per_bval(raw_response: Dict[str, str]) -> Optional[float]:
     """Extract ``entries_per_bval`` from an ``sindex-stat`` info response."""
     for value in raw_response.values():

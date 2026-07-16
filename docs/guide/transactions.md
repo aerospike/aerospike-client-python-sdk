@@ -13,20 +13,20 @@ transaction monitor record and tracks the write set.
 
 ## Async
 
-Use `Session.begin_transaction()` as a context manager. The returned
+Use `Session.transaction()` as a context manager. The returned
 [`TransactionalSession`](../api/transactional-session.md) auto-attaches
 the transaction to every operation — application code never sees the
 `Txn` object itself. On clean exit the transaction commits; on any
 exception it aborts.
 
 ```python
-from aerospike_sdk import Client, Behavior, DataSet
+from aerospike_sdk import ClusterDefinition, Behavior, DataSet
 
-async with Client("localhost:3100") as client:
-    session = client.create_session(Behavior.DEFAULT)
+async with await ClusterDefinition("localhost", 3100).connect() as cluster:
+    session = cluster.create_session(Behavior.DEFAULT)
     accounts = DataSet.of("test_sc", "accounts")
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
         await tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
 ```
@@ -63,13 +63,14 @@ The synchronous API mirrors the async surface exactly — just drop the
 `async`/`await`:
 
 ```python
-from aerospike_sdk import SyncClient, Behavior, DataSet
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.sync import ClusterDefinition
 
-with SyncClient("localhost:3100") as client:
-    session = client.create_session(Behavior.DEFAULT)
+with ClusterDefinition("localhost", 3100).connect() as cluster:
+    session = cluster.create_session(Behavior.DEFAULT)
     accounts = DataSet.of("test_sc", "accounts")
 
-    with session.begin_transaction() as tx:
+    with session.transaction() as tx:
         tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
         tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
 ```
@@ -80,11 +81,11 @@ with SyncClient("localhost:3100") as client:
 
 ## Reads Inside a Transaction
 
-Reads issued inside `begin_transaction` participate in the transaction
+Reads issued inside `transaction` participate in the transaction
 and see a consistent snapshot of the write set:
 
 ```python
-async with session.begin_transaction() as tx:
+async with session.transaction() as tx:
     stream = await tx.query(accounts.id("A")).execute()
     current = (await stream.first_or_raise()).record.bins["bal"]
     if current >= 10:
@@ -104,4 +105,4 @@ async with session.begin_transaction() as tx:
 See Also:
 - [`TransactionalSession`](../api/transactional-session.md) — async API reference
 - [`SyncTransactionalSession`](../api/sync/transactional-session.md) — sync API reference
-- [`Session.begin_transaction`](../api/session.md) / [`Session.do_in_transaction`](../api/session.md)
+- [`Session.transaction`](../api/session.md) / [`Session.do_in_transaction`](../api/session.md)

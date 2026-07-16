@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Example demonstrating the synchronous SDK API.
 
-Covers: SyncClient connection, put, get, exists, delete — no async/await.
+Covers: sync ClusterDefinition connection, put, get, exists, delete — no async/await.
 """
 
 import _env
