@@ -32,15 +32,19 @@ def client(aerospike_host, client_policy):
         yield c
 
 
+@pytest.fixture
+def session(client):
+    return client.create_session()
+
+
 def _key(suffix: str) -> Key:
     return Key(NS, SET, f"cdt_wopt_sync_{suffix}")
 
 
 class TestListUniqueFlag:
 
-    def test_list_append_unique_rejects_duplicate(self, client):
+    def test_list_append_unique_rejects_duplicate(self, session):
         """list_append with unique=True rejects a duplicate value."""
-        session = client.create_session()
         k = _key("uniq_append")
         session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -51,13 +55,12 @@ class TestListUniqueFlag:
                     .execute()
             )
 
-        rs = client.query(key=k).bin("lst").get().execute()
+        rs = session.query(key=k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3]
 
-    def test_list_append_unique_allows_new(self, client):
+    def test_list_append_unique_allows_new(self, session):
         """list_append with unique=True allows a new distinct value."""
-        session = client.create_session()
         k = _key("uniq_new")
         session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -67,16 +70,15 @@ class TestListUniqueFlag:
                 .execute()
         )
 
-        rs = client.query(key=k).bin("lst").get().execute()
+        rs = session.query(key=k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3, 4]
 
 
 class TestListCombinedFlags:
 
-    def test_list_append_unique_no_fail_skips_duplicate(self, client):
+    def test_list_append_unique_no_fail_skips_duplicate(self, session):
         """unique+no_fail: duplicate append is skipped without error."""
-        session = client.create_session()
         k = _key("uniq_nofail_append")
         session.upsert(k).put({"lst": [1, 2]}).execute()
 
@@ -86,16 +88,15 @@ class TestListCombinedFlags:
                 .execute()
         )
 
-        rs = client.query(key=k).bin("lst").get().execute()
+        rs = session.query(key=k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2]
 
 
 class TestMapNoFail:
 
-    def test_map_insert_items_no_fail_partial(self, client):
+    def test_map_insert_items_no_fail_partial(self, session):
         """map_insert_items with no_fail+partial inserts only new keys."""
-        session = client.create_session()
         k = _key("map_insert_partial")
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -108,7 +109,7 @@ class TestMapNoFail:
                 .execute()
         )
 
-        rs = client.query(key=k).bin("m").get().execute()
+        rs = session.query(key=k).bin("m").get().execute()
         result = rs.first_or_raise()
         assert result.record.bins["m"]["a"] == 1
         assert result.record.bins["m"]["b"] == 2

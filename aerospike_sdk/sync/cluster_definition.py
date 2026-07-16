@@ -140,7 +140,32 @@ class ClusterDefinition:
         self._tls_builder: Optional[TlsBuilder] = None
         self._system_settings: Optional[SystemSettings] = None
         self._app_id: Optional[str] = None
-    
+        self._index_refresh_interval: float = 5.0
+
+    def with_index_refresh_interval(
+        self, seconds: float
+    ) -> ClusterDefinition:
+        """Set how often the secondary-index metadata cache refreshes.
+
+        The client polls ``sindex-list`` / ``sindex-stat`` on this interval to
+        keep the per-namespace index cache current, which the AEL query planner
+        consults to pick secondary-index plans. Lower values pick up new indexes
+        faster at the cost of more background info traffic; the default is 5
+        seconds.
+
+        Args:
+            seconds: Refresh interval in seconds.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            cd = ClusterDefinition("localhost", 3000).with_index_refresh_interval(2.0)
+        """
+        self._index_refresh_interval = seconds
+        return self
+
     def app_id(self, app_id: str) -> ClusterDefinition:
         """Tag this client's traffic with an application identifier.
 
@@ -466,6 +491,7 @@ class ClusterDefinition:
         self._validate()
         policy = self._get_policy()
         seeds = self._build_seeds_string()
-        return Cluster._create(policy, seeds)
+        return Cluster._create(
+            policy, seeds, index_refresh_interval=self._index_refresh_interval)
 
 

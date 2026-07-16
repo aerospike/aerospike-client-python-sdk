@@ -68,6 +68,11 @@ async def client(aerospike_host, client_policy):
         yield c
 
 
+@pytest.fixture
+async def session(client):
+    return client.create_session()
+
+
 def _key(name: str) -> Key:
     return Key(NS, SET, name)
 
@@ -78,64 +83,64 @@ def _key(name: str) -> Key:
 
 class TestSelectFrom:
 
-    async def test_select_from_returns_int(self, client):
+    async def test_select_from_returns_int(self, session):
         """select_from evaluating an integer AEL expression."""
         rs = await (
-            client.query(_key(KEY_A)).bin("ev").select_from("$.A + 4")
+            session.query(_key(KEY_A)).bin("ev").select_from("$.A + 4")
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == 5
 
-    async def test_select_from_returns_string(self, client):
+    async def test_select_from_returns_string(self, session):
         """select_from evaluating a string AEL expression."""
         rs = await (
-            client.query(_key(KEY_A)).bin("ev").select_from("'hello'")
+            session.query(_key(KEY_A)).bin("ev").select_from("'hello'")
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == "hello"
 
-    async def test_select_from_returns_boolean(self, client):
+    async def test_select_from_returns_boolean(self, session):
         """select_from evaluating a boolean AEL expression."""
         rs = await (
-            client.query(_key(KEY_A)).bin("ev").select_from("$.A == 1")
+            session.query(_key(KEY_A)).bin("ev").select_from("$.A == 1")
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] is True
 
-    async def test_select_from_eval_error(self, client):
+    async def test_select_from_eval_error(self, session):
         """select_from referencing a missing bin raises server error."""
         with pytest.raises((AerospikeError, ServerError)):
             rs = await (
-                client.query(_key(KEY_B)).bin("ev").select_from("$.A + 4")
+                session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4")
                     .execute()
             )
             await rs.first_or_raise()
 
-    async def test_select_from_ignore_eval_failure(self, client):
+    async def test_select_from_ignore_eval_failure(self, session):
         """select_from with ignore_eval_failure returns None on missing bin."""
         rs = await (
-            client.query(_key(KEY_B)).bin("ev").select_from("$.A + 4", ignore_eval_failure=True)
+            session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4", ignore_eval_failure=True)
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
 
-    async def test_select_from_returns_nil(self, client):
+    async def test_select_from_returns_nil(self, session):
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
-            client.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
+            session.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
 
-    async def test_multiple_select_from(self, client):
+    async def test_multiple_select_from(self, session):
         """Multiple select_from in same execute (expMerge pattern)."""
         rs = await (
-            client.query(_key(KEY_A))
+            session.query(_key(KEY_A))
                 .bin("r1").select_from("$.A == 0 and $.D == 2")
                 .bin("r2").select_from("$.A == 0 or $.D == 2")
                 .execute()
@@ -339,10 +344,10 @@ class TestGuards:
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
-    async def test_batch_key_query_select_from_works(self, client):
+    async def test_batch_key_query_select_from_works(self, session):
         """select_from on batch key query works (no guard)."""
         rs = await (
-            client.query([_key(KEY_A), _key(KEY_B)]).bin("ev").select_from("$.D * 3")
+            session.query([_key(KEY_A), _key(KEY_B)]).bin("ev").select_from("$.D * 3")
                 .execute()
         )
         results = await rs.collect()

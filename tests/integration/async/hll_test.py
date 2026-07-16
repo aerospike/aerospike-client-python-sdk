@@ -194,7 +194,7 @@ class TestAelFilterExpressions:
         )
         # Query the set; only "a" should match $.h.hllCount() > 0.
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllCount() > 0")
             .execute()
         )
@@ -218,7 +218,7 @@ class TestAelFilterExpressions:
             .execute()
         )
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllUnionCount($.a) > 0")
             .execute()
         )
@@ -708,7 +708,7 @@ class TestHllAelServerSide:
             .execute()
         )
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllUnionCount($.peer) > 2")
             .execute()
         )
@@ -739,7 +739,7 @@ class TestHllAelServerSide:
         )
 
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllIntersectCount($.peer) >= 1")
             .execute()
         )
@@ -770,7 +770,7 @@ class TestHllAelServerSide:
         )
 
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllSimilarity($.peer) > 0.5")
             .execute()
         )
@@ -801,7 +801,7 @@ class TestHllAelServerSide:
             .execute()
         )
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllDescribe() == [14, 0]")
             .execute()
         )
@@ -827,7 +827,7 @@ class TestHllAelServerSide:
             .execute()
         )
         rs = await (
-            hll_client.query(NAMESPACE, SET)
+            session.query(NAMESPACE, SET)
             .where("$.h.hllMayContain(['alice']) == 1")
             .execute()
         )

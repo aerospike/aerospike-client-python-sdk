@@ -41,17 +41,17 @@ class SyncTransactionalSession(SyncSession):
     :meth:`rollback` (alias for ``abort``) are available for manual control.
 
     Example:
-        >>> with client.create_session().begin_transaction() as tx:
+        >>> with client.create_session().transaction() as tx:
         ...     tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
         ...     tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
     See Also:
-        :meth:`SyncSession.begin_transaction`:
+        :meth:`SyncSession.transaction`:
             Preferred construction entry.
     """
 
     def __init__(self, client: SyncClient, behavior: Behavior) -> None:
-        """Construct via :meth:`SyncSession.begin_transaction` rather than directly."""
+        """Construct via :meth:`SyncSession.transaction` rather than directly."""
         super().__init__(client, behavior)
         self._finalized = False
 

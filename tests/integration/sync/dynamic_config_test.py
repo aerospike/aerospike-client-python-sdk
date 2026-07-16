@@ -29,7 +29,7 @@ import os
 
 import pytest
 
-from aerospike_sdk import AerospikeError, Behavior, DataSet
+from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.sync import ClusterDefinition
 
 _GOOD = 'version: "1.0.0"\ndynamic:\n  read:\n    max_retries: 7\n'
@@ -116,50 +116,42 @@ def test_unrecognized_version_value_is_tolerated(tmp_path):
         assert _round_trip(cluster) == {"n": 1}
 
 
-# --- structural errors: reference clients reject, core currently ignores ---
+# --- structural errors: core fail-softs (logs + ignores), client stays usable ---
+# PSDK follows the core's fail-soft policy — inputs are validated at the core,
+# not re-validated in the client — so a structurally broken dynamic config is
+# logged and ignored rather than raised, and the client always connects with
+# usable defaults. This is a deliberate divergence from the classic client,
+# which raised on these.
 
-@pytest.mark.xfail(
-    reason="Core fail-softs (logs + ignores) on malformed YAML; reference clients raise. "
-    "Cross-client divergence — pending 'align dynamic-config error handling' decision.",
-    strict=False,
-)
-def test_malformed_yaml_raises(tmp_path):
-    with pytest.raises(AerospikeError):
-        with _client(_write(tmp_path, "malformed.yaml", _MALFORMED)) as cluster:
-            _round_trip(cluster)
+def test_malformed_yaml_is_tolerated_client_operates(tmp_path):
+    """Malformed YAML is logged and ignored; the client still operates."""
+    with _client(_write(tmp_path, "malformed.yaml", _MALFORMED)) as cluster:
+        assert _round_trip(cluster) == {"n": 1}
 
 
-@pytest.mark.xfail(
-    reason="Core ignores a config missing the top-level `version` (logs it); the classic "
-    "client raises. Cross-client divergence — pending error-handling decision.",
-    strict=False,
-)
-def test_missing_version_raises(tmp_path):
-    with pytest.raises(AerospikeError):
-        with _client(_write(tmp_path, "nover.yaml", _NO_VERSION)) as cluster:
-            _round_trip(cluster)
+def test_missing_version_is_tolerated_client_operates(tmp_path):
+    """A config missing the top-level `version` is ignored; the client still operates."""
+    with _client(_write(tmp_path, "nover.yaml", _NO_VERSION)) as cluster:
+        assert _round_trip(cluster) == {"n": 1}
 
 
 # --- override / reload effect (blocked on a resolved-policy getter) ---------
 
-@pytest.mark.xfail(
-    reason="No client-side getter for the resolved read policy: the core's resolve_read() is "
-    "pub(crate) and nothing exposes the effective policy through PAC. Reference clients assert "
-    "this via a resolved-settings getter on the session. Override verified manually with a "
-    "temporary core resolve_read debug log (max_retries 2 -> 7). Blocked on the core exposing "
-    "the resolved policy.",
-    strict=False,
+@pytest.mark.skip(
+    reason="Not testable yet — blocked on rust-core exposing the resolved read policy. "
+    "core's resolve_read() is pub(crate) and nothing surfaces the effective policy through "
+    "PAC, so an override's effect can't be observed from the client. Override was verified "
+    "manually with a temporary core resolve_read debug log (max_retries 2 -> 7). Un-skip when "
+    "core exposes a resolved-settings getter.",
 )
 def test_override_changes_resolved_read_policy(tmp_path):
     raise AssertionError("resolved read policy is not observable through the PSDK surface")
 
 
-@pytest.mark.xfail(
-    reason="Same missing resolved-policy getter as the override test — resolve_read() is "
-    "pub(crate), so a reloaded value cannot be read back through PAC. Reference clients assert "
-    "reload via a resolved-settings getter on the session (no file-watch timing involved). "
-    "Blocked on the core exposing the resolved policy.",
-    strict=False,
+@pytest.mark.skip(
+    reason="Not testable yet — same missing resolved-policy getter as the override test. "
+    "resolve_read() is pub(crate), so a reloaded value can't be read back through PAC. "
+    "Un-skip when core exposes a resolved-settings getter.",
 )
 def test_reload_reflects_updated_resolved_policy(tmp_path):
     raise AssertionError("resolved read policy is not observable through the PSDK surface")

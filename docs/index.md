@@ -11,11 +11,11 @@ built on top of the
 :::{tab-item} Async
 ```python
 import asyncio
-from aerospike_sdk import Client, DataSet, Behavior
+from aerospike_sdk import ClusterDefinition, DataSet, Behavior
 
 async def main():
-    async with Client("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
         # Write
@@ -47,10 +47,11 @@ asyncio.run(main())
 
 :::{tab-item} Sync
 ```python
-from aerospike_sdk import SyncClient, DataSet, Behavior
+from aerospike_sdk import DataSet, Behavior
+from aerospike_sdk.sync import ClusterDefinition
 
-with SyncClient("localhost:3000") as client:
-    session = client.create_session(Behavior.DEFAULT)
+with ClusterDefinition("localhost", 3000).connect() as cluster:
+    session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
 
     # Write

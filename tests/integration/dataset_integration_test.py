@@ -69,7 +69,7 @@ async def test_query_with_dataset(aerospike_host, client_policy):
         await session.upsert(users.id("q2")).put({"id": "q2", "value": 20}).execute()
 
         # Query using DataSet
-        stream = await client.query(dataset=users).execute()
+        stream = await session.query(dataset=users).execute()
         count = 0
         async for result in stream:
             record = result.record
@@ -95,7 +95,7 @@ async def test_query_with_single_key(aerospike_host, client_policy):
         await session.upsert(key).put({"name": "Bob", "age": 35}).execute()
 
         # Query using single Key
-        stream = await client.query(key=key).execute()
+        stream = await session.query(key=key).execute()
         count = 0
         async for result in stream:
             record = result.record
@@ -120,7 +120,7 @@ async def test_query_with_multiple_keys(aerospike_host, client_policy):
         await session.upsert(keys[1]).put({"name": "Charlie", "age": 32}).execute()
 
         # Query using multiple Keys (positional argument)
-        stream = await client.query(keys).execute()
+        stream = await session.query(keys).execute()
         count = 0
         names = []
         async for result in stream:

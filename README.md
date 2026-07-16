@@ -38,12 +38,12 @@ use — pre-built wheels are available for Linux, macOS, and Windows on Python
 
 ```python
 import asyncio
-from aerospike_sdk import Behavior, Client, DataSet
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 
 async def main():
-    async with Client("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
         # High-level key-value writes
@@ -70,16 +70,18 @@ asyncio.run(main())
 
 ### Sync
 
-The same surface is available without asyncio via `SyncClient`. No `async`/`await`,
-no event loop — useful for sync codebases or when a dependency forbids asyncio.
+The same surface is available without asyncio — no `async`/`await`, no event
+loop — useful for sync codebases or when a dependency forbids asyncio. Connect
+through the sync `ClusterDefinition`.
 
 ```python
-from aerospike_sdk import Behavior, DataSet, SyncClient
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.sync import ClusterDefinition
 
 
 def main():
-    with SyncClient("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    with ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
         # High-level key-value writes

@@ -296,7 +296,7 @@ class _FakeSdkClientForRetry:
         self._client = self._async_client
         self._indexes_monitor = None
 
-    def transaction_session(self, behavior=None):
+    def transaction(self, behavior=None):
         return TransactionalSession(client=self, behavior=behavior)
 
 

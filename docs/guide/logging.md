@@ -188,6 +188,7 @@ formatter (as the config snippets below do), the field is simply not rendered â€
 the records still carry it. See [Structured cluster field](#structured-cluster-field)
 for why only some lines populate it and the `defaults=` requirement.
 
+(structured-cluster-field)=
 ### Structured cluster field
 
 Client connect lines and per-operation command / query summaries carry the

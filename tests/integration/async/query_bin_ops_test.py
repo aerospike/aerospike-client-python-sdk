@@ -70,6 +70,11 @@ async def client(aerospike_host, client_policy):
         yield client
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(client):
+    return client.create_session()
+
+
 def _key(i: int) -> Key:
     return Key(NS, SET, f"{KEY_PREFIX}{i}")
 
@@ -80,14 +85,14 @@ def _key(i: int) -> Key:
 
 class TestSimpleBinReads:
 
-    async def test_get_single_bin(self, client):
-        rs = await client.query(key=_key(1)).bin("name").get().execute()
+    async def test_get_single_bin(self, session):
+        rs = await session.query(key=_key(1)).bin("name").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["name"] == "user1"
 
-    async def test_get_multiple_bins(self, client):
+    async def test_get_multiple_bins(self, session):
         rs = await (
-            client.query(key=_key(1))
+            session.query(key=_key(1))
                 .bin("name").get()
                 .bin("age").get()
                 .execute()
@@ -96,31 +101,31 @@ class TestSimpleBinReads:
         assert result.record.bins["name"] == "user1"
         assert result.record.bins["age"] == 21
 
-    async def test_map_size(self, client):
-        rs = await client.query(key=_key(1)).bin("settings").map_size().execute()
+    async def test_map_size(self, session):
+        rs = await session.query(key=_key(1)).bin("settings").map_size().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == 3
 
-    async def test_list_size(self, client):
-        rs = await client.query(key=_key(1)).bin("scores").list_size().execute()
+    async def test_list_size(self, session):
+        rs = await session.query(key=_key(1)).bin("scores").list_size().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 3
 
-    async def test_list_get(self, client):
-        rs = await client.query(key=_key(1)).bin("scores").list_get(0).execute()
+    async def test_list_get(self, session):
+        rs = await session.query(key=_key(1)).bin("scores").list_get(0).execute()
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 10
 
-    async def test_list_get_range(self, client):
+    async def test_list_get_range(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("scores").list_get_range(0, 2).execute()
+            session.query(key=_key(1)).bin("scores").list_get_range(0, 2).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20]
 
-    async def test_list_get_range_from_index(self, client):
+    async def test_list_get_range_from_index(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("scores").list_get_range(1, None).execute()
+            session.query(key=_key(1)).bin("scores").list_get_range(1, None).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [20, 30]
@@ -132,25 +137,25 @@ class TestSimpleBinReads:
 
 class TestCdtMapReads:
 
-    async def test_map_key_get_values(self, client):
+    async def test_map_key_get_values(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("settings").on_map_key("theme").get_values()
+            session.query(key=_key(1)).bin("settings").on_map_key("theme").get_values()
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == "dark"
 
-    async def test_map_key_count(self, client):
+    async def test_map_key_count(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("settings").on_map_key("theme").count()
+            session.query(key=_key(1)).bin("settings").on_map_key("theme").count()
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == 1
 
-    async def test_map_index_range_get_values(self, client):
+    async def test_map_index_range_get_values(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
+            session.query(key=_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
                 .execute()
         )
         result = await rs.first_or_raise()
@@ -158,9 +163,9 @@ class TestCdtMapReads:
         assert isinstance(vals, list)
         assert len(vals) == 2
 
-    async def test_map_rank_get_values(self, client):
+    async def test_map_rank_get_values(self, session):
         rs = await (
-            client.query(key=_key(2)).bin("settings").on_map_rank(0).get_values()
+            session.query(key=_key(2)).bin("settings").on_map_rank(0).get_values()
                 .execute()
         )
         result = await rs.first_or_raise()
@@ -173,33 +178,32 @@ class TestCdtMapReads:
 
 class TestCdtListReads:
 
-    async def test_list_index_get_values(self, client):
+    async def test_list_index_get_values(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("scores").on_list_index(0).get_values()
+            session.query(key=_key(1)).bin("scores").on_list_index(0).get_values()
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 10
 
-    async def test_list_index_count(self, client):
+    async def test_list_index_count(self, session):
         rs = await (
-            client.query(key=_key(1)).bin("scores").on_list_index(0).count()
+            session.query(key=_key(1)).bin("scores").on_list_index(0).count()
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 1
 
-    async def test_list_rank_get_values(self, client):
+    async def test_list_rank_get_values(self, session):
         """Rank 0 = lowest value; for key 2 scores=[20,40,60], lowest=20."""
         rs = await (
-            client.query(key=_key(2)).bin("scores").on_list_rank(0).get_values()
+            session.query(key=_key(2)).bin("scores").on_list_rank(0).get_values()
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 20
 
-    async def test_nested_list_get(self, client):
-        session = client.create_session()
+    async def test_nested_list_get(self, session):
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}nested_lg"
         key = ds.id(kid)
@@ -209,7 +213,7 @@ class TestCdtListReads:
             pass
         await session.upsert(key).bin("ll").set_to([[10, 20], [30, 40]]).execute()
         rs = await (
-            client.query(key=key).bin("ll").on_list_index(0).list_get(1).execute()
+            session.query(key=key).bin("ll").on_list_index(0).list_get(1).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ll"] == 20
@@ -222,8 +226,7 @@ class TestCdtListReads:
 
 class TestIndexBasedListWrites:
 
-    async def test_list_insert_then_read(self, client):
-        session = client.create_session()
+    async def test_list_insert_then_read(self, session):
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}idx_mut"
         key = ds.id(kid)
@@ -233,13 +236,12 @@ class TestIndexBasedListWrites:
             pass
         await session.upsert(key).bin("nums").set_to([1, 2, 3]).execute()
         await session.upsert(key).bin("nums").list_insert(1, 9).execute()
-        rs = await client.query(key=key).bin("nums").get().execute()
+        rs = await session.query(key=key).bin("nums").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["nums"] == [1, 9, 2, 3]
         await session.delete(key).execute()
 
-    async def test_list_increment_and_nested_insert(self, client):
-        session = client.create_session()
+    async def test_list_increment_and_nested_insert(self, session):
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}idx_mut2"
         key = ds.id(kid)
@@ -254,7 +256,7 @@ class TestIndexBasedListWrites:
         await (
             session.upsert(key).bin("outer").on_map_key("items").list_insert(1, 0).execute()
         )
-        rs = await client.query(key=key).bin("outer").get().execute()
+        rs = await session.query(key=key).bin("outer").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["outer"]["items"] == [15, 0, 20]
         await session.delete(key).execute()
@@ -266,9 +268,9 @@ class TestIndexBasedListWrites:
 
 class TestBatchKeyQueries:
 
-    async def test_batch_bin_get(self, client):
+    async def test_batch_bin_get(self, session):
         rs = await (
-            client.query(keys=[_key(1), _key(2)]).bin("name").get()
+            session.query(keys_list=[_key(1), _key(2)]).bin("name").get()
                 .execute()
         )
         results = await rs.collect()
@@ -276,9 +278,9 @@ class TestBatchKeyQueries:
         names = {r.record.bins["name"] for r in results if r.is_ok}
         assert names == {"user1", "user2"}
 
-    async def test_batch_cdt_map_read(self, client):
+    async def test_batch_cdt_map_read(self, session):
         rs = await (
-            client.query(keys=[_key(1), _key(2), _key(3)])
+            session.query(keys_list=[_key(1), _key(2), _key(3)])
                 .bin("settings").on_map_key("theme").get_values()
                 .execute()
         )
@@ -288,9 +290,9 @@ class TestBatchKeyQueries:
             assert r.is_ok
             assert r.record.bins["settings"] == "dark"
 
-    async def test_batch_cdt_list_size(self, client):
+    async def test_batch_cdt_list_size(self, session):
         rs = await (
-            client.query(keys=[_key(1), _key(2), _key(3)])
+            session.query(keys_list=[_key(1), _key(2), _key(3)])
                 .bin("scores").list_size()
                 .execute()
         )
@@ -300,9 +302,9 @@ class TestBatchKeyQueries:
             assert r.is_ok
             assert r.record.bins["scores"] == 3
 
-    async def test_batch_cdt_list_get(self, client):
+    async def test_batch_cdt_list_get(self, session):
         rs = await (
-            client.query(keys=[_key(1), _key(2), _key(3)])
+            session.query(keys_list=[_key(1), _key(2), _key(3)])
                 .bin("scores").list_get(0)
                 .execute()
         )
@@ -315,10 +317,10 @@ class TestBatchKeyQueries:
 class TestCdtReadEdgeCases:
     """OOB-tolerant reads and missing-record error paths."""
 
-    async def test_list_get_range_past_end_returns_partial(self, client):
+    async def test_list_get_range_past_end_returns_partial(self, session):
         """list_get_range with count past the end returns the full tail."""
         rs = await (
-            client.query(key=_key(1)).bin("scores").list_get_range(0, 100).execute()
+            session.query(key=_key(1)).bin("scores").list_get_range(0, 100).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30]
@@ -345,18 +347,18 @@ class TestCdtReadEdgeCases:
 
 class TestDatasetQueryGuard:
 
-    async def test_dataset_query_with_bin_ops_raises(self, client):
+    async def test_dataset_query_with_bin_ops_raises(self, session):
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                client.query(NS, SET).bin("settings").on_map_key("theme").get_values()
+                session.query(NS, SET).bin("settings").on_map_key("theme").get_values()
                     .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
-    async def test_dataset_query_with_get_raises(self, client):
+    async def test_dataset_query_with_get_raises(self, session):
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                client.query(NS, SET).bin("name").get()
+                session.query(NS, SET).bin("name").get()
                     .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
@@ -368,9 +370,9 @@ class TestDatasetQueryGuard:
 
 class TestQueryStacking:
 
-    async def test_stack_two_point_queries(self, client):
+    async def test_stack_two_point_queries(self, session):
         rs = await (
-            client
+            session
                 .query(key=_key(1)).bin("name").get()
                 .query(_key(2)).bin("age").get()
                 .execute()
@@ -385,25 +387,25 @@ class TestQueryStacking:
         digests = list(bins_by_key.keys())
         assert len(digests) == 2
 
-    async def test_stack_batch_queries(self, client):
+    async def test_stack_batch_queries(self, session):
         rs = await (
-            client
-                .query(keys=[_key(1), _key(2)]).bin("name").get()
+            session
+                .query(keys_list=[_key(1), _key(2)]).bin("name").get()
                 .query([_key(3)]).bin("age").get()
                 .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
 
-    async def test_dataset_query_cannot_stack(self, client):
+    async def test_dataset_query_cannot_stack(self, session):
         with pytest.raises(ValueError, match="cannot be stacked"):
-            client.query(NS, SET).query(_key(1))
+            session.query(NS, SET).query(_key(1))
 
-    async def test_stacked_read_complex(self, client):
+    async def test_stacked_read_complex(self, session):
         """Stacked query mixing specific bins, all bins, no bins,
         select_from, missing bin, and missing key."""
         rs = await (
-            client
+            session
                 .query(key=_key(1)).bins(["name"])
                 .query(_key(2))
                 .query(_key(3)).with_no_bins()
@@ -450,10 +452,10 @@ class TestQueryStacking:
 
 class TestInvertedReads:
 
-    async def test_map_key_range_get_all_other_values(self, client):
+    async def test_map_key_range_get_all_other_values(self, session):
         """Get all map values EXCEPT those in the range."""
         rs = await (
-            client.query(key=_key(1))
+            session.query(key=_key(1))
                 .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
                 .execute()
         )
@@ -465,10 +467,10 @@ class TestInvertedReads:
         # values for "notifications" and "volume".
         assert len(vals) == 2
 
-    async def test_list_value_get_all_other_values(self, client):
+    async def test_list_value_get_all_other_values(self, session):
         """Get all list elements EXCEPT those matching the value."""
         rs = await (
-            client.query(key=_key(1))
+            session.query(key=_key(1))
                 .bin("scores").on_list_value(10).get_all_other_values()
                 .execute()
         )
@@ -486,18 +488,18 @@ class TestInvertedReads:
 
 class TestExpressionReads:
 
-    async def test_select_from_simple(self, client):
+    async def test_select_from_simple(self, session):
         rs = await (
-            client.query(key=_key(1))
+            session.query(key=_key(1))
                 .bin("age_plus_20").select_from("$.age + 20")
                 .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["age_plus_20"] == 41
 
-    async def test_select_from_multiple(self, client):
+    async def test_select_from_multiple(self, session):
         rs = await (
-            client.query(key=_key(2))
+            session.query(key=_key(2))
                 .bin("double_age").select_from("$.age * 2")
                 .bin("triple_score").select_from("$.score * 3")
                 .execute()
@@ -506,9 +508,9 @@ class TestExpressionReads:
         assert result.record.bins["double_age"] == 44   # (20+2)*2
         assert result.record.bins["triple_score"] == 600  # 200*3
 
-    async def test_select_from_with_get(self, client):
+    async def test_select_from_with_get(self, session):
         rs = await (
-            client.query(key=_key(1))
+            session.query(key=_key(1))
                 .bin("name").get()
                 .bin("age_in_10").select_from("$.age + 10")
                 .execute()

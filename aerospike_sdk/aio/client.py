@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import types
 import typing
+from importlib import resources
 from typing import Awaitable, Callable, Dict, List, Optional, Union, overload
 
 from aerospike_async import (
@@ -35,9 +36,10 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.index_monitor import IndexesMonitor
+from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 
@@ -51,17 +53,22 @@ log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class Client:
-    """Async entry point for the SDK API over the Aerospike Python Async Client.
+    """Low-level async connection primitive.
 
-    Use ``async with Client(...) as client`` (or ``await connect()``) to
-    open a connection, then :meth:`create_session` for reads and writes with a
-    chosen :class:`~aerospike_sdk.policy.behavior.Behavior`.
+    Most applications should connect via
+    :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`
+    (``ClusterDefinition(...).connect()`` returns a
+    :class:`~aerospike_sdk.aio.cluster.Cluster`) rather than instantiating
+    ``Client`` directly. ``Client`` remains the building block behind
+    :class:`~aerospike_sdk.aio.pool.AsyncPool`. All reads and writes go
+    through a :class:`~aerospike_sdk.aio.session.Session` obtained from
+    :meth:`create_session`.
 
     Example::
 
         async with Client("127.0.0.1:3000") as client:
             session = client.create_session()
-            stream = await client.query(
+            stream = await session.query(
                 namespace="test",
                 set_name="users",
             ).execute()
@@ -70,7 +77,8 @@ class Client:
                     print(row.record.bins)
 
     See Also:
-        :meth:`create_session`: Primary API for application code.
+        :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`:
+            Recommended entry point.
     """
 
     def __init__(
@@ -315,67 +323,7 @@ class Client:
         """
         return self._async_client
 
-    @overload
-    def query(
-        self,
-        *,
-        dataset: DataSet,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
-    ) -> QueryBuilder:
-        """Create a query builder from a DataSet."""
-        ...
-
-    @overload
-    def query(
-        self,
-        *,
-        key: Key,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for a single Key (point read)."""
-        ...
-
-    @overload
-    def query(
-        self,
-        *,
-        keys: List[Key],
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (batch read)."""
-        ...
-
-    @overload
-    def query(
-        self,
-        *keys: Key,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (varargs)."""
-        ...
-
-    @overload
-    def query(
-        self,
-        namespace: str,
-        set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
-    ) -> QueryBuilder:
-        """Create a query builder with explicit namespace/set."""
-        ...
-
-    def query(
+    def _query(
         self,
         arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
         set_name: Optional[str] = None,
@@ -396,30 +344,30 @@ class Client:
         1. Using a DataSet (positional or keyword)::
 
               users = DataSet.of("test", "users")
-              async for record in client.query(users).execute():
+              async for record in session.query(users).execute():
               # or
-              async for record in client.query(dataset=users).execute():
+              async for record in session.query(dataset=users).execute():
                   print(record.bins)
 
         2. Using a single Key (positional or keyword)::
 
               users = DataSet.of("test", "users")
               key = users.id("user123")
-              recordset = await client.query(key).execute()
+              recordset = await session.query(key).execute()
               # or
-              recordset = await client.query(key=key).execute()
+              recordset = await session.query(key=key).execute()
 
         3. Using multiple Keys (positional or keyword)::
 
               users = DataSet.of("test", "users")
               keys = users.ids("user1", "user2", "user3")
-              recordset = await client.query(keys).execute()
+              recordset = await session.query(keys).execute()
               # or
-              recordset = await client.query(keys=keys).execute()
+              recordset = await session.query(keys_list=keys).execute()
 
         4. Explicit namespace/set (original style)::
 
-              async for record in client.query(
+              async for record in session.query(
                   namespace="test",
                   set_name="users"
               ).execute():
@@ -430,7 +378,7 @@ class Client:
                 :class:`~aerospike_async.Key`, list of keys, or namespace string for
                 the ``("namespace", "set")`` pair form.
             set_name: When ``arg1`` is a namespace string, the set name as the second
-                positional (``client.query("test", "users")``).
+                positional (``session.query("test", "users")``).
             namespace: Optional third positional; not used for the usual two-string
                 namespace/set pair (that form uses ``arg1`` and ``set_name``).
             dataset: Keyword-only :class:`~aerospike_sdk.dataset.DataSet`.
@@ -609,7 +557,7 @@ class Client:
             set_name=set_name,
         )
 
-    def transaction_session(
+    def transaction(
         self, behavior: Optional[Behavior] = None,
     ) -> "TransactionalSession":
         """Create a multi-record transaction (MRT) session.
@@ -635,7 +583,7 @@ class Client:
 
         Example::
 
-            async with client.transaction_session() as tx:
+            async with client.transaction() as tx:
                 await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
                 await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
         """
@@ -686,7 +634,7 @@ class Client:
 
         return Session(client=self, behavior=behavior)
 
-    async def register_udf(
+    async def _register_udf(
         self,
         body: bytes,
         server_path: str,
@@ -716,13 +664,13 @@ class Client:
 
         Example::
 
-            task = await client.register_udf("my_module", udf_source_code)
+            task = await session.register_udf("my_module", udf_source_code)
             await task.wait_till_complete()
         """
         return await self._async_client.register_udf(
             body, server_path, language, policy=policy)
 
-    async def register_udf_from_file(
+    async def _register_udf_from_file(
         self,
         client_path: str,
         server_path: str,
@@ -751,13 +699,56 @@ class Client:
 
         Example::
 
-            task = await client.register_udf_from_file("scripts/my_module.lua", "my_module.lua")
+            task = await session.register_udf_from_file("scripts/my_module.lua", "my_module.lua")
             await task.wait_till_complete()
         """
         return await self._async_client.register_udf_from_file(
             client_path, server_path, language, policy=policy)
 
-    async def remove_udf(
+    async def _register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional[AdminPolicy] = None,
+    ) -> RegisterTask:
+        """Register a UDF from a Python package resource (``importlib.resources``).
+
+        The Pythonic analog of the Java client's classpath/resource registration —
+        for a module shipped as package data (e.g. a ``.lua`` bundled inside a
+        library). Reads the resource bytes and delegates to :meth:`register_udf`.
+
+        Args:
+            package: Importable package holding the resource (e.g. ``"myapp.udfs"``).
+            resource: Resource name within the package (e.g. ``"record_example.lua"``).
+            server_path: Path name stored on the server.
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional admin policy; use keyword ``policy=``.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask` for completion polling.
+
+        Raises:
+            RuntimeError: If not connected.
+            ModuleNotFoundError: If ``package`` cannot be imported.
+            FileNotFoundError: If ``resource`` is not found in the package.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.register_udf_from_resource(
+                "myapp.udfs", "record_example.lua", "record_example.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf_from_file`, :meth:`register_udf`.
+        """
+        body = resources.files(package).joinpath(resource).read_bytes()
+        return await self._register_udf(body, server_path, language, policy=policy)
+
+    async def _remove_udf(
         self,
         server_path: str,
         *,
@@ -778,8 +769,55 @@ class Client:
 
         Example::
 
-            task = await client.remove_udf("my_module")
+            task = await session.remove_udf("my_module")
             await task.wait_till_complete()
         """
         return await self._async_client.remove_udf(server_path, policy=policy)
+
+    async def _list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster.
+
+        Returns:
+            One dict per registered module with ``name``, ``hash`` and
+            ``type`` keys (e.g. ``[{"name": "my_module.lua", "hash": "…",
+            "type": "LUA"}]``); an empty list when nothing is registered.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            for module in await session.list_udf():
+                print(module["name"], module["type"])
+
+        See Also:
+            :meth:`register_udf`, :meth:`remove_udf`.
+        """
+        resp = await self._async_client.info("udf-list")
+        return parse_udf_list(resp.get("udf-list", ""))
+
+    async def _list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster.
+
+        Returns:
+            One dict per index with ``namespace``, ``set``, ``bin`` and
+            ``name`` keys, plus ``type`` / ``index_type`` / ``context`` when
+            the server reports them (``context`` is present for CDT indexes).
+            Empty when no secondary indexes are defined.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster or info errors (via PAC).
+
+        Example::
+
+            for idx in await session.list_indexes():
+                print(idx["name"], idx["namespace"], idx["bin"])
+
+        See Also:
+            :meth:`index`: Create or drop a secondary index.
+        """
+        raw = await self._async_client.info_on_all_nodes("sindex-list")
+        return parse_index_list(raw)
 
