@@ -22,7 +22,7 @@ from aerospike_sdk.policy.behavior_registry import (
     get_behavior_or_default,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Scope, Settings
-from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
 __all__ = [
     "Behavior",
@@ -32,6 +32,7 @@ __all__ = [
     "Scope",
     "Settings",
     "SystemSettings",
+    "TransactionSettings",
     "get_all_behaviors",
     "get_behavior",
     "get_behavior_or_default",

@@ -24,7 +24,9 @@ from aerospike_async import AuthMode, ClientPolicy
 
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.tls_builder import TlsBuilder
+from aerospike_sdk.policy.sdk_config_loader import load_at_connect
 from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 
 # Client identifier sent to the server (user-agent), overriding the underlying
 # async client's own id so PSDK usage is distinguishable on the wire.
@@ -389,8 +391,16 @@ class ClusterDefinition:
         self._tls_builder = TlsBuilder(self)
         return self._tls_builder
 
-    def _get_policy(self) -> ClientPolicy:
-        """Build a ClientPolicy from the configuration."""
+    def _get_policy(self, system_settings: Optional[SystemSettings] = None) -> ClientPolicy:
+        """Build a ClientPolicy from the configuration.
+
+        Args:
+            system_settings: Effective settings to apply (the file layer
+                merged over :meth:`with_system_settings`). Defaults to the
+                programmatic settings alone.
+        """
+        if system_settings is None:
+            system_settings = self._system_settings
         policy = ClientPolicy()
 
         # Override the underlying client's user-agent id with PSDK's own.
@@ -414,8 +424,8 @@ class ClusterDefinition:
             if tls_config is not None:
                 policy.tls_config = tls_config
 
-        if self._system_settings is not None:
-            self._system_settings.apply_to(policy)
+        if system_settings is not None:
+            system_settings.apply_to(policy)
 
         return policy
     
@@ -489,9 +499,23 @@ class ClusterDefinition:
                 the cluster is unreachable
         """
         self._validate()
-        policy = self._get_policy()
+        # SDK config file (AEROSPIKE_SDK_CONFIG_URL): applies the behaviors
+        # section, layers system settings over programmatic ones per-field,
+        # and arms hot-reload on the client when a path is configured.
+        settings, config_path, raw = load_at_connect(self._cluster_name, self._system_settings)
+        config_source = (
+            SdkConfigSource(config_path, self._cluster_name, self._system_settings, raw)
+            if config_path is not None
+            else None
+        )
+        policy = self._get_policy(settings)
         seeds = self._build_seeds_string()
         return Cluster._create(
-            policy, seeds, index_refresh_interval=self._index_refresh_interval)
+            policy,
+            seeds,
+            index_refresh_interval=self._index_refresh_interval,
+            sdk_settings=settings,
+            sdk_config_source=config_source,
+        )
 
 

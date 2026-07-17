@@ -120,18 +120,55 @@ pip install -e ".[dev]"
 ```{toctree}
 :hidden:
 :maxdepth: 2
+:caption: Getting Started
 
 guide/connecting
+guide/dynamic-sdk-config
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Working with Data
+
 guide/reads
 guide/writes
 guide/cdt-operations
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Queries & Indexes
+
 guide/expression-ael
-guide/transactions
-guide/error-handling
-guide/background-udf
 guide/indexes
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Transactions & Background
+
+guide/transactions
+guide/background-udf
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Operations
+
+guide/error-handling
 guide/logging
 guide/performance
 guide/benchmarking
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Reference
+
 api/index
 ```

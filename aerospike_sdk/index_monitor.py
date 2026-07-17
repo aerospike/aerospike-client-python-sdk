@@ -191,7 +191,7 @@ def _fetch_indexes_blocking(pac_client: "PacClient") -> Dict[str, IndexContext]:
 class IndexesMonitor:
     """Daemon-thread background monitor that caches secondary index metadata.
 
-    Matches the JSDK ``IndexesMonitor`` design: a single daemon thread polls
+    Cannonical SDK ``IndexesMonitor`` design: a single daemon thread polls
     the cluster's info APIs at a fixed interval and refreshes an in-memory
     cache. Readers (sync or async builders) consult the cache through
     :meth:`get_index_context`, which is non-blocking.

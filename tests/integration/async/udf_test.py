@@ -489,9 +489,7 @@ async def test_register_udf_from_resource(aerospike_host, client_policy, tmp_pat
 
 async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     """UDF admin works through the ClusterDefinition -> Cluster -> Session path.
-
-    Registers via the Cluster, lists/removes via a Session obtained from it —
-    so the JSDK-shaped entry idiom is self-sufficient without touching Client.
+       Registers via the Cluster, lists/removes via a Session obtained from it
     """
     if ":" in aerospike_host:
         hostname, port_str = aerospike_host.split(":", 1)
