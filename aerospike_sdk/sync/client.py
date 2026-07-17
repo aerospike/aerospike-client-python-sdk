@@ -167,6 +167,30 @@ class SyncClient:
         # operation path reads it lock-free.
         self._sdk_settings: SystemSettings = fill_hard_defaults(None)
         self._sdk_config_monitor: Optional[SyncSdkConfigMonitor] = None
+        # Cluster-wide MRT capability (all nodes >= the MRT server version),
+        # resolved lazily on the first implicit-transaction gate check and
+        # cached for the client's lifetime (cleared on close, like the
+        # namespace-mode cache).
+        self._supports_mrt_cache: Optional[bool] = None
+
+    def _supports_mrt_blocking(self) -> bool:
+        """Whether every cluster node supports multi-record transactions.
+
+        An MRT spans the cluster, so the aggregate is all-nodes: a single
+        node below the MRT server version makes the answer ``False``. The
+        ``current_thread_runtime`` proxy has no node-listing surface, so
+        MRT support cannot be verified there and this reports ``False``
+        (implicit batch-write transactions stay off on that path).
+        """
+        if self._supports_mrt_cache is None:
+            nodes_fn = getattr(self._client, "nodes_blocking", None)
+            if nodes_fn is None:
+                return False
+            nodes = nodes_fn()
+            self._supports_mrt_cache = bool(nodes) and all(
+                node.version.supports_mrt() for node in nodes
+            )
+        return self._supports_mrt_cache
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -231,6 +255,7 @@ class SyncClient:
             self._connected = False
             log.info("Client closed")
         self._namespace_mode_cache.clear()
+        self._supports_mrt_cache = None
 
     def __enter__(self) -> SyncClient:
         self.connect()

@@ -64,6 +64,8 @@ DEFAULT_PROFILE = "DEFAULT"
 
 # Hard defaults — the bottom precedence layer, applied after all merging.
 _HARD_DEFAULT_IMPLICIT_BATCH_WRITE_TXNS = True
+_HARD_DEFAULT_TXN_SLEEP_BETWEEN_ATTEMPTS = timedelta(seconds=1)
+_HARD_DEFAULT_TXN_NUMBER_OF_ATTEMPTS = 5
 
 # Multi-character alternatives listed before their single-character prefixes
 # so e.g. "ms" is never consumed as "m".
@@ -518,11 +520,15 @@ def fill_hard_defaults(settings: Optional[SystemSettings]) -> SystemSettings:
     if settings is None:
         settings = SystemSettings()
     txn = settings.transactions
+    fills = {}
     if txn.implicit_batch_write_transactions is None:
-        txn = replace(
-            txn, implicit_batch_write_transactions=_HARD_DEFAULT_IMPLICIT_BATCH_WRITE_TXNS,
-        )
-        settings = replace(settings, transactions=txn)
+        fills["implicit_batch_write_transactions"] = _HARD_DEFAULT_IMPLICIT_BATCH_WRITE_TXNS
+    if txn.sleep_between_attempts is None:
+        fills["sleep_between_attempts"] = _HARD_DEFAULT_TXN_SLEEP_BETWEEN_ATTEMPTS
+    if txn.number_of_attempts is None:
+        fills["number_of_attempts"] = _HARD_DEFAULT_TXN_NUMBER_OF_ATTEMPTS
+    if fills:
+        settings = replace(settings, transactions=replace(txn, **fills))
     return settings
 
 

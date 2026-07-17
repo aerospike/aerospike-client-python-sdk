@@ -92,6 +92,60 @@ async with session.transaction() as tx:
         await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
 ```
 
+## Implicit Batch-Write Transactions
+
+A multi-key write batch against a strong-consistency namespace is
+automatically wrapped in a transaction when it is not already inside one,
+so its writes commit atomically — all keys land together, or none do:
+
+```python
+# No explicit transaction, SC namespace, MRT-capable cluster:
+# implicitly runs inside a transaction and commits on success.
+await session.upsert(customers.ids(1, 2, 3, 4, 5)) \
+    .put({"fixed": True, "pendingCosts": 0}) \
+    .execute()
+```
+
+The wrap fires only when **all** of the following hold; otherwise the
+batch executes exactly as before:
+
+- the batch contains writes (multi-key `upsert`/`insert`/`update`/
+  `replace`/`delete`/`touch`/UDF, or a `session.batch()` chain with
+  write verbs) and targets more than a single key,
+- every key's namespace is strong-consistency,
+- the whole cluster supports transactions (server 8.0+ on every node),
+- no explicit transaction is active and the operation was not opted out
+  with `with_txn(None)`,
+- `implicit_batch_write_transactions` is enabled (the default).
+
+Transient conflicts and failed commits are retried with a fresh
+transaction using the same settings-driven loop as explicit
+transactions. All three knobs live in
+[`TransactionSettings`](../api/system-settings.md) and can come from the
+[SDK config file](dynamic-sdk-config.md) (hot-reloaded, effective on the
+next operation) or `with_system_settings(...)`:
+
+```python
+from aerospike_sdk import SystemSettings, TransactionSettings
+
+settings = SystemSettings(
+    transactions=TransactionSettings(
+        implicit_batch_write_transactions=False,   # default True
+        # number_of_attempts=5,                    # retry attempts
+        # sleep_between_attempts=timedelta(seconds=1),
+    ),
+)
+```
+
+Two caveats. The lazy streaming terminal (`execute_stream`) never wraps —
+an implicit commit would have to wait for the stream to drain; use the
+buffered `execute()` or an explicit transaction when atomicity is
+required. And because the wrap inherits full transaction semantics, a
+batch whose commit cannot be verified (for example, deleting
+already-tombstoned records) raises `CommitFailedError` instead of
+returning per-key soft errors — opt out with `with_txn(None)` for
+cleanup-style deletes that do not need atomicity.
+
 ## Errors
 
 | Error | Meaning |

@@ -152,6 +152,37 @@ class Client:
         # operation path reads it lock-free.
         self._sdk_settings: SystemSettings = fill_hard_defaults(None)
         self._sdk_config_monitor: Optional[AsyncSdkConfigMonitor] = None
+        # Cluster-wide MRT capability (all nodes >= the MRT server version),
+        # resolved lazily on the first implicit-transaction gate check and
+        # cached for the client's lifetime (cleared on close, like the
+        # namespace-mode cache).
+        self._supports_mrt_cache: Optional[bool] = None
+
+    async def _supports_mrt(self) -> bool:
+        """Whether every cluster node supports multi-record transactions.
+
+        An MRT spans the cluster, so the aggregate is all-nodes: a single
+        node below the MRT server version makes the answer ``False``.
+        """
+        if self._supports_mrt_cache is None:
+            if self._client is None:
+                return False
+            nodes = await self._client.nodes()
+            self._supports_mrt_cache = bool(nodes) and all(
+                node.version.supports_mrt() for node in nodes
+            )
+        return self._supports_mrt_cache
+
+    def _supports_mrt_blocking(self) -> bool:
+        """Sync sibling of :meth:`_supports_mrt`."""
+        if self._supports_mrt_cache is None:
+            if self._client is None:
+                return False
+            nodes = self._client.nodes_blocking()
+            self._supports_mrt_cache = bool(nodes) and all(
+                node.version.supports_mrt() for node in nodes
+            )
+        return self._supports_mrt_cache
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -231,6 +262,7 @@ class Client:
             self._connected = False
             log.info("Client closed")
         self._namespace_mode_cache.clear()
+        self._supports_mrt_cache = None
 
     def connect_blocking(self) -> None:
         """Synchronously open a connection without requiring an asyncio loop.
@@ -282,6 +314,7 @@ class Client:
             self._connected = False
             log.info("Client closed")
         self._namespace_mode_cache.clear()
+        self._supports_mrt_cache = None
 
     async def __aenter__(self) -> Client:
         """Async context manager entry."""
@@ -454,6 +487,7 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                sdk_client=self,
             )
             builder._single_key = key
             return builder
@@ -471,6 +505,7 @@ class Client:
                 behavior=behavior,
                 indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
+                sdk_client=self,
             )
             builder._keys = keys
             return builder
@@ -499,6 +534,7 @@ class Client:
             indexes_monitor=self._indexes_monitor,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
+            sdk_client=self,
         )
 
     @overload

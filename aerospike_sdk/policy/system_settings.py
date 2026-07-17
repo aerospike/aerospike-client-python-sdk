@@ -33,8 +33,16 @@ class TransactionSettings:
     they configure how the SDK itself drives multi-record transactions.
     ``None`` means "not set" — the value falls through to the next
     configuration layer (see :class:`SystemSettings` for layering), ending
-    at the hard default (``implicit_batch_write_transactions`` defaults to
-    ``True``).
+    at the hard defaults: ``implicit_batch_write_transactions`` ``True``,
+    ``number_of_attempts`` ``5``, ``sleep_between_attempts`` one second.
+
+    ``implicit_batch_write_transactions`` controls whether a multi-key
+    write batch on a strong-consistency namespace (MRT-capable cluster,
+    no explicit transaction active) is wrapped in an implicit
+    multi-record transaction so its writes commit atomically.
+    ``number_of_attempts`` and ``sleep_between_attempts`` drive the retry
+    loop for those implicit transactions when the server reports a
+    transient conflict.
 
     Example::
 
