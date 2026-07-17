@@ -263,6 +263,23 @@ class TestFillHardDefaults:
         assert resolved.transactions.implicit_batch_write_transactions is True
         assert resolved.max_connections_per_node is None
 
+    def test_retry_defaults(self):
+        resolved = fill_hard_defaults(SystemSettings())
+        assert resolved.transactions.number_of_attempts == 5
+        assert resolved.transactions.sleep_between_attempts == timedelta(seconds=1)
+
+    def test_explicit_retry_values_preserved(self):
+        settings = SystemSettings(
+            transactions=TransactionSettings(
+                number_of_attempts=2,
+                sleep_between_attempts=timedelta(milliseconds=250),
+            ),
+        )
+        resolved = fill_hard_defaults(settings)
+        assert resolved.transactions.number_of_attempts == 2
+        assert resolved.transactions.sleep_between_attempts == timedelta(milliseconds=250)
+        assert resolved.transactions.implicit_batch_write_transactions is True
+
 
 class TestEnvResolution:
     """AEROSPIKE_SDK_CONFIG_URL resolves to a path; only file sources apply."""

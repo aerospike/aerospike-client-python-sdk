@@ -398,6 +398,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -487,6 +488,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -567,6 +569,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -727,6 +730,7 @@ class Session:
                 txn=self._txn,
                 namespace_mode_resolver=self._resolve_namespace_mode,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._single_key = arg1
             return builder
@@ -765,6 +769,7 @@ class Session:
                         txn=self._txn,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                        sdk_client=self._client,
                     )
                     builder._single_key = arg1
                     return builder

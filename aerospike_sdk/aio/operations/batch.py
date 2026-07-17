@@ -52,6 +52,13 @@ from aerospike_sdk.operations_shared import (
 )
 from aerospike_sdk.error_strategy import ErrorHandler, _filter_records_with_handler
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.implicit_txn import (
+    batch_ops_contain_write,
+    implicit_txn_enabled,
+    run_in_implicit_txn,
+    run_in_implicit_txn_blocking,
+    stamp_txn,
+)
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_batch_policy
@@ -512,6 +519,7 @@ class _BatchOperationBuilderBase:
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
+        sdk_client: Optional[Any] = None,
     ) -> None:
         """
         Initialize a BatchOperationBuilder.
@@ -526,6 +534,10 @@ class _BatchOperationBuilderBase:
                 used to apply AP vs SC behavior scopes before policies are built.
             namespace_mode_resolver_blocking: Optional sync callable for the
                 same purpose, used by :meth:`execute_blocking`.
+            sdk_client: Optional owning SDK client, consulted at execute time
+                for SDK-level settings (implicit batch-write transactions)
+                and cluster MRT capability. ``None`` disables implicit
+                transactions for this builder.
         """
         self._client = client
         self._behavior = behavior
@@ -533,6 +545,10 @@ class _BatchOperationBuilderBase:
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
+        self._sdk_client = sdk_client
+        # Set by with_txn(None): the caller explicitly opted out of any
+        # transaction, so the implicit batch-write wrap must not fire either.
+        self._txn_opted_out = False
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on the outer batch policy."""
@@ -548,12 +564,14 @@ class _BatchOperationBuilderBase:
 
         Args:
             txn: The :class:`~aerospike_async.Txn` to participate in, or
-                ``None`` to opt out.
+                ``None`` to opt out (of both an ambient transaction and
+                implicit batch-write transactions).
 
         Returns:
             This builder for chaining.
         """
         self._txn = txn
+        self._txn_opted_out = txn is None
         return self
 
     def insert(self, key: Key) -> BatchKeyOperationBuilder:
@@ -716,6 +734,18 @@ class _BatchOperationBuilderBase:
         ops = _build_pac_batch_ops(self._key_operations, delete_policy)
 
         try:
+            if (
+                not self._txn_opted_out
+                and implicit_txn_enabled(self._sdk_client, self._txn, batch_mode)
+                and batch_ops_contain_write(self._key_operations)
+                and self._sdk_client._supports_mrt_blocking()
+            ):
+                return run_in_implicit_txn_blocking(
+                    self._client,
+                    self._sdk_client._sdk_settings.transactions,
+                    lambda txn: self._client.batch_blocking(
+                        ops, batch_policy=stamp_txn(batch_policy, txn)),
+                )
             return self._client.batch_blocking(ops, batch_policy=batch_policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
@@ -852,7 +882,20 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         ops = _build_pac_batch_ops(self._key_operations, delete_policy)
 
         try:
-            raw_results = await self._client.batch(ops, batch_policy=batch_policy)
+            if (
+                not self._txn_opted_out
+                and implicit_txn_enabled(self._sdk_client, self._txn, batch_mode)
+                and batch_ops_contain_write(self._key_operations)
+                and await self._sdk_client._supports_mrt()
+            ):
+                raw_results = await run_in_implicit_txn(
+                    self._client,
+                    self._sdk_client._sdk_settings.transactions,
+                    lambda txn: self._client.batch(
+                        ops, batch_policy=stamp_txn(batch_policy, txn)),
+                )
+            else:
+                raw_results = await self._client.batch(ops, batch_policy=batch_policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
@@ -892,6 +935,13 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
           writes-complete-on-return — or use the "fire-and-forget" shape
           (``await session.batch()...execute_stream()`` without draining)
           — must use :meth:`execute` instead.
+        - **No implicit transaction.** The buffered :meth:`execute` wraps
+          a qualifying SC write batch in an implicit multi-record
+          transaction (see
+          :attr:`~aerospike_sdk.policy.system_settings.TransactionSettings.implicit_batch_write_transactions`);
+          the streaming path does not — an implicit commit would have to
+          wait for the stream to be fully drained. Use an explicit
+          transaction or :meth:`execute` when atomicity is required.
 
         Per-key op composition is inspected via
         :func:`aerospike_async.has_any_write_op` to choose the right PAC

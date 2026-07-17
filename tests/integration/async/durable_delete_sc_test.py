@@ -470,7 +470,11 @@ class TestDurableDeleteBatchReset:
         for k in keys:
             await delete_keys_durable(session, [k])
 
-        del_stream = await session.delete(*keys).with_durable_delete().include_missing_keys().execute(
+        # Deleting already-tombstoned keys inside a multi-record transaction
+        # fails commit verification, so this cleanup delete opts out of the
+        # implicit batch-write transaction via with_txn(None).
+        del_stream = await session.delete(*keys).with_durable_delete().include_missing_keys() \
+            .with_txn(None).execute(
             on_error=ErrorStrategy.IN_STREAM,
         )
         del_rows = await del_stream.collect()

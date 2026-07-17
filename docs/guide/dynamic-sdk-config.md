@@ -53,7 +53,12 @@ Two kinds of settings live in the file. The `connections`, `circuitBreaker`,
 and `refresh` groups configure the connection itself and take effect at
 `connect()`; changing them on a running client applies on the next connect.
 The `transactions` group is SDK-runtime configuration, read at operation
-time — hot-reloaded changes take effect on the next operation. See
+time — hot-reloaded changes take effect on the next operation.
+`implicitBatchWriteTransactions` (default `true`) controls whether
+multi-key write batches on strong-consistency namespaces are wrapped in
+[implicit transactions](transactions.md);
+`numberOfAttempts` (default `5`) and `sleepBetweenAttempts` (default
+`1000ms`) drive their retry loop on transient conflicts. See
 [`SystemSettings`](../api/system-settings.md) for the programmatic
 equivalents.
 

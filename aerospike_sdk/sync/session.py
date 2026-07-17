@@ -319,6 +319,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._single_key = key
             return builder
@@ -339,6 +340,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._keys = keys
             return builder
@@ -364,6 +366,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
 
     def batch(self) -> SyncBatchOperationBuilder:
@@ -380,6 +383,7 @@ class SyncSession:
             behavior=self._behavior,
             txn=self._txn,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         return SyncBatchOperationBuilder(inner)
 
