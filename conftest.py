@@ -255,9 +255,16 @@ def wait_for_index():
 
         await wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
     """
-    async def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+    async def _wait(
+        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
+    ):
+        # Server-side SI readiness is not monotonic right after create/drop —
+        # a single successful probe can be followed by a brief IndexNotReadable
+        # window. Require `stable` consecutive readable probes so the very next
+        # query in the test does not race that flicker.
         deadline = time.monotonic() + timeout
         last_err = None
+        hits = 0
         session = client.create_session()
         while time.monotonic() < deadline:
             try:
@@ -265,10 +272,14 @@ def wait_for_index():
                 async for _ in stream:
                     break
                 stream.close()
-                return
+                hits += 1
+                if hits >= stable:
+                    return
+                await asyncio.sleep(interval)
             except Exception as exc:
                 if "IndexNotReadable" not in str(exc):
                     raise
+                hits = 0  # a flicker resets the streak
                 last_err = exc
                 await asyncio.sleep(interval)
         raise last_err  # type: ignore[misc]
@@ -332,9 +343,16 @@ def sync_wait_for_index():
 
         sync_wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
     """
-    def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+    def _wait(
+        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
+    ):
+        # Server-side SI readiness is not monotonic right after create/drop —
+        # a single successful probe can be followed by a brief IndexNotReadable
+        # window. Require `stable` consecutive readable probes so the very next
+        # query in the test does not race that flicker.
         deadline = time.monotonic() + timeout
         last_err = None
+        hits = 0
         session = client.create_session()
         while time.monotonic() < deadline:
             try:
@@ -342,10 +360,14 @@ def sync_wait_for_index():
                 for _ in stream:
                     break
                 stream.close()
-                return
+                hits += 1
+                if hits >= stable:
+                    return
+                time.sleep(interval)
             except Exception as exc:
                 if "IndexNotReadable" not in str(exc):
                     raise
+                hits = 0  # a flicker resets the streak
                 last_err = exc
                 time.sleep(interval)
         raise last_err  # type: ignore[misc]
