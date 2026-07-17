@@ -25,6 +25,8 @@ from aerospike_async import ClientPolicy, UDFLang
 
 from aerospike_sdk.exceptions import ConnectionError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 from aerospike_sdk.sync.client import SyncClient
 
 if typing.TYPE_CHECKING:
@@ -67,6 +69,8 @@ class Cluster:
         policy: ClientPolicy,
         seeds: str,
         index_refresh_interval: float = 5.0,
+        sdk_settings: Optional[SystemSettings] = None,
+        sdk_config_source: Optional[SdkConfigSource] = None,
     ) -> Cluster:
         """
         Internal method to create a new Cluster instance.
@@ -75,6 +79,8 @@ class Cluster:
             policy: The ClientPolicy configuration
             seeds: The seeds string (e.g., "localhost:3000")
             index_refresh_interval: Seconds between secondary-index cache refreshes
+            sdk_settings: Resolved SDK settings to store for runtime reads
+            sdk_config_source: When set, arms config hot-reload on the client
 
         Returns:
             A new Cluster instance
@@ -87,6 +93,8 @@ class Cluster:
             policy=policy,
             index_refresh_interval=index_refresh_interval,
         )
+        if sdk_settings is not None:
+            sdk_client._sdk_settings = sdk_settings
         sdk_client.connect()
 
         # Bypass asyncio for the post-connect sanity check — `is_connected`
@@ -97,6 +105,8 @@ class Cluster:
                 f"Connected to seeds '{seeds}' but cluster reports not connected"
             )
 
+        if sdk_config_source is not None:
+            sdk_client._start_sdk_config_monitor(sdk_config_source)
         return cls(sdk_client)
     
     def __enter__(self) -> Cluster:

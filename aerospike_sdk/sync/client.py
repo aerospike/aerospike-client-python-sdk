@@ -45,6 +45,9 @@ from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.sync.operations.index import SyncIndexBuilder
@@ -159,6 +162,21 @@ class SyncClient:
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
+        # Resolved SDK-level settings (file over programmatic over defaults).
+        # A frozen snapshot swapped wholesale by the config monitor, so the
+        # operation path reads it lock-free.
+        self._sdk_settings: SystemSettings = fill_hard_defaults(None)
+        self._sdk_config_monitor: Optional[SyncSdkConfigMonitor] = None
+
+    def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
+        """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
+        monitor = SyncSdkConfigMonitor(
+            source,
+            self._sdk_settings,
+            lambda settings: setattr(self, "_sdk_settings", settings),
+        )
+        monitor.start()
+        self._sdk_config_monitor = monitor
 
     # -- Lifecycle ------------------------------------------------------------
 
@@ -202,6 +220,9 @@ class SyncClient:
         Stops the :class:`IndexesMonitor` daemon thread (if owned) and
         calls PAC's ``close_blocking``. Safe to call when already closed.
         """
+        if self._sdk_config_monitor is not None:
+            self._sdk_config_monitor.stop()
+            self._sdk_config_monitor = None
         if self._owns_monitor:
             self._indexes_monitor.stop()
         if self._client is not None:

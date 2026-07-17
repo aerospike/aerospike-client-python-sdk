@@ -123,6 +123,13 @@ cluster = await (
 )
 ```
 
+### SDK Configuration File
+
+Connection pool sizing, circuit-breaker thresholds, tend interval, and named
+operation-policy behaviors can also come from a YAML file (the
+`AEROSPIKE_SDK_CONFIG_URL` environment variable), read at `connect()` and
+hot-reloaded on change. See [Dynamic SDK Configuration](dynamic-sdk-config.md).
+
 ## Sessions
 
 A **Session** binds a connected cluster to a set of policy defaults via a

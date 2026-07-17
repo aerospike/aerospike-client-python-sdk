@@ -13,13 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Integration tests for record expiration / TTL.
-
-The first three tests parallel the reference JSDK ``ExpireTest`` suite
-(``expire``, ``noExpire``, ``resetReadTtl``); the remaining three exercise
-the ``expire_record_after(timedelta)`` and ``expire_record_at(datetime)``
-methods unique to PSDK.
-"""
+""" Integration tests for record expiration / TTL. """
 
 import asyncio
 from datetime import datetime, timedelta, timezone

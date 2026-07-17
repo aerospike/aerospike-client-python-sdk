@@ -122,6 +122,25 @@ class Session:
         # right policy per resolved namespace mode without rebuilding.
         # `_cached_*_policy` stays as the AP alias (matches behavior's default
         # mode); session.get/put still use it.
+        self._refresh_cached_policies()
+        # Config hot-reload pushes rebuilt policies into live sessions
+        # (weak registration; no per-operation check).
+        behavior._register_session(self)
+        # Cache the raw PAC client for fast-path methods.
+        self._pac_client = client._async_client
+        # Transaction hook. Non-transactional sessions always return None;
+        # TransactionalSession overrides this to yield its active Txn so every
+        # builder spawned from the session auto-participates.
+        self._txn: Optional[Txn] = None
+
+    def _refresh_cached_policies(self) -> None:
+        """(Re)build the cached base policies from the current behavior.
+
+        Called at construction and by config hot-reload when this session's
+        behavior changes. Each attribute swap is a single atomic assignment,
+        so in-flight operations use either the old or new policy snapshot.
+        """
+        behavior = self._behavior
         self._cached_read_policy = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
@@ -130,12 +149,6 @@ class Session:
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
         self._cached_write_policy_sc = to_write_policy(
             behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
-        # Cache the raw PAC client for fast-path methods.
-        self._pac_client = client._async_client
-        # Transaction hook. Non-transactional sessions always return None;
-        # TransactionalSession overrides this to yield its active Txn so every
-        # builder spawned from the session auto-participates.
-        self._txn: Optional[Txn] = None
 
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
