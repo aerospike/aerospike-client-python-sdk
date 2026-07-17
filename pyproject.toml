@@ -9,7 +9,7 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@69320fb773eff3dbf5e057c5775ca3315ecad263",
+    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@a1eb2431f59e9bd114f5b001a7f236ed43aa174a",
     "antlr4-python3-runtime>=4.13.0",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
