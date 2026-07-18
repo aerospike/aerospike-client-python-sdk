@@ -215,18 +215,30 @@ pip install -e ".[dev]"    # install with dev extras
 
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
+The pinned `aerospike-async` (PAC) dev version is published to the org's
+internal package repository, not public PyPI, so the plain install above
+needs either that index configured or PAC installed first. Until the
+internal index is wired for local use, install PAC from a local checkout
+(next section) or download the pinned wheel with the JFrog CLI:
+
+```bash
+jf rt dl "<project>-pypi-dev-local/aerospike-async/<pin>/*<your-platform>*.whl" pac-wheels/ --flat=true
+pip install pac-wheels/*.whl
+pip install -e ".[dev]"
+```
+
 ### Local PAC checkout
 
 To test against a sibling Aerospike Python Async Client working tree (e.g. for
-a feature not yet on PyPI), install it editable first and pass `--no-deps` to
-this SDK so pip doesn't try to re-resolve PAC from PyPI:
+a feature not yet published), install it editable first and pass `--no-deps` to
+this SDK so pip doesn't try to resolve the exact PAC pin from an index:
 
 ```bash
 pip install -e /path/to/aerospike-client-python-async
 pip install -e ".[dev]" --no-deps
 ```
 
-Or use `requirements-local.txt` (gitignored path example).
+Or use `requirements-local.txt` (edit the `file:` path for your machine).
 
 ### Configuration
 
