@@ -216,16 +216,22 @@ pip install -e ".[dev]"    # install with dev extras
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
 The pinned `aerospike-async` (PAC) dev version is published to the org's
-internal package repository, not public PyPI, so the plain install above
-needs either that index configured or PAC installed first. Until the
-internal index is wired for local use, install PAC from a local checkout
-(next section) or download the pinned wheel with the JFrog CLI:
+internal PyPI index, not public PyPI, so the plain install above needs
+that index configured once. Generate an identity token in the JFrog UI
+(avatar → *Edit Profile* → *Identity Tokens*), then point pip at the
+index — your username is your **email address**:
 
 ```bash
-jf rt dl "<project>-pypi-dev-local/aerospike-async/<pin>/*<your-platform>*.whl" pac-wheels/ --flat=true
-pip install pac-wheels/*.whl
+export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
 pip install -e ".[dev]"
 ```
+
+(Or persist the same URL in `~/.config/pip/pip.conf` under
+`[global] extra-index-url`, or credentials in `~/.netrc` for
+`artifact.aerospike.io`. Note the `%40` — the `@` in the email must be
+URL-encoded.) CI does the equivalent with short-lived OIDC credentials;
+ReadTheDocs builds need `PIP_EXTRA_INDEX_URL` set as an environment
+variable in the RTD project dashboard.
 
 ### Local PAC checkout
 

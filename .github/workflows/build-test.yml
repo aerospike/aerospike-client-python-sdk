@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup JFrog CLI
+        id: jfrog
         uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
           JF_PROJECT: ${{ vars.JFROG_PROJECT }}
@@ -61,6 +62,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Setup JFrog CLI
+        id: jfrog
         uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
           JF_PROJECT: ${{ vars.JFROG_PROJECT }}
@@ -68,19 +70,19 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Install PAC from the internal dev repo
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
           set -euo pipefail
-          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
-          tag=$(echo "${{ matrix.python }}" | tr -d '.')
-          echo "Pinned PAC version: $version (cp${tag})"
-          jf rt dl \
-            "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
-            pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --find-links pac-wheels/
-
-      - name: Install SDK and dev dependencies
-        run: pip install ".[dev]"
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
@@ -130,6 +132,7 @@ jobs:
           docker exec aerospike-server asinfo -v "build"
 
       - name: Setup JFrog CLI
+        id: jfrog
         uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
           JF_PROJECT: ${{ vars.JFROG_PROJECT }}
@@ -137,19 +140,19 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Install PAC from the internal dev repo
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
           set -euo pipefail
-          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
-          tag=$(echo "${{ matrix.python }}" | tr -d '.')
-          echo "Pinned PAC version: $version (cp${tag})"
-          jf rt dl \
-            "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
-            pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --find-links pac-wheels/
-
-      - name: Install SDK and dev dependencies
-        run: pip install ".[dev]"
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
@@ -187,6 +190,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Setup JFrog CLI
+        id: jfrog
         uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
           JF_PROJECT: ${{ vars.JFROG_PROJECT }}
@@ -194,19 +198,19 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Install PAC from the internal dev repo
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
           set -euo pipefail
-          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
-          tag=$(echo "${{ matrix.python }}" | tr -d '.')
-          echo "Pinned PAC version: $version (cp${tag})"
-          jf rt dl \
-            "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
-            pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --find-links pac-wheels/
-
-      - name: Install SDK and dev dependencies
-        run: pip install ".[dev]"
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
@@ -255,6 +259,7 @@ jobs:
           docker exec aerospike-server asinfo -v "build"
 
       - name: Setup JFrog CLI
+        id: jfrog
         uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
           JF_PROJECT: ${{ vars.JFROG_PROJECT }}
@@ -262,19 +267,19 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Install PAC from the internal dev repo
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
           set -euo pipefail
-          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
-          tag=$(echo "${{ matrix.python }}" | tr -d '.')
-          echo "Pinned PAC version: $version (cp${tag})"
-          jf rt dl \
-            "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
-            pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --find-links pac-wheels/
-
-      - name: Install SDK and dev dependencies
-        run: pip install ".[dev]"
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
