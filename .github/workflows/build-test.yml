@@ -77,7 +77,7 @@ jobs:
           jf rt dl \
             "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
             pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --no-index --find-links pac-wheels/
+          pip install "aerospike-async==${version}" --find-links pac-wheels/
 
       - name: Install SDK and dev dependencies
         run: pip install ".[dev]"
@@ -146,7 +146,7 @@ jobs:
           jf rt dl \
             "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
             pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --no-index --find-links pac-wheels/
+          pip install "aerospike-async==${version}" --find-links pac-wheels/
 
       - name: Install SDK and dev dependencies
         run: pip install ".[dev]"
@@ -203,7 +203,7 @@ jobs:
           jf rt dl \
             "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
             pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --no-index --find-links pac-wheels/
+          pip install "aerospike-async==${version}" --find-links pac-wheels/
 
       - name: Install SDK and dev dependencies
         run: pip install ".[dev]"
@@ -271,7 +271,7 @@ jobs:
           jf rt dl \
             "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*cp${tag}*manylinux*x86_64*.whl" \
             pac-wheels/ --flat=true
-          pip install "aerospike-async==${version}" --no-index --find-links pac-wheels/
+          pip install "aerospike-async==${version}" --find-links pac-wheels/
 
       - name: Install SDK and dev dependencies
         run: pip install ".[dev]"
