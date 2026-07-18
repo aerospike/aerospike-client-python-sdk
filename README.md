@@ -215,11 +215,22 @@ pip install -e ".[dev]"    # install with dev extras
 
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
-The pinned `aerospike-async` (PAC) dev version is published to the org's
-internal PyPI index, not public PyPI, so the plain install above needs
-that index configured once. Generate an identity token in the JFrog UI
-(avatar → *Edit Profile* → *Identity Tokens*), then point pip at the
-index — your username is your **email address**:
+On the `dev` branch, the pinned `aerospike-async` (PAC) version is a
+pre-release build published to Aerospike's internal package index rather
+than public PyPI, so the plain install above needs one extra step that
+depends on who you are:
+
+**External contributors:** the internal index requires Aerospike
+credentials, but PAC's source is public — build it locally per
+[Local PAC checkout](#local-pac-checkout) below (requires a Rust
+toolchain), then install this SDK with `--no-deps`. Released versions of
+`aerospike-sdk` on public PyPI depend only on public PyPI packages and
+need none of this.
+
+**Aerospike engineers:** configure the internal index once. Generate an
+identity token in the JFrog UI (avatar → *Edit Profile* → *Identity
+Tokens*), then point pip at the index — your username is your **email
+address**:
 
 ```bash
 export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
@@ -235,9 +246,11 @@ variable in the RTD project dashboard.
 
 ### Local PAC checkout
 
-To test against a sibling Aerospike Python Async Client working tree (e.g. for
-a feature not yet published), install it editable first and pass `--no-deps` to
-this SDK so pip doesn't try to resolve the exact PAC pin from an index:
+To build against a local Aerospike Python Async Client working tree —
+whether because you're changing PAC itself or because you don't have
+access to the internal index — install it editable first and pass
+`--no-deps` to this SDK so pip doesn't try to resolve the exact PAC pin
+from an index:
 
 ```bash
 pip install -e /path/to/aerospike-client-python-async
