@@ -74,6 +74,7 @@ behaviors:
       abandonCallAfter: 1s
       maximumNumberOfCallAttempts: 2
       delayBetweenRetries: 25ms
+      errorDetailVerbosity: 2    # 0=none, 1=subcode, 2=+message, 3=+expression trace
     retryableWrites:
       useDurableDelete: false
     batchReads:
@@ -94,7 +95,8 @@ Selector blocks scope the fields to an operation category: `allOperations`,
 the profile inherits field by field. A `DEFAULT` entry adjusts
 `Behavior.DEFAULT` itself, layered on its built-in settings.
 `maximumNumberOfCallAttempts` counts the initial call, so `2` means one
-retry.
+retry. `errorDetailVerbosity` opts operations into extended server error
+detail (see [Error Handling](error-handling.md)); it defaults to `0` (off).
 
 Use a file-defined behavior like any other:
 

@@ -136,8 +136,7 @@ _BEHAVIOR_SELECTOR_SCOPES: Dict[str, Scope] = {
 _BEHAVIOR_META_KEYS = frozenset({"parent", "name"})
 
 # behaviors: policy fields -> Settings fields. Fields with no Settings
-# equivalent (connection timeouts, error verbosity) fall through to the
-# unknown-key debug log.
+# equivalent (connection timeouts) fall through to the unknown-key debug log.
 _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "abandonCallAfter": ("total_timeout", "duration"),
     "waitForCallToComplete": ("socket_timeout", "duration"),
@@ -155,6 +154,7 @@ _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "allowInlineMemoryAccess": ("allow_inline", bool),
     "allowInlineSsdAccess": ("allow_inline_ssd", bool),
     "recordQueueSize": ("record_queue_size", int),
+    "errorDetailVerbosity": ("error_detail_verbosity", int),
 }
 
 

@@ -99,6 +99,8 @@ class Settings:
 
     read_touch_ttl_percent: Optional[int] = None
 
+    error_detail_verbosity: Optional[int] = None
+
     @classmethod
     def merge(cls, base: Settings, override: Settings) -> Settings:
         """Merge two Settings; override's non-None fields win."""
@@ -120,6 +122,9 @@ class Settings:
             allow_inline=_pick(override.allow_inline, base.allow_inline),
             allow_inline_ssd=_pick(override.allow_inline_ssd, base.allow_inline_ssd),
             read_touch_ttl_percent=_pick(override.read_touch_ttl_percent, base.read_touch_ttl_percent),
+            error_detail_verbosity=_pick(
+                override.error_detail_verbosity, base.error_detail_verbosity
+            ),
         )
 
 

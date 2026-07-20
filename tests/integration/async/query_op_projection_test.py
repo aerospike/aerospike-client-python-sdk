@@ -107,8 +107,8 @@ async def client(aerospike_host, client_policy, wait_for_index, wait_for_set_vis
     """SDK client + 20-record dataset on the broad-surface seed.
 
     Tests that exercise server-8.1.2-only ops projection should consume
-    ``client_812`` instead so they auto-route to the 8.1.2+ cluster when
-    one is available and skip cleanly otherwise.
+    ``client_812`` instead, which uses the default ``AEROSPIKE_HOST`` and
+    skips cleanly unless that cluster is 8.1.2+.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as c:
         await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
@@ -120,10 +120,11 @@ async def client(aerospike_host, client_policy, wait_for_index, wait_for_set_vis
 async def client_812(
     aerospike_host_812_required, client_policy, wait_for_index, wait_for_set_visible,
 ):
-    """SDK client + 20-record dataset on the 8.1.2+ seed (function-scoped: pairs with skip fixture).
+    """SDK client + 20-record dataset on the default 8.1.2+ seed (function-scoped).
 
-    The dependent ``aerospike_host_812_required`` fixture skips the dependent test
-    cleanly when ``AEROSPIKE_HOST_8_1_2`` is unset.
+    The dependent ``aerospike_host_812_required`` fixture connects to the
+    default ``AEROSPIKE_HOST`` and skips the dependent test cleanly unless it
+    is 8.1.2+.
     """
     async with Client(seeds=aerospike_host_812_required, policy=client_policy) as c:
         await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
