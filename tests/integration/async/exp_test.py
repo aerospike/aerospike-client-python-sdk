@@ -724,9 +724,9 @@ class TestExpWithAel:
 async def _seed_cdt_data(client, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
 
-    Used by both ``session_with_cdt_data`` (broad-surface seed) and
-    ``session_with_cdt_data_812`` (8.1.2+ seed) so the two clusters see the
-    exact same shape.
+    Used by both ``session_with_cdt_data`` (ungated) and
+    ``session_with_cdt_data_812`` (skips unless the default seed is 8.1.2+)
+    so the gated and ungated tests see the exact same shape.
     """
     session = client.create_session()
     ds = DataSet.of("test", "cdt_test")
@@ -770,12 +770,12 @@ async def _drop_cdt_data(session, ds):
 
 @pytest.fixture
 async def session_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
-    """SDK client + CDT dataset on the 8.1.2+ seed.
+    """SDK client + CDT dataset on the default 8.1.2+ seed.
 
     Used by tests that exercise convenience wrappers around server-8.1.2
     ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
-    ``aerospike_host_812_required`` fixture skips the test cleanly when
-    ``AEROSPIKE_HOST_8_1_2`` is unset.
+    ``aerospike_host_812_required`` fixture connects to the default
+    ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
     """
     async with Client(seeds=aerospike_host_812_required, policy=client_policy) as client:
         session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
@@ -788,8 +788,8 @@ async def session_with_cdt_data(aerospike_host, client_policy, wait_for_set_visi
     """SDK client + CDT dataset on the broad-surface seed.
 
     Tests that exercise convenience wrappers around server-8.1.2 ExpOps
-    should consume ``session_with_cdt_data_812`` instead so they auto-route
-    to the 8.1.2+ cluster when one is available.
+    should consume ``session_with_cdt_data_812`` instead, which uses the
+    default ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+.
     """
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
         session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
@@ -1939,8 +1939,8 @@ class TestConvenienceWrappers:
     These helpers are thin pass-throughs to the native 8.1.2 ExpOps (see
     the docstrings in ``aerospike_sdk/exp.py``). Server versions older
     than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
-    consume ``session_with_cdt_data_812`` which auto-routes to the 8.1.2+
-    cluster when one is available and skips cleanly otherwise. Callers
+    consume ``session_with_cdt_data_812`` which uses the default
+    ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+. Callers
     that need broader compatibility should build the equivalent expression
     explicitly with ``Exp.list_get_by_value`` /
     ``Exp.map_get_by_index_range`` rather than using these wrappers.
