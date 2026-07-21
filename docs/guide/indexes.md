@@ -54,6 +54,18 @@ await (
 await session.index(users).named("users_age_idx").drop()
 ```
 
+## Listing Indexes
+
+`list_indexes()` returns the secondary indexes defined on the cluster, one dict
+per index with `namespace`, `set`, `bin` and `name` keys (plus `type`,
+`index_type`, and `context` for CDT indexes when the server reports them). It is
+available on the session, cluster, and client:
+
+```python
+for idx in await session.list_indexes():
+    print(idx["name"], idx["namespace"], idx["bin"])
+```
+
 ## Auto-Index Discovery
 
 The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a daemon thread,
@@ -86,7 +98,11 @@ stream = await (
 The refresh interval defaults to 5 seconds:
 
 ```python
-client = Client("localhost:3000", index_refresh_interval=2.0)
+cluster = await (
+    ClusterDefinition("localhost", 3000)
+    .with_index_refresh_interval(2.0)
+    .connect()
+)
 ```
 
 ### Explicit Override

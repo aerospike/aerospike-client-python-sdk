@@ -17,12 +17,13 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 
 import pytest
 from aerospike_async import UDFLang
 from aerospike_async.exceptions import ResultCode
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import ClusterDefinition, DataSet, Client
 from aerospike_sdk.exceptions import AerospikeError
 
 NS = "test"
@@ -38,17 +39,18 @@ MODULE = "record_example"
 @pytest.fixture
 async def client_with_udf(aerospike_host, client_policy):
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        udf_session = client.create_session()
         try:
-            rm = await client.remove_udf(SERVER_PATH)
+            rm = await udf_session.remove_udf(SERVER_PATH)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
-        reg = await client.register_udf_from_file(
+        reg = await udf_session.register_udf_from_file(
             LUA_FILE, SERVER_PATH, UDFLang.LUA)
         assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
         yield client
         try:
-            rm = await client.remove_udf(SERVER_PATH)
+            rm = await udf_session.remove_udf(SERVER_PATH)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
@@ -428,18 +430,92 @@ async def test_single_key_validation_raises(client_with_udf):
                 .execute()
         )
 
-async def test_register_udf_from_bytes(aerospike_host, client_policy):
-    """Round-trip: register UDF from bytes, invoke it, then clean up."""
+async def test_list_udf(aerospike_host, client_policy):
+    """``list_udf`` reports name/hash/type and reflects register + remove."""
     async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        path = "psdk_list_udf_probe.lua"
         with open(LUA_FILE, "rb") as f:
             body = f.read()
-        path = "record_example_bytes_async.lua"
         try:
-            rm = await client.remove_udf(path)
+            rm = await session.remove_udf(path)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
-        task = await client.register_udf(body, path, UDFLang.LUA)
+        assert not any(m["name"] == path for m in await session.list_udf())
+
+        task = await session.register_udf(body, path, UDFLang.LUA)
         assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
-        rm = await client.remove_udf(path)
+
+        mine = [m for m in await session.list_udf() if m["name"] == path]
+        assert mine, "module not listed after register"
+        (entry,) = mine
+        assert entry["type"] == "LUA"
+        assert entry["hash"]
+        assert set(entry) == {"name", "hash", "type"}
+
+        rm = await session.remove_udf(path)
         await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        assert not any(m["name"] == path for m in await session.list_udf())
+
+
+async def test_register_udf_from_resource(aerospike_host, client_policy, tmp_path, monkeypatch):
+    """``register_udf_from_resource`` loads a module from a Python package resource."""
+    pkg = tmp_path / "psdk_udf_resource_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "probe.lua").write_bytes(b"function noop(rec) return 1 end\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+        session = client.create_session()
+        server_path = "psdk_resource_probe.lua"
+        try:
+            rm = await session.remove_udf(server_path)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+        task = await session.register_udf_from_resource(
+            "psdk_udf_resource_pkg", "probe.lua", server_path)
+        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert any(m["name"] == server_path for m in await session.list_udf())
+
+        rm = await session.remove_udf(server_path)
+        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        assert not any(m["name"] == server_path for m in await session.list_udf())
+
+
+async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
+    """UDF admin works through the ClusterDefinition -> Cluster -> Session path.
+       Registers via the Cluster, lists/removes via a Session obtained from it
+    """
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname, port = aerospike_host, 3000
+    path = "psdk_udf_via_cluster.lua"
+    with open(LUA_FILE, "rb") as f:
+        body = f.read()
+
+    cluster = await ClusterDefinition(hostname, port).connect()
+    try:
+        try:
+            rm = await cluster.remove_udf(path)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+        reg = await cluster.register_udf(body, path, UDFLang.LUA)
+        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+
+        session = cluster.create_session()
+        assert any(m["name"] == path for m in await session.list_udf())
+
+        rm = await session.remove_udf(path)
+        assert await rm.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert not any(m["name"] == path for m in await cluster.list_udf())
+    finally:
+        await cluster.close()

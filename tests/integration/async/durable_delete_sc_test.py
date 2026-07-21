@@ -236,12 +236,14 @@ async def _validate_process_record_outcome(session, ds: DataSet, bin1: str, bin2
 async def durable_delete_client(aerospike_host_sc, client_policy_sc):
     """One shared client for the module (UDF registration once per module)."""
     async with Client(seeds=aerospike_host_sc, policy=client_policy_sc) as client:
-        reg = await client.register_udf_from_file(
+        udf_session = client.create_session()
+        reg = await udf_session.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
         await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
 
-        reg2 = await client.register_udf(BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
+        reg2 = await udf_session.register_udf(
+            BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
         await reg2.wait_till_complete()
 
         yield client
@@ -468,7 +470,11 @@ class TestDurableDeleteBatchReset:
         for k in keys:
             await delete_keys_durable(session, [k])
 
-        del_stream = await session.delete(*keys).with_durable_delete().include_missing_keys().execute(
+        # Deleting already-tombstoned keys inside a multi-record transaction
+        # fails commit verification, so this cleanup delete opts out of the
+        # implicit batch-write transaction via with_txn(None).
+        del_stream = await session.delete(*keys).with_durable_delete().include_missing_keys() \
+            .with_txn(None).execute(
             on_error=ErrorStrategy.IN_STREAM,
         )
         del_rows = await del_stream.collect()

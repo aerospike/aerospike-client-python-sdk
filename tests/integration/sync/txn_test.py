@@ -166,7 +166,7 @@ def test_txn_abort_rolls_back(session, mrt_set):
     _reset(session, key)
     session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-    with session.begin_transaction() as tx:
+    with session.transaction() as tx:
         tx.upsert(key).put({BIN_NAME: "val2"}).execute()
         tx.abort()
 
@@ -183,7 +183,7 @@ def test_txn_write_conflict(session, mrt_set):
     def outer(tx1):
         tx1.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-        with session.begin_transaction() as tx2:
+        with session.transaction() as tx2:
             with pytest.raises(AerospikeError) as excinfo:
                 tx2.upsert(key).put({BIN_NAME: "val2"}).execute()
             assert excinfo.value.result_code == ResultCode.MRT_BLOCKED
@@ -243,7 +243,7 @@ def test_txn_batch_abort(session, mrt_set):
         _reset(session, k)
         session.upsert(k).put({BIN_NAME: 1}).execute()
 
-    with session.begin_transaction() as tx:
+    with session.transaction() as tx:
         stream = tx.upsert(keys).set_to(BIN_NAME, 2).execute()
         for result in stream:
             result.record_or_raise()

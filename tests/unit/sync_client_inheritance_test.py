@@ -49,31 +49,6 @@ def _make_offline_sync_session() -> SyncSession:
     )
 
 
-class TestSyncClientFactoryReturnTypes:
-    """SyncClient factories must return :class:`SyncQueryBuilder` regardless of arg shape."""
-
-    def test_query_single_key(self):
-        client = _make_offline_sync_client()
-        builder = client.query(Key("test", "users", 1))
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_multi_key(self):
-        client = _make_offline_sync_client()
-        keys = [Key("test", "users", i) for i in range(3)]
-        builder = client.query(keys)
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_dataset(self):
-        client = _make_offline_sync_client()
-        builder = client.query(DataSet.of("test", "users"))
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_namespace_set(self):
-        client = _make_offline_sync_client()
-        builder = client.query(namespace="test", set_name="users")
-        assert isinstance(builder, SyncQueryBuilder)
-
-
 class TestSyncSessionFactoryReturnTypes:
     """SyncSession factories must return :class:`SyncQueryBuilder` regardless of arg shape.
 

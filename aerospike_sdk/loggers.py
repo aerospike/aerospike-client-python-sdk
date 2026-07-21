@@ -91,6 +91,9 @@ class SdkLoggers:
 
     #: Point-op and batch command summaries (op type, counts, latency).
     COMMAND = "aerospike_sdk.command"
+    #: Named behaviors and SDK configuration file loading / hot-reload
+    #: (``AEROSPIKE_SDK_CONFIG_URL``).
+    BEHAVIOR = "aerospike_sdk.behavior"
     #: Dataset / secondary-index query execution summaries.
     QUERY = "aerospike_sdk.query"
     #: Info-protocol helpers (``namespace_details``, index metadata probes).

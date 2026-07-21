@@ -27,13 +27,13 @@ from __future__ import annotations
 
 import logging
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, overload
+from importlib import resources
+from typing import TYPE_CHECKING, Dict, Optional, overload
 
 from aerospike_async import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
-    Key,
     RegisterTask,
     UDFLang,
     UdfRemoveTask,
@@ -41,14 +41,16 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.index_monitor import IndexesMonitor
+from aerospike_sdk.udf_shared import parse_udf_list
+from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
-    from aerospike_sdk.aio.operations.query import QueryBuilder
     from aerospike_sdk.sync.operations.index import SyncIndexBuilder
-    from aerospike_sdk.sync.operations.query import SyncQueryBuilder
     from aerospike_sdk.sync.session import SyncSession
     from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
@@ -58,12 +60,19 @@ log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class SyncClient:
-    """Connect to Aerospike and run the SDK API without ``async``/``await``.
+    """Low-level synchronous connection primitive (no ``async``/``await``).
+
+    Most applications should connect via
+    :class:`~aerospike_sdk.sync.cluster_definition.ClusterDefinition`
+    (``ClusterDefinition(...).connect()``) rather than instantiating
+    ``SyncClient`` directly. Reads and writes go through a
+    :class:`~aerospike_sdk.sync.session.SyncSession` from :meth:`create_session`.
 
     Example::
 
             with SyncClient("localhost:3000") as client:
-                for row in client.query(
+                session = client.create_session()
+                for row in session.query(
                     namespace="test",
                     set_name="users"
                 ).execute():
@@ -153,6 +162,45 @@ class SyncClient:
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
+        # Resolved SDK-level settings (file over programmatic over defaults).
+        # A frozen snapshot swapped wholesale by the config monitor, so the
+        # operation path reads it lock-free.
+        self._sdk_settings: SystemSettings = fill_hard_defaults(None)
+        self._sdk_config_monitor: Optional[SyncSdkConfigMonitor] = None
+        # Cluster-wide MRT capability (all nodes >= the MRT server version),
+        # resolved lazily on the first implicit-transaction gate check and
+        # cached for the client's lifetime (cleared on close, like the
+        # namespace-mode cache).
+        self._supports_mrt_cache: Optional[bool] = None
+
+    def _supports_mrt_blocking(self) -> bool:
+        """Whether every cluster node supports multi-record transactions.
+
+        An MRT spans the cluster, so the aggregate is all-nodes: a single
+        node below the MRT server version makes the answer ``False``. The
+        ``current_thread_runtime`` proxy has no node-listing surface, so
+        MRT support cannot be verified there and this reports ``False``
+        (implicit batch-write transactions stay off on that path).
+        """
+        if self._supports_mrt_cache is None:
+            nodes_fn = getattr(self._client, "nodes_blocking", None)
+            if nodes_fn is None:
+                return False
+            nodes = nodes_fn()
+            self._supports_mrt_cache = bool(nodes) and all(
+                node.version.supports_mrt() for node in nodes
+            )
+        return self._supports_mrt_cache
+
+    def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
+        """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
+        monitor = SyncSdkConfigMonitor(
+            source,
+            self._sdk_settings,
+            lambda settings: setattr(self, "_sdk_settings", settings),
+        )
+        monitor.start()
+        self._sdk_config_monitor = monitor
 
     # -- Lifecycle ------------------------------------------------------------
 
@@ -196,6 +244,9 @@ class SyncClient:
         Stops the :class:`IndexesMonitor` daemon thread (if owned) and
         calls PAC's ``close_blocking``. Safe to call when already closed.
         """
+        if self._sdk_config_monitor is not None:
+            self._sdk_config_monitor.stop()
+            self._sdk_config_monitor = None
         if self._owns_monitor:
             self._indexes_monitor.stop()
         if self._client is not None:
@@ -204,6 +255,7 @@ class SyncClient:
             self._connected = False
             log.info("Client closed")
         self._namespace_mode_cache.clear()
+        self._supports_mrt_cache = None
 
     def __enter__(self) -> SyncClient:
         self.connect()
@@ -278,134 +330,6 @@ class SyncClient:
     # -- Factories: query / index / session ------------------------------------
 
     @overload
-    def query(self, arg1: DataSet, *, behavior: Optional[Behavior] = None) -> SyncQueryBuilder: ...
-    @overload
-    def query(self, arg1: Key, *, behavior: Optional[Behavior] = None) -> SyncQueryBuilder: ...
-    @overload
-    def query(self, arg1: List[Key], *, behavior: Optional[Behavior] = None) -> SyncQueryBuilder: ...
-    @overload
-    def query(
-        self, arg1: str, set_name: str, *, behavior: Optional[Behavior] = None,
-    ) -> SyncQueryBuilder: ...
-
-    def query(
-        self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        set_name: Optional[str] = None,
-        namespace: Optional[str] = None,
-        *,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys: Optional[List[Key]] = None,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Any] = None,
-        namespace_mode_resolver_blocking: Optional[Any] = None,
-    ) -> SyncQueryBuilder:
-        """Create a synchronous query builder.
-
-        Same calling shapes as
-        :meth:`Client.query <aerospike_sdk.aio.client.Client.query>`. Returns
-        :class:`SyncQueryBuilder` whose ``.execute()`` runs synchronously.
-        """
-        from aerospike_sdk.sync.operations.query import SyncQueryBuilder
-
-        self._ensure_connected()
-        # Normalize args: extract the right (namespace, set_name, key, keys, dataset).
-        if arg1 is not None:
-            if isinstance(arg1, DataSet):
-                dataset = arg1
-            elif isinstance(arg1, Key):
-                key = arg1
-            elif isinstance(arg1, list):
-                if not arg1:
-                    raise ValueError("keys list cannot be empty")
-                if not isinstance(arg1[0], Key):
-                    raise TypeError(
-                        f"Expected List[Key], got first element {type(arg1[0])}",
-                    )
-                keys = arg1
-            elif isinstance(arg1, str):
-                namespace = arg1
-                # set_name is the positional second arg in this calling style
-            else:
-                raise TypeError(f"Expected DataSet, Key, List[Key], or str; got {type(arg1)}")
-
-        return self._build_sync_query_builder(
-            namespace=namespace,
-            set_name=set_name,
-            dataset=dataset,
-            key=key,
-            keys=keys,
-            behavior=behavior,
-            namespace_mode_resolver=namespace_mode_resolver,
-            namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
-        )
-
-    def _build_sync_query_builder(
-        self,
-        *,
-        namespace: Optional[str],
-        set_name: Optional[str],
-        dataset: Optional[DataSet],
-        key: Optional[Key],
-        keys: Optional[List[Key]],
-        behavior: Optional[Behavior],
-        namespace_mode_resolver: Optional[Any] = None,
-        namespace_mode_resolver_blocking: Optional[Any] = None,
-    ) -> SyncQueryBuilder:
-        """Construct a :class:`SyncQueryBuilder` with full context."""
-        from aerospike_sdk.sync.operations.query import SyncQueryBuilder as _SQB
-
-        nmrb = namespace_mode_resolver_blocking or self._resolve_namespace_mode_blocking
-
-        if key is not None:
-            builder = _SQB(
-                client=self.underlying_client,
-                namespace=key.namespace,
-                set_name=key.set_name,
-                behavior=behavior,
-                indexes_monitor=self._indexes_monitor,
-                namespace_mode_resolver=namespace_mode_resolver,
-                namespace_mode_resolver_blocking=nmrb,
-            )
-            builder._single_key = key
-            return builder
-
-        if keys is not None:
-            ns = keys[0].namespace
-            sn = keys[0].set_name
-            builder = _SQB(
-                client=self.underlying_client,
-                namespace=ns,
-                set_name=sn,
-                behavior=behavior,
-                indexes_monitor=self._indexes_monitor,
-                namespace_mode_resolver=namespace_mode_resolver,
-                namespace_mode_resolver_blocking=nmrb,
-            )
-            builder._keys = keys
-            return builder
-
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        elif namespace is None or set_name is None:
-            raise ValueError(
-                "Invalid arguments. Use one of: query(dataset=...), query(key=...), "
-                "query(keys=[...]), or query(namespace=..., set_name=...).",
-            )
-
-        return _SQB(
-            client=self.underlying_client,
-            namespace=namespace,
-            set_name=set_name,
-            behavior=behavior,
-            indexes_monitor=self._indexes_monitor,
-            namespace_mode_resolver=namespace_mode_resolver,
-            namespace_mode_resolver_blocking=nmrb,
-        )
-
-    @overload
     def index(
         self, *, dataset: DataSet, behavior: Optional[Behavior] = None,
     ) -> SyncIndexBuilder: ...
@@ -445,7 +369,7 @@ class SyncClient:
             dataset.namespace, dataset.set_name, before_nanos,
         )
 
-    def register_udf(
+    def _register_udf(
         self,
         body: bytes,
         server_path: str,
@@ -458,7 +382,7 @@ class SyncClient:
             body, server_path, language, policy=policy,
         )
 
-    def register_udf_from_file(
+    def _register_udf_from_file(
         self,
         client_path: str,
         server_path: str,
@@ -471,7 +395,26 @@ class SyncClient:
             client_path, server_path, language, policy=policy,
         )
 
-    def remove_udf(
+    def _register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional[AdminPolicy] = None,
+    ) -> RegisterTask:
+        """Register a UDF from a Python package resource (synchronous).
+
+        The Pythonic analog of the Java client's classpath/resource registration;
+        reads the resource bytes via ``importlib.resources`` and delegates to
+        :meth:`register_udf`. See
+        :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`.
+        """
+        body = resources.files(package).joinpath(resource).read_bytes()
+        return self._register_udf(body, server_path, language, policy=policy)
+
+    def _remove_udf(
         self,
         server_path: str,
         *,
@@ -480,6 +423,27 @@ class SyncClient:
         """Remove a UDF module from the cluster (synchronous)."""
         return self.underlying_client.remove_udf_blocking(server_path, policy=policy)
 
+    def _list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster (synchronous).
+
+        Returns one dict per module with ``name`` / ``hash`` / ``type`` keys;
+        empty when nothing is registered. See
+        :meth:`aerospike_sdk.aio.session.Session.list_udf`.
+        """
+        resp = self.underlying_client.info_blocking("udf-list")
+        return parse_udf_list(resp.get("udf-list", ""))
+
+    def _list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster (synchronous).
+
+        Returns one dict per index with ``namespace`` / ``set`` / ``bin`` /
+        ``name`` keys, plus ``type`` / ``index_type`` / ``context`` when the
+        server reports them. See
+        :meth:`aerospike_sdk.aio.session.Session.list_indexes`.
+        """
+        raw = self.underlying_client.info_on_all_nodes_blocking("sindex-list")
+        return parse_index_list(raw)
+
     def create_session(self, behavior: Optional[Behavior] = None) -> SyncSession:
         """Create a synchronous session with the specified behavior."""
         from aerospike_sdk.sync.session import SyncSession
@@ -487,7 +451,7 @@ class SyncClient:
         self._ensure_connected()
         return SyncSession(client=self, behavior=behavior or Behavior.DEFAULT)
 
-    def create_transactional_session(
+    def transaction(
         self, behavior: Optional[Behavior] = None,
     ) -> SyncTransactionalSession:
         """Create a synchronous multi-record transaction session."""

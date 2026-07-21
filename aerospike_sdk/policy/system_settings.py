@@ -25,11 +25,57 @@ from aerospike_async import ClientPolicy
 
 
 @dataclass(frozen=True)
+class TransactionSettings:
+    """SDK-runtime transaction behavior, read at operation time.
+
+    Unlike the connection and refresh groups on :class:`SystemSettings`,
+    these fields do not map onto :class:`~aerospike_async.ClientPolicy`;
+    they configure how the SDK itself drives multi-record transactions.
+    ``None`` means "not set" — the value falls through to the next
+    configuration layer (see :class:`SystemSettings` for layering), ending
+    at the hard defaults: ``implicit_batch_write_transactions`` ``True``,
+    ``number_of_attempts`` ``5``, ``sleep_between_attempts`` one second.
+
+    ``implicit_batch_write_transactions`` controls whether a multi-key
+    write batch on a strong-consistency namespace (MRT-capable cluster,
+    no explicit transaction active) is wrapped in an implicit
+    multi-record transaction so its writes commit atomically.
+    ``number_of_attempts`` and ``sleep_between_attempts`` drive the retry
+    loop for those implicit transactions when the server reports a
+    transient conflict.
+
+    Example::
+
+        settings = SystemSettings(
+            transactions=TransactionSettings(
+                implicit_batch_write_transactions=False,
+            ),
+        )
+        cluster = await ClusterDefinition("localhost", 3000) \\
+            .with_system_settings(settings) \\
+            .connect()
+
+    See Also:
+        :class:`SystemSettings`: Carrier for these settings.
+    """
+
+    implicit_batch_write_transactions: Optional[bool] = None
+    sleep_between_attempts: Optional[timedelta] = None
+    number_of_attempts: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class SystemSettings:
     """Cluster-wide settings that apply to an entire cluster instance.
 
     These settings cannot vary per Behavior -- they are inherently global
     to the connection pool and cluster maintenance.
+
+    Settings may also come from an SDK configuration file (the
+    ``AEROSPIKE_SDK_CONFIG_URL`` environment variable). File-provided
+    values take precedence over values set here, field by field: a field
+    the file does not provide falls through to this object, then to the
+    hard default.
 
     Example::
 
@@ -40,6 +86,10 @@ class SystemSettings:
         cluster = await ClusterDefinition("localhost", 3000) \\
             .with_system_settings(settings) \\
             .connect()
+
+    See Also:
+        :class:`TransactionSettings`: The SDK-runtime transaction group.
+        :meth:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition.with_system_settings`
     """
 
     min_connections_per_node: Optional[int] = None
@@ -47,9 +97,18 @@ class SystemSettings:
     conn_pools_per_node: Optional[int] = None
     max_socket_idle_time: Optional[timedelta] = None
     tend_interval: Optional[timedelta] = None
+    num_tend_intervals_in_error_window: Optional[int] = None
+    max_errors_in_error_window: Optional[int] = None
+    transactions: TransactionSettings = TransactionSettings()
 
     def apply_to(self, policy: ClientPolicy) -> ClientPolicy:
-        """Apply non-None fields to *policy*, returning the same object."""
+        """Apply non-None fields to *policy*, returning the same object.
+
+        The :attr:`transactions` group is SDK-runtime configuration and is
+        deliberately not applied; it is read at operation time.
+        """
+        if self.min_connections_per_node is not None:
+            policy.min_conns_per_node = self.min_connections_per_node
         if self.max_connections_per_node is not None:
             policy.max_conns_per_node = self.max_connections_per_node
         if self.conn_pools_per_node is not None:
@@ -58,4 +117,8 @@ class SystemSettings:
             policy.idle_timeout = int(self.max_socket_idle_time.total_seconds() * 1000)
         if self.tend_interval is not None:
             policy.tend_interval = int(self.tend_interval.total_seconds() * 1000)
+        if self.num_tend_intervals_in_error_window is not None:
+            policy.error_rate_window = self.num_tend_intervals_in_error_window
+        if self.max_errors_in_error_window is not None:
+            policy.max_error_rate = self.max_errors_in_error_window
         return policy

@@ -29,11 +29,14 @@ from typing import (
     Union,
 )
 
+from typing_extensions import deprecated
+
 if TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
     from aerospike_sdk.record_result import RecordResult
 
-from aerospike_async import Key, Record, ResultCode, Txn
+from aerospike_async import Key, Record, ResultCode, Txn, UDFLang
 
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
@@ -119,6 +122,25 @@ class Session:
         # right policy per resolved namespace mode without rebuilding.
         # `_cached_*_policy` stays as the AP alias (matches behavior's default
         # mode); session.get/put still use it.
+        self._refresh_cached_policies()
+        # Config hot-reload pushes rebuilt policies into live sessions
+        # (weak registration; no per-operation check).
+        behavior._register_session(self)
+        # Cache the raw PAC client for fast-path methods.
+        self._pac_client = client._async_client
+        # Transaction hook. Non-transactional sessions always return None;
+        # TransactionalSession overrides this to yield its active Txn so every
+        # builder spawned from the session auto-participates.
+        self._txn: Optional[Txn] = None
+
+    def _refresh_cached_policies(self) -> None:
+        """(Re)build the cached base policies from the current behavior.
+
+        Called at construction and by config hot-reload when this session's
+        behavior changes. Each attribute swap is a single atomic assignment,
+        so in-flight operations use either the old or new policy snapshot.
+        """
+        behavior = self._behavior
         self._cached_read_policy = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
@@ -127,12 +149,6 @@ class Session:
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
         self._cached_write_policy_sc = to_write_policy(
             behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
-        # Cache the raw PAC client for fast-path methods.
-        self._pac_client = client._async_client
-        # Transaction hook. Non-transactional sessions always return None;
-        # TransactionalSession overrides this to yield its active Txn so every
-        # builder spawned from the session auto-participates.
-        self._txn: Optional[Txn] = None
 
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
@@ -211,11 +227,11 @@ class Session:
             session = client.create_session()
             session.get_current_transaction() is None
             # True
-            async with session.begin_transaction() as tx:
+            async with session.transaction() as tx:
                 assert tx.get_current_transaction() is tx.txn
 
         See Also:
-            :meth:`begin_transaction`: Enter a multi-record transaction.
+            :meth:`transaction`: Enter a multi-record transaction.
             :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
         """
         return self._txn
@@ -382,6 +398,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -471,6 +488,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -551,6 +569,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -711,6 +730,7 @@ class Session:
                 txn=self._txn,
                 namespace_mode_resolver=self._resolve_namespace_mode,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._single_key = arg1
             return builder
@@ -720,7 +740,7 @@ class Session:
         if arg1 is not None:
             if isinstance(arg1, DataSet):
                 return self._bind_txn(
-                    self._client.query(
+                    self._client._query(
                         dataset=arg1, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -749,11 +769,12 @@ class Session:
                         txn=self._txn,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                        sdk_client=self._client,
                     )
                     builder._single_key = arg1
                     return builder
                 return self._bind_txn(
-                    self._client.query(
+                    self._client._query(
                         keys=all_keys, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -764,14 +785,14 @@ class Session:
                 if not isinstance(arg1[0], Key):
                     raise TypeError(f"Expected List[Key], but first element is {type(arg1[0])}")
                 return self._bind_txn(
-                    self._client.query(
+                    self._client._query(
                         keys=arg1, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                     ))
             elif isinstance(arg1, str) and arg2 is not None:
                 return self._bind_txn(
-                    self._client.query(
+                    self._client._query(
                         namespace=arg1, set_name=arg2, behavior=b,
                         namespace_mode_resolver=self._resolve_namespace_mode,
                         namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -784,13 +805,13 @@ class Session:
             if arg2 is not None and isinstance(arg2, Key):
                 keys_list.insert(1 if arg1 is not None and isinstance(arg1, Key) else 0, arg2)
             return self._bind_txn(
-                self._client.query(
+                self._client._query(
                     keys=keys_list, behavior=b,
                     namespace_mode_resolver=self._resolve_namespace_mode,
                     namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 ))
 
-        return self._bind_txn(self._client.query(  # type: ignore[call-overload]
+        return self._bind_txn(self._client._query(  # type: ignore[call-overload]
             namespace=namespace,
             set_name=set_name,
             dataset=dataset,
@@ -870,22 +891,7 @@ class Session:
                 "  - index(namespace=..., set_name=...)"
             )
 
-    def transaction_session(self) -> "TransactionalSession":
-        """Create a transactional session using this session's behavior.
-
-        Alias for :meth:`begin_transaction`.
-
-        Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-            bound to this session's client and behavior.
-
-        See Also:
-            :meth:`begin_transaction`: Preferred entry point.
-            :meth:`aerospike_sdk.aio.client.Client.transaction_session`
-        """
-        return self.begin_transaction()
-
-    def begin_transaction(self) -> "TransactionalSession":
+    def transaction(self) -> "TransactionalSession":
         """Start a multi-record transaction (MRT) using this session's behavior.
 
         Returns an async context manager that allocates a fresh
@@ -898,7 +904,7 @@ class Session:
 
         Example::
 
-            async with session.begin_transaction() as tx:
+            async with session.transaction() as tx:
                 await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
                 await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
@@ -907,10 +913,207 @@ class Session:
             bound to this session's client and behavior.
 
         See Also:
-            :meth:`transaction_session`: Alias for this method.
             :meth:`do_in_transaction`: Run a callable inside a retrying MRT.
         """
-        return self._client.transaction_session(behavior=self._behavior)
+        return self._client.transaction(behavior=self._behavior)
+
+    @deprecated("Renamed to transaction(); begin_transaction() will be removed after preview.")
+    def begin_transaction(self) -> "TransactionalSession":
+        """Deprecated alias for :meth:`transaction` (preview back-compat).
+
+        :meta private:
+        """
+        return self.transaction()
+
+    async def register_udf(
+        self,
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF package from in-memory bytes on the cluster.
+
+        Args:
+            body: Raw module source (for example UTF-8 encoded Lua).
+            server_path: Path name stored on the server (often ends ``.lua``).
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            source = b"function echo(rec, v) return v end\\n"
+            task = await session.register_udf(source, "echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf_from_file`, :meth:`register_udf_from_resource`,
+            :meth:`remove_udf`.
+        """
+        return await self._client._register_udf(
+            body, server_path, language, policy=policy)
+
+    async def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF by reading module bytes from a local file.
+
+        Args:
+            client_path: Filesystem path to the module on the client machine.
+            server_path: Path name stored on the server (often ends ``.lua``).
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            OSError: If ``client_path`` cannot be read.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.register_udf_from_file("udfs/echo.lua", "echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf`: Register from in-memory bytes.
+        """
+        return await self._client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    async def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource.
+
+        Reads the resource bytes via ``importlib.resources`` and registers them —
+        the Pythonic analog of registering a module shipped as package data.
+
+        Args:
+            package: Importable package holding the resource (e.g. ``"myapp.udfs"``).
+            resource: Resource name within the package (e.g. ``"echo.lua"``).
+            server_path: Path name stored on the server.
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            ModuleNotFoundError: If ``package`` cannot be imported.
+            FileNotFoundError: If ``resource`` is not found in the package.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.register_udf_from_resource(
+                "myapp.udfs", "echo.lua", "echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf_from_file`, :meth:`register_udf`.
+        """
+        return await self._client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    async def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a registered UDF package from the cluster.
+
+        Args:
+            server_path: The server path used when the module was registered.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.UdfRemoveTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.remove_udf("echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf`, :meth:`list_udf`.
+        """
+        return await self._client._remove_udf(server_path, policy=policy)
+
+    async def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster.
+
+        Returns:
+            One dict per module with ``name`` / ``hash`` / ``type`` keys; an
+            empty list when nothing is registered.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or info errors (via PAC).
+
+        Example::
+
+            for module in await session.list_udf():
+                print(module["name"], module["type"])
+
+        See Also:
+            :meth:`register_udf`, :meth:`remove_udf`.
+        """
+        return await self._client._list_udf()
+
+    async def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster.
+
+        Returns:
+            One dict per index with ``namespace`` / ``set`` / ``bin`` / ``name``
+            keys, plus ``type`` / ``index_type`` / ``context`` when the server
+            reports them (``context`` is present for CDT indexes). An empty list
+            when no secondary indexes are defined.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or info errors (via PAC).
+
+        Example::
+
+            for idx in await session.list_indexes():
+                print(idx["name"], idx["namespace"], idx["bin"])
+
+        See Also:
+            :meth:`index`: Create or drop a secondary index.
+        """
+        return await self._client._list_indexes()
 
     @overload
     def info(self) -> InfoCommands: ...
@@ -1084,7 +1287,7 @@ class Session:
             result = await session.do_in_transaction(transfer)
 
         See Also:
-            :meth:`begin_transaction`: Manual MRT lifecycle.
+            :meth:`transaction`: Manual MRT lifecycle.
             :class:`TransactionalSession`
         """
         if max_attempts < 1:
@@ -1108,7 +1311,7 @@ class Session:
         last_exc: Optional[BaseException] = None
         for attempt in range(max_attempts):
             try:
-                async with self.begin_transaction() as tx_session:
+                async with self.transaction() as tx_session:
                     return await operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc

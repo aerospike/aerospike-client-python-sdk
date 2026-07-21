@@ -26,7 +26,9 @@ import time
 import typing
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
-from aerospike_async import Key, Record, Txn
+from typing_extensions import deprecated
+
+from aerospike_async import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.session_shared import NamespaceScStatus
@@ -43,6 +45,7 @@ from aerospike_sdk.sync.operations.query import (
 from aerospike_sdk.sync.operations.udf import SyncUdfFunctionBuilder
 
 if TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.sync.client import SyncClient
     from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
@@ -68,6 +71,24 @@ class SyncSession:
         # no-override case. Cache both AP and SC variants so bypass paths
         # can pick the right policy per resolved namespace mode without
         # rebuilding. `_cached_*_policy` stays as the AP alias.
+        self._refresh_cached_policies()
+        # Config hot-reload pushes rebuilt policies into live sessions
+        # (weak registration; no per-operation check).
+        behavior._register_session(self)
+        # Cache the PAC client for fast-path methods.
+        self._pac_client = client.underlying_client
+        # Non-transactional sessions always return None;
+        # SyncTransactionalSession overrides this to yield its active Txn.
+        self._txn: Optional[Txn] = None
+
+    def _refresh_cached_policies(self) -> None:
+        """(Re)build the cached base policies from the current behavior.
+
+        Called at construction and by config hot-reload when this session's
+        behavior changes. Each attribute swap is a single atomic assignment,
+        so in-flight operations use either the old or new policy snapshot.
+        """
+        behavior = self._behavior
         self._cached_read_policy = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         self._cached_write_policy = to_write_policy(
@@ -76,11 +97,6 @@ class SyncSession:
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
         self._cached_write_policy_sc = to_write_policy(
             behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
-        # Cache the PAC client for fast-path methods.
-        self._pac_client = client.underlying_client
-        # Non-transactional sessions always return None;
-        # SyncTransactionalSession overrides this to yield its active Txn.
-        self._txn: Optional[Txn] = None
 
     # -- State accessors ------------------------------------------------------
 
@@ -303,6 +319,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._single_key = key
             return builder
@@ -323,6 +340,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+                sdk_client=self._client,
             )
             builder._keys = keys
             return builder
@@ -348,6 +366,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
 
     def batch(self) -> SyncBatchOperationBuilder:
@@ -364,6 +383,7 @@ class SyncSession:
             behavior=self._behavior,
             txn=self._txn,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
         return SyncBatchOperationBuilder(inner)
 
@@ -414,15 +434,124 @@ class SyncSession:
             set_name=set_name,
         )
 
-    def transaction_session(self) -> SyncTransactionalSession:
-        """Alias for :meth:`begin_transaction`."""
-        return self.begin_transaction()
-
-    def begin_transaction(self) -> SyncTransactionalSession:
+    def transaction(self) -> SyncTransactionalSession:
         """Start a multi-record transaction (synchronous)."""
         from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
         return SyncTransactionalSession(client=self._client, behavior=self._behavior)
+
+    @deprecated("Renamed to transaction(); begin_transaction() will be removed after preview.")
+    def begin_transaction(self) -> SyncTransactionalSession:
+        """Deprecated alias for :meth:`transaction` (preview back-compat).
+
+        :meta private:
+        """
+        return self.transaction()
+
+    def register_udf(
+        self,
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from bytes (synchronous).
+
+        Exposed here so the ``ClusterDefinition`` ➜ ``Cluster`` ➜ ``Session``
+        path is self-sufficient.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf`
+        """
+        return self._client._register_udf(
+            body, server_path, language, policy=policy)
+
+    def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from a local file (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
+        """
+        return self._client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
+        """
+        return self._client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a UDF module from the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.remove_udf`
+        """
+        return self._client._remove_udf(server_path, policy=policy)
+
+    def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_udf`
+        """
+        return self._client._list_udf()
+
+    def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_indexes`
+        """
+        return self._client._list_indexes()
 
     def do_in_transaction(
         self,
@@ -449,7 +578,7 @@ class SyncSession:
         last_exc: Optional[BaseException] = None
         for attempt in range(max_attempts):
             try:
-                with self.begin_transaction() as tx_session:
+                with self.transaction() as tx_session:
                     return operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc

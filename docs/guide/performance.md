@@ -1,6 +1,6 @@
-# Performance modes — which API and Python build should I use?
+# Performance Modes
 
-PSDK exposes several execution modes. The right one depends on (1) whether you can run a free-threaded CPython build (e.g., 3.14t) with the GIL disabled, and (2) what your workload looks like — predominantly single-key reads/writes, or complex queries with builders, batches, and error handlers.
+**Which API and Python build should I use?** PSDK exposes several execution modes. The right one depends on (1) whether you can run a free-threaded CPython build (e.g., 3.14t) with the GIL disabled, and (2) what your workload looks like — predominantly single-key reads/writes, or complex queries with builders, batches, and error handlers.
 
 This guide is the short, user-facing decision tree. The full numbers and methodology behind every recommendation are in [`benchmarking.md`](benchmarking.md).
 
@@ -18,7 +18,7 @@ PSDK works on both standard CPython and a free-threaded build (e.g., `3.14t`). T
 
 | | Regular CPython | Free-threaded CPython (e.g. 3.14t) |
 |---|---|---|
-| **GIL** | Always on. Threads serialize through one interpreter. | Off when invoked with `PYTHON_GIL=0`. Multiple threads run Python in true parallel. |
+| **GIL** | Always on. Threads serialize through one interpreter. | Off by default. Multiple threads run Python in true parallel. |
 | **Single-thread perf** | Same | Same (slightly slower for some workloads due to atomic refcounts) |
 | **Multi-thread perf** | Capped by GIL — usually 1.5-2× single-thread no matter how many threads | Scales near-linearly with cores for I/O-bound work |
 | **C extension support** | Universal | Limited — extensions must declare `Py_mod_gil = Py_MOD_GIL_NOT_USED` |
@@ -36,7 +36,7 @@ PYTHON_GIL=0 python my_app.py
 
 **Critical gotcha:** if any imported C extension hasn't opted into free-threading, the interpreter silently re-enables the GIL. Verify with `sys._is_gil_enabled()` returning `False` after all imports. PSDK's dependency PAC (`aerospike-async`) is FT-safe; many other libraries aren't yet.
 
-If `PYTHON_GIL=0` is unset on the free-threaded build, the GIL stays on by default — which negates the entire point of using it.
+On the free-threaded build the GIL is **off by default** — `PYTHON_GIL=0` is not what turns it off. Rather, it *forces* the GIL to stay off even when an FT-incompatible extension would otherwise silently re-enable it (the gotcha above), so launching with it is a safeguard, not a switch. `PYTHON_GIL=1` forces the GIL back on.
 
 (fast-path-sessionget--sessionput)=
 ## Fast-path: `session.get` / `session.put`
@@ -46,11 +46,12 @@ For single-key operations where you don't need filters, error handlers, projecti
 ### Sync example
 
 ```python
-from aerospike_sdk import Behavior, SyncClient
+from aerospike_sdk import Behavior
+from aerospike_sdk.sync import ClusterDefinition
 from aerospike_async import Key
 
-with SyncClient("localhost:3000") as client:
-    session = client.create_session(Behavior.DEFAULT)
+with ClusterDefinition("localhost", 3000).connect() as cluster:
+    session = cluster.create_session(Behavior.DEFAULT)
     k = Key("test", "users", "alice")
     session.put(k, {"name": "Alice", "age": 28})
     record = session.get(k)
@@ -61,12 +62,12 @@ with SyncClient("localhost:3000") as client:
 
 ```python
 import asyncio
-from aerospike_sdk import Behavior, Client
+from aerospike_sdk import Behavior, ClusterDefinition
 from aerospike_async import Key
 
 async def main():
-    async with Client("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         k = Key("test", "users", "alice")
         await session.put(k, {"name": "Alice", "age": 28})
         record = await session.get(k)
@@ -89,10 +90,10 @@ The fast-path APIs accept an optional `bins=` projection for reads and an arbitr
 The full-featured chainable API that mirrors the Aerospike SDK shape across languages.
 
 ```python
-from aerospike_sdk import Behavior, Client, DataSet, ErrorStrategy
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet, ErrorStrategy
 
-async with Client("localhost:3000") as client:
-    session = client.create_session(Behavior.DEFAULT)
+async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
 
     # Filtered query — AEL filter expression

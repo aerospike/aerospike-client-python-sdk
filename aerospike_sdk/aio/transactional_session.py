@@ -46,14 +46,14 @@ class TransactionalSession(Session):
 
     Example::
 
-        async with client.create_session().begin_transaction() as tx:
+        async with client.create_session().transaction() as tx:
             await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
             await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
         # Auto-committed on clean exit; auto-aborted on exception.
 
     See Also:
-        :meth:`aerospike_sdk.aio.session.Session.begin_transaction`
-        :meth:`aerospike_sdk.aio.client.Client.transaction_session`
+        :meth:`aerospike_sdk.aio.session.Session.transaction`
+        :meth:`aerospike_sdk.aio.client.Client.transaction`
     """
 
     def __init__(
@@ -61,7 +61,7 @@ class TransactionalSession(Session):
         client: "Client",
         behavior: Optional["Behavior"] = None,
     ) -> None:
-        """Create a transactional session; prefer :meth:`Session.begin_transaction`.
+        """Create a transactional session; prefer :meth:`Session.transaction`.
 
         Args:
             client: Connected :class:`~aerospike_sdk.aio.client.Client`.
@@ -70,11 +70,11 @@ class TransactionalSession(Session):
 
         Note:
             Application code should not construct ``TransactionalSession``
-            directly; call :meth:`Session.begin_transaction` or
-            :meth:`Client.transaction_session` instead.
+            directly; call :meth:`Session.transaction` or
+            :meth:`Client.transaction` instead.
 
         See Also:
-            :meth:`aerospike_sdk.aio.session.Session.begin_transaction`
+            :meth:`aerospike_sdk.aio.session.Session.transaction`
         """
         if behavior is None:
             from aerospike_sdk.policy.behavior import Behavior as _Behavior

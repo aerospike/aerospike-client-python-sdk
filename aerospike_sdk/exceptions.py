@@ -56,6 +56,20 @@ class AerospikeError(Exception):
             issues (for example connection setup).
         in_doubt: ``True`` when a write may have completed on the server despite
             the error; safe retry usually requires a read-verify strategy.
+        sub_code: Server-supplied numeric subcode refining ``result_code`` when
+            extended error detail was requested (see ``error_detail_verbosity``).
+            ``None`` means no detail was returned (verbosity off, or a
+            client-side failure); ``0`` (``SubCode.NONE``) means detail was
+            returned but this failure has no finer subcode than its result code.
+            Only meaningful together with ``result_code`` — subcode values are
+            scoped to their parent code, not globally unique.
+        server_message: Human-readable message from the server when detail was
+            requested at message-level verbosity or higher; ``None`` when no
+            detail was returned. May be present even when ``sub_code`` is ``0``.
+        exp_trace: Structured expression trace the server attaches to
+            expression-build failures at trace-level verbosity; ``None``
+            otherwise. Surfaced as an opaque passthrough of the underlying
+            client value.
 
     Example::
         try:
@@ -76,10 +90,16 @@ class AerospikeError(Exception):
         *,
         result_code: ResultCode | None = None,
         in_doubt: bool = False,
+        sub_code: int | None = None,
+        server_message: str | None = None,
+        exp_trace: object | None = None,
     ) -> None:
         super().__init__(message)
         self.result_code = result_code
         self.in_doubt = in_doubt
+        self.sub_code = sub_code
+        self.server_message = server_message
+        self.exp_trace = exp_trace
 
 
 # ---------------------------------------------------------------------------
@@ -605,13 +625,24 @@ def _result_code_to_exception(
     result_code: ResultCode,
     message: str = "",
     in_doubt: bool = False,
+    *,
+    sub_code: int | None = None,
+    server_message: str | None = None,
+    exp_trace: object | None = None,
 ) -> AerospikeError:
     """Map a ``ResultCode`` to the appropriate typed exception.
 
     Map a server result code to the appropriate typed exception.
     """
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
-    return cls(message, result_code=result_code, in_doubt=in_doubt)
+    return cls(
+        message,
+        result_code=result_code,
+        in_doubt=in_doubt,
+        sub_code=sub_code,
+        server_message=server_message,
+        exp_trace=exp_trace,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +657,14 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
         :func:`_result_code_to_exception`
     """
     if isinstance(exc, PacServerError):
-        return _result_code_to_exception(exc.result_code, str(exc), exc.in_doubt)
+        return _result_code_to_exception(
+            exc.result_code,
+            str(exc),
+            exc.in_doubt,
+            sub_code=getattr(exc, "sub_code", None),
+            server_message=getattr(exc, "server_message", None),
+            exp_trace=getattr(exc, "exp_trace", None),
+        )
 
     if isinstance(exc, PacMaxErrorRate):
         return MaxErrorRate(str(exc))

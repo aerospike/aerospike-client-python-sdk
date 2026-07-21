@@ -123,7 +123,7 @@ async def test_query_filter_equal_with_map_nested_context(client, enterprise, wa
     await wait_for_index(client, _NS, _SET, flt)
 
     try:
-        stream = await client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         found = []
         try:
             async for res in stream:
@@ -137,7 +137,7 @@ async def test_query_filter_equal_with_map_nested_context(client, enterprise, wa
         flt2 = Filter.equal(_BIN, 9999).context(
             [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
         )
-        stream2 = await client.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
+        stream2 = await session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
         found2 = []
         try:
             async for res in stream2:
@@ -202,7 +202,7 @@ async def test_query_filter_equal_single_map_key_context(client, enterprise, wai
     await wait_for_index(client, _NS, _SET, flt)
 
     try:
-        stream = await client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         found = []
         try:
             async for res in stream:

@@ -36,6 +36,7 @@ enabling everything. The names are published as constants on
 | Logger name | What it logs | Typical levels |
 |-------------|--------------|----------------|
 | `aerospike_sdk.command` | One summary per point op / key-batch: op type, namespace, set, key count, latency; failures with result code + exception type | DEBUG |
+| `aerospike_sdk.behavior` | Named behaviors and SDK config file loading / hot-reload (`AEROSPIKE_SDK_CONFIG_URL`) | INFO load/reload, WARNING file problems |
 | `aerospike_sdk.query` | Dataset / secondary-index query execution summaries | DEBUG |
 | `aerospike_sdk.lifecycle` | Client connect / close on both surfaces | INFO connect/close, DEBUG detail |
 | `aerospike_sdk.pool` | `AsyncPool` start / stop, per-client connect issues | INFO start/stop, WARNING errors |
@@ -188,6 +189,7 @@ formatter (as the config snippets below do), the field is simply not rendered â€
 the records still carry it. See [Structured cluster field](#structured-cluster-field)
 for why only some lines populate it and the `defaults=` requirement.
 
+(structured-cluster-field)=
 ### Structured cluster field
 
 Client connect lines and per-operation command / query summaries carry the

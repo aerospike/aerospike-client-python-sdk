@@ -18,7 +18,6 @@
 import asyncio
 import uuid
 
-import pytest
 import pytest_asyncio
 
 from aerospike_sdk import DataSet, Client
@@ -95,13 +94,18 @@ async def client(aerospike_host, client_policy, enterprise):
             pass
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(client):
+    return client.create_session()
+
+
 class TestAutoIndexDiscovery:
     """Queries that rely on the monitor auto-discovering secondary indexes."""
 
-    async def test_ael_query_uses_auto_discovered_index(self, client):
+    async def test_ael_query_uses_auto_discovered_index(self, session):
         """AEL where() should auto-generate a secondary index filter."""
         stream = await (
-            client.query(NAMESPACE, SET_NAME)
+            session.query(NAMESPACE, SET_NAME)
             .where("$.age >= 25")
             .execute()
         )
@@ -113,10 +117,10 @@ class TestAutoIndexDiscovery:
         ages = sorted(r.bins["age"] for r in records)
         assert ages == [25, 26, 27, 28, 29]
 
-    async def test_ael_equality_with_auto_index(self, client):
+    async def test_ael_equality_with_auto_index(self, session):
         """AEL equality predicate on an indexed bin."""
         stream = await (
-            client.query(NAMESPACE, SET_NAME)
+            session.query(NAMESPACE, SET_NAME)
             .where("$.age == 23")
             .execute()
         )
@@ -127,7 +131,7 @@ class TestAutoIndexDiscovery:
         assert len(records) == 1
         assert records[0].bins["age"] == 23
 
-    async def test_explicit_index_context_overrides_monitor(self, client):
+    async def test_explicit_index_context_overrides_monitor(self, session):
         """An explicit with_index_context() should take precedence."""
         from aerospike_sdk import Index, IndexContext, IndexTypeEnum
 
@@ -141,7 +145,7 @@ class TestAutoIndexDiscovery:
             ),
         ])
         stream = await (
-            client.query(NAMESPACE, SET_NAME)
+            session.query(NAMESPACE, SET_NAME)
             .with_index_context(ctx)
             .where("$.age >= 28")
             .execute()

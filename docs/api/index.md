@@ -62,6 +62,7 @@ Shared types used by both async and sync APIs.
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
+| [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
 | [`IndexesMonitor`](indexes-monitor.md) | Background secondary index discovery |
 | [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
@@ -119,6 +120,7 @@ cluster-definition
 tls-builder
 system-settings
 error-strategy
+expression-trace
 exceptions
 query-hint
 indexes-monitor

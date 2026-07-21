@@ -21,7 +21,7 @@ import pytest
 from aerospike_async import ClientPolicy
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition as AsyncClusterDefinition
-from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition
 
 
@@ -73,6 +73,31 @@ class TestSystemSettingsApplyTo:
         assert p.conn_pools_per_node == 8
         assert p.idle_timeout == 45_000
         assert p.tend_interval == 500
+
+    def test_min_connections(self):
+        ss = SystemSettings(min_connections_per_node=10)
+        p = ClientPolicy()
+        ss.apply_to(p)
+        assert p.min_conns_per_node == 10
+
+    def test_circuit_breaker_fields(self):
+        ss = SystemSettings(
+            num_tend_intervals_in_error_window=3,
+            max_errors_in_error_window=250,
+        )
+        p = ClientPolicy()
+        ss.apply_to(p)
+        assert p.error_rate_window == 3
+        assert p.max_error_rate == 250
+
+    def test_transactions_group_not_applied_to_policy(self):
+        ss = SystemSettings(
+            transactions=TransactionSettings(implicit_batch_write_transactions=False),
+        )
+        p = ClientPolicy()
+        before = {a: getattr(p, a) for a in ("max_conns_per_node", "tend_interval")}
+        ss.apply_to(p)
+        assert {a: getattr(p, a) for a in before} == before
 
 
 class TestSystemSettingsImmutability:

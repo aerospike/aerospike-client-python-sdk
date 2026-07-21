@@ -1,0 +1,75 @@
+# Example SDK configuration file.
+#
+# Point AEROSPIKE_SDK_CONFIG_URL at this file (file:///path/to/it or a bare
+# path) before connecting. The file is re-read on change while a client is
+# running: connection-level groups (connections, circuitBreaker, refresh)
+# take effect on the next connect; the transactions group applies to the
+# next operation.
+#
+# Settings resolve per field, highest layer first:
+#   system.<cluster-name>  >  system.DEFAULT  >  with_system_settings(...)  >  defaults
+#
+# Durations take a unit suffix: 250ms, 55s, 5m, 2h.
+
+version: "1.0.0"
+
+system:
+  # Applies to every cluster this process connects to.
+  DEFAULT:
+    connections:
+      minimumConnectionsPerNode: 10
+      maximumConnectionsPerNode: 300
+      maximumSocketIdleTime: 55s
+    circuitBreaker:
+      # Errors per node tolerated within the window before commands to that
+      # node fail fast, and the window length in tend intervals.
+      numTendIntervalsInErrorWindow: 2
+      maximumErrorsInErrorWindow: 100
+    refresh:
+      tendInterval: 1s
+    transactions:
+      implicitBatchWriteTransactions: true
+      sleepBetweenAttempts: 1000ms
+      numberOfAttempts: 5
+
+  # Layers on DEFAULT for connections that declare this cluster name via
+  # ClusterDefinition.validate_cluster_name_is("prod-cluster").
+  prod-cluster:
+    connections:
+      maximumConnectionsPerNode: 500
+    transactions:
+      implicitBatchWriteTransactions: false
+
+# Named operation-policy profiles, registered as Behavior objects at connect
+# and retrievable via aerospike_sdk.policy.get_behavior("<name>"). Edits
+# hot-reload into live sessions bound to these behaviors.
+# maximumNumberOfCallAttempts counts the initial call (2 = one retry).
+behaviors:
+  high-performance:
+    allOperations:
+      abandonCallAfter: 1s
+      waitForCallToComplete: 500ms
+      maximumNumberOfCallAttempts: 2
+      delayBetweenRetries: 25ms
+      replicaOrder: SEQUENCE
+      sendKey: false
+    retryableWrites:
+      useDurableDelete: false
+      maximumNumberOfCallAttempts: 3
+    consistencyModeReads:
+      readConsistency: SESSION
+    availabilityModeReads:
+      migrationReadConsistency: ONE
+    batchReads:
+      maxConcurrentServers: 8
+      allowInlineMemoryAccess: true
+    query:
+      recordQueueSize: 5000
+
+  # Inherits high-performance, then overrides per field.
+  batch-optimized:
+    parent: high-performance
+    batchReads:
+      maxConcurrentServers: 16
+    query:
+      recordQueueSize: 20000

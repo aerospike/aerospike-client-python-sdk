@@ -46,6 +46,11 @@ def client(aerospike_host, client_policy):
         yield client
 
 
+@pytest.fixture
+def session(client):
+    return client.create_session()
+
+
 def _cleanup_records(session, keys):
     for k in keys:
         try:
@@ -140,7 +145,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
     sync_wait_for_index(client, _NS, _SET, flt)
 
     try:
-        stream = client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         try:
             user_keys = sorted(_user_keys_from_stream(stream))
         finally:
@@ -151,7 +156,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
         flt2 = Filter.equal(_BIN, 9999).context(
             [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
         )
-        stream2 = client.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
+        stream2 = session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream2)) == ["cdt_ctx_lo"]
         finally:
@@ -205,7 +210,7 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
     sync_wait_for_index(client, _NS, _SET, flt)
 
     try:
-        stream = client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream)) == ["cdt_ctx_flat_a"]
         finally:

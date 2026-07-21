@@ -197,6 +197,12 @@ from aerospike_sdk.error_strategy import (
     _resolve_disposition,
 )
 from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.implicit_txn import (
+    implicit_txn_enabled,
+    run_in_implicit_txn,
+    run_in_implicit_txn_blocking,
+    stamp_txn,
+)
 from aerospike_sdk.exceptions import (
     AerospikeError,
     _convert_pac_exception,
@@ -395,6 +401,9 @@ class _QueryBuilderBase:
     _udf_function: Optional[str] = None
     _udf_args: Optional[List[Any]] = None
     _op_projection: Optional[List[Any]] = None
+    # Set by with_txn(None): the caller explicitly opted out of any
+    # transaction, so the implicit batch-write wrap must not fire either.
+    _txn_opted_out: bool = False
 
     def __init__(
         self,
@@ -410,6 +419,7 @@ class _QueryBuilderBase:
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
+        sdk_client: Optional[Any] = None,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -434,6 +444,10 @@ class _QueryBuilderBase:
                 Session-scoped builders supply this; client-only builders omit it.
             namespace_mode_resolver_blocking: Sync counterpart used by
                 :meth:`execute_blocking` (the sync path bypassing asyncio).
+            sdk_client: Optional owning SDK client, consulted at execute time
+                for SDK-level settings (implicit batch-write transactions)
+                and cluster MRT capability. ``None`` disables implicit
+                transactions for this builder.
         """
         self._client = client
         self._namespace = namespace
@@ -458,6 +472,7 @@ class _QueryBuilderBase:
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode: Optional[Mode] = None
+        self._sdk_client = sdk_client
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -489,6 +504,32 @@ class _QueryBuilderBase:
         if self._txn is not None and policy is not None:
             policy.txn = self._txn
         return policy
+
+    def _implicit_txn_precheck(self) -> bool:
+        """Cheap synchronous half of the implicit batch-write txn gate.
+
+        The multi-key write dispatchers are inherently write-bearing, so
+        the has-writes condition is implied; this checks SC namespace, no
+        explicit txn (and no ``with_txn(None)`` opt-out), and the setting.
+        Callers confirm cluster MRT capability afterward — async paths
+        via ``await sdk_client._supports_mrt()``, so the coroutine is only
+        created once the cheap conditions pass.
+        """
+        return (
+            not self._txn_opted_out
+            and implicit_txn_enabled(self._sdk_client, self._txn, self._namespace_mode)
+        )
+
+    def _implicit_txn_gate_blocking(self) -> bool:
+        """Full gate for blocking dispatchers (precheck + MRT capability)."""
+        return (
+            self._implicit_txn_precheck()
+            and self._sdk_client._supports_mrt_blocking()
+        )
+
+    def _implicit_txn_settings(self) -> Any:
+        """Live transaction settings from the owning SDK client."""
+        return self._sdk_client._sdk_settings.transactions
 
     def _ensure_namespace_mode_blocking(self) -> None:
         """Sync counterpart of :meth:`_ensure_namespace_mode`.
@@ -538,7 +579,10 @@ class _QueryBuilderBase:
         Overrides any transaction captured at construction. Pass ``None`` to
         opt out of an ambient transaction (useful inside a
         :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        when a single operation must run outside the MRT).
+        when a single operation must run outside the MRT). ``None`` also
+        opts a multi-key write out of implicit batch-write transactions
+        (:attr:`~aerospike_sdk.policy.system_settings.TransactionSettings.implicit_batch_write_transactions`),
+        guaranteeing the operation runs in no transaction at all.
 
         Args:
             txn: The :class:`~aerospike_async.Txn` to participate in, or
@@ -549,7 +593,7 @@ class _QueryBuilderBase:
 
         Example::
 
-            async with session.begin_transaction() as tx:
+            async with session.transaction() as tx:
                 await tx.upsert(k1).bin("v").set_to(1).execute()
                 # Run this one write outside the transaction:
                 await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
@@ -558,6 +602,7 @@ class _QueryBuilderBase:
             :meth:`aerospike_sdk.aio.session.Session.get_current_transaction`
         """
         self._txn = txn
+        self._txn_opted_out = txn is None
         # Cached policies were built without this override — drop them so
         # subsequent policy lookups re-derive from behavior with the right
         # txn stamped on.
@@ -695,7 +740,7 @@ class _QueryBuilderBase:
                     FilterExpression.string_val("Sports")
                 )
             ])
-            recordset = await client.query("test", "products").filter_expression(filter_exp).execute()
+            recordset = await session.query("test", "products").filter_expression(filter_exp).execute()
 
         """
         self._filter_expression = expression
@@ -1500,8 +1545,8 @@ class _QueryBuilderBase:
 
         return RecordStream.from_error(key, rc, in_doubt, exception=pfc_exc)
 
-    @staticmethod
     def _handle_batch_error_list(
+        self,
         keys: List[Key],
         exc: Exception,
         disp: _ErrorDisposition,
@@ -1533,9 +1578,8 @@ class _QueryBuilderBase:
             for i, key in enumerate(keys)
         ]
 
-    @classmethod
     def _handle_batch_error(
-        cls,
+        self,
         keys: List[Key],
         exc: Exception,
         disp: _ErrorDisposition,
@@ -1547,7 +1591,7 @@ class _QueryBuilderBase:
         we create one error result per key.
         """
         return RecordStream.from_list(
-            cls._handle_batch_error_list(keys, exc, disp, handler),
+            self._handle_batch_error_list(keys, exc, disp, handler),
         )
 
     def _make_read_policy(
@@ -1775,14 +1819,22 @@ class _QueryBuilderBase:
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            batch_records = self._client.batch_apply_blocking(
-                spec.keys,
-                pkg,
-                fn,
-                spec.udf_args,
-                batch_policy=batch_policy,
-                udf_policy=udf_policy,
-            )
+            if self._implicit_txn_gate_blocking():
+                batch_records = run_in_implicit_txn_blocking(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_apply_blocking(
+                        spec.keys, pkg, fn, spec.udf_args,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        udf_policy=udf_policy))
+            else:
+                batch_records = self._client.batch_apply_blocking(
+                    spec.keys,
+                    pkg,
+                    fn,
+                    spec.udf_args,
+                    batch_policy=batch_policy,
+                    udf_policy=udf_policy,
+                )
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(
@@ -1800,9 +1852,17 @@ class _QueryBuilderBase:
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            batch_records = self._client.batch_operate_blocking(
-                spec.keys, ops_per_key,
-                batch_policy=batch_policy, write_policy=bwp)
+            if self._implicit_txn_gate_blocking():
+                batch_records = run_in_implicit_txn_blocking(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_operate_blocking(
+                        spec.keys, ops_per_key,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        write_policy=bwp))
+            else:
+                batch_records = self._client.batch_operate_blocking(
+                    spec.keys, ops_per_key,
+                    batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(
@@ -2166,8 +2226,18 @@ class _QueryBuilderBase:
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            batch_records = self._client.batch_blocking(
-                all_ops, batch_policy=batch_policy)
+            if (
+                self._implicit_txn_precheck()
+                and any(not isinstance(op, BatchReadOp) for op in all_ops)
+                and self._sdk_client._supports_mrt_blocking()
+            ):
+                batch_records = run_in_implicit_txn_blocking(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_blocking(
+                        all_ops, batch_policy=stamp_txn(batch_policy, txn)))
+            else:
+                batch_records = self._client.batch_blocking(
+                    all_ops, batch_policy=batch_policy)
         except Exception as e:
             return self._handle_batch_error_list(all_keys, e, disp, handler)
         return self._filtered_batch_list(batch_records, disp, handler)
@@ -2259,9 +2329,17 @@ class _QueryBuilderBase:
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            batch_records = self._client.batch_operate_blocking(
-                spec.keys, ops_per_key,
-                batch_policy=batch_policy, write_policy=bwp)
+            if self._implicit_txn_gate_blocking():
+                batch_records = run_in_implicit_txn_blocking(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_operate_blocking(
+                        spec.keys, ops_per_key,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        write_policy=bwp))
+            else:
+                batch_records = self._client.batch_operate_blocking(
+                    spec.keys, ops_per_key,
+                    batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(
@@ -2297,8 +2375,16 @@ class _QueryBuilderBase:
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            batch_records = self._client.batch_delete_blocking(
-                spec.keys, batch_policy=batch_policy, delete_policy=bdp)
+            if self._implicit_txn_gate_blocking():
+                batch_records = run_in_implicit_txn_blocking(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_delete_blocking(
+                        spec.keys,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        delete_policy=bdp))
+            else:
+                batch_records = self._client.batch_delete_blocking(
+                    spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(
@@ -2727,7 +2813,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
     Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.aio.client.Client.query`. Use :meth:`where`
+    :meth:`~aerospike_sdk.aio.session.Session.query`. Use :meth:`where`
     or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
@@ -2978,8 +3064,18 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 all_ops.extend(self._spec_to_batch_ops(spec))
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
-                batch_records = await self._client.batch(
-                    all_ops, batch_policy=batch_policy)
+                if (
+                    self._implicit_txn_precheck()
+                    and any(not isinstance(op, BatchReadOp) for op in all_ops)
+                    and await self._sdk_client._supports_mrt()
+                ):
+                    batch_records = await run_in_implicit_txn(
+                        self._client, self._implicit_txn_settings(),
+                        lambda txn: self._client.batch(
+                            all_ops, batch_policy=stamp_txn(batch_policy, txn)))
+                else:
+                    batch_records = await self._client.batch(
+                        all_ops, batch_policy=batch_policy)
             except Exception as e:
                 return self._handle_batch_error(all_keys, e, disp, handler)
             if cmd_t0:
@@ -3232,14 +3328,25 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            batch_records = await self._client.batch_apply(
-                spec.keys,
-                pkg,
-                fn,
-                spec.udf_args,
-                batch_policy=batch_policy,
-                udf_policy=udf_policy,
-            )
+            if (
+                self._implicit_txn_precheck()
+                and await self._sdk_client._supports_mrt()
+            ):
+                batch_records = await run_in_implicit_txn(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_apply(
+                        spec.keys, pkg, fn, spec.udf_args,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        udf_policy=udf_policy))
+            else:
+                batch_records = await self._client.batch_apply(
+                    spec.keys,
+                    pkg,
+                    fn,
+                    spec.udf_args,
+                    batch_policy=batch_policy,
+                    udf_policy=udf_policy,
+                )
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(
@@ -3460,9 +3567,20 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            batch_records = await self._client.batch_operate(
-                spec.keys, ops_per_key,
-                batch_policy=batch_policy, write_policy=bwp)
+            if (
+                self._implicit_txn_precheck()
+                and await self._sdk_client._supports_mrt()
+            ):
+                batch_records = await run_in_implicit_txn(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_operate(
+                        spec.keys, ops_per_key,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        write_policy=bwp))
+            else:
+                batch_records = await self._client.batch_operate(
+                    spec.keys, ops_per_key,
+                    batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(
@@ -3476,8 +3594,19 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            batch_records = await self._client.batch_delete(
-                spec.keys, batch_policy=batch_policy, delete_policy=bdp)
+            if (
+                self._implicit_txn_precheck()
+                and await self._sdk_client._supports_mrt()
+            ):
+                batch_records = await run_in_implicit_txn(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_delete(
+                        spec.keys,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        delete_policy=bdp))
+            else:
+                batch_records = await self._client.batch_delete(
+                    spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(
@@ -3509,9 +3638,20 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            batch_records = await self._client.batch_operate(
-                spec.keys, ops_per_key,
-                batch_policy=batch_policy, write_policy=bwp)
+            if (
+                self._implicit_txn_precheck()
+                and await self._sdk_client._supports_mrt()
+            ):
+                batch_records = await run_in_implicit_txn(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch_operate(
+                        spec.keys, ops_per_key,
+                        batch_policy=stamp_txn(batch_policy, txn),
+                        write_policy=bwp))
+            else:
+                batch_records = await self._client.batch_operate(
+                    spec.keys, ops_per_key,
+                    batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(

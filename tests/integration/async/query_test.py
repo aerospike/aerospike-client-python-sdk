@@ -40,8 +40,9 @@ async def _wait_for_set_count(
     """
     deadline = time.monotonic() + timeout
     last_count = -1
+    session = client.create_session()
     while time.monotonic() < deadline:
-        stream = await client.query(ns, set_name).execute()
+        stream = await session.query(ns, set_name).execute()
         count = 0
         async for _ in stream:
             count += 1
@@ -117,9 +118,15 @@ async def client(aerospike_host, client_policy):
 
         yield client
 
-async def test_query_basic(client):
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(client):
+    return client.create_session()
+
+
+async def test_query_basic(session):
     """Test basic query operation without filters."""
-    stream = await client.query("test", "query_test").execute()
+    stream = await session.query("test", "query_test").execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -131,9 +138,9 @@ async def test_query_basic(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_bins(client):
+async def test_query_with_bins(session):
     """Test query with specific bin selection."""
-    stream = await client.query("test", "query_test").bins(["name", "age"]).execute()
+    stream = await session.query("test", "query_test").bins(["name", "age"]).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -145,10 +152,10 @@ async def test_query_with_bins(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_policy(client):
+async def test_query_with_policy(session):
     """Test query with custom policy."""
     policy = QueryPolicy()
-    stream = await client.query("test", "query_test").with_policy(policy).execute()
+    stream = await session.query("test", "query_test").with_policy(policy).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -159,10 +166,10 @@ async def test_query_with_policy(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_partition_filter(client):
+async def test_query_with_partition_filter(session):
     """Test query with partition filter."""
     partition_filter = PartitionFilter.all()
-    stream = await client.query("test", "query_test").partition(partition_filter).execute()
+    stream = await session.query("test", "query_test").partition(partition_filter).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -173,13 +180,13 @@ async def test_query_with_partition_filter(client):
     stream.close()
     assert count > 0
 
-async def test_query_builder_chaining(client):
+async def test_query_builder_chaining(session):
     """Test method chaining on query builder."""
     policy = QueryPolicy()
     partition_filter = PartitionFilter.all()
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .bins(["name", "age"])
         .with_policy(policy)
         .partition(partition_filter)
@@ -196,7 +203,7 @@ async def test_query_builder_chaining(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_range_filter(client, enterprise, wait_for_index):
+async def test_query_with_range_filter(client, session, enterprise, wait_for_index):
     """Test query with range filter (requires index)."""
     try:
         await client.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
@@ -206,7 +213,7 @@ async def test_query_with_range_filter(client, enterprise, wait_for_index):
 
     try:
         stream = await (
-            client.query("test", "query_test")
+            session.query("test", "query_test")
             .filter(Filter.range("age", 22, 26))
             .execute()
         )
@@ -226,9 +233,9 @@ async def test_query_with_range_filter(client, enterprise, wait_for_index):
         except Exception:
             pass
 
-async def test_query_empty_result(client):
+async def test_query_empty_result(session):
     """Test query that returns no results."""
-    stream = await client.query("test", "non_existent_set").execute()
+    stream = await session.query("test", "non_existent_set").execute()
     count = 0
     async for result in stream:
         count += 1
@@ -236,9 +243,9 @@ async def test_query_empty_result(client):
     stream.close()
     assert count == 0
 
-async def test_query_iteration(client):
+async def test_query_iteration(session):
     """Test that query builder can execute and return a RecordStream."""
-    query_builder = client.query("test", "query_test")
+    query_builder = session.query("test", "query_test")
     assert hasattr(query_builder, "execute")
 
     stream = await query_builder.execute()
@@ -252,7 +259,7 @@ async def test_query_iteration(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_expression(client):
+async def test_query_with_filter_expression(session):
     """Test query with Exp (FilterExpression) for server-side filtering."""
     filter_exp = Exp.ge(
         Exp.int_bin("age"),
@@ -260,7 +267,7 @@ async def test_query_with_filter_expression(client):
     )
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -276,7 +283,7 @@ async def test_query_with_filter_expression(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_and_filter_expression(client, enterprise, wait_for_index):
+async def test_query_with_filter_and_filter_expression(client, session, enterprise, wait_for_index):
     """Test query with both Filter (secondary index) and Exp (FilterExpression)."""
     try:
         await client.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
@@ -291,7 +298,7 @@ async def test_query_with_filter_and_filter_expression(client, enterprise, wait_
 
     try:
         stream = await (
-            client.query("test", "query_test")
+            session.query("test", "query_test")
             .filter(Filter.range("age", 20, 30))
             .filter_expression(filter_exp)
             .execute()
@@ -313,7 +320,7 @@ async def test_query_with_filter_and_filter_expression(client, enterprise, wait_
         except Exception:
             pass
 
-async def test_query_with_filter_expression_and(client):
+async def test_query_with_filter_expression_and(session):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
     filter_exp = Exp.and_([
         Exp.ge(Exp.int_bin("age"), Exp.int_val(25)),
@@ -321,7 +328,7 @@ async def test_query_with_filter_expression_and(client):
     ])
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -342,10 +349,10 @@ async def test_query_with_filter_expression_and(client):
 # Metadata-based query tests 
 # ============================================================================
 
-async def test_query_with_ael_where(client):
+async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where("$.age >= 25")
         .execute()
     )
@@ -359,10 +366,10 @@ async def test_query_with_ael_where(client):
     assert count == 5
 
 
-async def test_query_ael_and_or(client):
+async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where('$.age >= 22 and $.age <= 26')
         .execute()
     )
@@ -376,10 +383,10 @@ async def test_query_ael_and_or(client):
     assert count == 5
 
 
-async def test_query_ael_not(client):
+async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where('not ($.age >= 25)')
         .execute()
     )
@@ -393,12 +400,12 @@ async def test_query_ael_not(client):
     assert count == 5
 
 
-async def test_query_digest_modulo(client):
+async def test_query_digest_modulo(session):
     """Test query with digestModulo metadata expression filter."""
     filter_exp = Exp.eq(Exp.digest_modulo(3), Exp.int_val(1))
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -411,12 +418,12 @@ async def test_query_digest_modulo(client):
     assert count >= 1
 
 
-async def test_query_bin_exists(client):
+async def test_query_bin_exists(session):
     """Test query filtering by bin existence."""
     filter_exp = Exp.bin_exists("age")
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -430,12 +437,12 @@ async def test_query_bin_exists(client):
     assert count == 10
 
 
-async def test_query_record_size(client):
+async def test_query_record_size(session):
     """Test query filtering by record size metadata."""
     filter_exp = Exp.ge(Exp.device_size(), Exp.int_val(0))
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -525,10 +532,10 @@ async def test_query_exp_set_name_filters_out_no_set_records(client):
                 pass
 
 
-async def test_query_chunked_iteration(client):
+async def test_query_chunked_iteration(session):
     """Server-side chunked iteration via chunk_size + has_more_chunks."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .chunk_size(3)
         .execute()
     )
@@ -545,10 +552,10 @@ async def test_query_chunked_iteration(client):
     assert chunks >= 2
 
 
-async def test_query_chunked_single_chunk(client):
+async def test_query_chunked_single_chunk(session):
     """chunk_size larger than dataset returns everything in one chunk."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .chunk_size(100)
         .execute()
     )
@@ -564,9 +571,9 @@ async def test_query_chunked_single_chunk(client):
     assert chunks == 1
 
 
-async def test_has_more_chunks_on_non_chunked_stream(client):
+async def test_has_more_chunks_on_non_chunked_stream(session):
     """has_more_chunks on a regular stream returns True once then False."""
-    stream = await client.query("test", "query_test").execute()
+    stream = await session.query("test", "query_test").execute()
     assert await stream.has_more_chunks() is True
     count = 0
     async for _ in stream:
@@ -644,10 +651,10 @@ class TestExecuteStreamAcrossBuilders:
             except Exception:
                 pass
 
-    async def test_dataset_query_stream_delegates_to_scan(self, client):
+    async def test_dataset_query_stream_delegates_to_scan(self, session):
         """execute_stream on a keyless dataset query streams the scan
         lazily (delegates to execute())."""
-        stream = await client.query("test", "query_test").execute_stream()
+        stream = await session.query("test", "query_test").execute_stream()
         count = 0
         async for r in stream:
             assert r.is_ok

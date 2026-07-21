@@ -244,9 +244,9 @@ async def test_session_multiple_sessions_different_behaviors(client):
     assert default_session.behavior.total_timeout == timedelta(seconds=30)
 
 
-async def test_session_transaction_session(session):
-    """Test that session.transaction_session() works."""
-    tx_session = session.transaction_session()
+async def test_session_transaction(session):
+    """Test that session.transaction() works."""
+    tx_session = session.transaction()
     assert tx_session is not None
 
 

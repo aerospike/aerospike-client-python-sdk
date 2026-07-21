@@ -9,9 +9,14 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@69320fb773eff3dbf5e057c5775ca3315ecad263",
+    # Dev-channel version published to the internal package index on every
+    # PAC merge; promoted versions land on public PyPI at release. CI
+    # resolves this from the internal index; see README "Local PAC checkout"
+    # for working against a local PAC tree instead.
+    "aerospike-async==0.6.0a7.dev3",
     "antlr4-python3-runtime>=4.13.0",
     "typing_extensions>=4.0.0",
+    "pyyaml>=6.0",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -38,6 +43,7 @@ dev = [
     "pytest-env>=1.1.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "types-PyYAML",
 ]
 docs = [
     "sphinx>=8.0",

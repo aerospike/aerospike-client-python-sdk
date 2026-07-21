@@ -365,8 +365,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "`--no-services-alternate` to force-disable (overrides "
         "AEROSPIKE_USE_SERVICES_ALTERNATE from `aerospike.env` if set). "
         "When neither form is passed, falls back to that env var (default: "
-        "env or False, matching JSDK's `--services-alternate` default of "
-        "false).",
+        "env or False",
     )
     p.add_argument(
         "--seed-only",
