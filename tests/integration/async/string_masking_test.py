@@ -22,10 +22,11 @@ constant), and modifies are blocked for unprivileged users.
 
 Gated on FOUR conditions:
 
-1. ``AEROSPIKE_HOST_8_1_3`` set (string ops + masking are 8.1.3+ features)
-2. Security enabled on the target cluster
-3. Admin credentials supplied via ``AEROSPIKE_HOST_8_1_3_USER`` /
-   ``AEROSPIKE_HOST_8_1_3_PASSWORD``
+1. ``AEROSPIKE_HOST_SEC`` set and the cluster is server >= 8.1.3
+   (string ops + masking are 8.1.3+ features)
+2. Security enabled on that cluster
+3. Admin credentials supplied via ``AEROSPIKE_AUTH_USER`` /
+   ``AEROSPIKE_AUTH_PASSWORD``
 4. Server accepts ``masking;...`` info commands
 
 PSDK exposes ``Session.info()`` so masking rules are applied via the PSDK
@@ -69,10 +70,7 @@ _PROPAGATION_DELAY = 0.5
 _TEST_DS = DataSet.of(_NAMESPACE, _SET)
 
 
-def _services_alternate_813() -> bool:
-    sa_override = os.environ.get("AEROSPIKE_HOST_8_1_3_USE_SERVICES_ALTERNATE")
-    if sa_override is not None:
-        return sa_override.lower() == "true"
+def _services_alternate() -> bool:
     return os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "true").lower() == "true"
 
 
@@ -132,49 +130,72 @@ async def _remove_masking(admin_session, *, ns, set_name, bin_name):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def admin_pac(aerospike_host_8_1_3):
+async def admin_pac(aerospike_host_sec):
     """PAC admin client — used ONLY for user/role management (create_user,
     drop_user, grant_roles, query_users), which PSDK does not expose at
     the SDK layer (by design; users are expected to use ``asadm`` or the
-    low-level client for that). Skips the module if security is not
-    enabled or admin creds fail.
+    low-level client for that).
+
+    Masking is both a security feature and an 8.1.3+ feature, so it targets
+    the security host (``AEROSPIKE_HOST_SEC``). Skips the module if that host
+    is unset, is < 8.1.3, security is not enabled, or admin creds fail.
     """
-    if not aerospike_host_8_1_3:
-        pytest.skip("AEROSPIKE_HOST_8_1_3 unset")
-    user = os.environ.get("AEROSPIKE_HOST_8_1_3_USER", "admin")
-    password = os.environ.get("AEROSPIKE_HOST_8_1_3_PASSWORD", "admin")
+    if not aerospike_host_sec:
+        pytest.skip("AEROSPIKE_HOST_SEC unset; masking needs a security-enabled 8.1.3+ cluster")
+    user = os.environ.get("AEROSPIKE_AUTH_USER", "admin")
+    password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin")
     cp = _PacClientPolicy()
-    cp.use_services_alternate = _services_alternate_813()
+    cp.use_services_alternate = _services_alternate()
     cp.user = user
     cp.password = password
     try:
-        client = await new_client(cp, aerospike_host_8_1_3)
+        client = await new_client(cp, aerospike_host_sec)
     except Exception as exc:
-        pytest.skip(f"Could not connect as admin to {aerospike_host_8_1_3}: {exc}")
+        pytest.skip(f"Could not connect as admin to {aerospike_host_sec}: {exc}")
     await asyncio.sleep(2)
+    # Gate on server >= 8.1.3 (string ops + masking feature).
+    def _ver_prefix(part):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        return int(digits) if digits else 0
+    build = ""
+    try:
+        info = await client.info("build")
+        raw = next((v for v in info.values() if v), "")
+        build = raw.partition("=")[2].strip() if "=" in raw else raw.strip()
+        parts = (build.split(".") + ["0", "0", "0"])[:3]
+        version = tuple(_ver_prefix(p) for p in parts)
+    except Exception:
+        version = (0, 0, 0)
+    if version < (8, 1, 3):
+        await client.close()
+        pytest.skip(f"masking requires server >= 8.1.3; AEROSPIKE_HOST_SEC is {build!r}")
     try:
         await client.query_users(None)
     except ServerError as exc:
         await client.close()
         if exc.result_code == ResultCode.SECURITY_NOT_ENABLED or isinstance(exc, SecurityNotEnabled):
-            pytest.skip("Security not enabled on 8.1.3+ cluster")
+            pytest.skip("Security not enabled on the 8.1.3+ cluster")
         raise
     yield client
     await client.close()
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def admin_client(aerospike_host_8_1_3, admin_pac):
+async def admin_client(aerospike_host_sec, admin_pac):
     """PSDK admin Client — used for masking-rule application, record put,
     and any test assertion that needs admin privileges. Depends on
-    ``admin_pac`` solely so the security probe happens before this one
-    spins up.
+    ``admin_pac`` solely so the security + 8.1.3 probe happens before this
+    one spins up.
     """
     policy = _psdk_client_policy(
-        user=os.environ.get("AEROSPIKE_HOST_8_1_3_USER", "admin"),
-        password=os.environ.get("AEROSPIKE_HOST_8_1_3_PASSWORD", "admin"),
+        user=os.environ.get("AEROSPIKE_AUTH_USER", "admin"),
+        password=os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin"),
     )
-    async with Client(seeds=aerospike_host_8_1_3, policy=policy) as c:
+    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
         await asyncio.sleep(2)
         yield c
 
@@ -215,25 +236,25 @@ async def masking_setup(admin_pac, admin_client):
 
 def _psdk_client_policy(*, user: str, password: str) -> _PacClientPolicy:
     cp = _PacClientPolicy()
-    cp.use_services_alternate = _services_alternate_813()
+    cp.use_services_alternate = _services_alternate()
     cp.set_auth_mode(AuthMode.INTERNAL, user=user, password=password)
     return cp
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def reader_client(aerospike_host_8_1_3, masking_setup):
+async def reader_client(aerospike_host_sec, masking_setup):
     """PSDK Client authenticated as ``psdk_strops_reader`` ([read-write, read-masked])."""
     policy = _psdk_client_policy(user=_USER_READER, password=_USER_PASSWORD)
-    async with Client(seeds=aerospike_host_8_1_3, policy=policy) as c:
+    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
         await asyncio.sleep(2)
         yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def basic_client(aerospike_host_8_1_3, masking_setup):
+async def basic_client(aerospike_host_sec, masking_setup):
     """PSDK Client authenticated as ``psdk_strops_user`` ([read-write] only)."""
     policy = _psdk_client_policy(user=_USER_BASIC, password=_USER_PASSWORD)
-    async with Client(seeds=aerospike_host_8_1_3, policy=policy) as c:
+    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
         await asyncio.sleep(2)
         yield c
 

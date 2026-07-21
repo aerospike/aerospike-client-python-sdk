@@ -415,31 +415,18 @@ SERVER_8_1_2 = (8, 1, 2, 0)
 SERVER_8_1_3 = (8, 1, 3, 0)
 
 
-@pytest.fixture(scope="session")
-def aerospike_host_8_1_3():
-    """Seed for an 8.1.3+ Aerospike cluster, when one is available locally.
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_string_operations(server_version):
+    """``True`` when the (default-host) cluster supports server-side string ops.
 
-    Returns ``None`` when ``AEROSPIKE_HOST_8_1_3`` is unset; tests that need
-    8.1.3+ behavior (e.g. string operations) should accept this fixture and
-    ``pytest.skip`` when it is ``None`` rather than failing.
+    Covers the ``str_*`` builder / ``StringOperation`` surface and string
+    filter expressions (server >= 8.1.3, gated server-side via the core's
+    ``Version::supports_string_operations``). Single-host model: point
+    ``AEROSPIKE_HOST`` at an 8.1.3+ build to exercise these; CI covers the
+    version spread via a server matrix rather than a dedicated host var.
+    Tests should ``pytest.skip`` when this is ``False``.
     """
-    return os.environ.get('AEROSPIKE_HOST_8_1_3')
-
-
-@pytest.fixture
-def aerospike_host_813_required(aerospike_host_8_1_3):
-    """Returns the 8.1.3+ host or skips the dependent test cleanly.
-
-    Tests that exercise server-8.1.3-only features (string operations)
-    opt in by depending on this fixture. When ``AEROSPIKE_HOST_8_1_3``
-    is unset the dependent test is skipped with a clear message.
-    """
-    if not aerospike_host_8_1_3:
-        pytest.skip(
-            "AEROSPIKE_HOST_8_1_3 is unset; this test requires an 8.1.3+ "
-            "cluster. Set AEROSPIKE_HOST_8_1_3 in aerospike.env to enable."
-        )
-    return aerospike_host_8_1_3
+    return server_version is not None and server_version >= SERVER_8_1_3
 
 
 def _parse_build_string(build: str):

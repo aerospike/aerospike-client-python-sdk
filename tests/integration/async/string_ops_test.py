@@ -16,12 +16,9 @@
 """Integration tests for server string operations (8.1.3+)."""
 
 import asyncio
-import os
 
 import pytest
 import pytest_asyncio
-
-from aerospike_async import AuthMode, ClientPolicy
 
 from aerospike_sdk import (
     Client,
@@ -36,37 +33,21 @@ from aerospike_sdk.dataset import DataSet
 _TEST_DS = DataSet.of("test", "test")
 
 
-def _build_813_policy() -> ClientPolicy:
-    """Build a ClientPolicy for the 8.1.3+ seed honoring per-host overrides.
-
-    The 8.1.3+ seed may sit at a different network topology from the rest
-    of the test rig (e.g. external bench host at a public IP vs containerized
-    localhost), so this fixture honors a per-host services-alternate override
-    and per-host auth env vars when present.
-    """
-    policy = ClientPolicy()
-    sa_override = os.environ.get('AEROSPIKE_HOST_8_1_3_USE_SERVICES_ALTERNATE', '').strip().lower()
-    if sa_override in ('true', '1', 'yes', 'false', '0', 'no'):
-        policy.use_services_alternate = sa_override in ('true', '1', 'yes')
-    else:
-        policy.use_services_alternate = os.environ.get(
-            'AEROSPIKE_USE_SERVICES_ALTERNATE', 'true'
-        ).strip().lower() in ('true', '1', 'yes')
-    user = os.environ.get('AEROSPIKE_HOST_8_1_3_USER', '')
-    password = os.environ.get('AEROSPIKE_HOST_8_1_3_PASSWORD', '')
-    if user and password:
-        policy.set_auth_mode(AuthMode.INTERNAL, user=user, password=password)
-    return policy
-
-
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host_8_1_3):
-    if not aerospike_host_8_1_3:
+async def client(aerospike_host, supports_string_operations, client_policy):
+    """Module-scoped client for server-side string ops (server >= 8.1.3).
+
+    Single-host model: connects to the default ``AEROSPIKE_HOST`` and skips
+    cleanly via ``supports_string_operations`` unless it is 8.1.3+. Point
+    ``AEROSPIKE_HOST`` at an 8.1.3+ build to run these; CI covers the version
+    spread via a server matrix.
+    """
+    if not supports_string_operations:
         pytest.skip(
-            "AEROSPIKE_HOST_8_1_3 is unset; this suite requires an 8.1.3+ "
-            "cluster. Set AEROSPIKE_HOST_8_1_3 in aerospike.env to enable."
+            "string operations require server >= 8.1.3; point AEROSPIKE_HOST "
+            "at an 8.1.3+ build to run these"
         )
-    async with Client(seeds=aerospike_host_8_1_3, policy=_build_813_policy()) as c:
+    async with Client(seeds=aerospike_host, policy=client_policy) as c:
         await asyncio.sleep(2)
         sess = c.create_session()
         for suffix in (
