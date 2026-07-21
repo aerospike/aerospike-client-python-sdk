@@ -134,6 +134,7 @@ guide/dynamic-sdk-config
 guide/reads
 guide/writes
 guide/cdt-operations
+guide/string-ops
 ```
 
 ```{toctree}
