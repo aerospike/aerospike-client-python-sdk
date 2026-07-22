@@ -31,9 +31,8 @@ import pytest
 import pytest_asyncio
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
-from aerospike_sdk import DataSet, Client
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 KEY_PREFIX = "qbops_"
@@ -42,10 +41,10 @@ SET = "query_bin_ops"
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    """Setup SDK client, seed test data, yield the client."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+async def cluster(aerospike_host, make_cluster_definition):
+    """Connect a Cluster, seed test data, yield it."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        session = c.create_session()
         ds = DataSet.of(NS, SET)
 
         for i in range(1, 4):
@@ -67,12 +66,12 @@ async def client(aerospike_host, client_policy):
         # Brief pause so the query scan index reflects the committed writes under CI load
         await asyncio.sleep(0.1)
 
-        yield client
+        yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 def _key(i: int) -> Key:
@@ -325,9 +324,9 @@ class TestCdtReadEdgeCases:
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30]
 
-    async def test_remove_from_nonexistent_key_raises(self, client):
+    async def test_remove_from_nonexistent_key_raises(self, cluster):
         """Map remove_by_key_list on a missing record raises KEY_NOT_FOUND_ERROR."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         key = ds.id(f"{KEY_PREFIX}missing_rm")
         try:
@@ -526,9 +525,9 @@ class TestExpressionReads:
 
 class TestNestedCdtReads:
 
-    async def test_nested_map_key_get_values(self, client):
+    async def test_nested_map_key_get_values(self, cluster):
         """Read a value 2 levels deep: nested.level1.a"""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(1))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -536,9 +535,9 @@ class TestNestedCdtReads:
         ).first_or_raise()
         assert rs.record.bins["nested"] == 100
 
-    async def test_nested_map_key_count(self, client):
+    async def test_nested_map_key_count(self, cluster):
         """Count at a nested path should be 1 for a scalar."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(1))
                 .bin("nested").on_map_key("level1").on_map_key("b").count()
@@ -546,9 +545,9 @@ class TestNestedCdtReads:
         ).first_or_raise()
         assert rs.record.bins["nested"] == 1
 
-    async def test_nested_map_key_different_branches(self, client):
+    async def test_nested_map_key_different_branches(self, cluster):
         """Read from two different nested branches in separate queries."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs1 = await (
             await session.query(_key(2))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -563,9 +562,9 @@ class TestNestedCdtReads:
         ).first_or_raise()
         assert rs2.record.bins["nested"] == 2
 
-    async def test_nested_map_key_with_flat_bin(self, client):
+    async def test_nested_map_key_with_flat_bin(self, cluster):
         """Combine a nested CDT read with a flat bin read."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(3))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -575,9 +574,9 @@ class TestNestedCdtReads:
         assert rs.record.bins["nested"] == 300
         assert rs.record.bins["name"] == "user3"
 
-    async def test_nested_map_key_get_values_key3(self, client):
+    async def test_nested_map_key_get_values_key3(self, cluster):
         """Read nested value for a different key to verify data independence."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(3))
                 .bin("nested").on_map_key("level2").on_map_key("y").get_values()

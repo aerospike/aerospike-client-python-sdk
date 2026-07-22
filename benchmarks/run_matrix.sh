@@ -116,7 +116,7 @@ export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 
 # --- PSDK sync (fast-path + builder × 32t/1t × FT/non-FT) ------------------
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     for fp in --fast-path --no-fast-path; do
       sfx=${fp//-/_}
       tag="psdk_sync${sfx}_t${threads}_gil${gil}"
@@ -132,7 +132,7 @@ done
 # Dormant by default — only fires when the bench passes the explicit flag.
 # Kept in-matrix so each lever lands with both default + ct_runtime numbers.
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     for fp in --fast-path --no-fast-path; do
       sfx=${fp//-/_}
       tag="psdk_sync${sfx}_t${threads}_ctrt_gil${gil}"
@@ -167,7 +167,7 @@ done
 
 # --- PAC sync direct (pac-blocking) ----------------------------------------
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     tag="pac_sync_t${threads}_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
@@ -182,7 +182,7 @@ done
 # compare against psdk_sync_*_ctrt_gil* cells to isolate PSDK overhead
 # under ct_runtime.
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     tag="pac_sync_t${threads}_ctrt_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
@@ -211,7 +211,7 @@ done
 # --- Rust core binary (no Python, no GIL) ----------------------------------
 if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
   for mode in async sync; do
-    for tasks in 32 1; do
+    for tasks in 32; do
       tag="rust_${mode}_t${tasks}"
       echo "[run] $tag"
       MODE=$mode TASKS=$tasks DURATION="$DURATION" WARMUP="$WARMUP" \

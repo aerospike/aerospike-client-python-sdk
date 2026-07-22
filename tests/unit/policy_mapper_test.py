@@ -88,7 +88,7 @@ class TestToReadPolicy:
         # surfaces this as a built-in ValueError (matching the rest of the
         # SDK's input validation), NOT a leaked aerospike_async exception, and
         # preserves the original PAC error as the cause.
-        from aerospike_async.exceptions import ValueError as PacValueError
+        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             to_read_policy(Settings(read_touch_ttl_percent=bad))
         assert not isinstance(exc_info.value, PacValueError)
@@ -206,7 +206,7 @@ class TestToBatchReadPolicy:
 
     @pytest.mark.parametrize("bad", [-2, 101, 3600])
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
-        from aerospike_async.exceptions import ValueError as PacValueError
+        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             to_batch_read_policy(Settings(read_touch_ttl_percent=bad))
         assert not isinstance(exc_info.value, PacValueError)
@@ -237,7 +237,7 @@ class TestApplyToReadPolicy:
         assert result.read_touch_ttl == 50
 
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
-        from aerospike_async.exceptions import ValueError as PacValueError
+        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             apply_to_read_policy(Settings(read_touch_ttl_percent=101), ReadPolicy())
         assert not isinstance(exc_info.value, PacValueError)

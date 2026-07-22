@@ -25,12 +25,10 @@ Covers:
 """
 
 import pytest
-from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
-from aerospike_sdk.exceptions import AerospikeError, GenerationError
+from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from .durable_delete_support import delete_keys_durable
 
@@ -41,8 +39,8 @@ def ds():
 
 
 @pytest.fixture
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 async def _cleanup(session, *keys):

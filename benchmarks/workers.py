@@ -38,7 +38,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.session import SyncSession
 
-from ._env import client_policy_from_config
+from ._env import client_policy_from_config, definition_from_config
 from .config import WorkloadConfig, WorkloadKind
 from .record_spec import (
     BinField,
@@ -1047,23 +1047,34 @@ async def run_async_pool(
 
     n_loops = cfg.pool_loops
     bench_state = _BenchState()
-    policy = client_policy_from_config(cfg)
 
     # threading.Event is safe to check from any OS thread / event loop.
     thread_stop = threading.Event()
-
-    def factory() -> Client:
-        return Client(cfg.seeds, policy=policy)
 
     async def _bridge_stop() -> None:
         await stop.wait()
         thread_stop.set()
 
-    async with AsyncPool(factory, loop_count=n_loops) as pool:
+    # Definition-based pool contract. ``seed_only_cluster`` has no
+    # ClusterDefinition surface, so that config falls back to the deprecated
+    # factory shape (whose callbacks receive raw Clients — the worker below
+    # only calls ``create_session``, which both member types expose).
+    definition = definition_from_config(cfg)
+    if definition is not None:
+        pool = AsyncPool(definition, loop_count=n_loops)
+    else:
+        policy = client_policy_from_config(cfg)
+
+        def factory() -> Client:
+            return Client(cfg.seeds, policy=policy)
+
+        pool = AsyncPool(client_factory=factory, loop_count=n_loops)
+
+    async with pool:
         dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)
 
-        async def _do_self_test(client: Client) -> None:
-            session = client.create_session(Behavior.DEFAULT)
+        async def _do_self_test(member) -> None:
+            session = member.create_session(Behavior.DEFAULT)
             await _self_test_psdk_async(session, dataset_for_self_test)
 
         # Self-test BEFORE `connected.set()` so the failure aborts the
@@ -1084,8 +1095,8 @@ async def run_async_pool(
         _pkn = len(pk_pairs) if pk_pairs else 0
         _n_workers = max(1, n_loops * cfg.async_tasks)
 
-        async def loop_worker(client: Client, loop_idx: int) -> None:
-            session = client.create_session(Behavior.DEFAULT)
+        async def loop_worker(member, loop_idx: int) -> None:
+            session = member.create_session(Behavior.DEFAULT)
             dataset = DataSet.of(cfg.namespace, cfg.set_name)
             fields = list(cfg.bin_fields)
 

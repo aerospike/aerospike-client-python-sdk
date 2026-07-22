@@ -33,11 +33,10 @@ import math
 
 import pytest
 
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk import Client, HllConfig
+from aerospike_sdk import HllConfig
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
 
 
 NAMESPACE = "test"
@@ -45,16 +44,16 @@ SET = "hll_psdk"
 
 
 @pytest.fixture
-async def hll_client(aerospike_host, client_policy, enterprise):
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+async def hll_cluster(aerospike_host, make_cluster_definition, enterprise):
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
         for k in ("a", "b", "c"):
             try:
                 await session.delete(ds.id(k)).execute()
             except Exception:
                 pass
-        yield client
+        yield cluster
         for k in ("a", "b", "c"):
             try:
                 await session.delete(ds.id(k)).execute()
@@ -64,8 +63,8 @@ async def hll_client(aerospike_host, client_policy, enterprise):
 
 class TestHllWritesAndCount:
 
-    async def test_init_add_count(self, hll_client):
-        session = hll_client.create_session()
+    async def test_init_add_count(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -80,8 +79,8 @@ class TestHllWritesAndCount:
         assert isinstance(count, int)
         assert count >= 3
 
-    async def test_add_auto_create_via_config(self, hll_client):
-        session = hll_client.create_session()
+    async def test_add_auto_create_via_config(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -93,8 +92,8 @@ class TestHllWritesAndCount:
         result = await rs.first_or_raise()
         assert result.record_or_raise().bins["h"] >= 3
 
-    async def test_create_only_blocks_existing(self, hll_client):
-        session = hll_client.create_session()
+    async def test_create_only_blocks_existing(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -107,8 +106,8 @@ class TestHllWritesAndCount:
             .execute()
         )
 
-    async def test_mutual_exclusion_raises_at_builder(self, hll_client):
-        session = hll_client.create_session()
+    async def test_mutual_exclusion_raises_at_builder(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
         with pytest.raises(ValueError, match="mutually exclusive"):
             session.upsert(key).bin("h").hll_init(
@@ -118,8 +117,8 @@ class TestHllWritesAndCount:
 
 class TestHllDescribeRoundTrip:
 
-    async def test_describe_via_get_hll_config(self, hll_client):
-        session = hll_client.create_session()
+    async def test_describe_via_get_hll_config(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -135,8 +134,8 @@ class TestHllDescribeRoundTrip:
 
 class TestHllReadsAndUnion:
 
-    async def test_fold_and_refresh_count(self, hll_client):
-        session = hll_client.create_session()
+    async def test_fold_and_refresh_count(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
         await (
             session.upsert(key)
@@ -150,8 +149,8 @@ class TestHllReadsAndUnion:
         result = await rs.first_or_raise()
         assert result.record_or_raise().bins["h"] >= 10
 
-    async def test_set_union_cross_bin(self, hll_client):
-        session = hll_client.create_session()
+    async def test_set_union_cross_bin(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         await (
@@ -178,8 +177,8 @@ class TestHllReadsAndUnion:
 
 class TestAelFilterExpressions:
 
-    async def test_ael_hll_count_filter(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_hll_count_filter(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         await (
@@ -204,11 +203,11 @@ class TestAelFilterExpressions:
         rs.close()
         assert count == 1
 
-    async def test_ael_union_count_with_single_bin_ref(self, hll_client):
+    async def test_ael_union_count_with_single_bin_ref(self, hll_cluster):
         """``$.h.hllUnionCount($.a) > 0`` — bare HLL bin reference as the
         multi-sketch arg. Server treats it as an implicit single-element list.
         """
-        session = hll_client.create_session()
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         await (
@@ -255,8 +254,8 @@ class TestHllErrorPaths:
     and the read-without-bin behaviors that other suites do not exercise.
     """
 
-    async def test_init_illegal_description_raises_parameter_error(self, hll_client):
-        session = hll_client.create_session()
+    async def test_init_illegal_description_raises_parameter_error(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         # index_bit_count = 3 is below the 4..16 floor.
@@ -277,8 +276,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
-    async def test_init_create_only_fails_on_existing_bin(self, hll_client):
-        session = hll_client.create_session()
+    async def test_init_create_only_fails_on_existing_bin(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -292,8 +291,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.BIN_EXISTS_ERROR
 
-    async def test_init_update_only_fails_on_missing_bin(self, hll_client):
-        session = hll_client.create_session()
+    async def test_init_update_only_fails_on_missing_bin(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         with pytest.raises(AerospikeError) as exc_info:
@@ -304,8 +303,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.BIN_NOT_FOUND
 
-    async def test_init_no_fail_swallows_create_only_on_existing(self, hll_client):
-        session = hll_client.create_session()
+    async def test_init_no_fail_swallows_create_only_on_existing(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -318,8 +317,8 @@ class TestHllErrorPaths:
             .execute()
         )
 
-    async def test_fold_up_raises(self, hll_client):
-        session = hll_client.create_session()
+    async def test_fold_up_raises(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -333,8 +332,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
-    async def test_fold_on_missing_bin_raises(self, hll_client):
-        session = hll_client.create_session()
+    async def test_fold_on_missing_bin_raises(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         # Seed the record with a different bin so the key exists.
@@ -347,8 +346,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.BIN_NOT_FOUND
 
-    async def test_refresh_count_on_missing_bin_raises(self, hll_client):
-        session = hll_client.create_session()
+    async def test_refresh_count_on_missing_bin_raises(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await (
@@ -360,8 +359,8 @@ class TestHllErrorPaths:
             )
         assert exc_info.value.result_code == ResultCode.BIN_NOT_FOUND
 
-    async def test_get_count_on_missing_bin_returns_none(self, hll_client):
-        session = hll_client.create_session()
+    async def test_get_count_on_missing_bin_returns_none(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         # Materialize a record without the HLL bin.
@@ -385,9 +384,9 @@ class TestHllMatrices:
 
     @pytest.mark.parametrize(("index_bits", "min_hash_bits"), _LEGAL_DESCRIPTIONS)
     async def test_init_legal_description_matrix(
-        self, hll_client, index_bits, min_hash_bits,
+        self, hll_cluster, index_bits, min_hash_bits,
     ):
-        session = hll_client.create_session()
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await session.delete(key).execute()
@@ -402,9 +401,9 @@ class TestHllMatrices:
 
     @pytest.mark.parametrize(("index_bits", "min_hash_bits"), _LEGAL_DESCRIPTIONS)
     async def test_add_auto_create_matrix(
-        self, hll_client, index_bits, min_hash_bits,
+        self, hll_cluster, index_bits, min_hash_bits,
     ):
-        session = hll_client.create_session()
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await session.delete(key).execute()
@@ -420,13 +419,13 @@ class TestHllMatrices:
         result = await rs.first_or_raise()
         assert result.record_or_raise().bins["h"] >= 1
 
-    async def test_init_flag_matrix(self, hll_client):
+    async def test_init_flag_matrix(self, hll_cluster):
         """Exhaustive create_only / update_only / no_fail / allow_fold matrix.
 
         The mutually-exclusive ``create_only + update_only`` cells are covered
         by a unit-level :class:`ValueError` check and skipped here.
         """
-        session = hll_client.create_session()
+        session = hll_cluster.create_session()
         # Use min_hash_bit_count=0 explicitly. The sentinel -1 ("no minhash,
         # inherit from existing") works for plain init but interacts poorly
         # with some flag combos at the wire layer.
@@ -496,8 +495,8 @@ class TestHllMatrices:
             except Exception:
                 pass
 
-    async def test_fold_across_index_bit_widths(self, hll_client):
-        session = hll_client.create_session()
+    async def test_fold_across_index_bit_widths(self, hll_cluster):
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         values = [f"key-{i}" for i in range(200)]
@@ -528,8 +527,8 @@ class TestHllMatrices:
             n_added = (await rs.first_or_raise()).record_or_raise().bins["h"]
             assert n_added == 0
 
-    async def test_set_union_with_folding_and_allow_fold(self, hll_client):
-        session = hll_client.create_session()
+    async def test_set_union_with_folding_and_allow_fold(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # Seed three sketches at differing precisions with overlapping values.
@@ -574,8 +573,8 @@ class TestHllRoundTrips:
     via ``set_to`` and then participate in further HLL operations identically.
     """
 
-    async def test_get_union_blob_round_trip(self, hll_client):
-        session = hll_client.create_session()
+    async def test_get_union_blob_round_trip(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # Seed two sketches with partly-overlapping populations.
@@ -620,9 +619,9 @@ class TestHllRoundTrips:
 
     @pytest.mark.parametrize(("index_bits", "min_hash_bits"), _LEGAL_DESCRIPTIONS)
     async def test_describe_round_trip_all_legal_configs(
-        self, hll_client, index_bits, min_hash_bits,
+        self, hll_cluster, index_bits, min_hash_bits,
     ):
-        session = hll_client.create_session()
+        session = hll_cluster.create_session()
         key = DataSet.of(NAMESPACE, SET).id("a")
 
         await session.delete(key).execute()
@@ -650,8 +649,8 @@ class TestHllRoundTrips:
         second_desc = (await rs.first_or_raise()).get_hll_config("h")
         assert second_desc == first_desc
 
-    async def test_empty_similarity_returns_nan_and_intersect_zero(self, hll_client):
-        session = hll_client.create_session()
+    async def test_empty_similarity_returns_nan_and_intersect_zero(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # Two empty sketches (init only, no add).
@@ -690,8 +689,8 @@ class TestHllAelServerSide:
     count, then asserts the query returns the expected number of records.
     """
 
-    async def test_ael_union_count_filter_server_side(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_union_count_filter_server_side(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # Record a has overlap with b; record c has its own HLL but no peer bin.
@@ -719,8 +718,8 @@ class TestHllAelServerSide:
         # Only "a" has union > 2 (3 distinct: alice, bob, carol).
         assert matched == 1
 
-    async def test_ael_intersect_count_filter_server_side(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_intersect_count_filter_server_side(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # minhash bits are required for intersect/similarity to be meaningful.
@@ -750,8 +749,8 @@ class TestHllAelServerSide:
         # Only "a" shares values with its peer bin.
         assert matched == 1
 
-    async def test_ael_similarity_filter_server_side(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_similarity_filter_server_side(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         cfg = HllConfig.of(12, 20)
@@ -781,8 +780,8 @@ class TestHllAelServerSide:
         # Only "a" has high similarity.
         assert matched == 1
 
-    async def test_ael_describe_filter_server_side(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_describe_filter_server_side(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # Two records with differing index_bit_count values; filter selects
@@ -811,8 +810,8 @@ class TestHllAelServerSide:
         rs.close()
         assert matched == 1
 
-    async def test_ael_may_contain_filter_server_side(self, hll_client):
-        session = hll_client.create_session()
+    async def test_ael_may_contain_filter_server_side(self, hll_cluster):
+        session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
 
         # "a" contains the probe value; "b" does not.

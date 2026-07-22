@@ -20,7 +20,7 @@ import uuid
 
 import pytest_asyncio
 
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 
 
 SET_NAME = "idx_monitor_integ"
@@ -29,7 +29,7 @@ NAMESPACE = "test"
 
 
 async def _wait_for_monitor_cache(
-    client, namespace: str, index_name: str, *, present: bool,
+    cluster, namespace: str, index_name: str, *, present: bool,
     timeout: float = 5.0, interval: float = 0.1,
 ) -> bool:
     """Poll the monitor cache until *index_name* is (or isn't) discovered.
@@ -40,7 +40,7 @@ async def _wait_for_monitor_cache(
     """
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
-        ctx = client._indexes_monitor.get_index_context(namespace)
+        ctx = cluster._client._indexes_monitor.get_index_context(namespace)
         names = {idx.name for idx in ctx.indexes} if ctx is not None else set()
         if (index_name in names) == present:
             return True
@@ -49,15 +49,13 @@ async def _wait_for_monitor_cache(
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy, enterprise):
-    """Client with seed data and a numeric secondary index on 'age'."""
-    async with Client(
-        seeds=aerospike_host,
-        policy=client_policy,
-        # refresh interval set super-small to spped up testing:
-        index_refresh_interval=.25,
-    ) as client:
-        session = client.create_session()
+async def cluster(aerospike_host, make_cluster_definition, enterprise):
+    """Cluster with seed data and a numeric secondary index on 'age'."""
+    definition = make_cluster_definition(aerospike_host)
+    # refresh interval set super-small to speed up testing
+    definition.with_index_refresh_interval(0.25)
+    async with await definition.connect() as c:
+        session = c.create_session()
         ds = DataSet.of(NAMESPACE, SET_NAME)
 
         for i in range(10):
@@ -75,7 +73,7 @@ async def client(aerospike_host, client_policy, enterprise):
 
         try:
             await (
-                client.index(NAMESPACE, SET_NAME)
+                session.index(NAMESPACE, SET_NAME)
                 .on_bin("age")
                 .named(INDEX_NAME)
                 .numeric()
@@ -86,17 +84,17 @@ async def client(aerospike_host, client_policy, enterprise):
 
         await asyncio.sleep(0.75 if not enterprise else 0.4)
 
-        yield client
+        yield c
 
         try:
-            await client.index(NAMESPACE, SET_NAME).named(INDEX_NAME).drop()
+            await session.index(NAMESPACE, SET_NAME).named(INDEX_NAME).drop()
         except Exception:
             pass
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 class TestAutoIndexDiscovery:
@@ -158,9 +156,9 @@ class TestAutoIndexDiscovery:
         ages = sorted(r.bins["age"] for r in records)
         assert ages == [28, 29]
 
-    async def test_monitor_cache_accessible(self, client):
+    async def test_monitor_cache_accessible(self, cluster):
         """The monitor cache should contain the test namespace."""
-        ctx = client._indexes_monitor.get_index_context(NAMESPACE)
+        ctx = cluster._client._indexes_monitor.get_index_context(NAMESPACE)
         assert ctx is not None
         names = {idx.name for idx in ctx.indexes}
         assert INDEX_NAME in names
@@ -169,51 +167,51 @@ class TestAutoIndexDiscovery:
 class TestIndexLifecycle:
     """Verify the cache updates when indexes are created/dropped."""
 
-    async def test_new_index_discovered(self, client):
+    async def test_new_index_discovered(self, cluster, session):
         """Creating a new index should appear in the cache after refresh."""
         new_idx = f"pfc_auto_idx_name_{uuid.uuid4().hex[:10]}"
         try:
             await (
-                client.index(NAMESPACE, SET_NAME)
+                session.index(NAMESPACE, SET_NAME)
                 .on_bin("name")
                 .named(new_idx)
                 .string()
                 .create()
             )
             assert await _wait_for_monitor_cache(
-                client, NAMESPACE, new_idx, present=True,
+                cluster, NAMESPACE, new_idx, present=True,
             ), f"Monitor never discovered {new_idx!r}"
         finally:
             try:
-                await client.index(NAMESPACE, SET_NAME).named(new_idx).drop()
+                await session.index(NAMESPACE, SET_NAME).named(new_idx).drop()
             except Exception:
                 pass
             await _wait_for_monitor_cache(
-                client, NAMESPACE, new_idx, present=False,
+                cluster, NAMESPACE, new_idx, present=False,
             )
 
-    async def test_dropped_index_evicted(self, client):
+    async def test_dropped_index_evicted(self, cluster, session):
         """Dropping an index should remove it from the cache after refresh."""
         temp_idx = f"pfc_auto_idx_temp_{uuid.uuid4().hex[:10]}"
         try:
             await (
-                client.index(NAMESPACE, SET_NAME)
+                session.index(NAMESPACE, SET_NAME)
                 .on_bin("id")
                 .named(temp_idx)
                 .numeric()
                 .create()
             )
             assert await _wait_for_monitor_cache(
-                client, NAMESPACE, temp_idx, present=True,
+                cluster, NAMESPACE, temp_idx, present=True,
             ), f"Monitor never discovered {temp_idx!r}"
 
-            await client.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
+            await session.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
 
             assert await _wait_for_monitor_cache(
-                client, NAMESPACE, temp_idx, present=False,
+                cluster, NAMESPACE, temp_idx, present=False,
             ), f"Monitor never evicted {temp_idx!r} after drop"
         finally:
             try:
-                await client.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
+                await session.index(NAMESPACE, SET_NAME).named(temp_idx).drop()
             except Exception:
                 pass

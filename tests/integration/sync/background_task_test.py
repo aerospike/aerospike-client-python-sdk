@@ -18,7 +18,7 @@
 import pytest
 from aerospike_async import UDFLang
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 
 NS = "test"
 SET = "pfc_bg_task"
@@ -49,19 +49,15 @@ end
 """
 
 
-def _wait_task(client: SyncClient, task) -> bool:
+def _wait_task(cluster, task) -> bool:
     """Wait for ``task`` synchronously via PAC's blocking sibling."""
     return task.wait_till_complete_blocking()
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
-        ac = c._ensure_connected()
-        raw = ac._client
-        assert raw is not None
-
-        reg = raw.register_udf_blocking(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
+        reg = c.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
         reg.wait_till_complete_blocking()
         session = c.create_session()
         for i in range(1, 60):
@@ -72,8 +68,8 @@ def client(aerospike_host, client_policy):
         yield c
 
 
-def test_sync_background_update(client):
-    session = client.create_session()
+def test_sync_background_update(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
@@ -87,15 +83,15 @@ def test_sync_background_update(client):
             .bin(BG_BIN2).set_to("sync_updated")
             .execute()
     )
-    assert _wait_task(client, task)
+    assert _wait_task(cluster, task)
     for i in range(1, 11):
         rr = session.query(DS.id(f"bg_{i}")).bins([BG_BIN2]).execute().first_or_raise()
         assert rr.record is not None
         assert rr.record.bins.get(BG_BIN2) == "sync_updated"
 
 
-def test_sync_background_delete(client):
-    session = client.create_session()
+def test_sync_background_delete(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = (
@@ -104,7 +100,7 @@ def test_sync_background_delete(client):
             .where("$.bgval > 8")
             .execute()
     )
-    assert _wait_task(client, task)
+    assert _wait_task(cluster, task)
     for i in range(1, 11):
         rr = session.query(DS.id(f"bg_{i}")).execute().first()
         if i > 8:
@@ -114,8 +110,8 @@ def test_sync_background_delete(client):
             assert rr.is_ok
 
 
-def test_sync_background_touch(client):
-    session = client.create_session()
+def test_sync_background_touch(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = (
@@ -124,15 +120,15 @@ def test_sync_background_touch(client):
             .expire_record_after_seconds(60)
             .execute()
     )
-    assert _wait_task(client, task)
+    assert _wait_task(cluster, task)
     rr = session.query(DS.id("bg_1")).execute().first_or_raise()
     assert rr.record is not None
     assert rr.record.ttl is not None
     assert rr.record.ttl > 0
 
 
-def test_sync_background_udf(client):
-    session = client.create_session()
+def test_sync_background_udf(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
@@ -147,14 +143,14 @@ def test_sync_background_udf(client):
             .passing(BG_BIN2, "sync_udf")
             .execute()
     )
-    assert _wait_task(client, task)
+    assert _wait_task(cluster, task)
     rr = session.query(DS.id("bg_1")).bins([BG_BIN2]).execute().first_or_raise()
     assert rr.record is not None
     assert rr.record.bins.get(BG_BIN2) == "sync_udf"
 
 
-def test_sync_background_udf_with_validation(client):
-    session = client.create_session()
+def test_sync_background_udf_with_validation(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
@@ -169,7 +165,7 @@ def test_sync_background_udf_with_validation(client):
             .passing(BG_BIN2, 5)
             .execute()
     )
-    assert _wait_task(client, task)
+    assert _wait_task(cluster, task)
     for i in range(1, 11):
         rr = session.query(DS.id(f"bg_{i}")).bins([BG_BIN2]).execute().first_or_raise()
         assert rr.record is not None

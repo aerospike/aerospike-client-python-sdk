@@ -23,11 +23,9 @@ Tests both:
 
 import pytest
 import pytest_asyncio
-from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 @pytest.fixture
@@ -39,9 +37,9 @@ def users():
 class TestBatchOperations:
     """Test batch operation builder with multi-key chaining."""
 
-    async def test_batch_insert_multiple_keys(self, client: Client, users: DataSet):
+    async def test_batch_insert_multiple_keys(self, cluster, users: DataSet):
         """Test inserting multiple records in a single batch."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("batch_user_1")
         key2 = users.id("batch_user_2")
@@ -95,9 +93,9 @@ class TestBatchOperations:
         await session.delete(key2).execute()
         await session.delete(key3).execute()
 
-    async def test_batch_mixed_operations(self, client: Client, users: DataSet):
+    async def test_batch_mixed_operations(self, cluster, users: DataSet):
         """Test batch with mixed insert, update, and delete operations."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("batch_mixed_1")
         key2 = users.id("batch_mixed_2")
@@ -146,9 +144,9 @@ class TestBatchOperations:
         await session.delete(key1).execute()
         await session.delete(key3).execute()
 
-    async def test_batch_upsert_operations(self, client: Client, users: DataSet):
+    async def test_batch_upsert_operations(self, cluster, users: DataSet):
         """Test batch upsert operations."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("batch_upsert_1")
         key2 = users.id("batch_upsert_2")
@@ -194,9 +192,9 @@ class TestBatchOperations:
         await session.delete(key1).execute()
         await session.delete(key2).execute()
 
-    async def test_batch_delete_multiple_keys(self, client: Client, users: DataSet):
+    async def test_batch_delete_multiple_keys(self, cluster, users: DataSet):
         """Test deleting multiple records in a single batch."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("batch_del_1")
         key2 = users.id("batch_del_2")
@@ -225,16 +223,16 @@ class TestBatchOperations:
             result = await exists_stream.first()
             assert result is not None and result.as_bool() is False
 
-    async def test_batch_empty_raises_error(self, client: Client):
+    async def test_batch_empty_raises_error(self, cluster):
         """Test that executing an empty batch raises an error."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         with pytest.raises(ValueError, match="No operations to execute"):
             await session.batch().execute()
 
-    async def test_batch_bin_string_operations(self, client: Client, users: DataSet):
+    async def test_batch_bin_string_operations(self, cluster, users: DataSet):
         """Test batch with string bin operations (append/prepend)."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("batch_str_1")
         key2 = users.id("batch_str_2")
@@ -277,9 +275,9 @@ class TestHomogeneousBatchOperations:
     """
 
     @pytest.fixture
-    async def setup_batch_data(self, client: Client, users: DataSet):
+    async def setup_batch_data(self, cluster, users: DataSet):
         """Setup test data for batch operations."""
-        session = client.create_session()
+        session = cluster.create_session()
         size = 10
         key_prefix = "batchkey"
         value_prefix = "batchvalue"
@@ -318,7 +316,7 @@ class TestHomogeneousBatchOperations:
                 pass
 
     async def test_batch_exists_homogeneous(
-        self, client: Client, users: DataSet, setup_batch_data
+        self, cluster, users: DataSet, setup_batch_data
     ):
         """
         Test batch exists operation on multiple keys.
@@ -341,7 +339,7 @@ class TestHomogeneousBatchOperations:
             assert result.as_bool() is True, f"exists[{i}] is False"
 
     async def test_batch_reads_homogeneous(
-        self, client: Client, users: DataSet, setup_batch_data
+        self, cluster, users: DataSet, setup_batch_data
     ):
         """
         Test batch read operation on multiple keys via query.
@@ -373,7 +371,7 @@ class TestHomogeneousBatchOperations:
                 assert val == i + 1, f"record[{i}] has wrong integer value"
 
     async def test_batch_read_headers_homogeneous(
-        self, client: Client, users: DataSet, setup_batch_data
+        self, cluster, users: DataSet, setup_batch_data
     ):
         """
         Test batch read headers (metadata only) via query.
@@ -399,13 +397,13 @@ class TestHomogeneousBatchOperations:
             assert rec.generation != 0, f"record[{i}] generation is 0"
 
     async def test_batch_delete_homogeneous(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """
         Test batch delete operation on multiple keys.
         Test batch delete operation.
         """
-        session = client.create_session()
+        session = cluster.create_session()
         
         # Create test records
         first_key = 10000
@@ -435,10 +433,10 @@ class TestHomogeneousBatchOperations:
             assert result.as_bool() is False
 
     async def test_batch_exists_with_varargs(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """Test batch exists using varargs style."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("vararg_exist_1")
         key2 = users.id("vararg_exist_2")
@@ -463,10 +461,10 @@ class TestHomogeneousBatchOperations:
         await session.delete(key2).execute()
 
     async def test_batch_delete_with_varargs(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """Test batch delete using varargs style."""
-        session = client.create_session()
+        session = cluster.create_session()
         
         key1 = users.id("vararg_del_1")
         key2 = users.id("vararg_del_2")
@@ -494,10 +492,10 @@ class TestRecordResultIntegration:
     """Verify RecordResult / RecordStream behavior against a live server."""
 
     async def test_exists_mixed_result_codes(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """Exists with mixed present/absent keys yields per-key result codes."""
-        session = client.create_session()
+        session = cluster.create_session()
         key_exists = users.id("rr_exists_yes")
         key_missing = users.id("rr_exists_no")
 
@@ -523,10 +521,10 @@ class TestRecordResultIntegration:
         await session.delete(key_exists).execute()
 
     async def test_or_raise_on_not_found_result(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """or_raise() raises a PFC exception for a KEY_NOT_FOUND result."""
-        session = client.create_session()
+        session = cluster.create_session()
         key_exists = users.id("rr_or_raise_ok")
         key_missing = users.id("rr_or_raise_fail")
 
@@ -554,10 +552,10 @@ class TestRecordResultIntegration:
         await session.delete(key_exists).execute()
 
     async def test_failures_filters_stream(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """failures() returns only non-OK results from a mixed stream."""
-        session = client.create_session()
+        session = cluster.create_session()
         key1 = users.id("rr_fail_filt_1")
         key2 = users.id("rr_fail_filt_2")
         key3 = users.id("rr_fail_filt_3")
@@ -583,10 +581,10 @@ class TestRecordResultIntegration:
         await session.delete(key2).execute()
 
     async def test_first_on_query_stream(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """first() returns the first RecordResult from a single-key query."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("rr_first")
 
         await session.upsert(key).put({"v": 42}).execute()
@@ -601,10 +599,10 @@ class TestRecordResultIntegration:
         await session.delete(key).execute()
 
     async def test_first_or_raise_on_batch_query_with_missing_key(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """first_or_raise() raises when the first batch-query result is not OK."""
-        session = client.create_session()
+        session = cluster.create_session()
         key_missing = users.id("rr_first_or_raise_miss")
 
         try:
@@ -622,10 +620,10 @@ class TestRecordResultIntegration:
             await stream.first_or_raise()
 
     async def test_batch_delete_returns_results_for_all_keys(
-        self, client: Client, users: DataSet
+        self, cluster, users: DataSet
     ):
         """Batch delete returns a RecordResult per key."""
-        session = client.create_session()
+        session = cluster.create_session()
         keys = users.ids(*[f"rr_del_{i}" for i in range(3)])
 
         for key in keys:
@@ -642,9 +640,9 @@ class TestRecordResultIntegration:
 class TestBatchExpressionOps:
     """Test batch operations with expression reads and writes."""
 
-    async def test_batch_upsert_from(self, client: Client, users: DataSet):
+    async def test_batch_upsert_from(self, cluster, users: DataSet):
         """upsert_from across multiple batch keys."""
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [users.id(f"bexp_{i}") for i in range(3)]
 
         for i, key in enumerate(keys):
@@ -667,9 +665,9 @@ class TestBatchExpressionOps:
             rec = await rs.first_or_raise()
             assert rec.record.bins["C"] == (i + 1) * 10 + 1
 
-    async def test_batch_select_from(self, client: Client, users: DataSet):
+    async def test_batch_select_from(self, cluster, users: DataSet):
         """select_from (expression read) in batch context."""
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [users.id(f"bexp_sel_{i}") for i in range(2)]
 
         await session.upsert(keys[0]).put({"A": 5, "B": 3}).execute()
@@ -687,10 +685,10 @@ class TestBatchExpressionOps:
         assert results[1].record.bins["sum"] == 17
 
     async def test_batch_mixed_set_to_and_expression(
-        self, client: Client, users: DataSet,
+        self, cluster, users: DataSet,
     ):
         """set_to + upsert_from on same key in batch."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("bexp_mixed")
 
         await session.upsert(key).put({"A": 10}).execute()
@@ -717,14 +715,14 @@ class TestBatchExecuteStream:
     writes-complete-on-return guarantee. Mixed ops in one call."""
 
     @pytest_asyncio.fixture
-    async def track_key(self, client):
+    async def track_key(self, cluster):
         """Factory: register a Key for auto-cleanup at fixture teardown.
 
         Replaces manual ``try/except session.delete(k).execute()`` loops at
         the end of every test. Pass each Key through this factory once and
         the fixture handles the drop in teardown order.
         """
-        session = client.create_session()
+        session = cluster.create_session()
         created: list = []
 
         def track(key):
@@ -740,7 +738,7 @@ class TestBatchExecuteStream:
                 pass
 
     async def test_execute_stream_mixed_ops_yields_all(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete in one streaming batch.
 
@@ -753,7 +751,7 @@ class TestBatchExecuteStream:
           `sum` bin (select_from is a read, not a write); the DELETE
           removed its record.
         """
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [track_key(users.id(f"estream_mix_{i}")) for i in range(4)]
         for i, k in enumerate(keys):
             await session.upsert(k).put({"A": i, "B": i * 2}).execute()
@@ -800,7 +798,7 @@ class TestBatchExecuteStream:
         assert empty == []
 
     async def test_execute_stream_read_only_ops_dispatch_as_reads(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """AEL select_from under the UPDATE verb is a read — must dispatch
         as BatchReadOp on the wire so the server accepts it. Catches the
@@ -808,7 +806,7 @@ class TestBatchExecuteStream:
         Also verifies the persisted record was NOT mutated (select_from is
         a read; if the bug regressed and it landed as a write, the `sum`
         bin would persist)."""
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [track_key(users.id(f"estream_ro_{i}")) for i in range(2)]
         for i, k in enumerate(keys):
             await session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
@@ -840,8 +838,8 @@ class TestBatchExecuteStreamClose:
     read-batch stream close coverage in ``query_test.py``."""
 
     @pytest_asyncio.fixture
-    async def track_key(self, client):
-        session = client.create_session()
+    async def track_key(self, cluster):
+        session = cluster.create_session()
         created: list = []
 
         def track(key):
@@ -870,9 +868,9 @@ class TestBatchExecuteStreamClose:
         return b
 
     async def test_close_mid_stream_stops_iteration(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
 
         stream = await self._write_batch(session, keys).execute_stream()
@@ -888,9 +886,9 @@ class TestBatchExecuteStreamClose:
         assert remaining == 0
 
     async def test_close_is_idempotent(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 3)
         stream = await self._write_batch(session, keys).execute_stream()
         stream.close()
@@ -899,9 +897,9 @@ class TestBatchExecuteStreamClose:
         assert await stream.collect() == []
 
     async def test_reiterate_after_close_yields_nothing(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 4)
         stream = await self._write_batch(session, keys).execute_stream()
         stream.close()
@@ -909,9 +907,9 @@ class TestBatchExecuteStreamClose:
         assert [r async for r in stream] == []
 
     async def test_client_usable_after_early_close(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
         stream = await self._write_batch(session, keys).execute_stream()
         async for _ in stream:
@@ -921,9 +919,9 @@ class TestBatchExecuteStreamClose:
         assert rec.record.bins["v"] == 0
 
     async def test_async_with_closes_on_normal_exit(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 3)
         seen = 0
         async with (await self._write_batch(session, keys).execute_stream()) as stream:
@@ -933,9 +931,9 @@ class TestBatchExecuteStreamClose:
         assert await stream.collect() == []
 
     async def test_async_with_closes_on_early_break(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
         async with (await self._write_batch(session, keys).execute_stream()) as stream:
             async for _ in stream:
@@ -943,9 +941,9 @@ class TestBatchExecuteStreamClose:
         assert await stream.collect() == []
 
     async def test_async_with_closes_on_exception(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
@@ -966,8 +964,8 @@ class TestBatchVerbExistenceEnforcement:
     enforcement) and exists as the always-succeeds variant."""
 
     @pytest_asyncio.fixture
-    async def track_key(self, client):
-        session = client.create_session()
+    async def track_key(self, cluster):
+        session = cluster.create_session()
         created: list = []
         def track(key):
             created.append(key)
@@ -980,11 +978,11 @@ class TestBatchVerbExistenceEnforcement:
                 pass
 
     async def test_update_nonexistent_returns_key_not_found(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """``update`` against a non-existent key must surface KEY_NOT_FOUND
         — not silently upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         missing = track_key(users.id("verb_update_missing"))
         stream = await (
             session.batch().update(missing).bin("v").set_to(1).execute()
@@ -995,11 +993,11 @@ class TestBatchVerbExistenceEnforcement:
         assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_insert_existing_returns_key_exists(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """``insert`` against an existing key must surface KEY_EXISTS
         — not silently upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         existing = track_key(users.id("verb_insert_existing"))
         await session.upsert(existing).put({"v": 1}).execute()
 
@@ -1012,10 +1010,10 @@ class TestBatchVerbExistenceEnforcement:
         assert results[0].result_code == ResultCode.KEY_EXISTS_ERROR
 
     async def test_replace_if_exists_nonexistent_returns_key_not_found(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """``replace_if_exists`` against a non-existent key surfaces KEY_NOT_FOUND."""
-        session = client.create_session()
+        session = cluster.create_session()
         missing = track_key(users.id("verb_replace_if_exists_missing"))
         stream = await (
             session.batch().replace_if_exists(missing).bin("v").set_to(1).execute()
@@ -1026,21 +1024,21 @@ class TestBatchVerbExistenceEnforcement:
         assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_upsert_against_nonexistent_succeeds(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """``upsert`` is the no-enforcement verb — succeeds on either side."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = track_key(users.id("verb_upsert_missing"))
         stream = await (session.batch().upsert(k).bin("v").set_to(1).execute())
         results = await stream.collect()
         assert results[0].is_ok
 
     async def test_execute_stream_enforces_verbs(
-        self, client: Client, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key,
     ):
         """Streaming path enforces verb existence semantics the same as
         the buffered path."""
-        session = client.create_session()
+        session = cluster.create_session()
         missing = track_key(users.id("verb_stream_missing"))
         stream = await (
             session.batch().update(missing).bin("v").set_to(1).execute_stream()

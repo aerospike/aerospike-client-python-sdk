@@ -88,8 +88,8 @@ pip install -e ".[dev]"
 
 ## Key Concepts
 
-**Client / SyncClient**
-:   Entry point. Connects to an Aerospike cluster and manages the connection lifecycle.
+**ClusterDefinition / Cluster**
+:   Entry point. Configure seeds, auth, and TLS on a [`ClusterDefinition`](api/cluster-definition.md), then `connect()` for a live [`Cluster`](api/cluster.md) that creates sessions and manages the connection lifecycle. (Async at the top level; the sync twins live under `aerospike_sdk.sync`.)
 
 **Session**
 :   Scoped to a [`Behavior`](api/behavior.md) (policy defaults for timeouts, consistency, etc.). All reads and writes go through a session.

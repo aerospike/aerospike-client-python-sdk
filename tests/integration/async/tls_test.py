@@ -22,10 +22,9 @@ from aerospike_sdk import (
     Behavior,
     ClusterDefinition,
     DataSet,
-    Client,
     Host,
-    SyncClient,
 )
+from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
 
 
 def _tls_host_env():
@@ -190,43 +189,40 @@ class TestPkiClusterDefinition:
 
 
 # ============================================================================
-# Client — TLS via direct policy
+# Env-driven TLS config — conditional client auth, async + sync definitions
 # ============================================================================
 
 
 @skip_no_tls
-class TestTlsClient:
-    """TLS connections through Client (seeds string)."""
+class TestTlsEnvDrivenDefinition:
+    """TLS via the builder with the full env-driven knob set.
 
-    def _seeds(self) -> str:
-        """Build host:tls_name:port seed string."""
-        host_str = _tls_host_env()
-        hostname, port = _parse_host_port(host_str)
-        if TLS_NAME:
-            return f"{hostname}:{TLS_NAME}:{port}"
-        return host_str
+    Unlike the fixed-shape classes above, client cert/key are applied only
+    when both are set — mirroring how a deployment-driven config would
+    toggle mutual TLS from the environment.
+    """
 
-    def _policy(self):
-        from aerospike_async import ClientPolicy, TlsConfig, AuthMode
+    def _definition(self, cd):
+        """Apply CA (always) and client cert/key (when both set) to ``cd``."""
+        tls = cd.with_tls_config_of().tls_name(TLS_NAME or "").ca_file(TLS_CA)
+        if TLS_CERT and TLS_KEY:
+            tls = tls.client_cert_file(TLS_CERT).client_key_file(TLS_KEY)
+        return (
+            tls.done()
+            .with_native_credentials(TLS_USER, TLS_PASS)
+            .using_services_alternate()
+        )
 
-        policy = ClientPolicy()
-        policy.use_services_alternate = True
-        if TLS_CA:
-            if TLS_CERT and TLS_KEY:
-                policy.tls_config = TlsConfig.with_client_auth(TLS_CA, TLS_CERT, TLS_KEY)
-            else:
-                policy.tls_config = TlsConfig(TLS_CA)
-        policy.set_auth_mode(AuthMode.INTERNAL, user=TLS_USER, password=TLS_PASS)
-        return policy
-
-    async def test_async_sdk_client_tls(self):
-        """Client with explicit TLS policy."""
+    async def test_async_sdk_cluster_tls(self):
+        """Async definition with env-driven TLS config."""
         if not TLS_CA:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
 
-        async with Client(self._seeds(), self._policy()) as client:
-            assert client.is_connected
-            session = client.create_session(Behavior.DEFAULT)
+        hostname, port = _parse_host_port(_tls_host_env())
+        cd = self._definition(ClusterDefinition(hostname, port))
+        async with await cd.connect() as cluster:
+            assert cluster.is_connected()
+            session = cluster.create_session(Behavior.DEFAULT)
             key = USERS.id("fc_tls")
             await session.upsert(key).bin("v").set_to(1).execute()
             stream = await session.query(key).execute()
@@ -234,14 +230,16 @@ class TestTlsClient:
             assert result.record.bins["v"] == 1
             await session.delete(key).execute()
 
-    def test_sync_sdk_client_tls(self):
-        """SyncClient with explicit TLS policy."""
+    def test_sync_sdk_cluster_tls(self):
+        """Sync definition with env-driven TLS config."""
         if not TLS_CA:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
 
-        with SyncClient(self._seeds(), self._policy()) as client:
-            assert client.is_connected
-            session = client.create_session(Behavior.DEFAULT)
+        hostname, port = _parse_host_port(_tls_host_env())
+        cd = self._definition(SyncClusterDefinition(hostname, port))
+        with cd.connect() as cluster:
+            assert cluster.is_connected()
+            session = cluster.create_session(Behavior.DEFAULT)
             key = USERS.id("sfc_tls")
             session.upsert(key).bin("v").set_to(2).execute()
             stream = session.query(key).execute()

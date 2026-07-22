@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 from aerospike_async import Operation, UDFLang
 
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 
 NS = "test"
 SET = "pfc_bg_task"
@@ -61,12 +61,10 @@ end
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+async def cluster(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
-        raw = c._client
-        assert raw is not None
-        reg = await raw.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
+        reg = await c.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
         await reg.wait_till_complete()
         for i in range(1, 60):
             try:
@@ -80,8 +78,8 @@ async def client(aerospike_host, client_policy):
         yield c
 
 
-async def test_background_update(client):
-    session = client.create_session()
+async def test_background_update(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -103,8 +101,8 @@ async def test_background_update(client):
         assert rr.record.bins.get(BG_BIN2) == "updated"
 
 
-async def test_background_update_with_where(client):
-    session = client.create_session()
+async def test_background_update_with_where(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -130,8 +128,8 @@ async def test_background_update_with_where(client):
             assert rr.record.bins.get(BG_BIN2) == "original"
 
 
-async def test_background_delete(client):
-    session = client.create_session()
+async def test_background_delete(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -155,8 +153,8 @@ async def test_background_delete(client):
             assert rr.is_ok
 
 
-async def test_background_touch(client):
-    session = client.create_session()
+async def test_background_touch(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = await (
@@ -173,8 +171,8 @@ async def test_background_touch(client):
     assert rr.record.ttl > 0
 
 
-async def test_background_udf(client):
-    session = client.create_session()
+async def test_background_udf(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -196,8 +194,8 @@ async def test_background_udf(client):
     assert rr.record.bins.get(BG_BIN2) == "udf_written"
 
 
-async def test_background_udf_with_args(client):
-    session = client.create_session()
+async def test_background_udf_with_args(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -219,8 +217,8 @@ async def test_background_udf_with_args(client):
         assert rr.record.bins.get(BG_BIN) == i + 100
 
 
-async def test_background_udf_with_where(client):
-    session = client.create_session()
+async def test_background_udf_with_where(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -247,8 +245,8 @@ async def test_background_udf_with_where(client):
             assert rr.record.bins.get(BG_BIN2) == "original"
 
 
-async def test_background_udf_with_records_per_second(client):
-    session = client.create_session()
+async def test_background_udf_with_records_per_second(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -271,8 +269,8 @@ async def test_background_udf_with_records_per_second(client):
     assert rr.record.bins.get(BG_BIN2) == "rate_limited"
 
 
-async def test_background_udf_with_validation(client):
-    session = client.create_session()
+async def test_background_udf_with_validation(cluster):
+    session = cluster.create_session()
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
@@ -295,8 +293,8 @@ async def test_background_udf_with_validation(client):
         assert rr.record.bins.get(BG_BIN2) == 5
 
 
-async def test_legacy_query_builder_background_scan(client):
-    session = client.create_session()
+async def test_legacy_query_builder_background_scan(cluster):
+    session = cluster.create_session()
     for i in range(5):
         await session.upsert(DS.id(i)).put({BG_BIN: i}).execute()
     task = await (
@@ -311,8 +309,8 @@ async def test_legacy_query_builder_background_scan(client):
     assert rec.record.bins.get(MARKER) == 1
 
 
-async def test_point_query_rejects_background_task(client):
-    session = client.create_session()
+async def test_point_query_rejects_background_task(cluster):
+    session = cluster.create_session()
     k = DS.id(40)
     await session.upsert(k).put({BG_BIN: 1}).execute()
     with pytest.raises(ValueError, match="dataset queries"):

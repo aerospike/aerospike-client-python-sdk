@@ -28,7 +28,6 @@ from dataclasses import replace
 import pytest
 
 from aerospike_sdk import DataSet
-from aerospike_sdk.sync import SyncClient
 
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
@@ -39,21 +38,18 @@ from integration.sc_namespace_resolve import (
 
 
 @pytest.fixture(scope="module")
-def sync_client(aerospike_host_sc, client_policy_sc):
-    client = SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc)
+def cluster_sc(aerospike_host_sc, make_cluster_definition):
     try:
-        client.connect()
+        cluster = make_cluster_definition(aerospike_host_sc, sync=True, auth=True).connect()
     except Exception as exc:
         pytest.skip(f"SC cluster unreachable at {aerospike_host_sc!r}: {exc}")
-    try:
-        yield client
-    finally:
-        client.close()
+    with cluster:
+        yield cluster
 
 
 @pytest.fixture(scope="module")
-def sc_namespace(sync_client):
-    sess = sync_client.create_session()
+def sc_namespace(cluster_sc):
+    sess = cluster_sc.create_session()
     try:
         return resolve_sc_namespace_sync(sess)
     except MultipleScNamespacesError as e:
@@ -66,10 +62,11 @@ def sc_namespace(sync_client):
 
 
 @pytest.fixture
-def session(sync_client, sc_namespace):
-    if not sync_client._supports_mrt_blocking():
+def session(cluster_sc, sc_namespace):
+    # MRT support probe has no Cluster surface; reach through to the client.
+    if not cluster_sc._client._supports_mrt_blocking():
         pytest.skip("cluster does not support multi-record transactions")
-    return sync_client.create_session()
+    return cluster_sc.create_session()
 
 
 @pytest.fixture
@@ -136,13 +133,14 @@ def test_batch_builder_write_is_wrapped(session, ds, txn_spy):
     assert _bin_values(session, keys, "n") == {10: 1, 11: 2}
 
 
-def test_setting_disabled_suppresses_wrap(sync_client, session, ds, txn_spy, monkeypatch):
+def test_setting_disabled_suppresses_wrap(cluster_sc, session, ds, txn_spy, monkeypatch):
     keys = ds.ids(20, 21)
     _reset(session, keys)
 
-    settings = sync_client._sdk_settings
+    # Settings live on the underlying client; no Cluster surface for them.
+    settings = cluster_sc._client._sdk_settings
     monkeypatch.setattr(
-        sync_client, "_sdk_settings",
+        cluster_sc._client, "_sdk_settings",
         replace(
             settings,
             transactions=replace(

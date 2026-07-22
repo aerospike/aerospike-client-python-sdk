@@ -16,7 +16,6 @@
 """Tests for generation (optimistic locking) operations."""
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import GenerationError
 
@@ -30,9 +29,9 @@ def test_set():
 class TestGeneration:
     """Test generation-based optimistic locking."""
 
-    async def test_generation_basic(self, client: Client, test_set: DataSet):
+    async def test_generation_basic(self, cluster, test_set: DataSet):
         """Test that generation increments with each update."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("generation_basic")
         bin_name = "genbin"
 
@@ -60,9 +59,9 @@ class TestGeneration:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_generation_check_success(self, client: Client, test_set: DataSet):
+    async def test_generation_check_success(self, cluster, test_set: DataSet):
         """Test successful update with correct generation."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("generation_check_success")
         bin_name = "genbin"
 
@@ -94,9 +93,9 @@ class TestGeneration:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_generation_check_failure(self, client: Client, test_set: DataSet):
+    async def test_generation_check_failure(self, cluster, test_set: DataSet):
         """Test that update fails with incorrect generation."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("generation_check_failure")
         bin_name = "genbin"
 
@@ -124,9 +123,9 @@ class TestGeneration:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_generation_concurrent_update(self, client: Client, test_set: DataSet):
+    async def test_generation_concurrent_update(self, cluster, test_set: DataSet):
         """Test optimistic locking pattern for concurrent updates."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("generation_concurrent")
         bin_name = "counter"
 

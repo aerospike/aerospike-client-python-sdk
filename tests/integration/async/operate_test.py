@@ -23,7 +23,6 @@ Coverage:
 """
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 
 
@@ -36,9 +35,9 @@ def test_set():
 class TestOperate:
     """Test combined operate operations."""
 
-    async def test_operate(self, client: Client, test_set: DataSet):
+    async def test_operate(self, cluster, test_set: DataSet):
         """Test combined operations (add + set + get) in single call."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("operate")
         bin_name1 = "optintbin"
         bin_name2 = "optstringbin"
@@ -72,9 +71,9 @@ class TestOperate:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_operate_multiple_increments(self, client: Client, test_set: DataSet):
+    async def test_operate_multiple_increments(self, cluster, test_set: DataSet):
         """Test multiple increment operations on same bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("operate_multi_inc")
         bin_name = "counter"
 
@@ -100,9 +99,9 @@ class TestOperate:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_operate_set_and_get(self, client: Client, test_set: DataSet):
+    async def test_operate_set_and_get(self, cluster, test_set: DataSet):
         """Test setting and getting in same operation."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("operate_set_get")
         bin_name = "mybin"
 
@@ -123,9 +122,9 @@ class TestOperate:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_record_reads_then_deletes(self, client: Client, test_set: DataSet):
+    async def test_delete_record_reads_then_deletes(self, cluster, test_set: DataSet):
         """Read a bin and atomically delete the record in one operate call."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("del_read")
         await session.upsert(key).put({"name": "Alice", "age": 30}).execute()
 
@@ -142,9 +141,9 @@ class TestOperate:
         exists_row = await exists_stream.first()
         assert exists_row is None or not exists_row.as_bool()
 
-    async def test_delete_record_then_write_recreates(self, client: Client, test_set: DataSet):
+    async def test_delete_record_then_write_recreates(self, cluster, test_set: DataSet):
         """Delete the record and write a new bin in one atomic operate call."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("del_write")
         await session.upsert(key).put({"a": 1, "b": 2}).execute()
 
@@ -166,9 +165,9 @@ class TestOperate:
         assert "a" not in read_rec.bins
         assert len(read_rec.bins) == 1
 
-    async def test_touch_record_resets_ttl(self, client: Client, test_set: DataSet):
+    async def test_touch_record_resets_ttl(self, cluster, test_set: DataSet):
         """Touch the record to reset its TTL within an atomic operate call."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("touch_ttl")
         await (
             session.upsert(key)

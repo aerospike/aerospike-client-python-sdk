@@ -16,13 +16,13 @@
 """Tests for InfoCommands."""
 
 import pytest
-from aerospike_sdk import Behavior, Client
+from aerospike_sdk import Behavior
 
 
 @pytest.fixture
-async def session(client):
+async def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
 async def test_info_creation(session):

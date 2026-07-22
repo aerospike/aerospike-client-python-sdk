@@ -96,16 +96,31 @@ class Cluster:
         )
         if sdk_settings is not None:
             sdk_client._sdk_settings = sdk_settings
+        cluster = await cls._connect_and_wrap(sdk_client)
+
+        if sdk_config_source is not None:
+            sdk_client._start_sdk_config_monitor(sdk_config_source)
+        return cluster
+
+    @classmethod
+    async def _connect_and_wrap(cls, sdk_client: Client) -> Cluster:
+        """Connect *sdk_client* on the current loop, validate, and wrap it.
+
+        Shared by :meth:`_create` and :class:`~aerospike_sdk.aio.pool.AsyncPool`
+        (which connects one pre-built member per pool loop), so
+        connect-then-validate is defined once.
+
+        Raises:
+            ConnectionError: If post-connect validation fails.
+        """
         await sdk_client.connect()
 
         if not await sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
-                f"Connected to seeds '{seeds}' but cluster reports not connected"
+                f"Connected to seeds '{sdk_client._seeds}' but cluster "
+                f"reports not connected"
             )
-
-        if sdk_config_source is not None:
-            sdk_client._start_sdk_config_monitor(sdk_config_source)
         return cls(sdk_client)
     
     async def __aenter__(self) -> Cluster:

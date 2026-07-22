@@ -8,14 +8,11 @@ import os
 
 import pytest
 import pytest_asyncio
-from aerospike_async import AuthMode, ClientPolicy
 
 from aerospike_sdk import (
     Behavior,
     ClusterDefinition,
     DataSet,
-    Client,
-    SyncClient,
 )
 
 SEEDS = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
@@ -28,33 +25,15 @@ def _use_services_alternate() -> bool:
     ).lower() in ("true", "1", "yes")
 
 
-_AUTH_MODES = {"INTERNAL": AuthMode.INTERNAL, "EXTERNAL": AuthMode.EXTERNAL, "PKI": AuthMode.PKI}
-
-
-def _client_policy() -> ClientPolicy:
-    policy = ClientPolicy()
-    policy.use_services_alternate = _use_services_alternate()
-    mode_str = os.environ.get("AEROSPIKE_AUTH_MODE", "").strip().upper()
-    if mode_str and mode_str in _AUTH_MODES:
-        mode = _AUTH_MODES[mode_str]
-        user = os.environ.get("AEROSPIKE_AUTH_USER", "")
-        password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
-        if mode == AuthMode.PKI:
-            policy.set_auth_mode(mode)
-        else:
-            policy.set_auth_mode(mode, user=user, password=password)
-    return policy
-
-
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session():
+async def session(make_cluster_definition):
     """Provide a connected async session for the module."""
-    async with Client(SEEDS, _client_policy()) as client:
-        s = client.create_session(Behavior.DEFAULT)
+    async with await make_cluster_definition(SEEDS).connect() as cluster:
+        s = cluster.create_session(Behavior.DEFAULT)
         await s.truncate(USERS)
         yield s
 
@@ -95,10 +74,10 @@ async def test_quick_example_async(session):
 # docs/index.md — Quick Example (sync)
 # ------------------------------------------------------------------
 
-def test_quick_example_sync():
+def test_quick_example_sync(make_cluster_definition):
     """docs/index.md — Quick Example (sync tab)."""
-    with SyncClient(SEEDS, _client_policy()) as client:
-        s = client.create_session(Behavior.DEFAULT)
+    with make_cluster_definition(SEEDS, sync=True).connect() as cluster:
+        s = cluster.create_session(Behavior.DEFAULT)
         key = USERS.id("qe_sync")
 
         s.upsert(key).bin("name").set_to("Alice").bin("age").set_to(30).execute()
@@ -131,8 +110,7 @@ async def test_cluster_definition_connect():
         user = os.environ.get("AEROSPIKE_AUTH_USER", "")
         password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
         defn = defn.with_external_credentials(user, password)
-    cluster = await defn.connect()
-    try:
+    async with await defn.connect() as cluster:
         s = cluster.create_session(Behavior.DEFAULT)
         key = USERS.id("cd_test")
         await s.upsert(key).put({"x": 1}).execute()
@@ -141,8 +119,6 @@ async def test_cluster_definition_connect():
         assert result.record.bins["x"] == 1
         stream.close()
         await s.delete(key).execute()
-    finally:
-        await cluster.close()
 
 
 # ------------------------------------------------------------------

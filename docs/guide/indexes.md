@@ -70,9 +70,8 @@ for idx in await session.list_indexes():
 
 The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a daemon thread,
 periodically fetching secondary index metadata from the cluster via PAC's
-blocking info APIs. It works identically for the async
-{class}`~aerospike_sdk.aio.client.Client` and the synchronous
-{class}`~aerospike_sdk.SyncClient` — no event loop required.
+blocking info APIs. It works identically on the async and synchronous surfaces — no event
+loop required.
 
 The monitor **starts lazily**: the daemon thread spins up the first time an
 AEL `.where()` query needs cached secondary-index metadata. Code paths that

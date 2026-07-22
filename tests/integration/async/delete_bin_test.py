@@ -16,7 +16,6 @@
 """Tests for delete bin operations."""
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 
 
@@ -29,9 +28,9 @@ def test_set():
 class TestDeleteBin:
     """Test deleting individual bins from records."""
 
-    async def test_delete_bin(self, client: Client, test_set: DataSet):
+    async def test_delete_bin(self, cluster, test_set: DataSet):
         """Test deleting a single bin from a record."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteBin")
         bin_name1 = "bin1"
         bin_name2 = "bin2"
@@ -62,9 +61,9 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_multiple_bins(self, client: Client, test_set: DataSet):
+    async def test_delete_multiple_bins(self, cluster, test_set: DataSet):
         """Test deleting multiple bins from a record."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteMultipleBins")
 
         # Create record with three bins
@@ -94,9 +93,9 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_bin_nonexistent(self, client: Client, test_set: DataSet):
+    async def test_delete_bin_nonexistent(self, cluster, test_set: DataSet):
         """Test removing a bin that doesn't exist (should not error)."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteNonexistentBin")
 
         # Create record with one bin
@@ -113,9 +112,9 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_and_set_bin(self, client: Client, test_set: DataSet):
+    async def test_delete_and_set_bin(self, cluster, test_set: DataSet):
         """Test deleting one bin while setting another in same operation."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteAndSetBin")
 
         # Create record with two bins

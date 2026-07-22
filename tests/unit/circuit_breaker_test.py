@@ -21,10 +21,11 @@ keywords, the underlying :class:`~aerospike_async.ClientPolicy`, and the
 """
 
 from aerospike_async import ClientPolicy
-from aerospike_async.exceptions import MaxErrorRate as PacMaxErrorRate
+from aerospike_sdk.exceptions import PacMaxErrorRate, _convert_pac_exception
 
-from aerospike_sdk import BackoffError, Client, MaxErrorRate, SyncClient
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk import BackoffError, MaxErrorRate
+from aerospike_sdk.aio.client import Client
+from aerospike_sdk.sync.client import SyncClient
 
 
 class TestExceptionHierarchy:

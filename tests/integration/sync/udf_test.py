@@ -21,9 +21,9 @@ import os
 
 import pytest
 from aerospike_async import UDFLang
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import ResultCode
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
 
 NS = "test"
@@ -36,32 +36,32 @@ SERVER_PATH = "record_example.lua"
 MODULE = "record_example"
 
 
-def _wait_task(client: SyncClient, task) -> bool:
+def _wait_task(cluster, task) -> bool:
     """Wait for ``task`` synchronously via PAC's blocking sibling."""
     return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
 
 
 @pytest.fixture
-def client_with_udf(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        udf_session = client.create_session()
+def cluster_with_udf(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        udf_session = cluster.create_session()
         try:
             rm = udf_session.remove_udf(SERVER_PATH)
-            _wait_task(client, rm)
+            _wait_task(cluster, rm)
         except Exception:
             pass
         reg = udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
-        assert _wait_task(client, reg)
-        yield client
+        assert _wait_task(cluster, reg)
+        yield cluster
         try:
             rm = udf_session.remove_udf(SERVER_PATH)
-            _wait_task(client, rm)
+            _wait_task(cluster, rm)
         except Exception:
             pass
 
 
-def test_sync_write_using_udf(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_write_using_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("sync_udf_w1")
     session.delete(k).execute()
     stream = (
@@ -76,21 +76,21 @@ def test_sync_write_using_udf(client_with_udf):
     assert rr.record.bins.get("sb1") == "sync val"
 
 
-def test_sync_list_udf(client_with_udf):
+def test_sync_list_udf(cluster_with_udf):
     """Sync ``list_udf`` reports name/hash/type and reflects register + remove."""
-    session = client_with_udf.create_session()
+    session = cluster_with_udf.create_session()
     with open(LUA_FILE, "rb") as f:
         body = f.read()
     path = "psdk_list_udf_probe_sync.lua"
     try:
         rm = session.remove_udf(path)
-        _wait_task(client_with_udf, rm)
+        _wait_task(cluster_with_udf, rm)
     except Exception:
         pass
     assert not any(m["name"] == path for m in session.list_udf())
 
     task = session.register_udf(body, path, UDFLang.LUA)
-    assert _wait_task(client_with_udf, task)
+    assert _wait_task(cluster_with_udf, task)
 
     mine = [m for m in session.list_udf() if m["name"] == path]
     assert mine, "module not listed after register"
@@ -100,7 +100,7 @@ def test_sync_list_udf(client_with_udf):
     assert set(entry) == {"name", "hash", "type"}
 
     rm = session.remove_udf(path)
-    _wait_task(client_with_udf, rm)
+    _wait_task(cluster_with_udf, rm)
     assert not any(m["name"] == path for m in session.list_udf())
 
 
@@ -136,8 +136,8 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
         cluster.close()
 
 
-def test_sync_batch_udf_validation_errors_in_stream(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_err_1")
     k2 = DS.id("sync_batch_udf_err_2")
     session.delete(k1, k2).execute()
@@ -156,8 +156,8 @@ def test_sync_batch_udf_validation_errors_in_stream(client_with_udf):
         assert r.record is not None
 
 
-def test_sync_batch_udf_include_missing_keys_includes_filtered_out(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")
     k2 = DS.id("sync_batch_udf_rak_2")
     session.delete(k1, k2).execute()
@@ -192,8 +192,8 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(client_with_u
     assert r2.result_code == ResultCode.FILTERED_OUT
 
 
-def test_sync_write_if_generation_not_changed(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_write_if_generation_not_changed(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("sync_udf_gen_guard")
     session.delete(k).execute()
     session.upsert(k).put({"gcol": "a"}).execute()
@@ -224,8 +224,8 @@ def test_sync_write_if_generation_not_changed(client_with_udf):
     assert rr2.record.bins.get("gcol") == "b"
 
 
-def test_sync_write_unique_idempotent(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_write_unique_idempotent(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("sync_udf_write_unique")
     session.delete(k).execute()
     (
@@ -245,8 +245,8 @@ def test_sync_write_unique_idempotent(client_with_udf):
     assert rr.record.bins.get("ub") == "first"
 
 
-def test_sync_append_list_bin_via_udf(client_with_udf):
-    session = client_with_udf.create_session()
+def test_sync_append_list_bin_via_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("sync_udf_list_append")
     session.delete(k).execute()
     session.insert(k).put({"lb": []}).execute()
@@ -265,9 +265,9 @@ def test_sync_append_list_bin_via_udf(client_with_udf):
 
 
 def test_sync_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
-    client_with_udf,
+    cluster_with_udf,
 ):
-    session = client_with_udf.create_session()
+    session = cluster_with_udf.create_session()
     k1 = DS.id("sync_chain_udf_complex_1")
     k2 = DS.id("sync_chain_udf_complex_2")
     k3 = DS.id("sync_chain_udf_complex_3")

@@ -18,21 +18,21 @@
 import pytest
 from aerospike_async import BasePolicy, QueryDuration, QueryPolicy, Replica
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    """Setup sync SDK client for testing."""
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
+def cluster(aerospike_host, make_cluster_definition):
+    """Setup sync SDK cluster for testing."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        yield cluster
 
 
 @pytest.fixture
-def session(client):
+def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
 def test_records_per_second(session):

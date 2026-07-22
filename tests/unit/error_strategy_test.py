@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from aerospike_async import Expiration, Key
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
 from aerospike_sdk.error_strategy import (
@@ -29,7 +29,6 @@ from aerospike_sdk.error_strategy import (
     _filter_records_with_handler,
     _resolve_disposition,
 )
-from aerospike_sdk.exceptions import AerospikeError, GenerationError, TimeoutError
 from aerospike_sdk.operations_shared import _to_expiration
 from aerospike_sdk.record_result import RecordResult
 

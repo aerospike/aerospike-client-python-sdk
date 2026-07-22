@@ -46,7 +46,7 @@ from typing import List, Tuple
 
 from aerospike_async import ClientPolicy
 from aerospike_async.exceptions import RecordNotFound
-from aerospike_sdk import AsyncPool
+from aerospike_sdk import AsyncPool, ClusterDefinition, Host
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 from benchmarks.record_spec import full_bins, parse_bin_spec
@@ -130,15 +130,14 @@ async def _run_pool(
     dataset: DataSet,
     loop_count: int,
 ) -> Tuple[int, float]:
-    def factory() -> Client:
-        return Client(seeds=args.host, policy=ClientPolicy())
+    definition = ClusterDefinition(hosts=Host.parse_hosts(args.host, 3000))
 
-    async with AsyncPool(factory, loop_count=loop_count) as pool:
+    async with AsyncPool(definition, loop_count=loop_count) as pool:
         t0 = time.monotonic()
         deadline = t0 + args.duration
 
-        async def loop_work(client: Client, _idx: int) -> int:
-            session = client.create_session()
+        async def loop_work(cluster, _idx: int) -> int:
+            session = cluster.create_session()
             tasks = [
                 asyncio.create_task(
                     _worker(session, dataset, fields, args.keys, args.read_pct, deadline)

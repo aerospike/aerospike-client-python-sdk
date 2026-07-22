@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 from aerospike_async import BatchPolicy, Key, Operation, Txn
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.implicit_txn import (
     batch_ops_contain_write,

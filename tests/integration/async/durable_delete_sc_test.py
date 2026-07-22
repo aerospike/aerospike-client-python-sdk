@@ -39,10 +39,9 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from aerospike_async import Filter, UDFLang
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk import Client, DataSet
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
@@ -233,25 +232,26 @@ async def _validate_process_record_outcome(session, ds: DataSet, bin1: str, bin2
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def durable_delete_client(aerospike_host_sc, client_policy_sc):
-    """One shared client for the module (UDF registration once per module)."""
-    async with Client(seeds=aerospike_host_sc, policy=client_policy_sc) as client:
-        udf_session = client.create_session()
-        reg = await udf_session.register_udf_from_file(
+async def cluster_sc(aerospike_host_sc, make_cluster_definition):
+    """One shared cluster for the module (UDF registration once per module)."""
+    async with await make_cluster_definition(
+        aerospike_host_sc, auth=True
+    ).connect() as cluster:
+        reg = await cluster.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
         await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
 
-        reg2 = await udf_session.register_udf(
+        reg2 = await cluster.register_udf(
             BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
         await reg2.wait_till_complete()
 
-        yield client
+        yield cluster
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def sc_namespace(durable_delete_client):
-    sess = durable_delete_client.create_session()
+async def sc_namespace(cluster_sc):
+    sess = cluster_sc.create_session()
     try:
         return await resolve_sc_namespace(sess)
     except MultipleScNamespacesError as e:
@@ -264,8 +264,8 @@ async def sc_namespace(durable_delete_client):
 
 
 @pytest.fixture
-async def session_sc(durable_delete_client, sc_namespace):
-    sess = durable_delete_client.create_session()
+async def session_sc(cluster_sc, sc_namespace):
+    sess = cluster_sc.create_session()
     env_hint = (
         f"AEROSPIKE_HOST_SC={os.environ.get('AEROSPIKE_HOST_SC', '')!r}; "
         f"AEROSPIKE_SC_NAMESPACE={sc_namespace!r} "
@@ -297,13 +297,13 @@ def ds_bg(sc_namespace) -> DataSet:
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def bgtest_bgval_index(durable_delete_client, sc_namespace):
+async def bgtest_bgval_index(cluster_sc, sc_namespace):
     """Numeric secondary index on ``bgtest.bgval`` for background jobs using ``index_filters``."""
-    client = durable_delete_client
+    session = cluster_sc.create_session()
     idx_name = "bgtest_bgval_ix"
     try:
         await (
-            client.index(sc_namespace, BG_TEST_SET)
+            session.index(sc_namespace, BG_TEST_SET)
             .on_bin(BG_BIN)
             .named(idx_name)
             .numeric()
@@ -709,10 +709,10 @@ class TestDurableDeleteDefaultPointDelete:
         assert row.as_bool() is False
 
     async def test_default_session_point_delete_on_ap_without_explicit_durable_opt_in(
-        self, durable_delete_client,
+        self, cluster_sc,
     ):
         """Default session point delete on an AP namespace without explicit durable opt-in."""
-        session = durable_delete_client.create_session()
+        session = cluster_sc.create_session()
         if await session.is_namespace_sc("test"):
             pytest.skip("Namespace 'test' is SC mode; this scenario expects an AP namespace.")
         ds_ap = DataSet.of("test", "durable_delete_ap_def")

@@ -18,7 +18,6 @@
 import pytest
 
 from aerospike_async import Key
-from aerospike_sdk import Client
 from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -32,9 +31,9 @@ def _key(suffix: str) -> Key:
 
 class TestListUniqueFlag:
 
-    async def test_list_append_unique_rejects_duplicate(self, client):
+    async def test_list_append_unique_rejects_duplicate(self, cluster):
         """list_append with unique=True rejects a duplicate value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("uniq_append")
         await session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -49,9 +48,9 @@ class TestListUniqueFlag:
         result = await rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3]
 
-    async def test_list_add_unique_rejects_duplicate(self, client):
+    async def test_list_add_unique_rejects_duplicate(self, cluster):
         """list_add with unique=True rejects a duplicate value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("uniq_add")
         await session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -62,9 +61,9 @@ class TestListUniqueFlag:
                     .execute()
             )
 
-    async def test_list_append_unique_allows_new(self, client):
+    async def test_list_append_unique_allows_new(self, cluster):
         """list_append with unique=True allows a new distinct value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("uniq_new")
         await session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -81,9 +80,9 @@ class TestListUniqueFlag:
 
 class TestListCombinedFlags:
 
-    async def test_list_append_unique_no_fail_skips_duplicate(self, client):
+    async def test_list_append_unique_no_fail_skips_duplicate(self, cluster):
         """unique+no_fail: duplicate append is skipped without error."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("uniq_nofail_append")
         await session.upsert(k).put({"lst": [1, 2]}).execute()
 
@@ -100,9 +99,9 @@ class TestListCombinedFlags:
 
 class TestListBoundedFlag:
 
-    async def test_list_insert_bounded_rejects_out_of_bounds(self, client):
+    async def test_list_insert_bounded_rejects_out_of_bounds(self, cluster):
         """list_insert with bounded=True rejects an out-of-bounds index."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("bounded_insert")
         await session.upsert(k).put({"lst": [10, 20]}).execute()
 
@@ -116,9 +115,9 @@ class TestListBoundedFlag:
 
 class TestMapNoFail:
 
-    async def test_map_upsert_items_no_fail(self, client):
+    async def test_map_upsert_items_no_fail(self, cluster):
         """map_upsert_items with no_fail=True succeeds."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("map_nofail")
         await session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -133,9 +132,9 @@ class TestMapNoFail:
         assert result.record.bins["m"]["a"] == 2
         assert result.record.bins["m"]["b"] == 3
 
-    async def test_map_insert_items_no_fail_partial(self, client):
+    async def test_map_insert_items_no_fail_partial(self, cluster):
         """map_insert_items with no_fail+partial inserts only new keys."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key("map_insert_partial")
         await session.upsert(k).put({"m": {"a": 1}}).execute()
 

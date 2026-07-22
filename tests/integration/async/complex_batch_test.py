@@ -18,10 +18,9 @@
 import asyncio
 
 import pytest
-from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
 
@@ -32,8 +31,8 @@ def ds():
 
 
 @pytest.fixture
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 async def _cleanup(session, *keys):
@@ -771,7 +770,7 @@ class TestBatchReadTTL:
     TTL_SECS = 5
     SLEEP_SECS = 3
 
-    async def test_batch_read_ttl(self, client, session, ds):
+    async def test_batch_read_ttl(self, cluster, session, ds):
         k1 = ds.id(88888)
         k2 = ds.id(88889)
         keys = [k1, k2]
@@ -795,7 +794,7 @@ class TestBatchReadTTL:
                 "read_touch_80",
                 reads=Settings(read_touch_ttl_percent=80),
             )
-            session_reset = client.create_session(reset_behavior)
+            session_reset = cluster.create_session(reset_behavior)
 
             rs = await (
                 session_reset
@@ -811,7 +810,7 @@ class TestBatchReadTTL:
                 "read_touch_off",
                 reads=Settings(read_touch_ttl_percent=-1),
             )
-            session_no_reset = client.create_session(no_reset_behavior)
+            session_no_reset = cluster.create_session(no_reset_behavior)
 
             rs = await (
                 session_no_reset

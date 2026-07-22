@@ -25,9 +25,8 @@ from types import SimpleNamespace
 import pytest
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 

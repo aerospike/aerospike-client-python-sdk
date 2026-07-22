@@ -8,7 +8,7 @@ This guide is the short, user-facing decision tree. The full numbers and methodo
 
 1. **Single-key reads/writes, want max throughput?** Use [`session.get()` / `session.put()`](#fast-path-sessionget--sessionput) — the fast-path API.
 2. **Complex queries (secondary index, AEL filters, batch ops, error handlers)?** Use [chained builders](#chained-builder-api) — `session.query(...).where(...).execute()` and friends.
-3. **Sync or async?** If you have an existing sync codebase, use `SyncClient`. For new code or web servers, async is the standard.
+3. **Sync or async?** If you have an existing sync codebase, use the sync entry path (`aerospike_sdk.sync`). For new code or web servers, async is the standard.
 4. **Free-threaded Python (e.g. 3.14t)?** Yes if you need high throughput across many threads. No if you depend on C extensions that aren't FT-safe.
 5. **AsyncPool?** Only on free-threaded Python. Slower than single-client on non-FT.
 
@@ -120,24 +120,20 @@ Use the builder when you need filter expressions, batch operations, secondary-in
 
 ## AsyncPool — multi-loop async on free-threaded Python only
 
-`AsyncPool` runs N event loops on N OS threads with one PAC client each, so async work can use multiple CPU cores in parallel. **It only helps under free-threaded Python.**
+`AsyncPool` runs N event loops on N OS threads with one cluster member (one PAC client) each, so async work can use multiple CPU cores in parallel. **It only helps under free-threaded Python.**
 
 ```python
-from aerospike_sdk import AsyncPool, Behavior
-from aerospike_sdk.aio.client import Client
+from aerospike_sdk import AsyncPool, Behavior, ClusterDefinition
 
-def factory():
-    return Client("localhost:3000")
-
-async def per_loop(client, loop_idx):
-    session = client.create_session(Behavior.DEFAULT)
+async def per_loop(cluster, loop_idx):
+    session = cluster.create_session(Behavior.DEFAULT)
     # ... do work, e.g. asyncio.gather of session.get/put calls ...
 
-async with AsyncPool(factory, loop_count=4) as pool:
+async with AsyncPool(ClusterDefinition("localhost", 3000), loop_count=4) as pool:
     await pool.map(per_loop, range(4))
 ```
 
-**Scaling**: at `loop_count >= 4`, AsyncPool automatically gives each Client
+**Scaling**: at `loop_count >= 4`, AsyncPool automatically gives each member
 its own PAC Tokio runtime (per-Client runtime isolation). This eliminates the
 cross-loop scheduler contention that previously capped throughput at 4 loops,
 so TPS scales monotonically. Measured on 8-core hardware, FT Python (with
@@ -162,16 +158,16 @@ auto-derived as `max(2, os.cpu_count() // loop_count)`.
 
 **AsyncPool on regular (GIL-on) Python is now roughly on par with single-client async** after the uvloop-in-pool change — measured ~108K (pool 4×64) vs ~106K (single-loop) on FT-Python forced to GIL-on. The GIL still serializes all Python execution across pool threads, so the multi-loop architecture can't deliver the full FT scaling, but uvloop's per-op savings inside the pool now roughly cancel the orchestration overhead.
 
-On regular Python it's a wash — pick AsyncPool if it fits your code shape (you already write fan-out patterns) or a single `Client` + `asyncio.gather` if simpler. The real AsyncPool win remains free-threaded Python.
+On regular Python it's a wash — pick AsyncPool if it fits your code shape (you already write fan-out patterns) or a single cluster connection + `asyncio.gather` if simpler. The real AsyncPool win remains free-threaded Python.
 
 ## Sync vs async — when to pick which
 
-- **Sync (`SyncClient`)** is best when:
+- **Sync (`aerospike_sdk.sync`)** is best when:
   - You're integrating into an existing sync codebase (Django views, scripts, etc.)
   - Per-op latency matters more than concurrency depth
   - You want the absolute lowest per-op overhead — PSDK sync fast-path is roughly at parity with PAC's direct blocking API
 
-- **Async (`Client`)** is best when:
+- **Async (top-level `aerospike_sdk`)** is best when:
   - You already have an asyncio event loop (FastAPI, aiohttp, etc.)
   - You need to overlap I/O across many concurrent operations
   - You're willing to use uvloop for higher throughput (default in modern asyncio + free-threaded Python setups)
@@ -179,7 +175,7 @@ On regular Python it's a wash — pick AsyncPool if it fits your code shape (you
 Both modes share the same `Session` API surface (chained builders + fast-path shortcuts), the same `Behavior` policy model, and the same error semantics.
 
 :::{note}
-When you construct a `SyncClient` without supplying your own `ClientPolicy`,
+When you connect via the sync entry path without tuning connection settings,
 PSDK sets `conn_pools_per_node = 8` (PAC's default is 4). The async-tuned PAC
 default works well for single-loop or per-Client-runtime workloads where the
 event loop serializes pool access naturally, but sync wrappers drive PAC from

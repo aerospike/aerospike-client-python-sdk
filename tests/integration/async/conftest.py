@@ -15,25 +15,26 @@
 
 """Shared async integration fixtures.
 
-``Client.connect`` + auth against a real cluster is typically ~1s per connection.
-Using one module-scoped client per test file removes that overhead from every
-test function. Tests must keep keys isolated (unique names / sets) or clean up.
+Connect + auth against a real cluster is typically ~1s per connection.
+Using one module-scoped cluster per test file removes that overhead from
+every test function. Tests must keep keys isolated (unique names / sets) or
+clean up.
 """
 
 import pytest_asyncio
 
-from aerospike_sdk.aio.client import Client
-
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    """One connected async :class:`~aerospike_sdk.aio.client.Client` per module."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+async def cluster(aerospike_host, make_cluster_definition):
+    """One connected async :class:`~aerospike_sdk.aio.cluster.Cluster` per module."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client_sc(aerospike_host_sc, client_policy_sc):
-    """One Client per module against ``AEROSPIKE_HOST_SC`` (MRT / SC-only suites)."""
-    async with Client(seeds=aerospike_host_sc, policy=client_policy_sc) as c:
+async def cluster_sc(aerospike_host_sc, make_cluster_definition):
+    """One Cluster per module against ``AEROSPIKE_HOST_SC`` (MRT / SC-only suites)."""
+    async with await make_cluster_definition(
+        aerospike_host_sc, auth=True
+    ).connect() as c:
         yield c

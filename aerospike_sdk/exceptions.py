@@ -35,7 +35,12 @@ from aerospike_async.exceptions import (
     TimeoutError as PacTimeoutError,
     UDFBadResponse as PacUDFBadResponse,
 )
+# Re-exported for callers that need the raw server result code or the
+# PAC-level error types without importing aerospike_async directly.
 from aerospike_async.exceptions import ResultCode
+from aerospike_async.exceptions import SecurityNotEnabled as SecurityNotEnabled
+from aerospike_async.exceptions import ServerError as ServerError
+from aerospike_async.exceptions import ValueError as PacValueError  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

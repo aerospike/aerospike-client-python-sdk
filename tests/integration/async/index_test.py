@@ -32,54 +32,54 @@ async def test_client_policy_use_services_alternate_from_env(client_policy, aero
     assert aerospike_host, "AEROSPIKE_HOST should be set (e.g. 127.0.0.1:3100)"
 
 
-async def test_create_numeric_index(client):
+async def test_create_numeric_index(cluster):
     """Test creating a numeric index."""
     index_name = "test_numeric_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create numeric index
-    await client.index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
 
     # Clean up
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
-async def test_create_string_index(client):
+async def test_create_string_index(cluster):
     """Test creating a string index."""
     index_name = "test_string_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create string index
-    await client.index("test", "test").on_bin("name").named(index_name).string().create()
+    await cluster.create_session().index("test", "test").on_bin("name").named(index_name).string().create()
 
     # Clean up
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
-async def test_create_index_with_collection_type(client):
+async def test_create_index_with_collection_type(cluster):
     """Test creating an index with collection index type."""
     index_name = "test_collection_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create index with collection type
     await (
-        client.index("test", "test")
+        cluster.create_session().index("test", "test")
         .on_bin("roles")
         .named(index_name)
         .string()
@@ -89,42 +89,42 @@ async def test_create_index_with_collection_type(client):
 
     # Clean up
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
-async def test_drop_index(client):
+async def test_drop_index(cluster):
     """Test dropping an index."""
     index_name = "test_drop_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create index first
-    await client.index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
 
     # Drop the index
-    await client.index("test", "test").named(index_name).drop()
+    await cluster.create_session().index("test", "test").named(index_name).drop()
 
-async def test_drop_nonexistent_index(client):
+async def test_drop_nonexistent_index(cluster):
     """Test dropping a non-existent index (should not raise error)."""
     # Dropping non-existent index should not raise error
-    await client.index("test", "test").named("non_existent_idx").drop()
+    await cluster.create_session().index("test", "test").named("non_existent_idx").drop()
 
-async def test_index_chaining(client):
+async def test_index_chaining(cluster):
     """Test method chaining on index builder."""
     index_name = "test_chain_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Test chaining
     await (
-        client.index("test", "test")
+        cluster.create_session().index("test", "test")
         .on_bin("age")
         .named(index_name)
         .numeric()
@@ -132,55 +132,55 @@ async def test_index_chaining(client):
     )
 
     # Verify we can chain drop too
-    await client.index("test", "test").named(index_name).drop()
+    await cluster.create_session().index("test", "test").named(index_name).drop()
 
-async def test_create_index_missing_bin_name(client):
+async def test_create_index_missing_bin_name(cluster):
     """Test that creating index without bin name raises error."""
     with pytest.raises(ValueError, match="bin_name"):
-        await client.index("test", "test").named("test_idx").numeric().create()
+        await cluster.create_session().index("test", "test").named("test_idx").numeric().create()
 
-async def test_create_index_missing_index_name(client):
+async def test_create_index_missing_index_name(cluster):
     """Test that creating index without index name raises error."""
     with pytest.raises(ValueError, match="index_name"):
-        await client.index("test", "test").on_bin("age").numeric().create()
+        await cluster.create_session().index("test", "test").on_bin("age").numeric().create()
 
-async def test_create_index_missing_index_type(client):
+async def test_create_index_missing_index_type(cluster):
     """Test that creating index without index type raises error."""
     with pytest.raises(ValueError, match="index_type"):
-        await client.index("test", "test").on_bin("age").named("test_idx").create()
+        await cluster.create_session().index("test", "test").on_bin("age").named("test_idx").create()
 
-async def test_create_duplicate_index_fails(client):
+async def test_create_duplicate_index_fails(cluster):
     """Test that creating duplicate index names fails."""
     index_name = "test_duplicate_idx"
     # Clean up any existing index
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create first index
-    await client.index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
 
     # Try to create another index with same name should fail
     with pytest.raises(AerospikeError):
-        await client.index("test", "test").on_bin("name").named(index_name).string().create()
+        await cluster.create_session().index("test", "test").on_bin("name").named(index_name).string().create()
 
     # Clean up
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
 
-async def test_create_index_with_cdt_context(client, enterprise, wait_for_index):
+async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index):
     """Create a numeric index on a nested map element via chainable .context()."""
     index_name = "test_ctx_idx"
     bin_name = "payload"
     ds = DataSet.of("test", "test")
-    session = client.create_session()
+    session = cluster.create_session()
 
     try:
-        await client.index("test", "test").named(index_name).drop()
+        await cluster.create_session().index("test", "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -199,7 +199,7 @@ async def test_create_index_with_cdt_context(client, enterprise, wait_for_index)
     )
 
     await (
-        client.index("test", "test")
+        cluster.create_session().index("test", "test")
             .on_bin(bin_name)
             .named(index_name)
             .numeric()
@@ -208,7 +208,7 @@ async def test_create_index_with_cdt_context(client, enterprise, wait_for_index)
     )
 
     flt = Filter.equal(bin_name, 10).context([CTX.map_key("inner")])
-    await wait_for_index(client, "test", "test", flt)
+    await wait_for_index(cluster, "test", "test", flt)
 
     try:
         stream = await session.query("test", "test").filter(flt).bins([bin_name]).execute()
@@ -224,6 +224,6 @@ async def test_create_index_with_cdt_context(client, enterprise, wait_for_index)
     finally:
         await session.delete(k1, k2).execute()
         try:
-            await client.index("test", "test").named(index_name).drop()
+            await cluster.create_session().index("test", "test").named(index_name).drop()
         except Exception:
             pass

@@ -28,10 +28,9 @@ Coverage:
 
 import pytest
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk import DataSet, SyncClient
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import DataSet
 
 
 KEY_PREFIX = "qbops_"
@@ -40,9 +39,9 @@ SET = "query_bin_ops_sync"
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
 
         for i in range(1, 4):
@@ -61,7 +60,7 @@ def client(aerospike_host, client_policy):
                 "nested": nested,
             }).execute()
 
-        yield client
+        yield cluster
 
 
 def _key(i: int) -> Key:
@@ -74,13 +73,13 @@ def _key(i: int) -> Key:
 
 class TestSimpleBinReads:
 
-    def test_get_single_bin(self, client):
-        session = client.create_session()
+    def test_get_single_bin(self, cluster):
+        session = cluster.create_session()
         result = session.query(_key(1)).bin("name").get().execute().first_or_raise()
         assert result.record.bins["name"] == "user1"
 
-    def test_get_multiple_bins(self, client):
-        session = client.create_session()
+    def test_get_multiple_bins(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("name").get()
@@ -91,32 +90,32 @@ class TestSimpleBinReads:
         assert result.record.bins["name"] == "user1"
         assert result.record.bins["age"] == 21
 
-    def test_map_size(self, client):
-        session = client.create_session()
+    def test_map_size(self, cluster):
+        session = cluster.create_session()
         result = session.query(_key(1)).bin("settings").map_size().execute().first_or_raise()
         assert result.record.bins["settings"] == 3
 
-    def test_list_size(self, client):
-        session = client.create_session()
+    def test_list_size(self, cluster):
+        session = cluster.create_session()
         result = session.query(_key(1)).bin("scores").list_size().execute().first_or_raise()
         assert result.record.bins["scores"] == 3
 
-    def test_list_get(self, client):
-        session = client.create_session()
+    def test_list_get(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").list_get(0).execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 10
 
-    def test_list_get_range(self, client):
-        session = client.create_session()
+    def test_list_get_range(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").list_get_range(0, 2).execute().first_or_raise()
         )
         assert result.record.bins["scores"] == [10, 20]
 
-    def test_list_get_range_from_index(self, client):
-        session = client.create_session()
+    def test_list_get_range_from_index(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").list_get_range(1, None).execute().first_or_raise()
         )
@@ -129,24 +128,24 @@ class TestSimpleBinReads:
 
 class TestCdtMapReads:
 
-    def test_map_key_get_values(self, client):
-        session = client.create_session()
+    def test_map_key_get_values(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_key("theme").get_values()
                 .execute().first_or_raise()
         )
         assert result.record.bins["settings"] == "dark"
 
-    def test_map_key_count(self, client):
-        session = client.create_session()
+    def test_map_key_count(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_key("theme").count()
                 .execute().first_or_raise()
         )
         assert result.record.bins["settings"] == 1
 
-    def test_map_index_range_get_values(self, client):
-        session = client.create_session()
+    def test_map_index_range_get_values(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
                 .execute().first_or_raise()
@@ -155,8 +154,8 @@ class TestCdtMapReads:
         assert isinstance(vals, list)
         assert len(vals) == 2
 
-    def test_map_rank_get_values(self, client):
-        session = client.create_session()
+    def test_map_rank_get_values(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(2)).bin("settings").on_map_rank(0).get_values()
                 .execute().first_or_raise()
@@ -170,33 +169,33 @@ class TestCdtMapReads:
 
 class TestCdtListReads:
 
-    def test_list_index_get_values(self, client):
-        session = client.create_session()
+    def test_list_index_get_values(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").on_list_index(0).get_values()
                 .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 10
 
-    def test_list_index_count(self, client):
-        session = client.create_session()
+    def test_list_index_count(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").on_list_index(0).count()
                 .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 1
 
-    def test_list_rank_get_values(self, client):
+    def test_list_rank_get_values(self, cluster):
         """Rank 0 = lowest value; for key 2 scores=[20,40,60], lowest=20."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(2)).bin("scores").on_list_rank(0).get_values()
                 .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 20
 
-    def test_nested_list_get(self, client):
-        session = client.create_session()
+    def test_nested_list_get(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}nested_lg"
         key = ds.id(kid)
@@ -218,8 +217,8 @@ class TestCdtListReads:
 
 class TestIndexBasedListWrites:
 
-    def test_list_insert_then_read(self, client):
-        session = client.create_session()
+    def test_list_insert_then_read(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}idx_mut"
         key = ds.id(kid)
@@ -233,8 +232,8 @@ class TestIndexBasedListWrites:
         assert result.record.bins["nums"] == [1, 9, 2, 3]
         session.delete(key).execute()
 
-    def test_list_increment_and_nested_insert(self, client):
-        session = client.create_session()
+    def test_list_increment_and_nested_insert(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         kid = f"{KEY_PREFIX}idx_mut2"
         key = ds.id(kid)
@@ -256,8 +255,8 @@ class TestIndexBasedListWrites:
 
 class TestBatchKeyQueries:
 
-    def test_batch_bin_get(self, client):
-        session = client.create_session()
+    def test_batch_bin_get(self, cluster):
+        session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2)]).bin("name").get()
                 .execute().collect()
@@ -266,8 +265,8 @@ class TestBatchKeyQueries:
         names = {r.record.bins["name"] for r in results if r.is_ok}
         assert names == {"user1", "user2"}
 
-    def test_batch_cdt_map_read(self, client):
-        session = client.create_session()
+    def test_batch_cdt_map_read(self, cluster):
+        session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
                 .bin("settings").on_map_key("theme").get_values()
@@ -278,8 +277,8 @@ class TestBatchKeyQueries:
             assert r.is_ok
             assert r.record.bins["settings"] == "dark"
 
-    def test_batch_cdt_list_size(self, client):
-        session = client.create_session()
+    def test_batch_cdt_list_size(self, cluster):
+        session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
                 .bin("scores").list_size()
@@ -290,8 +289,8 @@ class TestBatchKeyQueries:
             assert r.is_ok
             assert r.record.bins["scores"] == 3
 
-    def test_batch_cdt_list_get(self, client):
-        session = client.create_session()
+    def test_batch_cdt_list_get(self, cluster):
+        session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
                 .bin("scores").list_get(0)
@@ -305,18 +304,18 @@ class TestBatchKeyQueries:
 class TestCdtReadEdgeCases:
     """OOB-tolerant reads and missing-record error paths."""
 
-    def test_list_get_range_past_end_returns_partial(self, client):
+    def test_list_get_range_past_end_returns_partial(self, cluster):
         """list_get_range with count past the end returns the full tail."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").list_get_range(0, 100)
                 .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == [10, 20, 30]
 
-    def test_remove_from_nonexistent_key_raises(self, client):
+    def test_remove_from_nonexistent_key_raises(self, cluster):
         """Map remove_by_key_list on a missing record raises KEY_NOT_FOUND_ERROR."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         key = ds.id(f"{KEY_PREFIX}missing_rm")
         try:
@@ -334,9 +333,9 @@ class TestCdtReadEdgeCases:
 
 class TestInvertedReads:
 
-    def test_map_key_range_get_all_other_values(self, client):
+    def test_map_key_range_get_all_other_values(self, cluster):
         """Get all map values EXCEPT those in the range."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
@@ -346,9 +345,9 @@ class TestInvertedReads:
         assert isinstance(vals, list)
         assert len(vals) == 2
 
-    def test_list_value_get_all_other_values(self, client):
+    def test_list_value_get_all_other_values(self, cluster):
         """Get all list elements EXCEPT those matching the value."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("scores").on_list_value(10).get_all_other_values()
@@ -367,8 +366,8 @@ class TestInvertedReads:
 
 class TestExpressionReads:
 
-    def test_select_from_simple(self, client):
-        session = client.create_session()
+    def test_select_from_simple(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("age_plus_20").select_from("$.age + 20")
@@ -376,8 +375,8 @@ class TestExpressionReads:
         )
         assert result.record.bins["age_plus_20"] == 41
 
-    def test_select_from_multiple(self, client):
-        session = client.create_session()
+    def test_select_from_multiple(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(2))
                 .bin("double_age").select_from("$.age * 2")
@@ -387,8 +386,8 @@ class TestExpressionReads:
         assert result.record.bins["double_age"] == 44   # (20+2)*2
         assert result.record.bins["triple_score"] == 600  # 200*3
 
-    def test_select_from_with_get(self, client):
-        session = client.create_session()
+    def test_select_from_with_get(self, cluster):
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("name").get()
@@ -405,9 +404,9 @@ class TestExpressionReads:
 
 class TestNestedCdtReads:
 
-    def test_nested_map_key_get_values(self, client):
+    def test_nested_map_key_get_values(self, cluster):
         """Read a value 2 levels deep: nested.level1.a"""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -415,9 +414,9 @@ class TestNestedCdtReads:
         )
         assert result.record.bins["nested"] == 100
 
-    def test_nested_map_key_count(self, client):
+    def test_nested_map_key_count(self, cluster):
         """Count at a nested path should be 1 for a scalar."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(1))
                 .bin("nested").on_map_key("level1").on_map_key("b").count()
@@ -425,9 +424,9 @@ class TestNestedCdtReads:
         )
         assert result.record.bins["nested"] == 1
 
-    def test_nested_map_key_different_branches(self, client):
+    def test_nested_map_key_different_branches(self, cluster):
         """Read from two different nested branches in separate queries."""
-        session = client.create_session()
+        session = cluster.create_session()
         r1 = (
             session.query(_key(2))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -442,9 +441,9 @@ class TestNestedCdtReads:
         )
         assert r2.record.bins["nested"] == 2
 
-    def test_nested_map_key_with_flat_bin(self, client):
+    def test_nested_map_key_with_flat_bin(self, cluster):
         """Combine a nested CDT read with a flat bin read."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(3))
                 .bin("nested").on_map_key("level1").on_map_key("a").get_values()
@@ -454,9 +453,9 @@ class TestNestedCdtReads:
         assert result.record.bins["nested"] == 300
         assert result.record.bins["name"] == "user3"
 
-    def test_nested_map_key_get_values_key3(self, client):
+    def test_nested_map_key_get_values_key3(self, cluster):
         """Read nested value for a different key to verify data independence."""
-        session = client.create_session()
+        session = cluster.create_session()
         result = (
             session.query(_key(3))
                 .bin("nested").on_map_key("level2").on_map_key("y").get_values()

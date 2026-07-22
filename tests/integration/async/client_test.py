@@ -15,7 +15,7 @@
 
 """Tests for Client."""
 
-from aerospike_sdk import Client
+from aerospike_sdk.aio.client import Client
 
 
 async def test_client_connection(aerospike_host, client_policy):

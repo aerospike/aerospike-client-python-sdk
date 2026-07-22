@@ -21,7 +21,6 @@ import pytest
 import pytest_asyncio
 
 from aerospike_sdk import (
-    Client,
     CTX,
     Exp,
     StringOperation,
@@ -34,8 +33,8 @@ _TEST_DS = DataSet.of("test", "test")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, supports_string_operations, client_policy):
-    """Module-scoped client for server-side string ops (server >= 8.1.3).
+async def cluster(aerospike_host, supports_string_operations, make_cluster_definition):
+    """Module-scoped cluster for server-side string ops (server >= 8.1.3).
 
     Single-host model: connects to the default ``AEROSPIKE_HOST`` and skips
     cleanly via ``supports_string_operations`` unless it is 8.1.3+. Point
@@ -47,7 +46,7 @@ async def client(aerospike_host, supports_string_operations, client_policy):
             "string operations require server >= 8.1.3; point AEROSPIKE_HOST "
             "at an 8.1.3+ build to run these"
         )
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         await asyncio.sleep(2)
         sess = c.create_session()
         for suffix in (
@@ -63,13 +62,13 @@ async def client(aerospike_host, supports_string_operations, client_policy):
 # Smoke — basic chainable + low-level + Exp paths
 # ---------------------------------------------------------------------------
 
-async def test_str_reads_via_builder(client):
+async def test_str_reads_via_builder(cluster):
     """Chained string reads via ``WriteBinBuilder.str_*`` — single multi-op call.
 
     Multiple ops targeting the same bin return positional results as a list
     on ``record.bins[bin]`` (PAC's ``Value::MultiResult``).
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_reads")
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
@@ -82,7 +81,7 @@ async def test_str_reads_via_builder(client):
     assert rec.bins["s"] == [5, "ell", 2]
 
 
-async def test_str_modify_and_read(client):
+async def test_str_modify_and_read(cluster):
     """``str_upper`` chained with ``get`` in a single execute. Asserts both:
 
     * ``bins["s"] == "AB"`` (by-name access shows the trailing read result)
@@ -91,7 +90,7 @@ async def test_str_modify_and_read(client):
       op-index 1 — the server returns nil for STRING_MODIFY ops on the wire,
       which the positional accessor surfaces faithfully)
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_modify")
     await sess.upsert(k).bin("s").set_to("ab").execute()
 
@@ -106,11 +105,11 @@ async def test_str_modify_and_read(client):
     assert result.operation_result(1) == "AB"
 
 
-async def test_str_append_and_prepend(client):
+async def test_str_append_and_prepend(cluster):
     """``str_append`` (sub-op 67) adds to the end; ``str_prepend`` (sub-op 68)
     adds to the start — distinct from ``str_concat`` (list form) and
     ``str_insert(0, …)``."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_append_prepend")
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
@@ -127,9 +126,9 @@ async def test_str_append_and_prepend(client):
     assert result.record_or_raise().bins["s"] == "oh hello world"
 
 
-async def test_str_reads_via_add_operation(client):
+async def test_str_reads_via_add_operation(cluster):
     """Low-level ``StringOperation`` factories via chained ``add_operation``."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_append_ops")
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
@@ -143,9 +142,9 @@ async def test_str_reads_via_add_operation(client):
     assert rec.bins["s"] == [5, "ell", "lo", 2]
 
 
-async def test_str_projection_via_exp_on_query(client):
+async def test_str_projection_via_exp_on_query(cluster):
     """Query projection using ``Exp.string_*`` filter expressions."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_exp_query")
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
@@ -162,7 +161,7 @@ async def test_str_projection_via_exp_on_query(client):
 # Spot tests — flag paths
 # ---------------------------------------------------------------------------
 
-async def test_str_upper_silently_noops_on_missing_bin(client):
+async def test_str_upper_silently_noops_on_missing_bin(cluster):
     """Transform / subtractive ops on a missing bin: silent no-op.
 
     Per the string-ops spec (§4.1, server 8.1.3+), the missing-bin path is
@@ -171,7 +170,7 @@ async def test_str_upper_silently_noops_on_missing_bin(client):
     siblings untouched. Behavior is independent of the NO_FAIL flag
     (NO_FAIL now only suppresses in-op execution failures, not missing-bin).
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_transform_noop_missing")
     await sess.delete(k).execute()
     await sess.upsert(k).bin("other").set_to("x").execute()
@@ -184,7 +183,7 @@ async def test_str_upper_silently_noops_on_missing_bin(client):
     assert "missing_bin" not in bins
 
 
-async def test_str_insert_creates_bin_from_empty_on_missing_bin(client):
+async def test_str_insert_creates_bin_from_empty_on_missing_bin(cluster):
     """Additive / create ops on a missing bin: bin is created from empty.
 
     Per the string-ops spec (§4.1, server 8.1.3+), the eight additive
@@ -194,7 +193,7 @@ async def test_str_insert_creates_bin_from_empty_on_missing_bin(client):
     ``str_insert(0, "hello")`` on a missing bin therefore creates the
     bin holding ``"hello"``.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_create_from_missing")
     await sess.delete(k).execute()
     await sess.upsert(k).bin("other").set_to("x").execute()
@@ -207,9 +206,9 @@ async def test_str_insert_creates_bin_from_empty_on_missing_bin(client):
     assert bins["other"] == "x"
 
 
-async def test_str_concat_with_flag(client):
+async def test_str_concat_with_flag(cluster):
     """``str_concat`` accepts a flags kwarg; default flags produce simple appending."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_concat_flag")
     await sess.upsert(k).bin("s").set_to("foo").execute()
 
@@ -224,9 +223,9 @@ async def test_str_concat_with_flag(client):
 # users drop to low-level StringOperation with ctx=[...] for nested ops)
 # ---------------------------------------------------------------------------
 
-async def test_str_upper_with_list_ctx(client):
+async def test_str_upper_with_list_ctx(cluster):
     """``StringOperation.upper`` with a ``ctx=[CTX.list_index(...)]`` upper-cases one list element."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_list_ctx")
     await sess.upsert(k).bin("lst").set_to(["one", "two", "three"]).execute()
 
@@ -238,9 +237,9 @@ async def test_str_upper_with_list_ctx(client):
     assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["one", "TWO", "three"]
 
 
-async def test_str_strlen_with_map_ctx(client):
+async def test_str_strlen_with_map_ctx(cluster):
     """``StringOperation.strlen`` with ``ctx=[CTX.map_key(...)]`` measures one map value."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_map_ctx")
     await sess.upsert(k).bin("m").set_to({"k1": "abcd", "k2": "xyz"}).execute()
 
@@ -261,7 +260,7 @@ async def test_str_strlen_with_map_ctx(client):
 # → 2` and `replaceAll("aaaa","aa","X") → "XX"` — are pinned below.
 # ---------------------------------------------------------------------------
 
-async def test_str_find_nth_overlap_skip(client):
+async def test_str_find_nth_overlap_skip(cluster):
     """``find_nth("aa")`` over ``"aaaaa"`` returns positions 0, 2 only.
 
     Overlap-skip scan per spec §4.1: after matching "aa" at index 0 the scan
@@ -269,9 +268,9 @@ async def test_str_find_nth_overlap_skip(client):
     index 4 where only one 'a' remains and no further match is possible.
     Two matches total; occurrences 3+ return -1. (A naive overlap-aware
     advance-by-one impl would return 1 for the 2nd occurrence — explicitly
-    called out as a wrong-client behavior in the spec.)
+    called out as a wrong-cluster behavior in the spec.)
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_find_nth_overlap")
     await sess.upsert(k).bin("s").set_to("aaaaa").execute()
 
@@ -285,14 +284,14 @@ async def test_str_find_nth_overlap_skip(client):
     assert rec.bins["s"] == [0, 2, -1, -1]
 
 
-async def test_str_find_nth_overlap_skip_longer(client):
+async def test_str_find_nth_overlap_skip_longer(cluster):
     """``find_nth("abab")`` over ``"abababab"`` returns positions 0, 4 only.
 
     Overlap-skip per spec §4.1: match at 0, advance by needle length 4,
     match at 4, advance to end of string. Two matches. An overlap-aware
     impl would yield three matches at 0, 2, 4.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_find_nth_longer")
     await sess.upsert(k).bin("s").set_to("abababab").execute()
 
@@ -305,7 +304,7 @@ async def test_str_find_nth_overlap_skip_longer(client):
     assert rec.bins["s"] == [0, 4, -1]
 
 
-async def test_str_replace_all_overlapping_needle(client):
+async def test_str_replace_all_overlapping_needle(cluster):
     """``replace_all("aa", "X")`` over ``"aaaa"`` yields ``"XX"`` — the spec's
     canonical overlap-skip example (§4.2): ``"XX"``, NOT ``"XaX"``.
 
@@ -313,7 +312,7 @@ async def test_str_replace_all_overlapping_needle(client):
     replaced. Original needles/replacements widened to ``"b"`` and a longer
     replacement in companion tests to surface advance-direction bugs.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_replace_overlap")
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
@@ -323,7 +322,7 @@ async def test_str_replace_all_overlapping_needle(client):
     assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "bb"
 
 
-async def test_str_replace_all_overlap_with_longer_replacement(client):
+async def test_str_replace_all_overlap_with_longer_replacement(cluster):
     """``replace_all("aa", "xxx")`` over ``"aaaa"`` yields ``"xxxxxx"``.
 
     Two non-overlapping "aa" matches in "aaaa" (positions 0 and 2) each get
@@ -331,7 +330,7 @@ async def test_str_replace_all_overlap_with_longer_replacement(client):
     NOT rescan into emitted replacement output, so the result is exactly
     two "xxx" segments concatenated.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_replace_overlap_long")
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
@@ -341,9 +340,9 @@ async def test_str_replace_all_overlap_with_longer_replacement(client):
     assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "xxxxxx"
 
 
-async def test_str_find_needle_equals_haystack(client):
+async def test_str_find_needle_equals_haystack(cluster):
     """``find("aaa")`` over ``"aaa"`` returns 0; ``find_nth`` 2nd occurrence returns -1."""
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_find_equal")
     await sess.upsert(k).bin("s").set_to("aaa").execute()
 
@@ -355,13 +354,13 @@ async def test_str_find_needle_equals_haystack(client):
     assert rec.bins["s"] == [0, -1]
 
 
-async def test_str_contains_overlapping_pattern(client):
+async def test_str_contains_overlapping_pattern(cluster):
     """``contains`` is overlap-agnostic — returns True whenever ANY match exists.
 
     Sanity guard that contains/starts_with/ends_with behave correctly on
     haystacks where the only matches are overlapping ones.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_contains_overlap")
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
@@ -374,13 +373,13 @@ async def test_str_contains_overlapping_pattern(client):
     assert rec.bins["s"] == [True, True, True]
 
 
-async def test_str_find_overlap_skip_spec_canonical(client):
+async def test_str_find_overlap_skip_spec_canonical(cluster):
     """Spec §4.1 canonical example: ``find("aaaa", "aa", 2) → 2``.
 
     Pinned verbatim from the spec ASCII-path verification — overlap-skip
     means the 2nd occurrence of "aa" in "aaaa" starts at index 2, not 1.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_find_overlap_canonical")
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
@@ -391,7 +390,7 @@ async def test_str_find_overlap_skip_spec_canonical(client):
     assert rec.bins["s"] == 2
 
 
-async def test_str_find_overlap_skip_icu_path_emoji(client):
+async def test_str_find_overlap_skip_icu_path_emoji(cluster):
     """Spec §4.1 ICU-path canonical: ``find("👋👋👋👋", "👋👋", 2) → 2``.
 
     Same overlap-skip contract on the ICU ``usearch`` code path. Indexes are
@@ -399,7 +398,7 @@ async def test_str_find_overlap_skip_icu_path_emoji(client):
     advances by 2 codepoints — the 2nd occurrence sits at codepoint
     index 2, not 1.
     """
-    sess = client.create_session()
+    sess = cluster.create_session()
     k = _TEST_DS.id("strop_find_overlap_icu_emoji")
     await sess.upsert(k).bin("s").set_to("👋👋👋👋").execute()
 

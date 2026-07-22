@@ -43,10 +43,10 @@ import os
 import pytest
 import pytest_asyncio
 
-from aerospike_async import AuthMode, ClientPolicy as _PacClientPolicy, new_client
-from aerospike_async.exceptions import ResultCode, ServerError, SecurityNotEnabled
+from aerospike_async import ClientPolicy as _PacClientPolicy, new_client
+from aerospike_sdk.exceptions import ResultCode, SecurityNotEnabled, ServerError
 
-from aerospike_sdk import Client, DataSet
+from aerospike_sdk import ClusterDefinition, DataSet, Host
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -185,23 +185,24 @@ async def admin_pac(aerospike_host_sec):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def admin_client(aerospike_host_sec, admin_pac):
-    """PSDK admin Client — used for masking-rule application, record put,
+async def admin_cluster(aerospike_host_sec, admin_pac):
+    """PSDK admin Cluster — used for masking-rule application, record put,
     and any test assertion that needs admin privileges. Depends on
     ``admin_pac`` solely so the security + 8.1.3 probe happens before this
     one spins up.
     """
-    policy = _psdk_client_policy(
+    definition = _psdk_definition(
+        aerospike_host_sec,
         user=os.environ.get("AEROSPIKE_AUTH_USER", "admin"),
         password=os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin"),
     )
-    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
+    async with await definition.connect() as c:
         await asyncio.sleep(2)
         yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def masking_setup(admin_pac, admin_client):
+async def masking_setup(admin_pac, admin_cluster):
     """User management via PAC; masking-rule application via PSDK ``Session.info``."""
     for username in (_USER_READER, _USER_BASIC):
         try:
@@ -214,7 +215,7 @@ async def masking_setup(admin_pac, admin_client):
     await admin_pac.create_user(_USER_BASIC, _USER_PASSWORD, ["read-write"])
     await _wait_for_user(admin_pac, _USER_BASIC)
 
-    admin_sess = admin_client.create_session()
+    admin_sess = admin_cluster.create_session()
     await _apply_masking(
         admin_sess, ns=_NAMESPACE, set_name=_SET, bin_name=_BIN_MASKED, function="redact",
     )
@@ -234,37 +235,38 @@ async def masking_setup(admin_pac, admin_client):
             pass
 
 
-def _psdk_client_policy(*, user: str, password: str) -> _PacClientPolicy:
-    cp = _PacClientPolicy()
-    cp.use_services_alternate = _services_alternate()
-    cp.set_auth_mode(AuthMode.INTERNAL, user=user, password=password)
-    return cp
+def _psdk_definition(seed: str, *, user: str, password: str) -> ClusterDefinition:
+    definition = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
+    if _services_alternate():
+        definition.using_services_alternate()
+    definition.with_native_credentials(user, password)
+    return definition
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def reader_client(aerospike_host_sec, masking_setup):
-    """PSDK Client authenticated as ``psdk_strops_reader`` ([read-write, read-masked])."""
-    policy = _psdk_client_policy(user=_USER_READER, password=_USER_PASSWORD)
-    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
+async def reader_cluster(aerospike_host_sec, masking_setup):
+    """PSDK Cluster authenticated as ``psdk_strops_reader`` ([read-write, read-masked])."""
+    definition = _psdk_definition(aerospike_host_sec, user=_USER_READER, password=_USER_PASSWORD)
+    async with await definition.connect() as c:
         await asyncio.sleep(2)
         yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def basic_client(aerospike_host_sec, masking_setup):
-    """PSDK Client authenticated as ``psdk_strops_user`` ([read-write] only)."""
-    policy = _psdk_client_policy(user=_USER_BASIC, password=_USER_PASSWORD)
-    async with Client(seeds=aerospike_host_sec, policy=policy) as c:
+async def basic_cluster(aerospike_host_sec, masking_setup):
+    """PSDK Cluster authenticated as ``psdk_strops_user`` ([read-write] only)."""
+    definition = _psdk_definition(aerospike_host_sec, user=_USER_BASIC, password=_USER_PASSWORD)
+    async with await definition.connect() as c:
         await asyncio.sleep(2)
         yield c
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="module")
-async def reset_record(admin_client, masking_setup):
+async def reset_record(admin_cluster, masking_setup):
     """Reset the test record before every test via PSDK admin session.
     Retries transient failures up to 3 attempts.
     """
-    sess = admin_client.create_session()
+    sess = admin_cluster.create_session()
     record = {
         _BIN_MASKED: "hello world",
         _BIN_CONSTANT: "real-secret",
@@ -295,45 +297,45 @@ def _k():
 
 class TestMaskingReads:
 
-    async def test_privileged_str_strlen_returns_real_length(self, reader_client):
+    async def test_privileged_str_strlen_returns_real_length(self, reader_cluster):
         """ReadMasked → real ``"hello world"`` length (11) via builder ``str_strlen``."""
-        sess = reader_client.create_session()
+        sess = reader_cluster.create_session()
         rs = await sess.query(_k()).bin(_BIN_MASKED).str_strlen().execute()
         assert (await rs.first_or_raise()).record_or_raise().bins[_BIN_MASKED] == 11
 
-    async def test_privileged_str_substr_returns_real_prefix(self, reader_client):
+    async def test_privileged_str_substr_returns_real_prefix(self, reader_cluster):
         """ReadMasked → real prefix ``"hello"`` via builder ``str_substr``."""
-        sess = reader_client.create_session()
+        sess = reader_cluster.create_session()
         rs = await sess.query(_k()).bin(_BIN_MASKED).str_substr(0, 5).execute()
         assert (await rs.first_or_raise()).record_or_raise().bins[_BIN_MASKED] == "hello"
 
-    async def test_unprivileged_str_substr_returns_redacted_prefix(self, basic_client):
+    async def test_unprivileged_str_substr_returns_redacted_prefix(self, basic_cluster):
         """Without ReadMasked → ``redact`` masking returns same-length stand-in."""
-        sess = basic_client.create_session()
+        sess = basic_cluster.create_session()
         rs = await sess.query(_k()).bin(_BIN_MASKED).str_substr(0, 5).execute()
         redacted = (await rs.first_or_raise()).record_or_raise().bins[_BIN_MASKED]
         assert isinstance(redacted, str)
         assert len(redacted) == 5
         assert redacted != "hello"
 
-    async def test_unprivileged_str_find_returns_minus_one(self, basic_client):
+    async def test_unprivileged_str_find_returns_minus_one(self, basic_cluster):
         """Without ReadMasked → ``find("world")`` on redacted bin returns -1."""
-        sess = basic_client.create_session()
+        sess = basic_cluster.create_session()
         rs = await sess.query(_k()).bin(_BIN_MASKED).str_find("world").execute()
         assert (await rs.first_or_raise()).record_or_raise().bins[_BIN_MASKED] == -1
 
-    async def test_unprivileged_str_contains_returns_false(self, basic_client):
+    async def test_unprivileged_str_contains_returns_false(self, basic_cluster):
         """Without ReadMasked → ``contains("hello")`` returns False on redacted bin."""
-        sess = basic_client.create_session()
+        sess = basic_cluster.create_session()
         rs = await sess.query(_k()).bin(_BIN_MASKED).str_contains("hello").execute()
         result = (await rs.first_or_raise()).record_or_raise().bins[_BIN_MASKED]
         assert result is False
         assert isinstance(result, bool)
 
-    async def test_unmasked_bin_transparent_to_both_users(self, reader_client, basic_client):
+    async def test_unmasked_bin_transparent_to_both_users(self, reader_cluster, basic_cluster):
         """The ``public`` bin (no masking) reads identically for both users."""
-        reader_sess = reader_client.create_session()
-        basic_sess = basic_client.create_session()
+        reader_sess = reader_cluster.create_session()
+        basic_sess = basic_cluster.create_session()
         rs1 = await reader_sess.query(_k()).bin(_BIN_UNMASKED).str_strlen().execute()
         rs2 = await basic_sess.query(_k()).bin(_BIN_UNMASKED).str_strlen().execute()
         len_priv = (await rs1.first_or_raise()).record_or_raise().bins[_BIN_UNMASKED]
@@ -347,16 +349,16 @@ class TestMaskingReads:
 
 class TestMaskingModifiesBlocked:
 
-    async def test_str_upper_blocked_for_unprivileged(self, basic_client):
+    async def test_str_upper_blocked_for_unprivileged(self, basic_cluster):
         """``str_upper`` on a masked bin without WriteMasked → ROLE_VIOLATION."""
-        sess = basic_client.create_session()
+        sess = basic_cluster.create_session()
         with pytest.raises(Exception) as ei:
             await sess.upsert(_k()).bin(_BIN_MASKED).str_upper().execute()
         assert _is_role_violation(ei.value), f"expected ROLE_VIOLATION, got {ei.value!r}"
 
-    async def test_str_concat_blocked_for_unprivileged(self, basic_client):
+    async def test_str_concat_blocked_for_unprivileged(self, basic_cluster):
         """``str_concat`` on a masked bin without WriteMasked → ROLE_VIOLATION."""
-        sess = basic_client.create_session()
+        sess = basic_cluster.create_session()
         with pytest.raises(Exception) as ei:
             await sess.upsert(_k()).bin(_BIN_MASKED).str_concat("more").execute()
         assert _is_role_violation(ei.value), f"expected ROLE_VIOLATION, got {ei.value!r}"
@@ -368,9 +370,9 @@ class TestMaskingModifiesBlocked:
 
 class TestMaskingPrivilegeBoundary:
 
-    async def test_read_masked_only_cannot_modify(self, reader_client):
+    async def test_read_masked_only_cannot_modify(self, reader_cluster):
         """ReadMasked is a READ privilege; modify still blocked → ROLE_VIOLATION."""
-        sess = reader_client.create_session()
+        sess = reader_cluster.create_session()
         with pytest.raises(Exception) as ei:
             await sess.upsert(_k()).bin(_BIN_MASKED).str_upper().execute()
         assert _is_role_violation(ei.value), f"expected ROLE_VIOLATION, got {ei.value!r}"
@@ -382,10 +384,10 @@ class TestMaskingPrivilegeBoundary:
 
 class TestMaskingConstantFunction:
 
-    async def test_constant_mask_split_view(self, reader_client, basic_client):
+    async def test_constant_mask_split_view(self, reader_cluster, basic_cluster):
         """Privileged reader sees real (11 chars); unprivileged sees ``HIDDEN`` (6)."""
-        reader_sess = reader_client.create_session()
-        basic_sess = basic_client.create_session()
+        reader_sess = reader_cluster.create_session()
+        basic_sess = basic_cluster.create_session()
 
         # Privileged: real "real-secret" = 11 chars
         rs = await reader_sess.query(_k()).bin(_BIN_CONSTANT).str_strlen().execute()

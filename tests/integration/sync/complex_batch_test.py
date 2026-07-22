@@ -24,14 +24,14 @@ dropped-read defect go unnoticed.
 """
 
 import pytest
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import ResultCode
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy, enterprise):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition, enterprise):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
@@ -41,8 +41,8 @@ def ds():
 
 
 @pytest.fixture
-def session(client):
-    return client.create_session()
+def session(cluster):
+    return cluster.create_session()
 
 
 def _cleanup(session, *keys):

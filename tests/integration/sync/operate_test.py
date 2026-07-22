@@ -23,7 +23,7 @@ Covers:
 
 import pytest
 
-from aerospike_sdk import SyncClient, DataSet
+from aerospike_sdk import DataSet
 
 
 NS = "test"
@@ -31,14 +31,14 @@ SET = "operate_record_sync"
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
 @pytest.fixture
-def session(client):
-    return client.create_session()
+def session(cluster):
+    return cluster.create_session()
 
 
 @pytest.fixture

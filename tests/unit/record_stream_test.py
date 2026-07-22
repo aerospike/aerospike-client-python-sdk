@@ -20,9 +20,8 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
 

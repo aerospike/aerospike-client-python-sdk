@@ -16,10 +16,10 @@
 """Multi-loop async pool for scaling past the single-event-loop ceiling.
 
 Each pool thread runs its own event loop with its own
-:class:`~aerospike_sdk.aio.client.Client`.  Because each PAC ``Client``
-carries its own ``CompletionBridge``, completions never cross loops —
-loop A's completions enqueue into client-A's bridge and drain on loop A's
-thread.
+:class:`~aerospike_sdk.aio.cluster.Cluster` (backed by one PAC client
+apiece).  Because each PAC client carries its own ``CompletionBridge``,
+completions never cross loops — loop A's completions enqueue into
+member-A's bridge and drain on loop A's thread.
 
 **Free-threading required for throughput gains.**  On a GIL-built
 interpreter (stock CPython ≤ 3.12) an ``AsyncPool`` is *correct* but
@@ -44,9 +44,12 @@ from typing import (
     List,
     Optional,
     TypeVar,
+    cast,
 )
 
 from aerospike_sdk.aio.client import Client
+from aerospike_sdk.aio.cluster import Cluster
+from aerospike_sdk.aio.cluster_definition import ClusterDefinition
 from aerospike_sdk.index_monitor import IndexesMonitor
 
 from aerospike_sdk.loggers import SdkLoggers
@@ -69,12 +72,14 @@ def _gil_is_enabled() -> bool:
 
 
 class AsyncPool:
-    """Pool of event loops + paired clients for parallel async work.
+    """Pool of event loops + paired cluster members for parallel async work.
 
     Each loop runs on a dedicated OS thread with its own
-    :class:`~aerospike_sdk.aio.client.Client` (and therefore its own PAC
+    :class:`~aerospike_sdk.aio.cluster.Cluster` (and therefore its own PAC
     ``CompletionBridge``).  Submitted coroutines are dispatched round-robin
-    (or by explicit index) across loops.
+    (or by explicit index) across loops.  The pool is defined by a
+    :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`; one
+    member connects per loop from that single definition.
 
     **Free-threading required for throughput gains.**  On a GIL-built
     interpreter (stock CPython ≤ 3.12) an ``AsyncPool`` is *correct* — N
@@ -84,14 +89,14 @@ class AsyncPool:
 
     **Shared IndexesMonitor.**  Index metadata is cluster-scoped, so the
     pool runs one shared :class:`IndexesMonitor` (anchored to loop 0,
-    issuing info commands through ``clients[0]``) instead of one per
-    client.  The factory's per-client monitor is replaced before
-    ``connect()``, so cluster-side ``sindex-list`` load is independent
-    of ``loop_count``.  Tune via the ``index_refresh_interval`` kwarg
-    on :class:`AsyncPool` itself.
+    issuing info commands through member 0's client) instead of one per
+    member, so cluster-side ``sindex-list`` load is independent of
+    ``loop_count``.  Tune via ``index_refresh_interval`` — either the
+    kwarg on :class:`AsyncPool` or
+    :meth:`ClusterDefinition.with_index_refresh_interval`.
 
     **Per-Client Tokio runtime.**  When ``loop_count >= 4``, AsyncPool
-    automatically configures each Client to use its own dedicated PAC
+    automatically configures each member to use its own dedicated PAC
     Tokio runtime instead of the shared global one. This eliminates the
     cross-loop scheduler contention that previously caused throughput to
     collapse beyond 4 loops. Controlled via the ``per_client_runtime``
@@ -127,61 +132,68 @@ class AsyncPool:
     Example::
 
         pool = AsyncPool(
-            client_factory=lambda: Client("127.0.0.1:3000"),
+            ClusterDefinition("127.0.0.1", 3000),
             loop_count=4,
         )
         async with pool:
             result = await pool.run(
-                lambda client: client.create_session().get(key)
+                lambda cluster: cluster.create_session().get(key)
             )
 
     See Also:
-        :class:`~aerospike_sdk.aio.client.Client`: Single-loop async API.
+        :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`:
+            Single-loop entry point; the pool connects one member per loop
+            from the same definition.
     """
 
     def __init__(
         self,
-        client_factory: Callable[[], Client],
+        cluster_definition: Optional[ClusterDefinition] = None,
         loop_count: Optional[int] = None,
         *,
-        index_refresh_interval: float = 5.0,
+        index_refresh_interval: Optional[float] = None,
         per_client_runtime: Optional[bool] = None,
         use_uvloop: Optional[bool] = None,
+        client_factory: Optional[Callable[[], Client]] = None,
     ) -> None:
         """Configure the pool.  Call :meth:`start` or use ``async with``.
 
         Args:
-            client_factory: Zero-argument callable returning an *unconnected*
-                :class:`~aerospike_sdk.aio.client.Client`.  Called
-                ``loop_count`` times — once per pool thread.  Each client
-                connects on its own loop, binding its PAC
-                ``CompletionBridge`` to that loop.
+            cluster_definition: The
+                :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`
+                describing the cluster (seeds, auth, TLS, system settings).
+                The pool builds ``loop_count`` members from this single
+                definition; each member connects on its own loop, binding its
+                PAC ``CompletionBridge`` to that loop.  One definition builds
+                one ``ClientPolicy``, shared by every member — which is the
+                invariant the one-shot per-member-runtime policy mutation
+                relies on.  Config-file hot-reload is not armed for pool
+                members (restart the pool to pick up config changes).
 
-                **Shared-policy invariant:** when ``per_client_runtime`` is
-                enabled (auto at ``loop_count >= 4`` on free-threaded Python),
-                the factory MUST return Clients sharing a single
-                ``ClientPolicy`` PyO3 object — typically via a closure that
-                captures one policy: ``policy = ClientPolicy(); factory =
-                lambda: Client(seeds, policy=policy)``. AsyncPool applies a
-                one-shot mutation to that shared policy before any loop
-                thread starts; constructing a fresh ``ClientPolicy`` per
-                call would land the mutation on client 0 only and silently
-                disable the per-Client runtime for the rest. Violations
-                raise ``RuntimeError`` from :meth:`start`.
-
-                **Connection-pool sizing:** with N clients, total connections
-                per server node = N × ``max_conns_per_node``.  To keep the
-                aggregate budget constant, set
-                ``ClientPolicy.max_conns_per_node`` in the factory to
-                ``default / loop_count``.
+                **Connection-pool sizing:** with N members, total connections
+                per server node = N × ``max_connections_per_node``.  To keep
+                the aggregate budget constant, size
+                ``SystemSettings(max_connections_per_node=default //
+                loop_count)`` via
+                :meth:`ClusterDefinition.with_system_settings`.
             loop_count: Number of event loops / OS threads.  Defaults to
                 ``os.cpu_count()`` (or ``4`` if indeterminate).
             index_refresh_interval: Seconds between secondary-index cache
-                refreshes for the pool's *single shared* ``IndexesMonitor``
-                (default 5.0).  Index metadata is cluster-scoped, so one
-                monitor serves all pool clients — the per-Client monitor
-                each ``client_factory()`` would create is replaced before
-                connect, eliminating N×polling load.
+                refreshes for the pool's *single shared* ``IndexesMonitor``.
+                Defaults to the definition's
+                :meth:`~ClusterDefinition.with_index_refresh_interval` value
+                (itself 5.0 by default).  Index metadata is cluster-scoped,
+                so one monitor serves all pool members, eliminating
+                N×polling load.
+            client_factory: **Deprecated** — pass ``cluster_definition``
+                instead.  Zero-argument callable returning an *unconnected*
+                :class:`~aerospike_sdk.aio.client.Client`, called once per
+                pool thread; dispatch callbacks then receive the raw
+                ``Client`` the factory made (not a ``Cluster``).  When
+                ``per_client_runtime`` is enabled the factory MUST return
+                Clients sharing a single ``ClientPolicy`` PyO3 object
+                (violations raise ``RuntimeError`` from :meth:`start`).
+                Removed after one deprecation cycle.
             per_client_runtime: Whether each pool Client should run on its
                 own dedicated PAC Tokio runtime (per-loop runtime isolation,
                 eliminates cross-loop scheduler contention).
@@ -213,18 +225,52 @@ class AsyncPool:
 
         Example::
 
-            from aerospike_async import ClientPolicy
-            from aerospike_sdk import Client
+            from aerospike_sdk import ClusterDefinition
+            from aerospike_sdk.policy.system_settings import SystemSettings
 
             N = 4
-            def make_client() -> Client:
-                policy = ClientPolicy()
-                policy.max_conns_per_node = 300 // N
-                return Client("127.0.0.1:3000", policy=policy)
-
-            pool = AsyncPool(client_factory=make_client, loop_count=N)
+            definition = (
+                ClusterDefinition("127.0.0.1", 3000)
+                .with_system_settings(SystemSettings(max_connections_per_node=300 // N))
+            )
+            pool = AsyncPool(definition, loop_count=N)
         """
+        if cluster_definition is not None and not isinstance(
+            cluster_definition, ClusterDefinition
+        ):
+            # Old positional shape: AsyncPool(factory, loop_count). Shift the
+            # callable into the deprecated kwarg path below.
+            if callable(cluster_definition) and client_factory is None:
+                client_factory = cluster_definition
+                cluster_definition = None
+            else:
+                raise TypeError(
+                    "cluster_definition must be a ClusterDefinition; got "
+                    f"{type(cluster_definition).__name__}"
+                )
+        if client_factory is not None:
+            if cluster_definition is not None:
+                raise ValueError(
+                    "Pass either cluster_definition or the deprecated "
+                    "client_factory, not both"
+                )
+            warnings.warn(
+                "AsyncPool(client_factory=...) is deprecated; pass a "
+                "ClusterDefinition instead: AsyncPool(ClusterDefinition(...), "
+                "loop_count=N). Dispatch callbacks then receive a Cluster.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif cluster_definition is None:
+            raise ValueError("cluster_definition is required")
+        self._definition = cluster_definition
         self._factory = client_factory
+        if index_refresh_interval is None:
+            index_refresh_interval = (
+                cluster_definition._index_refresh_interval
+                if cluster_definition is not None
+                else 5.0
+            )
         self._n = loop_count or os.cpu_count() or 4
         # Auto-decide per-Client runtime: enable at 4+ loops where it scales,
         # leave alone below where the shared global runtime wins. ALSO gate
@@ -268,6 +314,9 @@ class AsyncPool:
         self._loops: List[Optional[asyncio.AbstractEventLoop]] = [None] * self._n
         self._threads: List[threading.Thread] = []
         self._clients: List[Client] = []
+        # What dispatch hands to callbacks: Cluster members (or, on the
+        # deprecated client_factory path, the raw Clients the factory made).
+        self._members: List[Cluster] = []
         self._rr = itertools.cycle(range(self._n))
         self._started = False
         self._closed = False
@@ -286,13 +335,13 @@ class AsyncPool:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Spin up pool threads, event loops, and connect all clients.
+        """Spin up pool threads, event loops, and connect all members.
 
-        Each thread starts an ``asyncio`` event loop, then the pool creates
-        and connects one :class:`Client` per loop (via
-        ``run_coroutine_threadsafe``).  Because ``Client.connect()`` calls
-        ``await new_client(…)`` on the pool loop, the PAC
-        ``CompletionBridge`` is naturally bound to the correct loop.
+        Each thread starts an ``asyncio`` event loop, then the pool connects
+        one :class:`Cluster` member per loop (via
+        ``run_coroutine_threadsafe``).  Because the connect awaits
+        ``new_client(…)`` on the pool loop, the PAC ``CompletionBridge`` is
+        naturally bound to the correct loop.
 
         Raises:
             RuntimeError: If already started or closed.
@@ -302,45 +351,55 @@ class AsyncPool:
         if self._closed:
             raise RuntimeError("AsyncPool is closed; create a new one")
 
-        # Phase 1: construct all N clients on the main thread, BEFORE any
-        # loop threads exist. Each call to `self._factory()` returns a
-        # fresh `Client` but typically shares the same `ClientPolicy`
-        # PyO3 object (the standard factory shape is
-        # `lambda: Client(seeds, policy=shared_policy)`). Constructing
-        # the clients here keeps them on a single thread until policy
-        # mutation is done.
-        clients: List[Optional[Client]] = [None] * self._n
-        for i in range(self._n):
-            client = self._factory()
-            # Replace the factory-created per-Client monitor with the pool's
-            # shared one before `connect()` runs.  `_owns_monitor = False`
-            # makes the per-Client lazy-start path skip start (so only one
-            # daemon thread polls, not N).  The pool drives the shared
-            # monitor's lifecycle (stop on aclose).
-            client._indexes_monitor = self._shared_monitor
-            client._owns_monitor = False
-            clients[i] = client
+        # Construct all N member clients on the main thread, BEFORE
+        # any loop threads exist — this keeps them on a single thread until
+        # policy mutation is done. The definition path builds every member
+        # from one ClusterDefinition, so a single ClientPolicy is shared by
+        # construction and the shared monitor is injected at __init__ time.
+        if self._definition is not None:
+            clients: List[Client] = self._definition._build_pool_members(
+                self._n, self._shared_monitor
+            )
+        else:
+            # Deprecated client_factory path. Each factory call returns a
+            # fresh `Client` but must share the same `ClientPolicy` PyO3
+            # object (the documented factory shape is
+            # `lambda: Client(seeds, policy=shared_policy)`).
+            assert self._factory is not None
+            clients = []
+            for _ in range(self._n):
+                client = self._factory()
+                # Replace the factory-created per-Client monitor with the
+                # pool's shared one before `connect()` runs.
+                # `_owns_monitor = False` makes the per-Client lazy-start
+                # path skip start (so only one daemon thread polls, not N).
+                # The pool drives the shared monitor's lifecycle (stop on
+                # aclose).
+                client._indexes_monitor = self._shared_monitor
+                client._owns_monitor = False
+                clients.append(client)
 
-        # Phase 2: one-shot policy mutation.  Per-Client Tokio runtime must
+        # One-shot policy mutation.  Per-Client Tokio runtime must
         # be set BEFORE connect() because PAC's new_client() reads this
-        # field at construction.  This relies on the documented invariant
-        # that the factory returns Clients sharing a single ClientPolicy
-        # PyO3 object — verified by `_assert_shared_policy_invariant()`
-        # below. A single mutation on clients[0]._policy then applies to
-        # all clients via shared reference. Doing this once, BEFORE any
-        # loop threads exist, avoids the race where the previous
-        # per-iteration mutation could collide with already-running loop
-        # threads — on 3.14t free-threading PyO3's RefCell-style borrow
-        # checker raised `RuntimeError: Already borrowed` because the
-        # mutation took `&mut ClientPolicy` while a peer loop thread held
-        # a shared borrow via `Client.connect()`'s policy read.
+        # field at construction.  All members share a single ClientPolicy
+        # PyO3 object — by construction on the definition path, and by
+        # documented factory contract on the deprecated path (verified by
+        # `_assert_shared_policy_invariant()`). A single mutation on
+        # clients[0]._policy then applies to all members via shared
+        # reference. Doing this once, BEFORE any loop threads exist, avoids
+        # the race where a per-iteration mutation could collide with
+        # already-running loop threads — on 3.14t free-threading PyO3's
+        # RefCell-style borrow checker raised `RuntimeError: Already
+        # borrowed` because the mutation took `&mut ClientPolicy` while a
+        # peer loop thread held a shared borrow via the connect-time policy
+        # read.
         if self._per_client_runtime:
             self._assert_shared_policy_invariant(clients)
             clients[0]._policy.per_client_runtime_workers = (
                 self._per_client_runtime_workers
             )
 
-        # Phase 3: spawn the N loop threads. Safe now because clients are
+        # Spawn the N loop threads. Safe now because clients are
         # fully constructed and their shared policy is finalized.
         for i in range(self._n):
             t = threading.Thread(
@@ -355,37 +414,51 @@ class AsyncPool:
         for ev in self._loop_ready:
             ev.wait()
 
-        # Phase 4: schedule all connects concurrently on their respective
+        # Schedule all connects concurrently on their respective
         # loops.  `run_coroutine_threadsafe` returns a
         # `concurrent.futures.Future`; we wrap each so `gather` can await
         # them without blocking the caller's event loop (sequential
         # `.result()` would freeze the caller's loop for up to
-        # N × connect_timeout seconds).
-        afuts: List[asyncio.Future[None]] = []
+        # N × connect_timeout seconds).  On the definition path each member
+        # is connected, validated, and wrapped into a Cluster on its own
+        # loop; the deprecated factory path connects the bare Client as
+        # before.
+        afuts: List[asyncio.Future[object]] = []
         for i in range(self._n):
-            client = clients[i]
-            assert client is not None
             loop = self._loops[i]
             assert loop is not None
-            cfut = asyncio.run_coroutine_threadsafe(client.connect(), loop)
+            if self._definition is not None:
+                coro: Coroutine[object, object, object] = (
+                    Cluster._connect_and_wrap(clients[i])
+                )
+            else:
+                coro = clients[i].connect()
+            cfut = asyncio.run_coroutine_threadsafe(coro, loop)
             afuts.append(asyncio.wrap_future(cfut))
 
         results = await asyncio.gather(*afuts, return_exceptions=True)
         errors: List[Exception] = [r for r in results if isinstance(r, Exception)]
         for i, r in enumerate(results):
             if isinstance(r, Exception):
-                log.error("AsyncPool: client %d failed to connect: %s", i, r)
+                log.error("AsyncPool: member %d failed to connect: %s", i, r)
 
         if errors:
-            # Close the clients that did connect, also concurrently.
+            # Close the members that did connect, also concurrently.
+            # `_connect_and_wrap` already closed its client on validation
+            # failure, so only successful results need cleanup here.
             close_afuts: List[asyncio.Future[None]] = []
-            for i in range(self._n):
-                c = clients[i]
-                if c is not None and c.is_connected:
-                    loop = self._loops[i]
-                    assert loop is not None
-                    cfut = asyncio.run_coroutine_threadsafe(c.close(), loop)
-                    close_afuts.append(asyncio.wrap_future(cfut))
+            for i, r in enumerate(results):
+                loop = self._loops[i]
+                assert loop is not None
+                if isinstance(r, Cluster):
+                    cfut = asyncio.run_coroutine_threadsafe(r.close(), loop)
+                elif clients[i].is_connected:
+                    cfut = asyncio.run_coroutine_threadsafe(
+                        clients[i].close(), loop
+                    )
+                else:
+                    continue
+                close_afuts.append(asyncio.wrap_future(cfut))
             if close_afuts:
                 await asyncio.gather(*close_afuts, return_exceptions=True)
             for loop in self._loops:
@@ -395,7 +468,13 @@ class AsyncPool:
                 t.join(timeout=5.0)
             raise errors[0]
 
-        self._clients = [c for c in clients if c is not None]
+        if self._definition is not None:
+            self._members = cast(List[Cluster], list(results))
+            self._clients = [m._client for m in self._members]
+        else:
+            # Deprecated factory path: callbacks receive the raw Clients.
+            self._members = cast(List[Cluster], clients)
+            self._clients = clients
 
         # The shared monitor is now a daemon-thread poller (no loop affinity).
         # It starts lazily on the first AEL ``where()`` query through any of
@@ -468,6 +547,7 @@ class AsyncPool:
             t.join(timeout=10.0)
 
         self._clients.clear()
+        self._members.clear()
         self._threads.clear()
         # Hygiene: drop the round-robin iterator so its captured range() can GC.
         self._rr = itertools.cycle(range(0))
@@ -488,14 +568,16 @@ class AsyncPool:
 
     async def run(
         self,
-        fn: Callable[[Client], Coroutine[object, object, T]],
+        fn: Callable[[Cluster], Coroutine[object, object, T]],
         pick: Optional[int] = None,
     ) -> T:
-        """Dispatch ``fn(client_i)`` to one of the pool's loops.
+        """Dispatch ``fn(member_i)`` to one of the pool's loops.
 
         Args:
             fn: Async callable receiving one of the pool's
-                :class:`~aerospike_sdk.aio.client.Client` instances.
+                :class:`~aerospike_sdk.aio.cluster.Cluster` members.  (On
+                the deprecated ``client_factory`` path the callback receives
+                the raw ``Client`` the factory made instead.)
             pick: Explicit loop index (modulo ``loop_count``).  ``None``
                 selects round-robin.
 
@@ -510,29 +592,31 @@ class AsyncPool:
         Example::
 
             result = await pool.run(
-                lambda c: c.create_session().get(key)
+                lambda cluster: cluster.create_session().get(key)
             )
         """
         self._check_usable()
         self._guard_self_dispatch()
 
         idx = (pick % self._n) if pick is not None else next(self._rr)
-        client = self._clients[idx]
+        member = self._members[idx]
         loop = self._loops[idx]
         assert loop is not None
 
-        cfut = asyncio.run_coroutine_threadsafe(fn(client), loop)
+        cfut = asyncio.run_coroutine_threadsafe(fn(member), loop)
         return await asyncio.wrap_future(cfut)
 
     async def map(
         self,
-        fn: Callable[[Client, X], Coroutine[object, object, T]],
+        fn: Callable[[Cluster, X], Coroutine[object, object, T]],
         inputs: Iterable[X],
     ) -> List[T]:
         """Dispatch ``fn`` across *inputs*, sharded round-robin across loops.
 
         Args:
-            fn: Async callable receiving ``(client, input_item)``.
+            fn: Async callable receiving ``(cluster, input_item)``.  (On
+                the deprecated ``client_factory`` path the first argument is
+                the raw ``Client`` the factory made instead.)
             inputs: Items to distribute across the pool.
 
         Returns:
@@ -543,8 +627,8 @@ class AsyncPool:
 
         Example::
 
-            async def do_get(client: Client, key: Key) -> RecordResult:
-                return await client.create_session().get(key)
+            async def do_get(cluster: Cluster, key: Key) -> RecordResult:
+                return await cluster.create_session().get(key)
 
             results = await pool.map(do_get, keys)
         """
@@ -554,10 +638,10 @@ class AsyncPool:
         wrapped: List[asyncio.Future[T]] = []
         for item in inputs:
             idx = next(self._rr)
-            client = self._clients[idx]
+            member = self._members[idx]
             loop = self._loops[idx]
             assert loop is not None
-            cfut = asyncio.run_coroutine_threadsafe(fn(client, item), loop)
+            cfut = asyncio.run_coroutine_threadsafe(fn(member, item), loop)
             wrapped.append(asyncio.wrap_future(cfut))
 
         result = list(await asyncio.gather(*wrapped))
@@ -616,14 +700,16 @@ class AsyncPool:
                 "AsyncPool is not started; call start() or use async with"
             )
 
-    def _assert_shared_policy_invariant(self, clients: List[Optional[Client]]) -> None:
+    def _assert_shared_policy_invariant(self, clients: List[Client]) -> None:
         """Verify all clients share a single ``ClientPolicy`` PyO3 object.
 
-        The Phase-2 one-shot mutation in :meth:`start` relies on this
+        The one-shot policy mutation in :meth:`start` relies on this
         invariant: it mutates ``clients[0]._policy`` and expects the change
         to be visible to all other clients via shared reference. The
-        documented factory shape (``lambda: Client(seeds, policy=shared)``)
-        produces this; an unusual factory that constructs a fresh
+        definition path satisfies it by construction (one
+        ``ClusterDefinition`` builds one policy); on the deprecated factory
+        path the documented shape (``lambda: Client(seeds, policy=shared)``)
+        produces it, and an unusual factory that constructs a fresh
         ``ClientPolicy`` per call would silently land
         ``per_client_runtime_workers`` on client 0 only and break the
         per-Client-runtime promise for clients 1..N-1.

@@ -15,7 +15,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.exceptions import ConnectionError as PacConnectionError
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -130,6 +130,55 @@ def _apply_auth_from_env(policy: ClientPolicy) -> None:
             policy.set_auth_mode(mode)
         else:
             policy.set_auth_mode(mode, user=user, password=password)
+
+
+def _apply_auth_to_definition(definition) -> None:
+    """Apply ``AEROSPIKE_AUTH_*`` env vars to a ClusterDefinition, if set.
+
+    Mirror of :func:`_apply_auth_from_env` for the ``ClusterDefinition``
+    entry path (async or sync — both expose the same credential methods).
+    """
+    mode_str = os.environ.get('AEROSPIKE_AUTH_MODE', '').strip().upper()
+    if not mode_str or mode_str not in _AUTH_MODES:
+        return
+    user = os.environ.get('AEROSPIKE_AUTH_USER', '')
+    password = os.environ.get('AEROSPIKE_AUTH_PASSWORD', '')
+    if mode_str == "INTERNAL":
+        definition.with_native_credentials(user, password)
+    elif mode_str == "EXTERNAL":
+        definition.with_external_credentials(user, password)
+    else:  # PKI
+        definition.with_certificate_credentials()
+
+
+@pytest.fixture(scope="session")
+def make_cluster_definition():
+    """Factory for ClusterDefinitions mirroring the ClientPolicy fixtures.
+
+    ``make_cluster_definition(seed)`` builds a definition for the AP seed
+    (services-alternate from env, no auth — same contract as
+    :func:`client_policy`); ``auth=True`` applies ``AEROSPIKE_AUTH_*`` (the
+    :func:`client_policy_sc` / :func:`client_policy_sec` contract);
+    ``sync=True`` returns the ``aerospike_sdk.sync`` definition.
+    """
+    from aerospike_sdk import ClusterDefinition, Host
+    from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
+    from aerospike_sdk.sync import Host as SyncHost
+
+    def _make(seed: str, *, auth: bool = False, sync: bool = False):
+        if sync:
+            definition = SyncClusterDefinition(
+                hosts=SyncHost.parse_hosts(seed, 3000)
+            )
+        else:
+            definition = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
+        if _use_services_alternate_from_env():
+            definition.using_services_alternate()
+        if auth:
+            _apply_auth_to_definition(definition)
+        return definition
+
+    return _make
 
 
 @pytest.fixture(scope="session")
