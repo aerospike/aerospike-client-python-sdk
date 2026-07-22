@@ -132,7 +132,7 @@ def _apply_auth_from_env(policy: ClientPolicy) -> None:
             policy.set_auth_mode(mode, user=user, password=password)
 
 
-def _apply_auth_to_definition(definition) -> None:
+def _apply_auth_to_definition(cluster_def) -> None:
     """Apply ``AEROSPIKE_AUTH_*`` env vars to a ClusterDefinition, if set.
 
     Mirror of :func:`_apply_auth_from_env` for the ``ClusterDefinition``
@@ -144,22 +144,22 @@ def _apply_auth_to_definition(definition) -> None:
     user = os.environ.get('AEROSPIKE_AUTH_USER', '')
     password = os.environ.get('AEROSPIKE_AUTH_PASSWORD', '')
     if mode_str == "INTERNAL":
-        definition.with_native_credentials(user, password)
+        cluster_def.with_native_credentials(user, password)
     elif mode_str == "EXTERNAL":
-        definition.with_external_credentials(user, password)
+        cluster_def.with_external_credentials(user, password)
     else:  # PKI
-        definition.with_certificate_credentials()
+        cluster_def.with_certificate_credentials()
 
 
 @pytest.fixture(scope="session")
 def make_cluster_definition():
     """Factory for ClusterDefinitions mirroring the ClientPolicy fixtures.
 
-    ``make_cluster_definition(seed)`` builds a definition for the AP seed
+    ``make_cluster_definition(seed)`` builds a ClusterDefinition for the AP seed
     (services-alternate from env, no auth — same contract as
     :func:`client_policy`); ``auth=True`` applies ``AEROSPIKE_AUTH_*`` (the
     :func:`client_policy_sc` / :func:`client_policy_sec` contract);
-    ``sync=True`` returns the ``aerospike_sdk.sync`` definition.
+    ``sync=True`` returns the ``aerospike_sdk.sync`` cluster_def.
     """
     from aerospike_sdk import ClusterDefinition, Host
     from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
@@ -167,16 +167,16 @@ def make_cluster_definition():
 
     def _make(seed: str, *, auth: bool = False, sync: bool = False):
         if sync:
-            definition = SyncClusterDefinition(
+            cluster_def = SyncClusterDefinition(
                 hosts=SyncHost.parse_hosts(seed, 3000)
             )
         else:
-            definition = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
+            cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
         if _use_services_alternate_from_env():
-            definition.using_services_alternate()
+            cluster_def.using_services_alternate()
         if auth:
-            _apply_auth_to_definition(definition)
-        return definition
+            _apply_auth_to_definition(cluster_def)
+        return cluster_def
 
     return _make
 

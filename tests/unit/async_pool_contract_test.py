@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""AsyncPool construction contract: definition-first, deprecated factory adapter.
+"""AsyncPool construction contract: ClusterDefinition-first, deprecated factory adapter.
 
 Construction-time only — no I/O, no loops. The pool is defined by a
 :class:`ClusterDefinition`; the ``client_factory`` kwarg (and the old
@@ -56,13 +56,13 @@ class TestDefinitionContract:
             AsyncPool("127.0.0.1:3000", loop_count=2)  # type: ignore[arg-type]
 
     def test_monitor_interval_defaults_from_definition(self, unit_cluster_definition):
-        definition = unit_cluster_definition.with_index_refresh_interval(2.5)
-        pool = AsyncPool(definition, loop_count=2)
+        cluster_def = unit_cluster_definition.with_index_refresh_interval(2.5)
+        pool = AsyncPool(cluster_def, loop_count=2)
         assert pool._shared_monitor._refresh_interval == 2.5
 
     def test_monitor_interval_kwarg_overrides_definition(self, unit_cluster_definition):
-        definition = unit_cluster_definition.with_index_refresh_interval(2.5)
-        pool = AsyncPool(definition, loop_count=2, index_refresh_interval=0.5)
+        cluster_def = unit_cluster_definition.with_index_refresh_interval(2.5)
+        pool = AsyncPool(cluster_def, loop_count=2, index_refresh_interval=0.5)
         assert pool._shared_monitor._refresh_interval == 0.5
 
 

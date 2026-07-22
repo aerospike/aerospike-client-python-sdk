@@ -191,12 +191,12 @@ async def admin_cluster(aerospike_host_sec, admin_pac):
     ``admin_pac`` solely so the security + 8.1.3 probe happens before this
     one spins up.
     """
-    definition = _psdk_definition(
+    cluster_def = _psdk_definition(
         aerospike_host_sec,
         user=os.environ.get("AEROSPIKE_AUTH_USER", "admin"),
         password=os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin"),
     )
-    async with await definition.connect() as c:
+    async with await cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 
@@ -236,18 +236,18 @@ async def masking_setup(admin_pac, admin_cluster):
 
 
 def _psdk_definition(seed: str, *, user: str, password: str) -> ClusterDefinition:
-    definition = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
+    cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
     if _services_alternate():
-        definition.using_services_alternate()
-    definition.with_native_credentials(user, password)
-    return definition
+        cluster_def.using_services_alternate()
+    cluster_def.with_native_credentials(user, password)
+    return cluster_def
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def reader_cluster(aerospike_host_sec, masking_setup):
     """PSDK Cluster authenticated as ``psdk_strops_reader`` ([read-write, read-masked])."""
-    definition = _psdk_definition(aerospike_host_sec, user=_USER_READER, password=_USER_PASSWORD)
-    async with await definition.connect() as c:
+    cluster_def = _psdk_definition(aerospike_host_sec, user=_USER_READER, password=_USER_PASSWORD)
+    async with await cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 
@@ -255,8 +255,8 @@ async def reader_cluster(aerospike_host_sec, masking_setup):
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def basic_cluster(aerospike_host_sec, masking_setup):
     """PSDK Cluster authenticated as ``psdk_strops_user`` ([read-write] only)."""
-    definition = _psdk_definition(aerospike_host_sec, user=_USER_BASIC, password=_USER_PASSWORD)
-    async with await definition.connect() as c:
+    cluster_def = _psdk_definition(aerospike_host_sec, user=_USER_BASIC, password=_USER_PASSWORD)
+    async with await cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 

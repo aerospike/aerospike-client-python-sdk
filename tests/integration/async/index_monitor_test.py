@@ -51,10 +51,10 @@ async def _wait_for_monitor_cache(
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition, enterprise):
     """Cluster with seed data and a numeric secondary index on 'age'."""
-    definition = make_cluster_definition(aerospike_host)
+    cluster_def = make_cluster_definition(aerospike_host)
     # refresh interval set super-small to speed up testing
-    definition.with_index_refresh_interval(0.25)
-    async with await definition.connect() as c:
+    cluster_def.with_index_refresh_interval(0.25)
+    async with await cluster_def.connect() as c:
         session = c.create_session()
         ds = DataSet.of(NAMESPACE, SET_NAME)
 

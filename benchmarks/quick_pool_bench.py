@@ -130,9 +130,9 @@ async def _run_pool(
     dataset: DataSet,
     loop_count: int,
 ) -> Tuple[int, float]:
-    definition = ClusterDefinition(hosts=Host.parse_hosts(args.host, 3000))
+    cluster_def = ClusterDefinition(hosts=Host.parse_hosts(args.host, 3000))
 
-    async with AsyncPool(definition, loop_count=loop_count) as pool:
+    async with AsyncPool(cluster_def, loop_count=loop_count) as pool:
         t0 = time.monotonic()
         deadline = t0 + args.duration
 

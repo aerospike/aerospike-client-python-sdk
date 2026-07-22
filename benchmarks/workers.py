@@ -38,7 +38,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.session import SyncSession
 
-from ._env import client_policy_from_config, definition_from_config
+from ._env import client_policy_from_config, cluster_def_from_config
 from .config import WorkloadConfig, WorkloadKind
 from .record_spec import (
     BinField,
@@ -1059,9 +1059,9 @@ async def run_async_pool(
     # ClusterDefinition surface, so that config falls back to the deprecated
     # factory shape (whose callbacks receive raw Clients — the worker below
     # only calls ``create_session``, which both member types expose).
-    definition = definition_from_config(cfg)
-    if definition is not None:
-        pool = AsyncPool(definition, loop_count=n_loops)
+    cluster_def = cluster_def_from_config(cfg)
+    if cluster_def is not None:
+        pool = AsyncPool(cluster_def, loop_count=n_loops)
     else:
         policy = client_policy_from_config(cfg)
 

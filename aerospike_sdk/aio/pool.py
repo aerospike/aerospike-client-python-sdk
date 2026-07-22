@@ -236,11 +236,11 @@ class AsyncPool:
             from aerospike_sdk.policy.system_settings import SystemSettings
 
             N = 4
-            definition = (
+            cluster_def = (
                 ClusterDefinition("127.0.0.1", 3000)
                 .with_system_settings(SystemSettings(max_connections_per_node=300 // N))
             )
-            pool = AsyncPool(definition, loop_count=N)
+            pool = AsyncPool(cluster_def, loop_count=N)
         """
         if cluster_definition is not None and not isinstance(
             cluster_definition, ClusterDefinition

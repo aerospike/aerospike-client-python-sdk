@@ -34,9 +34,9 @@ async def cluster(
     wait_for_index, wait_for_set_visible,
 ):
     """Setup cluster, data, and a secondary index for hint tests."""
-    definition = make_cluster_definition(aerospike_host)
-    definition.with_index_refresh_interval(0.25)
-    async with await definition.connect() as c:
+    cluster_def = make_cluster_definition(aerospike_host)
+    cluster_def.with_index_refresh_interval(0.25)
+    async with await cluster_def.connect() as c:
         session = c.create_session()
         ds = DataSet.of("test", SET_NAME)
 

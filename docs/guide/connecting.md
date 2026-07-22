@@ -57,7 +57,7 @@ async with await cluster_def.connect() as cluster:
 Server-side TLS with CA certificate verification:
 
 ```python
-cluster = (
+cluster_def = (
     ClusterDefinition("localhost", 4333)
     .with_tls_config_of()
         .tls_name("myTlsName")
@@ -67,15 +67,15 @@ cluster = (
     .using_services_alternate()
 )
 
-async with await cluster.connect() as connected:
-    session = connected.create_session()
+async with await cluster_def.connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 
 Mutual TLS (mTLS) with client certificate authentication:
 
 ```python
-cluster = (
+cluster_def = (
     ClusterDefinition("localhost", 4333)
     .with_tls_config_of()
         .tls_name("myTlsName")
@@ -87,8 +87,8 @@ cluster = (
     .using_services_alternate()
 )
 
-async with await cluster.connect() as connected:
-    session = connected.create_session()
+async with await cluster_def.connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 

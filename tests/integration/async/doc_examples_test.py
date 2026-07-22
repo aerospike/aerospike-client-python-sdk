@@ -98,19 +98,19 @@ def test_quick_example_sync(make_cluster_definition):
 async def test_cluster_definition_connect():
     """docs/guide/connecting.md — ClusterDefinition section."""
     host, port = SEEDS.split(",")[0].rsplit(":", 1)
-    defn = ClusterDefinition(host, int(port))
+    cluster_def = ClusterDefinition(host, int(port))
     if _use_services_alternate():
-        defn = defn.using_services_alternate()
+        cluster_def = cluster_def.using_services_alternate()
     mode_str = os.environ.get("AEROSPIKE_AUTH_MODE", "").strip().upper()
     if mode_str == "INTERNAL":
         user = os.environ.get("AEROSPIKE_AUTH_USER", "")
         password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
-        defn = defn.with_native_credentials(user, password)
+        cluster_def = cluster_def.with_native_credentials(user, password)
     elif mode_str == "EXTERNAL":
         user = os.environ.get("AEROSPIKE_AUTH_USER", "")
         password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
-        defn = defn.with_external_credentials(user, password)
-    async with await defn.connect() as cluster:
+        cluster_def = cluster_def.with_external_credentials(user, password)
+    async with await cluster_def.connect() as cluster:
         s = cluster.create_session(Behavior.DEFAULT)
         key = USERS.id("cd_test")
         await s.upsert(key).put({"x": 1}).execute()
