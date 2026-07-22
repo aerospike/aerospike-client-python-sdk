@@ -51,9 +51,11 @@ class TransactionSettings:
                 implicit_batch_write_transactions=False,
             ),
         )
-        cluster = await ClusterDefinition("localhost", 3000) \\
-            .with_system_settings(settings) \\
+        cluster = await (
+            ClusterDefinition("localhost", 3000)
+            .with_system_settings(settings)
             .connect()
+        )
 
     See Also:
         :class:`SystemSettings`: Carrier for these settings.
@@ -83,9 +85,11 @@ class SystemSettings:
             max_connections_per_node=200,
             max_socket_idle_time=timedelta(seconds=30),
         )
-        cluster = await ClusterDefinition("localhost", 3000) \\
-            .with_system_settings(settings) \\
+        cluster = await (
+            ClusterDefinition("localhost", 3000)
+            .with_system_settings(settings)
             .connect()
+        )
 
     See Also:
         :class:`TransactionSettings`: The SDK-runtime transaction group.

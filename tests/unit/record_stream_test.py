@@ -20,9 +20,8 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
 
@@ -105,8 +104,7 @@ class TestFromError:
         assert results[0].in_doubt is False
 
     async def test_preserves_in_doubt(self):
-        stream = RecordStream.from_error(
-            _key(), ResultCode.TIMEOUT, in_doubt=True)
+        stream = RecordStream.from_error(_key(), ResultCode.TIMEOUT, in_doubt=True)
         results = await stream.collect()
         assert results[0].in_doubt is True
 

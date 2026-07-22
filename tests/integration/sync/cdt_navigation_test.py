@@ -19,7 +19,7 @@ import pytest
 
 from aerospike_async import ListOrderType, MapOrder
 
-from aerospike_sdk import DataSet, ListReturnType, MapReturnType, SyncClient
+from aerospike_sdk import DataSet, ListReturnType, MapReturnType
 
 
 NS = "test"
@@ -28,8 +28,8 @@ DS = DataSet.of(NS, SET)
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         session = c.create_session()
         for i in range(1, 40):
             session.delete(DS.id(i)).execute()
@@ -51,8 +51,8 @@ def _cdt_remove_payload(bins: dict, bin_name: str):
 
 class TestNestedMapNavigationDeepSync:
 
-    def test_three_level_map_read(self, client):
-        session = client.create_session()
+    def test_three_level_map_read(self, cluster):
+        session = cluster.create_session()
         k = _key(1)
         session.upsert(k).put({"doc": {"mid": {"leaf": 7}}}).execute()
 
@@ -64,8 +64,8 @@ class TestNestedMapNavigationDeepSync:
         )
         assert rs.record.bins["doc"] == 7
 
-    def test_three_level_map_write_set_to(self, client):
-        session = client.create_session()
+    def test_three_level_map_write_set_to(self, cluster):
+        session = cluster.create_session()
         k = _key(2)
         session.upsert(k).put({"doc": {"mid": {"leaf": 1}}}).execute()
 
@@ -79,8 +79,8 @@ class TestNestedMapNavigationDeepSync:
         )
         assert rs.record.bins["doc"] == 99
 
-    def test_map_then_list_then_map_read(self, client):
-        session = client.create_session()
+    def test_map_then_list_then_map_read(self, cluster):
+        session = cluster.create_session()
         k = _key(3)
         session.upsert(k).put({
             "root": {"items": [{"id": 1, "v": 10}, {"id": 2, "v": 20}]},
@@ -97,8 +97,8 @@ class TestNestedMapNavigationDeepSync:
 
 class TestNestedRangeNavigationSync:
 
-    def test_nested_map_key_range_count(self, client):
-        session = client.create_session()
+    def test_nested_map_key_range_count(self, cluster):
+        session = cluster.create_session()
         k = _key(4)
         session.upsert(k).put({
             "outer": {"a": 1, "b": 2, "c": 3, "d": 4},
@@ -112,8 +112,8 @@ class TestNestedRangeNavigationSync:
         )
         assert rs.record.bins["outer"] == 2
 
-    def test_nested_map_value_range_get_values(self, client):
-        session = client.create_session()
+    def test_nested_map_value_range_get_values(self, cluster):
+        session = cluster.create_session()
         k = _key(5)
         session.upsert(k).put({
             "scores": {"alice": 80, "bob": 90, "carol": 95},
@@ -129,8 +129,8 @@ class TestNestedRangeNavigationSync:
         assert isinstance(vals, list)
         assert sorted(int(x) for x in vals) == [90, 95]
 
-    def test_nested_list_index_range_count(self, client):
-        session = client.create_session()
+    def test_nested_list_index_range_count(self, cluster):
+        session = cluster.create_session()
         k = _key(6)
         session.upsert(k).put({
             "wrap": {"nums": [10, 20, 30, 40, 50]},
@@ -147,8 +147,8 @@ class TestNestedRangeNavigationSync:
 
 class TestCreateIfMissingSync:
 
-    def test_on_map_key_create_type_adds_key(self, client):
-        session = client.create_session()
+    def test_on_map_key_create_type_adds_key(self, cluster):
+        session = cluster.create_session()
         k = _key(7)
         session.upsert(k).put({"shell": {"existing": 1}}).execute()
 
@@ -164,8 +164,8 @@ class TestCreateIfMissingSync:
         )
         assert rs.record.bins["shell"] == 42
 
-    def test_nested_on_map_key_create_type(self, client):
-        session = client.create_session()
+    def test_nested_on_map_key_create_type(self, cluster):
+        session = cluster.create_session()
         k = _key(8)
         session.upsert(k).put({"root": {"inner": {"x": 0}}}).execute()
 
@@ -181,8 +181,8 @@ class TestCreateIfMissingSync:
         )
         assert rs.record.bins["root"] == 100
 
-    def test_on_list_index_pad_nested_list(self, client):
-        session = client.create_session()
+    def test_on_list_index_pad_nested_list(self, cluster):
+        session = cluster.create_session()
         k = _key(9)
         session.upsert(k).put({"m": {"lst": [1, 2]}}).execute()
 
@@ -203,8 +203,8 @@ class TestCreateIfMissingSync:
 
 class TestValueSelectorChainingSync:
 
-    def test_nested_list_value_count(self, client):
-        session = client.create_session()
+    def test_nested_list_value_count(self, cluster):
+        session = cluster.create_session()
         k = _key(10)
         session.upsert(k).put({"m": {"nums": [1, 5, 5, 5, 2]}}).execute()
 
@@ -216,8 +216,8 @@ class TestValueSelectorChainingSync:
         )
         assert rs.record.bins["m"] == 3
 
-    def test_nested_list_value_remove(self, client):
-        session = client.create_session()
+    def test_nested_list_value_remove(self, cluster):
+        session = cluster.create_session()
         k = _key(11)
         session.upsert(k).put({"m": {"nums": [1, 9, 9, 3]}}).execute()
 
@@ -229,8 +229,8 @@ class TestValueSelectorChainingSync:
         lst = rs.record.bins["m"]
         assert [int(x) for x in lst] == [1, 3]
 
-    def test_bin_list_value_then_inverted_read(self, client):
-        session = client.create_session()
+    def test_bin_list_value_then_inverted_read(self, cluster):
+        session = cluster.create_session()
         k = _key(12)
         session.upsert(k).put({"tags": [10, 20, 10, 30]}).execute()
 
@@ -256,10 +256,10 @@ class TestSpecialValueOpenRangeSync:
         except ImportError:
             pytest.skip("aerospike_async.SpecialValue not available")
 
-    def test_nested_map_key_range_to_infinity(self, client):
+    def test_nested_map_key_range_to_infinity(self, cluster):
         from aerospike_async import SpecialValue
 
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(13)
         session.upsert(k).put({"m": {"a": 1, "m": 2, "z": 3}}).execute()
 
@@ -271,11 +271,11 @@ class TestSpecialValueOpenRangeSync:
         )
         assert rs.record.bins["m"] == 2
 
-    def test_wildcard_in_map_value_list(self, client):
+    def test_wildcard_in_map_value_list(self, cluster):
         """WILDCARD matches all values in a value-list selector."""
         from aerospike_async import SpecialValue
 
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(14)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3},
@@ -290,11 +290,11 @@ class TestSpecialValueOpenRangeSync:
         keys = rs.record.bins["m"]
         assert sorted(keys) == ["a", "b", "c"]
 
-    def test_list_value_range_to_infinity(self, client):
+    def test_list_value_range_to_infinity(self, cluster):
         """SpecialValue.INFINITY as upper bound on list value range."""
         from aerospike_async import SpecialValue
 
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(15)
         session.upsert(k).put({"nums": [10, 20, 30, 40, 50]}).execute()
 
@@ -310,9 +310,9 @@ class TestSpecialValueOpenRangeSync:
 
 class TestMapValueSelectorSync:
 
-    def test_on_map_value_count(self, client):
+    def test_on_map_value_count(self, cluster):
         """Count map entries matching a specific value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(16)
         session.upsert(k).put({
             "grades": {"alice": "A", "bob": "B", "carol": "A", "dave": "C"},
@@ -326,9 +326,9 @@ class TestMapValueSelectorSync:
         )
         assert rs.record.bins["grades"] == 2
 
-    def test_on_map_value_get_keys(self, client):
+    def test_on_map_value_get_keys(self, cluster):
         """Get keys for entries matching a specific value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(17)
         session.upsert(k).put({
             "colors": {"apple": "red", "sky": "blue", "fire": "red"},
@@ -343,9 +343,9 @@ class TestMapValueSelectorSync:
         keys = rs.record.bins["colors"]
         assert sorted(keys) == ["apple", "fire"]
 
-    def test_on_map_value_remove(self, client):
+    def test_on_map_value_remove(self, cluster):
         """Remove map entries by value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(18)
         session.upsert(k).put({
             "scores": {"a": 10, "b": 20, "c": 10},
@@ -359,9 +359,9 @@ class TestMapValueSelectorSync:
 
 class TestListValueRangeSync:
 
-    def test_list_value_range_get_values(self, client):
+    def test_list_value_range_get_values(self, cluster):
         """Select list elements by value range."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(19)
         session.upsert(k).put({"nums": [5, 15, 25, 35, 45]}).execute()
 
@@ -374,9 +374,9 @@ class TestListValueRangeSync:
         vals = rs.record.bins["nums"]
         assert sorted(int(x) for x in vals) == [15, 25]
 
-    def test_list_value_range_remove(self, client):
+    def test_list_value_range_remove(self, cluster):
         """Remove list elements in a value range."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(20)
         session.upsert(k).put({"nums": [5, 15, 25, 35, 45]}).execute()
 
@@ -389,9 +389,9 @@ class TestListValueRangeSync:
 
 class TestListSelectorsSync:
 
-    def test_on_map_key_list_get_values(self, client):
+    def test_on_map_key_list_get_values(self, cluster):
         """Select map entries by a list of keys."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(21)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3, "d": 4},
@@ -406,9 +406,9 @@ class TestListSelectorsSync:
         vals = rs.record.bins["m"]
         assert sorted(int(x) for x in vals) == [1, 3]
 
-    def test_on_map_value_list_get_keys(self, client):
+    def test_on_map_value_list_get_keys(self, cluster):
         """Select map entries by a list of values."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(22)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 1, "d": 3},
@@ -423,9 +423,9 @@ class TestListSelectorsSync:
         keys = rs.record.bins["m"]
         assert sorted(keys) == ["a", "c", "d"]
 
-    def test_on_list_value_list_get_values(self, client):
+    def test_on_list_value_list_get_values(self, cluster):
         """Select list elements matching any value in a list."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(23)
         session.upsert(k).put({"nums": [1, 2, 3, 4, 5, 3]}).execute()
 
@@ -438,9 +438,9 @@ class TestListSelectorsSync:
         vals = rs.record.bins["nums"]
         assert sorted(int(x) for x in vals) == [2, 4]
 
-    def test_on_map_key_list_remove(self, client):
+    def test_on_map_key_list_remove(self, cluster):
         """Remove map entries by a list of keys."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(24)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3},
@@ -454,9 +454,9 @@ class TestListSelectorsSync:
 
 class TestRemoveAllOthersSync:
 
-    def test_remove_all_others_map_key_range(self, client):
+    def test_remove_all_others_map_key_range(self, cluster):
         """Keep only map entries in a key range, remove the rest."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(25)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3, "d": 4},
@@ -467,9 +467,9 @@ class TestRemoveAllOthersSync:
         rs = session.query(k).execute().first_or_raise()
         assert rs.record.bins["m"] == {"b": 2, "c": 3}
 
-    def test_remove_all_others_list_value(self, client):
+    def test_remove_all_others_list_value(self, cluster):
         """Keep only list elements matching a value, remove others."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(26)
         session.upsert(k).put({"nums": [1, 5, 3, 5, 2]}).execute()
 
@@ -481,9 +481,9 @@ class TestRemoveAllOthersSync:
 
 class TestDeepInvertedReadsSync:
 
-    def test_nested_map_value_range_get_all_other_values(self, client):
+    def test_nested_map_value_range_get_all_other_values(self, cluster):
         """Inverted read after navigating into a nested map."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(27)
         session.upsert(k).put({
             "root": {"scores": {"alice": 80, "bob": 90, "carol": 95}},
@@ -500,9 +500,9 @@ class TestDeepInvertedReadsSync:
         assert isinstance(vals, list)
         assert sorted(int(x) for x in vals) == [80]
 
-    def test_nested_list_value_get_all_other_values(self, client):
+    def test_nested_list_value_get_all_other_values(self, cluster):
         """Inverted read on a list nested inside a map."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(28)
         session.upsert(k).put({
             "wrap": {"tags": [10, 20, 30, 40]},
@@ -521,9 +521,9 @@ class TestDeepInvertedReadsSync:
 
 class TestDeepPathThenRangeSync:
 
-    def test_two_hops_then_key_range_count(self, client):
+    def test_two_hops_then_key_range_count(self, cluster):
         """Navigate 2 map levels deep, then key-range count."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(29)
         session.upsert(k).put({
             "l1": {"l2": {"a": 1, "b": 2, "c": 3, "d": 4}},
@@ -538,9 +538,9 @@ class TestDeepPathThenRangeSync:
         )
         assert rs.record.bins["l1"] == 2
 
-    def test_two_hops_then_value_range_get_values(self, client):
+    def test_two_hops_then_value_range_get_values(self, cluster):
         """Navigate map then list, then value-range select."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(30)
         session.upsert(k).put({
             "data": {"items": [5, 15, 25, 35]},
@@ -556,9 +556,9 @@ class TestDeepPathThenRangeSync:
         vals = rs.record.bins["data"]
         assert sorted(int(x) for x in vals) == [15, 25]
 
-    def test_two_hops_then_range_remove(self, client):
+    def test_two_hops_then_range_remove(self, cluster):
         """Navigate 2 levels deep, remove by key range."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = _key(31)
         session.upsert(k).put({
             "l1": {"l2": {"a": 1, "b": 2, "c": 3, "d": 4}},
@@ -572,8 +572,8 @@ class TestDeepPathThenRangeSync:
 
 class TestRemoveReturnTypeSync:
 
-    def test_remove_map_by_value_range_returns_values(self, client):
-        session = client.create_session()
+    def test_remove_map_by_value_range_returns_values(self, cluster):
+        session = cluster.create_session()
         k = _key(32)
         session.upsert(k).put({
             "scores": {"alice": 80, "bob": 90, "carol": 95},
@@ -589,8 +589,8 @@ class TestRemoveReturnTypeSync:
         final = session.query(k).execute().first_or_raise()
         assert final.record_or_raise().bins["scores"] == {"alice": 80}
 
-    def test_remove_map_by_key_range_returns_count(self, client):
-        session = client.create_session()
+    def test_remove_map_by_key_range_returns_count(self, cluster):
+        session = cluster.create_session()
         k = _key(33)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3, "d": 4},
@@ -607,8 +607,8 @@ class TestRemoveReturnTypeSync:
         final = session.query(k).execute().first_or_raise()
         assert final.record_or_raise().bins["m"] == {"a": 1, "d": 4}
 
-    def test_remove_all_others_returns_values(self, client):
-        session = client.create_session()
+    def test_remove_all_others_returns_values(self, cluster):
+        session = cluster.create_session()
         k = _key(35)
         session.upsert(k).put({
             "m": {"a": 1, "b": 2, "c": 3, "d": 4},

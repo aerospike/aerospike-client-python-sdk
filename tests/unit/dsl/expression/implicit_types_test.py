@@ -78,8 +78,7 @@ class TestImplicitTypes:
     def test_second_degree_implicit_casting_float(self):
         """Test ($.apples + $.bananas) > 10.5 - float literal infers float bins."""
         expected = Exp.gt(
-            Exp.num_add([Exp.float_bin("apples"), Exp.float_bin("bananas")]),
-            Exp.float_val(10.5)
+            Exp.num_add([Exp.float_bin("apples"), Exp.float_bin("bananas")]), Exp.float_val(10.5)
         )
         result = parse_ael("($.apples + $.bananas) > 10.5")
         assert result == expected

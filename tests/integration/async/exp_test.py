@@ -22,7 +22,7 @@ Tests expression building and usage with actual database operations.
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import AelParseException, Exp, Client, in_list, map_keys, map_values, val
+from aerospike_sdk import AelParseException, Exp, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
 
@@ -115,10 +115,9 @@ class TestExpComposition:
         assert expr is not None
 
     def test_and_expression(self):
-        expr = Exp.and_([
-            Exp.eq(Exp.string_bin("country"), val("US")),
-            Exp.gt(Exp.int_bin("age"), val(21))
-        ])
+        expr = Exp.and_(
+            [Exp.eq(Exp.string_bin("country"), val("US")), Exp.gt(Exp.int_bin("age"), val(21))]
+        )
         assert expr is not None
 
     def test_or_expression(self):
@@ -147,59 +146,35 @@ class TestArithmeticExpressions:
     """Test arithmetic expression building."""
 
     def test_num_add(self):
-        expr = Exp.eq(
-            Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")]),
-            val(10)
-        )
+        expr = Exp.eq(Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")]), val(10))
         assert expr is not None
 
     def test_num_sub(self):
-        expr = Exp.eq(
-            Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")]),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")]), val(5))
         assert expr is not None
 
     def test_num_mul(self):
-        expr = Exp.eq(
-            Exp.num_mul([Exp.int_bin("a"), val(2)]),
-            val(20)
-        )
+        expr = Exp.eq(Exp.num_mul([Exp.int_bin("a"), val(2)]), val(20))
         assert expr is not None
 
     def test_num_div(self):
-        expr = Exp.eq(
-            Exp.num_div([Exp.int_bin("a"), val(2)]),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_div([Exp.int_bin("a"), val(2)]), val(5))
         assert expr is not None
 
     def test_num_mod(self):
-        expr = Exp.eq(
-            Exp.num_mod(Exp.int_bin("a"), val(2)),
-            val(0)
-        )
+        expr = Exp.eq(Exp.num_mod(Exp.int_bin("a"), val(2)), val(0))
         assert expr is not None
 
     def test_num_abs(self):
-        expr = Exp.eq(
-            Exp.num_abs(Exp.int_bin("negative")),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_abs(Exp.int_bin("negative")), val(5))
         assert expr is not None
 
     def test_num_floor(self):
-        expr = Exp.eq(
-            Exp.num_floor(Exp.float_bin("f")),
-            val(2.0)
-        )
+        expr = Exp.eq(Exp.num_floor(Exp.float_bin("f")), val(2.0))
         assert expr is not None
 
     def test_num_ceil(self):
-        expr = Exp.eq(
-            Exp.num_ceil(Exp.float_bin("f")),
-            val(3.0)
-        )
+        expr = Exp.eq(Exp.num_ceil(Exp.float_bin("f")), val(3.0))
         assert expr is not None
 
 
@@ -207,45 +182,27 @@ class TestBitwiseExpressions:
     """Test bitwise expression building."""
 
     def test_int_and(self):
-        expr = Exp.eq(
-            Exp.int_and([Exp.int_bin("a"), val(0xFF)]),
-            val(1)
-        )
+        expr = Exp.eq(Exp.int_and([Exp.int_bin("a"), val(0xFF)]), val(1))
         assert expr is not None
 
     def test_int_or(self):
-        expr = Exp.eq(
-            Exp.int_or([Exp.int_bin("a"), val(0xFF)]),
-            val(0xFF)
-        )
+        expr = Exp.eq(Exp.int_or([Exp.int_bin("a"), val(0xFF)]), val(0xFF))
         assert expr is not None
 
     def test_int_xor(self):
-        expr = Exp.eq(
-            Exp.int_xor([Exp.int_bin("a"), val(0xFF)]),
-            val(0xFE)
-        )
+        expr = Exp.eq(Exp.int_xor([Exp.int_bin("a"), val(0xFF)]), val(0xFE))
         assert expr is not None
 
     def test_int_not(self):
-        expr = Exp.eq(
-            Exp.int_not(Exp.int_bin("a")),
-            val(-2)
-        )
+        expr = Exp.eq(Exp.int_not(Exp.int_bin("a")), val(-2))
         assert expr is not None
 
     def test_int_lshift(self):
-        expr = Exp.eq(
-            Exp.int_lshift(Exp.int_bin("a"), val(2)),
-            val(4)
-        )
+        expr = Exp.eq(Exp.int_lshift(Exp.int_bin("a"), val(2)), val(4))
         assert expr is not None
 
     def test_int_rshift(self):
-        expr = Exp.eq(
-            Exp.int_rshift(Exp.int_bin("a"), val(2)),
-            val(0)
-        )
+        expr = Exp.eq(Exp.int_rshift(Exp.int_bin("a"), val(2)), val(0))
         assert expr is not None
 
 
@@ -281,17 +238,11 @@ class TestTypeConversions:
     """Test type conversion expressions."""
 
     def test_to_int(self):
-        expr = Exp.eq(
-            Exp.to_int(Exp.float_bin("f")),
-            val(2)
-        )
+        expr = Exp.eq(Exp.to_int(Exp.float_bin("f")), val(2))
         assert expr is not None
 
     def test_to_float(self):
-        expr = Exp.eq(
-            Exp.to_float(Exp.int_bin("a")),
-            val(2.0)
-        )
+        expr = Exp.eq(Exp.to_float(Exp.int_bin("a")), val(2.0))
         assert expr is not None
 
 
@@ -378,10 +329,10 @@ class TestBinExpressions:
 # Integration tests with actual database operations
 
 @pytest.fixture
-async def session_with_data(aerospike_host, client_policy, enterprise, wait_for_set_visible):
+async def session_with_data(aerospike_host, make_cluster_definition, enterprise, wait_for_set_visible):
     """Setup test data for expression tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "exp_test")
 
         for key in ["A", "B", "C"]:
@@ -396,7 +347,7 @@ async def session_with_data(aerospike_host, client_policy, enterprise, wait_for_
 
         await wait_for_set_visible(session, "test", "exp_test", 3)
 
-        yield client.create_session()
+        yield cluster.create_session()
 
         for key in ["A", "B", "C"]:
             try:
@@ -444,10 +395,7 @@ class TestExpWithQuery:
 
     async def test_query_with_and_filter(self, session_with_data):
         """Test query with AND filter expression."""
-        filter_exp = Exp.and_([
-            Exp.eq(Exp.int_bin("A"), val(1)),
-            Exp.eq(Exp.int_bin("D"), val(1))
-        ])
+        filter_exp = Exp.and_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("D"), val(1))])
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -465,10 +413,7 @@ class TestExpWithQuery:
 
     async def test_query_with_or_filter(self, session_with_data):
         """Test query with OR filter expression."""
-        filter_exp = Exp.or_([
-            Exp.eq(Exp.int_bin("A"), val(1)),
-            Exp.eq(Exp.int_bin("A"), val(2))
-        ])
+        filter_exp = Exp.or_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("A"), val(2))])
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -502,10 +447,7 @@ class TestExpWithQuery:
 
     async def test_query_with_arithmetic_filter(self, session_with_data):
         """Test query with arithmetic filter: A + D == 2."""
-        filter_exp = Exp.eq(
-            Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]),
-            val(2)
-        )
+        filter_exp = Exp.eq(Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]), val(2))
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -721,14 +663,14 @@ class TestExpWithAel:
 
 # CDT Path Access Tests
 
-async def _seed_cdt_data(client, *, wait_for_set_visible):
+async def _seed_cdt_data(cluster, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
 
     Used by both ``session_with_cdt_data`` (ungated) and
     ``session_with_cdt_data_812`` (skips unless the default seed is 8.1.2+)
     so the gated and ungated tests see the exact same shape.
     """
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "cdt_test")
 
     for key in ["rec1", "rec2", "rec3"]:
@@ -769,31 +711,31 @@ async def _drop_cdt_data(session, ds):
 
 
 @pytest.fixture
-async def session_with_cdt_data_812(aerospike_host_812_required, client_policy, wait_for_set_visible):
-    """SDK client + CDT dataset on the default 8.1.2+ seed.
+async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_definition, wait_for_set_visible):
+    """Connected cluster + CDT dataset on the default 8.1.2+ seed.
 
     Used by tests that exercise convenience wrappers around server-8.1.2
     ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
     ``aerospike_host_812_required`` fixture connects to the default
     ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
     """
-    async with Client(seeds=aerospike_host_812_required, policy=client_policy) as client:
-        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
-        yield client.create_session()
+    async with await make_cluster_definition(aerospike_host_812_required).connect() as cluster:
+        session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
+        yield cluster.create_session()
         await _drop_cdt_data(session, ds)
 
 
 @pytest.fixture
-async def session_with_cdt_data(aerospike_host, client_policy, wait_for_set_visible):
-    """SDK client + CDT dataset on the broad-surface seed.
+async def session_with_cdt_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
+    """Connected cluster + CDT dataset on the broad-surface seed.
 
     Tests that exercise convenience wrappers around server-8.1.2 ExpOps
     should consume ``session_with_cdt_data_812`` instead, which uses the
     default ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+.
     """
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session, ds = await _seed_cdt_data(client, wait_for_set_visible=wait_for_set_visible)
-        yield client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
+        yield cluster.create_session()
         await _drop_cdt_data(session, ds)
 
 
@@ -1066,10 +1008,10 @@ class TestExistsAndCount:
 
 
 @pytest.fixture
-async def session_with_list_data(aerospike_host, client_policy, wait_for_set_visible):
+async def session_with_list_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Setup test data with various lists for advanced list AEL tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "list_ael_test")
 
         for key in ["rec1", "rec2", "rec3", "rec4"]:
@@ -1097,7 +1039,7 @@ async def session_with_list_data(aerospike_host, client_policy, wait_for_set_vis
 
         await wait_for_set_visible(session, "test", "list_ael_test", 4)
 
-        yield client.create_session()
+        yield cluster.create_session()
 
         for key in ["rec1", "rec2", "rec3", "rec4"]:
             try:
@@ -1249,10 +1191,10 @@ class TestAdvancedListAel:
 
 
 @pytest.fixture
-async def session_with_map_data(aerospike_host, client_policy, wait_for_set_visible):
+async def session_with_map_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Setup test data with maps for advanced map AEL tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "map_ael_test")
 
         for key in ["rec1", "rec2", "rec3"]:
@@ -1276,7 +1218,7 @@ async def session_with_map_data(aerospike_host, client_policy, wait_for_set_visi
 
         await wait_for_set_visible(session, "test", "map_ael_test", 3)
 
-        yield client.create_session()
+        yield cluster.create_session()
 
         for key in ["rec1", "rec2", "rec3"]:
             try:
@@ -1359,10 +1301,10 @@ class TestAdvancedMapAel:
 # =============================================================================
 
 @pytest.fixture
-async def session_with_nested_data(aerospike_host, client_policy, wait_for_set_visible):
+async def session_with_nested_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Setup test data with deeply nested structures."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "nested_ael_test")
 
         for key in ["rec1", "rec2"]:
@@ -1390,7 +1332,7 @@ async def session_with_nested_data(aerospike_host, client_policy, wait_for_set_v
 
         await wait_for_set_visible(session, "test", "nested_ael_test", 2)
 
-        yield client.create_session()
+        yield cluster.create_session()
 
         for key in ["rec1", "rec2"]:
             try:
@@ -1518,10 +1460,10 @@ class TestMapKeyOperationsAel:
 
 
 @pytest.fixture
-async def session_with_relative_range_data(aerospike_host, client_policy, wait_for_set_visible):
+async def session_with_relative_range_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Setup test data for relative range operations."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "rel_range_test")
 
         for key in ["rec1", "rec2", "rec3"]:
@@ -1545,7 +1487,7 @@ async def session_with_relative_range_data(aerospike_host, client_policy, wait_f
 
         await wait_for_set_visible(session, "test", "rel_range_test", 3)
 
-        yield client.create_session()
+        yield cluster.create_session()
 
         for key in ["rec1", "rec2", "rec3"]:
             try:
@@ -1721,15 +1663,15 @@ class TestAelErrorHandling:
 # =============================================================================
 
 @pytest.fixture
-async def filter_session(aerospike_host, client_policy, wait_for_set_visible):
+async def filter_session(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Session with test data matching JFC FilterExpTest setUp.
 
     Key "A": A=1, B=1.1, C="abcde",      D=1, E=-1
     Key "B": A=2, B=2.2, C="abcdeabcde",  D=1, E=-2
     Key "C": A=0, B=-1.0, C="1"
     """
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "filter_exp_test")
 
         for key in ["A", "B", "C"]:
@@ -1764,15 +1706,15 @@ class TestAdvancedExpFilters:
 
     async def _assert_filtered_out(self, session, key, ael):
         """Query with AEL filter that should NOT match, expect FILTERED_OUT."""
-        from aerospike_async.exceptions import ResultCode
+        from aerospike_sdk.exceptions import ResultCode
         from aerospike_sdk.exceptions import AerospikeError
 
         with pytest.raises(AerospikeError) as exc_info:
             rs = await (
                 session.query(key)
-                    .where(ael)
-                    .fail_on_filtered_out()
-                    .execute()
+                .where(ael)
+                .fail_on_filtered_out()
+                .execute()
             )
             await rs.first_or_raise()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
@@ -1781,10 +1723,10 @@ class TestAdvancedExpFilters:
         """Query with AEL filter that SHOULD match, validate returned bin."""
         rs = await (
             session.query(key)
-                .bins([bin_name])
-                .where(ael)
-                .fail_on_filtered_out()
-                .execute()
+            .bins([bin_name])
+            .where(ael)
+            .fail_on_filtered_out()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.record.bins[bin_name] == expected_value
@@ -2060,14 +2002,14 @@ class TestAelMapBlobIntegrationQueries:
     async def test_blob_bin_ael_equality_on_server(
         self,
         aerospike_host,
-        client_policy,
+        make_cluster_definition,
         wait_for_set_visible,
     ):
         """BLOB bin filter using a base64 literal in AEL."""
         import base64
 
-        async with Client(seeds=aerospike_host, policy=client_policy) as client:
-            session = client.create_session()
+        async with await make_cluster_definition(aerospike_host).connect() as cluster:
+            session = cluster.create_session()
             k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
             payload = bytes([1, 2, 254])
             try:
@@ -2081,8 +2023,8 @@ class TestAelMapBlobIntegrationQueries:
             enc = base64.b64encode(payload).decode("ascii")
             stream = await (
                 session.query("test", "ael_blob_srv_it")
-                    .where(f'$.payload.get(type: BLOB) == "{enc}"')
-                    .execute()
+                .where(f'$.payload.get(type: BLOB) == "{enc}"')
+                .execute()
             )
             rows = [r.record async for r in stream]
             stream.close()

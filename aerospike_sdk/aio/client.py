@@ -724,8 +724,7 @@ class Client:
             task = await session.register_udf("my_module", udf_source_code)
             await task.wait_till_complete()
         """
-        return await self._async_client.register_udf(
-            body, server_path, language, policy=policy)
+        return await self._async_client.register_udf(body, server_path, language, policy=policy)
 
     async def _register_udf_from_file(
         self,

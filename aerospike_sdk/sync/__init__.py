@@ -15,7 +15,6 @@
 
 """Sync client and operations for the Aerospike SDK API."""
 
-from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.sync.info import SyncInfoCommands
@@ -31,7 +30,6 @@ __all__ = [
     "ClusterDefinition",
     "Host",
     "SyncBatchOperationBuilder",
-    "SyncClient",
     "SyncInfoCommands",
     "SyncIndexBuilder",
     "SyncQueryBuilder",
@@ -39,4 +37,21 @@ __all__ = [
     "SyncTransactionalSession",
     "TlsBuilder",
 ]
+
+
+def __getattr__(name: str):
+    # Deprecated connection primitive, importable for one deprecation cycle.
+    if name == "SyncClient":
+        import warnings
+
+        warnings.warn(
+            "aerospike_sdk.sync.SyncClient is deprecated; connect with "
+            "aerospike_sdk.sync.ClusterDefinition(...).connect() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from aerospike_sdk.sync.client import SyncClient
+
+        return SyncClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

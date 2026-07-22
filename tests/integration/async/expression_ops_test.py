@@ -32,8 +32,7 @@ import asyncio
 import pytest
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode, ServerError
-from aerospike_sdk import Client
+from aerospike_sdk.exceptions import ResultCode, ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -44,9 +43,9 @@ KEY_B = "exp_B"
 
 
 @pytest.fixture
-async def client(aerospike_host, client_policy):
+async def cluster(aerospike_host, make_cluster_definition):
     """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         # Clean slate
         try:
@@ -69,8 +68,8 @@ async def client(aerospike_host, client_policy):
 
 
 @pytest.fixture
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 def _key(name: str) -> Key:
@@ -87,7 +86,7 @@ class TestSelectFrom:
         """select_from evaluating an integer AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("$.A + 4")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == 5
@@ -96,7 +95,7 @@ class TestSelectFrom:
         """select_from evaluating a string AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("'hello'")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == "hello"
@@ -105,7 +104,7 @@ class TestSelectFrom:
         """select_from evaluating a boolean AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("$.A == 1")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] is True
@@ -115,7 +114,7 @@ class TestSelectFrom:
         with pytest.raises((AerospikeError, ServerError)):
             rs = await (
                 session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4")
-                    .execute()
+                .execute()
             )
             await rs.first_or_raise()
 
@@ -123,7 +122,7 @@ class TestSelectFrom:
         """select_from with ignore_eval_failure returns None on missing bin."""
         rs = await (
             session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4", ignore_eval_failure=True)
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
@@ -132,7 +131,7 @@ class TestSelectFrom:
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
             session.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
@@ -141,9 +140,9 @@ class TestSelectFrom:
         """Multiple select_from in same execute (expMerge pattern)."""
         rs = await (
             session.query(_key(KEY_A))
-                .bin("r1").select_from("$.A == 0 and $.D == 2")
-                .bin("r2").select_from("$.A == 0 or $.D == 2")
-                .execute()
+            .bin("r1").select_from("$.A == 0 and $.D == 2")
+            .bin("r2").select_from("$.A == 0 or $.D == 2")
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["r1"] is False
@@ -156,23 +155,23 @@ class TestSelectFrom:
 
 class TestUpsertFrom:
 
-    async def test_upsert_from_creates_bin(self, client):
+    async def test_upsert_from_creates_bin(self, cluster):
         """upsert_from writes computed value to a new bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").upsert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("C").get().execute()
         result = await rec.first_or_raise()
         assert result.record.bins["C"] == 5
 
-    async def test_upsert_from_overwrites_bin(self, client):
+    async def test_upsert_from_overwrites_bin(self, cluster):
         """upsert_from overwrites an existing bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("D").upsert_from("$.A + 10")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("D").get().execute()
         result = await rec.first_or_raise()
@@ -181,32 +180,32 @@ class TestUpsertFrom:
 
 class TestUpdateFrom:
 
-    async def test_update_from_existing_bin(self, client):
+    async def test_update_from_existing_bin(self, cluster):
         """update_from on an existing bin succeeds."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("D").update_from("$.A + 100")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("D").get().execute()
         result = await rec.first_or_raise()
         assert result.record.bins["D"] == 101
 
-    async def test_update_from_missing_bin_raises(self, client):
+    async def test_update_from_missing_bin_raises(self, cluster):
         """update_from on non-existent bin raises server error."""
-        session = client.create_session()
+        session = cluster.create_session()
         with pytest.raises((AerospikeError, ServerError)):
             await (
                 session.update(_key(KEY_A)).bin("C").update_from("$.A + 4")
-                    .execute()
+                .execute()
             )
 
-    async def test_update_from_missing_bin_ignore_op_failure(self, client):
+    async def test_update_from_missing_bin_ignore_op_failure(self, cluster):
         """update_from with ignore_op_failure silently skips."""
-        session = client.create_session()
+        session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_A)).bin("C").update_from("$.A + 4", ignore_op_failure=True)
-                .execute()
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -216,42 +215,42 @@ class TestUpdateFrom:
 
 class TestInsertFrom:
 
-    async def test_insert_from_new_bin(self, client):
+    async def test_insert_from_new_bin(self, cluster):
         """insert_from creates a new bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("C").get().execute()
         result = await rec.first_or_raise()
         assert result.record.bins["C"] == 5
 
-    async def test_insert_from_existing_bin_raises(self, client):
+    async def test_insert_from_existing_bin_raises(self, cluster):
         """insert_from on existing bin raises server error."""
-        session = client.create_session()
+        session = cluster.create_session()
         # First insert succeeds
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         # Second insert fails
         with pytest.raises((AerospikeError, ServerError)):
             await (
                 session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                    .execute()
+                .execute()
             )
 
-    async def test_insert_from_existing_bin_ignore_op_failure(self, client):
+    async def test_insert_from_existing_bin_ignore_op_failure(self, cluster):
         """insert_from with ignore_op_failure silently skips."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         stream = await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 99", ignore_op_failure=True)
-                .execute()
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -263,22 +262,22 @@ class TestInsertFrom:
 
 class TestCombinedExpression:
 
-    async def test_upsert_from_and_select_from(self, client):
+    async def test_upsert_from_and_select_from(self, cluster):
         """upsert_from + select_from in same execute."""
-        session = client.create_session()
+        session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_A))
-                .bin("D").upsert_from("$.D + 10")
-                .bin("ev").select_from("$.A")
-                .execute()
+            .bin("D").upsert_from("$.D + 10")
+            .bin("ev").select_from("$.A")
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
         assert result.record.bins["ev"] == 1
 
-    async def test_upsert_from_and_get(self, client):
+    async def test_upsert_from_and_get(self, cluster):
         """upsert_from + .get() in same execute."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").upsert_from("$.A + 4").execute()
         )
@@ -287,14 +286,14 @@ class TestCombinedExpression:
         assert result is not None
         assert result.record.bins["C"] == 5
 
-    async def test_write_eval_error_with_ignore(self, client):
+    async def test_write_eval_error_with_ignore(self, cluster):
         """upsert_from + select_from with ignore_eval_failure on both."""
-        session = client.create_session()
+        session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_B))
-                .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
-                .bin("ev").select_from("$.A", ignore_eval_failure=True)
-                .execute()
+            .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
+            .bin("ev").select_from("$.A", ignore_eval_failure=True)
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -308,20 +307,20 @@ class TestCombinedExpression:
 
 class TestMixedOps:
 
-    async def test_set_to_and_upsert_from(self, client):
+    async def test_set_to_and_upsert_from(self, cluster):
         """set_to + upsert_from in same execute."""
-        session = client.create_session()
+        session = cluster.create_session()
         await (
             session.upsert(_key(KEY_A))
-                .bin("name").set_to("Alice")
-                .bin("computed").upsert_from("$.A * 2")
-                .execute()
+            .bin("name").set_to("Alice")
+            .bin("computed").upsert_from("$.A * 2")
+            .execute()
         )
         rec = await (
             session.query(_key(KEY_A))
-                .bin("name").get()
-                .bin("computed").get()
-                .execute()
+            .bin("name").get()
+            .bin("computed").get()
+            .execute()
         )
         result = await rec.first_or_raise()
         assert result.record.bins["name"] == "Alice"
@@ -334,13 +333,13 @@ class TestMixedOps:
 
 class TestGuards:
 
-    async def test_dataset_query_select_from_raises(self, client):
+    async def test_dataset_query_select_from_raises(self, cluster):
         """select_from on dataset query raises OP_NOT_APPLICABLE."""
-        session = client.create_session()
+        session = cluster.create_session()
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(namespace=NS, set_name=SET).bin("ev").select_from("$.A + 4")
-                    .execute()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
@@ -348,7 +347,7 @@ class TestGuards:
         """select_from on batch key query works (no guard)."""
         rs = await (
             session.query([_key(KEY_A), _key(KEY_B)]).bin("ev").select_from("$.D * 3")
-                .execute()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2

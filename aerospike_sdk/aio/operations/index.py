@@ -115,9 +115,7 @@ class _IndexBuilderBase:
         self._index_type = IndexType.GEO2D_SPHERE
         return self
 
-    def collection(
-        self, collection_index_type: CollectionIndexType
-    ) -> IndexBuilder:
+    def collection(self, collection_index_type: CollectionIndexType) -> IndexBuilder:
         """Set the collection index variant for map or list bins (optional).
 
         Use together with :meth:`numeric` or :meth:`string` when indexing into
@@ -258,8 +256,6 @@ class IndexBuilder(_IndexBuilderBase):
             raise ValueError("index_name is required. Call named() first.")
 
         try:
-            await self._client.drop_index(
-                self._namespace, self._set_name, self._index_name
-            )
+            await self._client.drop_index(self._namespace, self._set_name, self._index_name)
         except Exception as e:
             raise _convert_pac_exception(e) from e

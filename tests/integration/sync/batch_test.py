@@ -19,12 +19,13 @@ import time
 
 import pytest
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
+from aerospike_sdk.sync import Cluster
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy, enterprise):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition, enterprise):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
@@ -35,8 +36,8 @@ def users():
 
 class TestSyncBatchOperations:
 
-    def test_batch_insert_multiple_keys(self, client: SyncClient, users: DataSet):
-        session = client.create_session()
+    def test_batch_insert_multiple_keys(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
         key1 = users.id("sb_user_1")
         key2 = users.id("sb_user_2")
 
@@ -63,8 +64,8 @@ class TestSyncBatchOperations:
         session.delete(key1).execute()
         session.delete(key2).execute()
 
-    def test_batch_mixed_update_delete_insert(self, client: SyncClient, users: DataSet):
-        session = client.create_session()
+    def test_batch_mixed_update_delete_insert(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
         key1 = users.id("sb_mix_1")
         key2 = users.id("sb_mix_2")
         key3 = users.id("sb_mix_3")
@@ -93,16 +94,16 @@ class TestSyncBatchOperations:
         session.delete(key1).execute()
         session.delete(key3).execute()
 
-    def test_batch_empty_raises(self, client: SyncClient):
-        session = client.create_session()
+    def test_batch_empty_raises(self, cluster: Cluster):
+        session = cluster.create_session()
         with pytest.raises(ValueError, match="No operations to execute"):
             session.batch().execute()
 
 
 class TestSyncBatchExpressionOps:
 
-    def test_batch_upsert_from(self, client: SyncClient, users: DataSet, enterprise):
-        session = client.create_session()
+    def test_batch_upsert_from(self, cluster: Cluster, users: DataSet, enterprise):
+        session = cluster.create_session()
         keys = [users.id(f"sbx_{i}") for i in range(2)]
 
         for i, key in enumerate(keys):
@@ -129,14 +130,14 @@ class TestSyncBatchExecuteStream:
     """Sync lazy `execute_stream()` — same contract as the async sibling."""
 
     @pytest.fixture
-    def track_key(self, client):
+    def track_key(self, cluster):
         """Factory: register a Key for auto-cleanup at fixture teardown.
 
         Replaces manual ``try/except session.delete(k).execute()`` loops at
         the end of every test. Pass each Key through this factory once and
         the fixture handles the drop in teardown order.
         """
-        session = client.create_session()
+        session = cluster.create_session()
         created: list = []
 
         def track(key):
@@ -152,7 +153,7 @@ class TestSyncBatchExecuteStream:
                 pass
 
     def test_execute_stream_mixed_ops_yields_all(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete dispatch correctly via
         ``batch_stream_blocking``; results yielded one-by-one with idx
@@ -167,18 +168,18 @@ class TestSyncBatchExecuteStream:
           `sum` bin (select_from is a read, not a write); the DELETE
           removed its record.
         """
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [track_key(users.id(f"sb_estream_mix_{i}")) for i in range(4)]
         for i, k in enumerate(keys):
             session.upsert(k).put({"A": i, "B": i * 2}).execute()
 
         stream = (
             session.batch()
-                .upsert(keys[0]).bin("A").set_to(99)
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .update(keys[2]).bin("sum").select_from("$.A + $.B")
-                .delete(keys[3])
-                .execute_stream()
+            .upsert(keys[0]).bin("A").set_to(99)
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .update(keys[2]).bin("sum").select_from("$.A + $.B")
+            .delete(keys[3])
+            .execute_stream()
         )
         results = list(stream)
         assert len(results) == 4
@@ -212,23 +213,23 @@ class TestSyncBatchExecuteStream:
         assert empty == []
 
     def test_execute_stream_read_only_ops_dispatch_as_reads(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Read-only op lists (AEL `select_from` under UPDATE) must land as
         BatchReadOp on the wire — verifies the has_any_write_op inspection
         in the sync dispatch helper. Also verifies the persisted record
         was NOT mutated (if select_from regressed and landed as a write,
         the `sum` bin would persist)."""
-        session = client.create_session()
+        session = cluster.create_session()
         keys = [track_key(users.id(f"sb_estream_ro_{i}")) for i in range(2)]
         for i, k in enumerate(keys):
             session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = (
             session.batch()
-                .update(keys[0]).bin("sum").select_from("$.A + $.B")
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .execute_stream()
+            .update(keys[0]).bin("sum").select_from("$.A + $.B")
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .execute_stream()
         )
         results = list(stream)
         assert len(results) == 2
@@ -249,8 +250,8 @@ class TestSyncBatchExecuteStreamClose:
     re-iterate, and client-usable-after-close."""
 
     @pytest.fixture
-    def track_key(self, client):
-        session = client.create_session()
+    def track_key(self, cluster):
+        session = cluster.create_session()
         created: list = []
 
         def track(key):
@@ -278,9 +279,9 @@ class TestSyncBatchExecuteStreamClose:
         return b
 
     def test_close_mid_stream_stops_iteration(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
         stream = self._write_batch(session, keys).execute_stream()
         seen = 0
@@ -292,9 +293,9 @@ class TestSyncBatchExecuteStreamClose:
         assert sum(1 for _ in stream) == 0
 
     def test_close_is_idempotent(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 3)
         stream = self._write_batch(session, keys).execute_stream()
         stream.close()
@@ -303,9 +304,9 @@ class TestSyncBatchExecuteStreamClose:
         assert stream.collect() == []
 
     def test_reiterate_after_close_yields_nothing(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 4)
         stream = self._write_batch(session, keys).execute_stream()
         stream.close()
@@ -313,9 +314,9 @@ class TestSyncBatchExecuteStreamClose:
         assert list(stream) == []
 
     def test_client_usable_after_early_close(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
         stream = self._write_batch(session, keys).execute_stream()
         for _ in stream:
@@ -325,9 +326,9 @@ class TestSyncBatchExecuteStreamClose:
         assert rec.record.bins["v"] == 0
 
     def test_with_closes_on_normal_exit(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 3)
         seen = 0
         with self._write_batch(session, keys).execute_stream() as stream:
@@ -337,9 +338,9 @@ class TestSyncBatchExecuteStreamClose:
         assert stream.collect() == []
 
     def test_with_closes_on_early_break(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
         with self._write_batch(session, keys).execute_stream() as stream:
             for _ in stream:
@@ -347,9 +348,9 @@ class TestSyncBatchExecuteStreamClose:
         assert stream.collect() == []
 
     def test_with_closes_on_exception(
-        self, client: SyncClient, users: DataSet, track_key,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
-        session = client.create_session()
+        session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):

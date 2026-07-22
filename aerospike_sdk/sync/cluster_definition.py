@@ -144,9 +144,7 @@ class ClusterDefinition:
         self._app_id: Optional[str] = None
         self._index_refresh_interval: float = 5.0
 
-    def with_index_refresh_interval(
-        self, seconds: float
-    ) -> ClusterDefinition:
+    def with_index_refresh_interval(self, seconds: float) -> ClusterDefinition:
         """Set how often the secondary-index metadata cache refreshes.
 
         The client polls ``sindex-list`` / ``sindex-stat`` on this interval to

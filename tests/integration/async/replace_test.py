@@ -16,10 +16,8 @@
 """Tests for replace and replace_if_exists operations."""
 
 import pytest
-from aerospike_async.exceptions import ResultCode
-from aerospike_sdk.aio.client import Client
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
 
 
 @pytest.fixture
@@ -31,9 +29,9 @@ def users():
 class TestReplaceOperations:
     """Test replace and replace_if_exists operations."""
 
-    async def test_replace(self, client: Client, users: DataSet):
+    async def test_replace(self, cluster, users: DataSet):
         """replace() completely replaces an existing record's bins."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_key")
 
         await session.upsert(key).put({"bin1": "value1", "bin2": "value2"}).execute()
@@ -46,9 +44,9 @@ class TestReplaceOperations:
         assert record.record.bins.get("bin2") is None
         assert record.record.bins["bin3"] == "value3"
 
-    async def test_replace_only(self, client: Client, users: DataSet):
+    async def test_replace_only(self, cluster, users: DataSet):
         """replace_only() on a non-existent key should fail with KEY_NOT_FOUND_ERROR."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_only_key")
 
         await session.delete(key).execute()
@@ -56,26 +54,26 @@ class TestReplaceOperations:
         with pytest.raises(AerospikeError) as exc_info:
             stream = await (
                 session.upsert(key)
-                    .replace_only()
-                    .put({"bin": "value"})
-                    .execute()
+                .replace_only()
+                .put({"bin": "value"})
+                .execute()
             )
             await stream.first_or_raise()
 
         assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
-    async def test_replace_only_modifies_op_type(self, client: Client, users: DataSet):
+    async def test_replace_only_modifies_op_type(self, cluster, users: DataSet):
         """replace_only() dynamically changes upsert to replace-if-exists semantics."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_only_modifies_key")
 
         await session.upsert(key).put({"bin1": "value1", "bin2": "value2"}).execute()
 
         await (
             session.upsert(key)
-                .replace_only()
-                .put({"bin3": "value3"})
-                .execute()
+            .replace_only()
+            .put({"bin3": "value3"})
+            .execute()
         )
 
         record = await (await session.query(key).execute()).first_or_raise()
@@ -85,10 +83,10 @@ class TestReplaceOperations:
         assert record.record.bins["bin3"] == "value3"
 
     async def test_chained_operations_with_different_op_types(
-        self, client: Client, users: DataSet,
+        self, cluster, users: DataSet,
     ):
         """Per-operation errors are isolated when chaining different op types."""
-        session = client.create_session()
+        session = cluster.create_session()
 
         key1 = users.id("chain_key1")
         key2 = users.id("chain_key2")
@@ -100,11 +98,11 @@ class TestReplaceOperations:
 
         await (
             session.update(key1)
-                .set_to("value", "updated1")
+            .set_to("value", "updated1")
             .insert(key2)
-                .set_to("newbin", "inserted2")
+            .set_to("newbin", "inserted2")
             .replace(key3)
-                .set_to("value", "replaced3")
+            .set_to("value", "replaced3")
             .execute()
         )
 
@@ -118,9 +116,9 @@ class TestReplaceOperations:
         rec3 = await (await session.query(key3).execute()).first_or_raise()
         assert rec3.record.bins["value"] == "replaced3"
 
-    async def test_replace_creates_new_record(self, client: Client, users: DataSet):
+    async def test_replace_creates_new_record(self, cluster, users: DataSet):
         """replace() creates a new record if it doesn't exist."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_new_record")
 
         await session.delete(key).execute()
@@ -132,9 +130,9 @@ class TestReplaceOperations:
         assert record.record.bins["name"] == "New User"
         assert record.record.bins["status"] == "active"
 
-    async def test_replace_if_exists_fails_on_missing_record(self, client: Client, users: DataSet):
+    async def test_replace_if_exists_fails_on_missing_record(self, cluster, users: DataSet):
         """replace_if_exists() fails if record doesn't exist."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_if_exists_missing")
 
         await session.delete(key).execute()
@@ -142,14 +140,14 @@ class TestReplaceOperations:
         with pytest.raises(AerospikeError):
             stream = await (
                 session.replace_if_exists(key)
-                    .put({"name": "Should Fail"})
-                    .execute()
+                .put({"name": "Should Fail"})
+                .execute()
             )
             await stream.first_or_raise()
 
-    async def test_replace_if_exists_replaces_existing_record(self, client: Client, users: DataSet):
+    async def test_replace_if_exists_replaces_existing_record(self, cluster, users: DataSet):
         """replace_if_exists() replaces an existing record."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = users.id("replace_if_exists_existing")
 
         await session.upsert(key).put({
@@ -165,9 +163,9 @@ class TestReplaceOperations:
         assert record.record.bins["status"] == "updated"
         assert "extra" not in record.record.bins
 
-    async def test_batch_replace_if_exists(self, client: Client, users: DataSet):
+    async def test_batch_replace_if_exists(self, cluster, users: DataSet):
         """replace_if_exists works in batch operations."""
-        session = client.create_session()
+        session = cluster.create_session()
 
         key1 = users.id("batch_replace_exists_1")
         key2 = users.id("batch_replace_exists_2")
@@ -177,9 +175,9 @@ class TestReplaceOperations:
 
         await (
             session.batch()
-                .replace_if_exists(key1).bin("value").set_to("replaced1")
-                .replace_if_exists(key2).bin("value").set_to("replaced2")
-                .execute()
+            .replace_if_exists(key1).bin("value").set_to("replaced1")
+            .replace_if_exists(key2).bin("value").set_to("replaced2")
+            .execute()
         )
 
         record1 = await (await session.query(key1).execute()).first_or_raise()

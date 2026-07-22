@@ -56,9 +56,7 @@ class TestResolveDurableDelete:
     def test_resolver_override_wins_over_default_and_setting(
         self, setting, command_default, override, expected,
     ):
-        assert (
-            resolve_durable_delete(setting, command_default, override) is expected
-        )
+        assert resolve_durable_delete(setting, command_default, override) is expected
 
     def test_resolver_default_wins_over_setting_when_no_override(self):
         assert resolve_durable_delete(True, False, None) is False

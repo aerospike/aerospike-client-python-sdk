@@ -21,8 +21,7 @@ async def main():
         # Write
         await (
             session.upsert(users.id(1))
-            .bin("name").set_to("Alice")
-            .bin("age").set_to(30)
+            .put({"name": "Alice", "age": 30})
             .execute()
         )
 
@@ -55,7 +54,7 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
     users = DataSet.of("test", "users")
 
     # Write
-    session.upsert(users.id(1)).bin("name").set_to("Alice").bin("age").set_to(30).execute()
+    session.upsert(users.id(1)).put({"name": "Alice", "age": 30}).execute()
 
     # Read
     stream = session.query(users.id(1)).execute()
@@ -88,8 +87,8 @@ pip install -e ".[dev]"
 
 ## Key Concepts
 
-**Client / SyncClient**
-:   Entry point. Connects to an Aerospike cluster and manages the connection lifecycle.
+**ClusterDefinition / Cluster**
+:   Entry point. Configure seeds, auth, and TLS on a [`ClusterDefinition`](api/cluster-definition.md), then `connect()` for a live [`Cluster`](api/cluster.md) that creates sessions and manages the connection lifecycle. (Async at the top level; the sync twins live under `aerospike_sdk.sync`.)
 
 **Session**
 :   Scoped to a [`Behavior`](api/behavior.md) (policy defaults for timeouts, consistency, etc.). All reads and writes go through a session.

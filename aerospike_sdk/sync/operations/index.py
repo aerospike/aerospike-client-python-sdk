@@ -99,9 +99,7 @@ class SyncIndexBuilder:
         self._index_type = IndexType.GEO2D_SPHERE
         return self
 
-    def collection(
-        self, collection_index_type: CollectionIndexType
-    ) -> SyncIndexBuilder:
+    def collection(self, collection_index_type: CollectionIndexType) -> SyncIndexBuilder:
         """Set the collection index variant for map or list bins.
 
         Args:

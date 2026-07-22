@@ -67,7 +67,8 @@ class BackgroundTaskSession:
     method returns a builder to add filters, bin operations or UDF arguments,
     then ``await ...execute()`` for a server :class:`~aerospike_async.ExecuteTask`.
 
-    Example:
+    Example::
+
         Background update with a filter::
 
             task = await (
@@ -356,11 +357,8 @@ class _BackgroundOperationBuilderBase:
         """Sync counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``."""
         ops = self._final_operations()
         reject_unsupported_background_write_ops(ops)
-        mode = self._session._resolve_namespace_mode_blocking(
-            self._dataset.namespace)
-        policy_filter = (
-            None if self._index_filters else self._filter_expression
-        )
+        mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
+        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
             policy_filter,
@@ -454,9 +452,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             self._dataset.namespace, self._dataset.set_name, len(ops),
         )
         mode = await self._session._resolve_namespace_mode(self._dataset.namespace)
-        policy_filter = (
-            None if self._index_filters else self._filter_expression
-        )
+        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
             policy_filter,
@@ -616,8 +612,7 @@ class _BackgroundUdfBuilderBase:
 
     def execute_blocking(self) -> ExecuteTask:
         """Sync counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``."""
-        mode = self._session._resolve_namespace_mode_blocking(
-            self._dataset.namespace)
+        mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         wp = make_background_write_policy(
             self._session.behavior,
             self._filter_expression,
@@ -632,9 +627,7 @@ class _BackgroundUdfBuilderBase:
             self._dataset.set_name,
         )
         client = self._pac_client()
-        py_args: Optional[List[Any]] = (
-            list(self._args) if self._args is not None else None
-        )
+        py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return client.query_execute_udf_blocking(
                 statement,
@@ -715,9 +708,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             self._dataset.set_name,
         )
         client = self._pac_client()
-        py_args: Optional[List[Any]] = (
-            list(self._args) if self._args is not None else None
-        )
+        py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return await client.query_execute_udf(
                 statement,

@@ -101,9 +101,7 @@ class Cluster:
         # on PAC is a non-blocking synchronous probe (no I/O).
         if not sdk_client._pac_client().is_connected_blocking():
             sdk_client.close()
-            raise ConnectionError(
-                f"Connected to seeds '{seeds}' but cluster reports not connected"
-            )
+            raise ConnectionError(f"Connected to seeds '{seeds}' but cluster reports not connected")
 
         if sdk_config_source is not None:
             sdk_client._start_sdk_config_monitor(sdk_config_source)
@@ -199,8 +197,7 @@ class Cluster:
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf`
         """
-        return self._sdk_client._register_udf(
-            body, server_path, language, policy=policy)
+        return self._sdk_client._register_udf(body, server_path, language, policy=policy)
 
     def register_udf_from_file(
         self,

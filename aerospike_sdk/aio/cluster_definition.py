@@ -18,11 +18,16 @@
 from __future__ import annotations
 
 import os
+import typing
 from typing import List, Optional, Union
 
 from aerospike_async import AuthMode, ClientPolicy
 
+from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
+
+if typing.TYPE_CHECKING:
+    from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.aio.tls_builder import TlsBuilder
 from aerospike_sdk.policy.sdk_config_loader import load_at_connect
 from aerospike_sdk.policy.system_settings import SystemSettings
@@ -162,9 +167,7 @@ class ClusterDefinition:
         self._app_id: Optional[str] = None
         self._index_refresh_interval: float = 5.0
 
-    def with_index_refresh_interval(
-        self, seconds: float
-    ) -> ClusterDefinition:
+    def with_index_refresh_interval(self, seconds: float) -> ClusterDefinition:
         """Set how often the secondary-index metadata cache refreshes.
 
         The client polls ``sindex-list`` / ``sindex-stat`` on this interval to
@@ -401,12 +404,14 @@ class ClusterDefinition:
 
         Example::
 
-            cluster = await ClusterDefinition("localhost", 3000) \\
+            cluster = await (
+                ClusterDefinition("localhost", 3000)
                 .with_system_settings(SystemSettings(
                     max_connections_per_node=200,
                     tend_interval=timedelta(seconds=2),
-                )) \\
+                ))
                 .connect()
+            )
         """
         self._system_settings = settings
         return self
@@ -520,6 +525,38 @@ class ClusterDefinition:
                     f"PKI authentication requires TLS names on all hosts. "
                     f"Missing TLS name for: {', '.join(missing)}"
                 )
+
+    def _build_pool_members(self, count: int, indexes_monitor: "IndexesMonitor") -> List[Client]:
+        """Construct *count* unconnected pool-member clients (AsyncPool hook).
+
+        All members share a single ``ClientPolicy`` built from this
+        definition — which is exactly the shared-policy invariant AsyncPool's
+        one-shot ``per_client_runtime_workers`` mutation relies on — and the
+        pool's shared *indexes_monitor* (index metadata is cluster-scoped, so
+        one monitor serves the whole pool). Resolved SDK settings are applied
+        to every member; config-file hot-reload is not armed for pool members
+        (N file watchers for one process would be waste — pools should reload
+        by restart).
+
+        Each member is connected later, on its own pool loop, via
+        :meth:`Cluster._connect_and_wrap` — connecting here would bind every
+        ``CompletionBridge`` to the caller's loop.
+        """
+        self._validate()
+        settings, _config_path, _raw = load_at_connect(self._cluster_name, self._system_settings)
+        policy = self._get_policy(settings)
+        seeds = self._build_seeds_string()
+        members: List[Client] = []
+        for _ in range(count):
+            client = Client(
+                seeds=seeds,
+                policy=policy,
+                indexes_monitor=indexes_monitor,
+            )
+            if settings is not None:
+                client._sdk_settings = settings
+            members.append(client)
+        return members
 
     async def connect(self) -> Cluster:
         """

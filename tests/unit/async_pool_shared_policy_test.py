@@ -27,21 +27,24 @@ promise for clients 1..N-1 — these tests catch that case explicitly.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
 from aerospike_sdk.aio.pool import AsyncPool
 
 
-def _make_pool_with_clients(per_client_runtime: bool, clients_policies: list[object]) -> AsyncPool:
+def _make_pool_with_clients(
+    definition, per_client_runtime: bool, clients_policies: list[object]
+) -> AsyncPool:
     """Construct an AsyncPool and pre-populate the data start() would see.
 
     The assertion helper only inspects ``client._policy`` identity, so we
     can fake the Clients with plain objects carrying a ``_policy`` field.
+    (The definition path satisfies the invariant by construction; the
+    helper still guards the deprecated client_factory path.)
     """
     pool = AsyncPool(
-        client_factory=lambda: (_ for _ in ()).throw(AssertionError("not called")),
+        definition,
         loop_count=len(clients_policies),
         per_client_runtime=per_client_runtime,
     )
@@ -49,19 +52,21 @@ def _make_pool_with_clients(per_client_runtime: bool, clients_policies: list[obj
     return pool, fake_clients
 
 
-def test_shared_policy_passes():
+def test_shared_policy_passes(unit_cluster_definition):
     """All clients share one policy → assertion passes silently."""
     shared = object()
     pool, clients = _make_pool_with_clients(
+        unit_cluster_definition,
         per_client_runtime=True,
         clients_policies=[shared] * 4,
     )
     pool._assert_shared_policy_invariant(clients)  # must not raise
 
 
-def test_distinct_policies_raises():
+def test_distinct_policies_raises(unit_cluster_definition):
     """Each client has its own policy → assertion raises with diagnostic."""
     pool, clients = _make_pool_with_clients(
+        unit_cluster_definition,
         per_client_runtime=True,
         clients_policies=[object(), object(), object(), object()],
     )
@@ -69,11 +74,12 @@ def test_distinct_policies_raises():
         pool._assert_shared_policy_invariant(clients)
 
 
-def test_mostly_shared_but_one_drifted_raises():
+def test_mostly_shared_but_one_drifted_raises(unit_cluster_definition):
     """N-1 clients share one policy; client at index 2 has its own → raises."""
     shared = object()
     odd_one_out = object()
     pool, clients = _make_pool_with_clients(
+        unit_cluster_definition,
         per_client_runtime=True,
         clients_policies=[shared, shared, odd_one_out, shared],
     )
@@ -81,9 +87,10 @@ def test_mostly_shared_but_one_drifted_raises():
         pool._assert_shared_policy_invariant(clients)
 
 
-def test_single_client_passes():
+def test_single_client_passes(unit_cluster_definition):
     """N=1 → no pairwise comparison needed; assertion is a no-op."""
     pool, clients = _make_pool_with_clients(
+        unit_cluster_definition,
         per_client_runtime=True,
         clients_policies=[object()],
     )

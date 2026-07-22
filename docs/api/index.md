@@ -8,9 +8,9 @@ The primary API. All operations are `async`/`await`.
 
 | Class | Description |
 |-------|-------------|
-| [`Client`](client.md) | Entry point — connect, create sessions, manage lifecycle |
-| [`AsyncPool`](async-pool.md) | Multi-loop async pool — N event loops × N clients for parallel async work (free-threaded Python) |
-| [`Cluster`](cluster.md) | Cluster handle returned by `Client` |
+| [`ClusterDefinition`](cluster-definition.md) | Entry point — configure seeds/auth/TLS, then `connect()` |
+| [`AsyncPool`](async-pool.md) | Multi-loop async pool — N event loops × N cluster members for parallel async work (free-threaded Python) |
+| [`Cluster`](cluster.md) | Live cluster connection returned by `ClusterDefinition.connect()` |
 | [`Session`](session.md) | Scoped reads and writes with a fixed `Behavior` |
 | [`QueryBuilder`](query.md) | Build and execute read queries (point, set, batch) |
 | [`WriteSegmentBuilder`](write-segment.md) | Build and execute writes (upsert, insert, update, replace, delete) |
@@ -23,6 +23,7 @@ The primary API. All operations are `async`/`await`.
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
 | [`InfoCommands`](info.md) | Aerospike info protocol commands |
 | [`TransactionalSession`](transactional-session.md) | Multi-record transactions |
+| [`Client`](client.md) | Low-level connection primitive (deprecated — use `ClusterDefinition`) |
 
 ## Sync API
 
@@ -30,7 +31,7 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 
 | Class | Description |
 |-------|-------------|
-| [`SyncClient`](sync/client.md) | Sync entry point |
+| [`ClusterDefinition`](sync/cluster-definition.md) | Sync entry point — configure, then `connect()` |
 | [`Cluster`](sync/cluster.md) | Sync cluster handle |
 | [`SyncSession`](sync/session.md) | Sync session |
 | [`SyncQueryBuilder`](sync/query.md) | Sync query builder |
@@ -42,7 +43,7 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`SyncInfoCommands`](sync/info.md) | Sync info protocol commands |
 | [`SyncTransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
 | [`SyncRecordStream`](sync/record-stream.md) | Sync iterator over query results |
-| [`ClusterDefinition`](sync/cluster-definition.md) | Sync cluster connection configuration |
+| [`SyncClient`](sync/client.md) | Low-level connection primitive (deprecated — use `ClusterDefinition`) |
 | [`TlsBuilder`](sync/tls-builder.md) | Sync TLS configuration builder |
 
 ## Core

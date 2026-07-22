@@ -381,8 +381,7 @@ class TestExplicitTypes:
     def test_second_degree_explicit_float(self):
         """Test ($.apples.get(type: FLOAT) + $.bananas.get(type: FLOAT)) > 10.5."""
         expected = Exp.gt(
-            Exp.num_add([Exp.float_bin("apples"), Exp.float_bin("bananas")]),
-            Exp.float_val(10.5)
+            Exp.num_add([Exp.float_bin("apples"), Exp.float_bin("bananas")]), Exp.float_val(10.5)
         )
         result = parse_ael("($.apples.get(type: FLOAT) + $.bananas.get(type: FLOAT)) > 10.5")
         assert result == expected

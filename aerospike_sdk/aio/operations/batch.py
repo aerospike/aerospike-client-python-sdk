@@ -74,9 +74,14 @@ NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
 class BatchBinBuilder:
     """
     Builder for chaining bin operations within a batch key operation.
-    
-    Example:
-        batch.insert(key).bin("name").set_to("Alice").bin("age").set_to(25)
+
+    Example::
+
+        stream = await (
+            session.batch()
+            .insert(key).bin("name").set_to("Alice").bin("age").set_to(25)
+            .execute()
+        )
     """
     
     def __init__(self, key_op: BatchKeyOperationBuilder, bin_name: str) -> None:
@@ -399,7 +404,8 @@ class _BatchKeyOperationBuilderBase:
         Returns:
             A BatchBinBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.insert(key).bin("name").set_to("Alice").bin("age").set_to(25)
         """
         return BatchBinBuilder(self, bin_name)
@@ -414,7 +420,8 @@ class _BatchKeyOperationBuilderBase:
         Returns:
             self for method chaining.
         
-        Example:
+        Example::
+
             batch.insert(key).put({"name": "Alice", "age": 25})
         """
         self._bins.update(bins)
@@ -458,10 +465,15 @@ class BatchKeyOperationBuilder(_BatchKeyOperationBuilderBase):
     
     This class allows chaining bin operations and then continuing
     to add more keys to the batch.
-    
-    Example:
-        batch.insert(key1).bin("name").set_to("Alice") \\
-             .update(key2).bin("counter").add(1)
+
+    Example::
+
+        stream = await (
+            session.batch()
+            .insert(key1).bin("name").set_to("Alice")
+            .update(key2).bin("counter").add(1)
+            .execute()
+        )
     """
     
     
@@ -584,7 +596,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.insert(key).bin("name").set_to("Alice")
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.INSERT)
@@ -601,7 +614,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.update(key).bin("counter").add(1)
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.UPDATE)
@@ -618,7 +632,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.upsert(key).bin("name").set_to("Bob")
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.UPSERT)
@@ -635,7 +650,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.replace(key).put({"name": "Charlie", "age": 35})
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.REPLACE)
@@ -654,7 +670,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for chaining bin operations.
         
-        Example:
+        Example::
+
             batch.replace_if_exists(key).put({"name": "Updated", "status": "active"})
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.REPLACE_IF_EXISTS)
@@ -671,7 +688,8 @@ class _BatchOperationBuilderBase:
         Returns:
             A BatchKeyOperationBuilder for continuing the chain.
         
-        Example:
+        Example::
+
             batch.delete(key1).delete(key2).execute()
         """
         op = BatchKeyOperationBuilder(self, key, BatchOpType.DELETE)
@@ -720,8 +738,7 @@ class _BatchOperationBuilderBase:
         delete_policy: Optional[BatchDeletePolicy] = None
         has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
         if has_delete and self._behavior is not None:
-            delete_keys = [k._key for k in self._key_operations
-                           if k._op_type == BatchOpType.DELETE]
+            delete_keys = [k._key for k in self._key_operations if k._op_type == BatchOpType.DELETE]
             bs = self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE,
                 OpShape.BATCH,
@@ -868,8 +885,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         delete_policy: Optional[BatchDeletePolicy] = None
         has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
         if has_delete and self._behavior is not None:
-            delete_keys = [k._key for k in self._key_operations
-                           if k._op_type == BatchOpType.DELETE]
+            delete_keys = [k._key for k in self._key_operations if k._op_type == BatchOpType.DELETE]
             bs = self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE,
                 OpShape.BATCH,
@@ -891,8 +907,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
                 raw_results = await run_in_implicit_txn(
                     self._client,
                     self._sdk_client._sdk_settings.transactions,
-                    lambda txn: self._client.batch(
-                        ops, batch_policy=stamp_txn(batch_policy, txn)),
+                    lambda txn: self._client.batch(ops, batch_policy=stamp_txn(batch_policy, txn)),
                 )
             else:
                 raw_results = await self._client.batch(ops, batch_policy=batch_policy)
@@ -983,8 +998,7 @@ class BatchOperationBuilder(_BatchOperationBuilderBase):
         delete_policy: Optional[BatchDeletePolicy] = None
         has_delete = any(k._op_type == BatchOpType.DELETE for k in self._key_operations)
         if has_delete and self._behavior is not None:
-            delete_keys = [k._key for k in self._key_operations
-                           if k._op_type == BatchOpType.DELETE]
+            delete_keys = [k._key for k in self._key_operations if k._op_type == BatchOpType.DELETE]
             bs = self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE,
                 OpShape.BATCH,

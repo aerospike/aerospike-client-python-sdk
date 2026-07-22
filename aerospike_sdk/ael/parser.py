@@ -155,7 +155,8 @@ def parse_ael(expression: str, *args: Any) -> FilterExpression:
     Returns:
         A FilterExpression object.
 
-    Example:
+    Example::
+
         expr = parse_ael("$.age > 30")
         expr = parse_ael("$.age > ?0 and $.name == ?1", 30, "John")
     """
@@ -181,7 +182,8 @@ def parse_ctx(path: str) -> List[CTX]:
     Raises:
         AelParseException: If the path is invalid or unsupported.
 
-    Example:
+    Example::
+
         ctx = parse_ctx("$.listBin.[0].[1]")
         # Returns [CTX.list_index(0), CTX.list_index(1)]
 

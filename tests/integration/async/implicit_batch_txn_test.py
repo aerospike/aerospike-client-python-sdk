@@ -44,8 +44,8 @@ from integration.sc_namespace_resolve import (
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def sc_namespace(client_sc):
-    sess = client_sc.create_session()
+async def sc_namespace(cluster_sc):
+    sess = cluster_sc.create_session()
     try:
         return await resolve_sc_namespace(sess)
     except MultipleScNamespacesError as e:
@@ -58,11 +58,11 @@ async def sc_namespace(client_sc):
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def session(client_sc, sc_namespace):
+async def session(cluster_sc, sc_namespace):
     """Session on the SC cluster; skips when the cluster cannot run MRTs."""
-    if not await client_sc._supports_mrt():
+    if not await cluster_sc._client._supports_mrt():
         pytest.skip("cluster does not support multi-record transactions")
-    return client_sc.create_session()
+    return cluster_sc.create_session()
 
 
 @pytest.fixture
@@ -100,11 +100,7 @@ async def _reset(session, keys):
 async def _bin_values(session, keys, bin_name):
     stream = await session.query(keys).execute()
     rows = await stream.collect()
-    return {
-        row.key.value: row.record.bins.get(bin_name)
-        for row in rows
-        if row.record is not None
-    }
+    return {row.key.value: row.record.bins.get(bin_name) for row in rows if row.record is not None}
 
 
 async def test_multi_key_upsert_is_wrapped(session, ds, txn_spy):
@@ -144,13 +140,13 @@ async def test_multi_key_delete_is_wrapped(session, ds, txn_spy):
     assert await _bin_values(session, keys, "n") == {}
 
 
-async def test_setting_disabled_suppresses_wrap(client_sc, session, ds, txn_spy, monkeypatch):
+async def test_setting_disabled_suppresses_wrap(cluster_sc, session, ds, txn_spy, monkeypatch):
     keys = ds.ids(30, 31)
     await _reset(session, keys)
 
-    settings = client_sc._sdk_settings
+    settings = cluster_sc._client._sdk_settings
     monkeypatch.setattr(
-        client_sc, "_sdk_settings",
+        cluster_sc._client, "_sdk_settings",
         replace(
             settings,
             transactions=replace(

@@ -41,10 +41,7 @@ _OpKey = Tuple[OpKind, OpShape, Mode]
 _sessions_lock = threading.Lock()
 
 _ALL_KEYS: List[_OpKey] = [
-    (kind, shape, mode)
-    for kind in OpKind
-    for shape in OpShape
-    for mode in Mode
+    (kind, shape, mode) for kind in OpKind for shape in OpShape for mode in Mode
 ]
 
 

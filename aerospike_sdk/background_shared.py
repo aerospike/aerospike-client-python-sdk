@@ -57,8 +57,7 @@ def reject_unsupported_background_write_ops(operations: Sequence[Any]) -> None:
             "MapOperation", "ListOperation", "BitOperation", "HllOperation",
         ):
             raise AerospikeError(
-                "Collection and HLL operations are not supported for "
-                "background task execution.",
+                "Collection and HLL operations are not supported for background task execution.",
                 result_code=ResultCode.OP_NOT_APPLICABLE,
             )
 
@@ -75,8 +74,7 @@ def make_background_write_policy(
 ) -> WritePolicy:
     """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``."""
     if behavior is not None:
-        settings = behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
+        settings = behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
         wp = to_write_policy(settings)
         wp.durable_delete = resolve_durable_delete(
             settings.durable_delete,

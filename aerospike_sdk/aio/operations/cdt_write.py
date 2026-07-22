@@ -160,7 +160,8 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
     Adds ``remove()``, and on map-key paths ``set_to()`` / ``add()``.
     Navigation returns ``CdtWriteBuilder`` to preserve write capability.
 
-    Example:
+    Example::
+
         Set a nested map value and remove another key::
 
             await (
@@ -519,9 +520,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
             TypeError: If not preceded by ``on_map_key()`` navigation.
         """
         if self._set_to_factory is None:
-            raise TypeError(
-                "set_to() requires on_map_key() navigation"
-            )
+            raise TypeError("set_to() requires on_map_key() navigation")
         op = self._set_to_factory(value)
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
@@ -539,9 +538,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
             TypeError: If not preceded by ``on_map_key()`` navigation.
         """
         if self._add_factory is None:
-            raise TypeError(
-                "add() requires on_map_key() navigation"
-            )
+            raise TypeError("add() requires on_map_key() navigation")
         op = self._add_factory(value)
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
@@ -953,7 +950,8 @@ class CdtWriteInvertableBuilder(CdtWriteBuilder[T], CdtReadInvertableBuilder[T])
     Combines :class:`CdtWriteBuilder` navigation (including invertable selectors)
     with inverted read terminals from :class:`CdtReadInvertableBuilder`.
 
-    Example:
+    Example::
+
         Remove everything except the selected range::
 
             .bin("m").on_map_value_range(0, 100).remove_all_others()

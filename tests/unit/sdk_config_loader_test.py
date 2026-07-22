@@ -109,8 +109,7 @@ class TestParseSdkConfig:
 
     def test_transactions_only(self):
         profiles = parse_sdk_config(
-            "system:\n  DEFAULT:\n    transactions:\n"
-            "      implicitBatchWriteTransactions: false\n"
+            "system:\n  DEFAULT:\n    transactions:\n      implicitBatchWriteTransactions: false\n"
         )
         settings = profiles["DEFAULT"]
         assert settings.transactions.implicit_batch_write_transactions is False
@@ -169,9 +168,7 @@ class TestParseSdkConfig:
         assert profiles["DEFAULT"].transactions.number_of_attempts is None
 
     def test_bad_duration_skipped(self):
-        profiles = parse_sdk_config(
-            "system:\n  DEFAULT:\n    refresh:\n      tendInterval: fast\n"
-        )
+        profiles = parse_sdk_config("system:\n  DEFAULT:\n    refresh:\n      tendInterval: fast\n")
         assert profiles["DEFAULT"].tend_interval is None
 
 

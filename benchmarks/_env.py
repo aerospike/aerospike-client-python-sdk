@@ -117,3 +117,48 @@ def client_policy_from_config(cfg: object) -> ClientPolicy:
 
 # Load on import so that callers get env vars populated immediately.
 ensure_env()
+
+
+def cluster_def_from_config(cfg: object):
+    """Build an async :class:`ClusterDefinition` mirroring :func:`client_policy_from_config`.
+
+    Used by the AsyncPool bench mode, whose contract is ClusterDefinition-based.
+    Returns ``None`` when the config needs a knob the ClusterDefinition path does
+    not expose (``seed_only_cluster``) — the caller falls back to the
+    deprecated ``client_factory`` shape in that case.
+    """
+    from aerospike_sdk import ClusterDefinition, Host
+
+    if getattr(cfg, "seed_only_cluster", False):
+        return None
+
+    cluster_def = ClusterDefinition(hosts=Host.parse_hosts(cfg.seeds, 3000))
+
+    env_alt = os.environ.get(
+        "AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower() in ("true", "1", "yes")
+    cli_alt = getattr(cfg, "services_alternate", None)
+    if (cli_alt if cli_alt is not None else env_alt):
+        cluster_def.using_services_alternate()
+
+    ca = getattr(cfg, "tls_ca_file", None)
+    cert = getattr(cfg, "tls_cert_file", None)
+    key = getattr(cfg, "tls_key_file", None)
+    if ca:
+        tls = cluster_def.with_tls_config_of().ca_file(ca)
+        if cert and key:
+            tls.client_cert_file(cert).client_key_file(key)
+        tls.done()
+
+    mode_str = getattr(cfg, "auth_mode", None)
+    user = getattr(cfg, "auth_user", None)
+    password = getattr(cfg, "auth_password", None)
+    if mode_str:
+        mode = _AUTH_MODES[mode_str.upper()]
+        if mode == AuthMode.PKI:
+            cluster_def.with_certificate_credentials()
+        elif mode == AuthMode.EXTERNAL:
+            cluster_def.with_external_credentials(user or "", password or "")
+        else:
+            cluster_def.with_native_credentials(user or "", password or "")
+
+    return cluster_def

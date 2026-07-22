@@ -128,9 +128,7 @@ class SyncInfoCommands:
                         index_map[index_name] = entry_map
         return list(index_map.values())
 
-    def secondary_index_details(
-        self, namespace: str, index_name: str
-    ) -> Optional[Dict[str, str]]:
+    def secondary_index_details(self, namespace: str, index_name: str) -> Optional[Dict[str, str]]:
         """Details for one secondary index; ``None`` when missing."""
         try:
             response = self._pac.info_blocking(f"sindex/{namespace}/{index_name}")

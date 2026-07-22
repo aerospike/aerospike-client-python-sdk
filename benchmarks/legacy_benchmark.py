@@ -135,8 +135,7 @@ class _Stats:
 
     def record(self, is_read: bool, latency_ms: float, is_error: bool) -> None:
         include = (
-            self._planned > 0
-            and self._warmup <= self._current < self._planned - self._cooldown
+            self._planned > 0 and self._warmup <= self._current < self._planned - self._cooldown
         )
         with self._lock:
             if is_read:

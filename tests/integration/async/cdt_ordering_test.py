@@ -21,7 +21,7 @@ from aerospike_async import (
     MapOperation, MapOrder, MapPolicy, MapReturnType,
     WritePolicy,
 )
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 
 
 NS = "test"
@@ -31,8 +31,8 @@ DS = DataSet.of(NS, SET)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+async def cluster(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         for key in range(1, 25):
             await session.delete(DS.id(key)).execute()
@@ -42,12 +42,12 @@ async def client(aerospike_host, client_policy):
 class TestKOrderedMapOrdering:
     """K-ordered maps return dict with keys in sorted iteration order."""
 
-    async def test_string_keys_sorted(self, client):
+    async def test_string_keys_sorted(self, cluster):
         """Insert string keys out of order into a K-ordered map, read back sorted."""
         key = 1
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -66,12 +66,12 @@ class TestKOrderedMapOrdering:
         assert isinstance(m, dict)
         assert list(m.keys()) == ["apple", "banana", "cherry"]
 
-    async def test_integer_keys_sorted(self, client):
+    async def test_integer_keys_sorted(self, cluster):
         """Insert integer keys out of order into a K-ordered map, read back sorted."""
         key = 2
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -92,12 +92,12 @@ class TestKOrderedMapOrdering:
         assert isinstance(m, dict)
         assert list(m.keys()) == [10, 20, 30, 40, 50]
 
-    async def test_many_keys_sorted(self, client):
+    async def test_many_keys_sorted(self, cluster):
         """K-ordered map with 100 keys preserves sorted order."""
         key = 3
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         keys_reversed = list(range(100, 0, -1))
@@ -109,12 +109,12 @@ class TestKOrderedMapOrdering:
         m = record.bins[BIN]
         assert list(m.keys()) == list(range(1, 101))
 
-    async def test_ordering_after_add(self, client):
+    async def test_ordering_after_add(self, cluster):
         """Adding a key to a K-ordered map keeps all keys sorted."""
         key = 4
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -140,12 +140,12 @@ class TestKOrderedMapOrdering:
         m = record.bins[BIN]
         assert list(m.keys()) == ["a", "b", "c", "d"]
 
-    async def test_ordering_after_remove(self, client):
+    async def test_ordering_after_remove(self, cluster):
         """Removing keys from a K-ordered map keeps remaining keys sorted."""
         key = 5
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -172,12 +172,12 @@ class TestKOrderedMapOrdering:
         m = record.bins[BIN]
         assert list(m.keys()) == ["a", "c", "d"]
 
-    async def test_ordering_after_remove_by_value(self, client):
+    async def test_ordering_after_remove_by_value(self, cluster):
         """Removing entries by value from a K-ordered map keeps remaining keys sorted."""
         key = 9
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -206,12 +206,12 @@ class TestKOrderedMapOrdering:
         assert list(m.keys()) == ["a", "c", "d"]
         assert list(m.values()) == [100, 100, 300]
 
-    async def test_round_trip_preserves_order(self, client):
+    async def test_round_trip_preserves_order(self, cluster):
         """Read an ordered map, clear it, re-insert via MapOperation — order preserved."""
         key = 6
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -247,12 +247,12 @@ class TestKOrderedMapOrdering:
 class TestKVOrderedMapOrdering:
     """KV-ordered maps return dict with keys in sorted iteration order."""
 
-    async def test_kv_ordered_string_keys_sorted(self, client):
+    async def test_kv_ordered_string_keys_sorted(self, cluster):
         """KV-ordered map keys iterate in sorted order, same as K-ordered."""
         key = 7
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
         await pac.operate(
@@ -271,12 +271,12 @@ class TestKVOrderedMapOrdering:
         assert isinstance(m, dict)
         assert list(m.keys()) == ["apple", "banana", "cherry"]
 
-    async def test_kv_ordered_integer_keys_sorted(self, client):
+    async def test_kv_ordered_integer_keys_sorted(self, cluster):
         """KV-ordered map with integer keys returns them in sorted order."""
         key = 8
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
         await pac.operate(
@@ -299,11 +299,11 @@ class TestKVOrderedMapOrdering:
 class TestUnorderedMap:
     """Unordered maps return dict with no guaranteed key order."""
 
-    async def test_unordered_map_has_no_key_order(self, client):
+    async def test_unordered_map_has_no_key_order(self, cluster):
         """Unordered maps return dict; key iteration order is not guaranteed."""
         key = 10
         k = DS.id(key)
-        session = client.create_session()
+        session = cluster.create_session()
         await session.upsert(k).put({BIN: {"x": 1, "y": 2, "z": 3}}).execute()
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -316,13 +316,13 @@ class TestUnorderedMap:
 class TestNestedOrderedMaps:
     """Nested K-ordered maps should preserve ordering at every level."""
 
-    async def test_nested_ordered_maps(self, client):
+    async def test_nested_ordered_maps(self, cluster):
         """Outer K-ordered map preserves key order; inner maps are unordered
         unless explicitly created with K-ordered policy."""
         outer_key = 11
         k = DS.id(outer_key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         inner = {"c": 3, "a": 1, "b": 2}
@@ -352,12 +352,12 @@ class TestNestedOrderedMaps:
 class TestEdgeCases:
     """Edge cases for ordered map conversion through PythonValue::OrderedMap."""
 
-    async def test_mixed_key_types_sorted(self, client):
+    async def test_mixed_key_types_sorted(self, cluster):
         """Aerospike sorts by type first (int before string), then by value."""
         key = 12
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -383,12 +383,12 @@ class TestEdgeCases:
         # Integers sort before strings in Aerospike's type ordering
         assert keys == int_keys + str_keys
 
-    async def test_bytes_keys_sorted(self, client):
+    async def test_bytes_keys_sorted(self, cluster):
         """Bytes keys in a K-ordered map preserve sorted order."""
         key = 13
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -406,12 +406,12 @@ class TestEdgeCases:
         m = record.bins[BIN]
         assert list(m.keys()) == [b"\x01", b"\x02", b"\x03"]
 
-    async def test_empty_ordered_map(self, client):
+    async def test_empty_ordered_map(self, cluster):
         """Empty K-ordered map returns an empty dict."""
         key = 15
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -435,12 +435,12 @@ class TestEdgeCases:
         assert isinstance(m, dict)
         assert len(m) == 0
 
-    async def test_get_by_rank_range_ordered(self, client):
+    async def test_get_by_rank_range_ordered(self, cluster):
         """get_by_rank_range on K-ordered map returns values in rank order."""
         key = 16
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(
@@ -469,12 +469,12 @@ class TestEdgeCases:
 class TestCdtOrdering:
     """Verify ordering through the chainable BinBuilder path."""
 
-    async def test_set_to_ordered_bin(self, client):
+    async def test_set_to_ordered_bin(self, cluster):
         """set_to() on a K-ordered map bin, then read back sorted."""
         key = 17
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         # First create the bin as K-ordered
@@ -498,12 +498,12 @@ class TestCdtOrdering:
         record = result.record
         assert isinstance(record.bins[BIN], dict)
 
-    async def test_get_by_key_range_ordered(self, client):
+    async def test_get_by_key_range_ordered(self, cluster):
         """get_by_key_range on K-ordered map returns keys in sorted order."""
         key = 18
         k = DS.id(key)
-        session = client.create_session()
-        pac = client.underlying_client
+        session = cluster.create_session()
+        pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         await pac.operate(

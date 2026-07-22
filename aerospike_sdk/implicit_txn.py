@@ -122,8 +122,7 @@ def _should_retry(exc: BaseException, attempt: int, attempts: int) -> bool:
     if attempt + 1 >= attempts:
         return False
     return (
-        isinstance(exc, CommitFailedError)
-        or getattr(exc, "result_code", None) in _RETRYABLE_CODES
+        isinstance(exc, CommitFailedError) or getattr(exc, "result_code", None) in _RETRYABLE_CODES
     )
 
 

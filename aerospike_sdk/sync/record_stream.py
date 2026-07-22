@@ -116,14 +116,9 @@ class SyncRecordStream:
         def _gen() -> Iterator[RecordResult]:
             try:
                 for idx, br in pac_stream:
-                    rc = (
-                        br.result_code
-                        if br.result_code is not None
-                        else ResultCode.OK
-                    )
+                    rc = br.result_code if br.result_code is not None else ResultCode.OK
                     if on_error is not None and rc != ResultCode.OK:
-                        on_error(br.key, idx, _result_code_to_exception(
-                            rc, str(rc), br.in_doubt))
+                        on_error(br.key, idx, _result_code_to_exception(rc, str(rc), br.in_doubt))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -413,11 +408,7 @@ def _chunked_iter(
     for record in recordset:
         if 0 < limit <= counter[0]:
             return
-        key = (
-            record.key
-            if hasattr(record, "key") and record.key is not None
-            else Key("", "", 0)
-        )
+        key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
         counter[0] += 1
         yield RecordResult(
             key=key, record=record, result_code=ResultCode.OK,

@@ -210,8 +210,7 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
             member = getattr(converter, raw, None)
             if member is not None:
                 return member
-        raise ValueError(
-            f"{disk_key} must name a {converter.__name__} value, got {raw!r}")
+        raise ValueError(f"{disk_key} must name a {converter.__name__} value, got {raw!r}")
     raise AssertionError(f"unknown converter for {disk_key}")
 
 

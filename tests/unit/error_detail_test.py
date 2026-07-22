@@ -21,12 +21,10 @@ passthrough. Behavior against a live cluster is covered in
 """
 
 from aerospike_async import ReadPolicy, WritePolicy
-from aerospike_async.exceptions import ResultCode
-from aerospike_async.exceptions import ServerError as PacServerError
+from aerospike_sdk.exceptions import AerospikeError, _convert_pac_exception, ResultCode, ServerError as PacServerError
 
 import aerospike_sdk
 from aerospike_sdk import ErrorDetailVerbosity, ExpressionTrace, SubCode
-from aerospike_sdk.exceptions import AerospikeError, _convert_pac_exception
 from aerospike_sdk.policy import sdk_config_loader as loader
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.policy.policy_mapper import (
@@ -119,8 +117,7 @@ class TestConfigKey:
 
     def test_parsed_into_settings(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    allOperations:\n"
-            "      errorDetailVerbosity: 2\n"
+            "behaviors:\n  b:\n    allOperations:\n      errorDetailVerbosity: 2\n"
         )
         assert specs["b"].patches[Scope.ALL].error_detail_verbosity == 2
 

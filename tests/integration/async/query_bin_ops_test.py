@@ -31,9 +31,8 @@ import pytest
 import pytest_asyncio
 
 from aerospike_async import Key
-from aerospike_async.exceptions import ResultCode
-from aerospike_sdk import DataSet, Client
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 KEY_PREFIX = "qbops_"
@@ -42,10 +41,10 @@ SET = "query_bin_ops"
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    """Setup SDK client, seed test data, yield the client."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+async def cluster(aerospike_host, make_cluster_definition):
+    """Connect a Cluster, seed test data, yield it."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        session = c.create_session()
         ds = DataSet.of(NS, SET)
 
         for i in range(1, 4):
@@ -67,12 +66,12 @@ async def client(aerospike_host, client_policy):
         # Brief pause so the query scan index reflects the committed writes under CI load
         await asyncio.sleep(0.1)
 
-        yield client
+        yield c
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 def _key(i: int) -> Key:
@@ -93,9 +92,9 @@ class TestSimpleBinReads:
     async def test_get_multiple_bins(self, session):
         rs = await (
             session.query(key=_key(1))
-                .bin("name").get()
-                .bin("age").get()
-                .execute()
+            .bin("name").get()
+            .bin("age").get()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["name"] == "user1"
@@ -140,7 +139,7 @@ class TestCdtMapReads:
     async def test_map_key_get_values(self, session):
         rs = await (
             session.query(key=_key(1)).bin("settings").on_map_key("theme").get_values()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == "dark"
@@ -148,7 +147,7 @@ class TestCdtMapReads:
     async def test_map_key_count(self, session):
         rs = await (
             session.query(key=_key(1)).bin("settings").on_map_key("theme").count()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == 1
@@ -156,7 +155,7 @@ class TestCdtMapReads:
     async def test_map_index_range_get_values(self, session):
         rs = await (
             session.query(key=_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         vals = result.record.bins["settings"]
@@ -166,7 +165,7 @@ class TestCdtMapReads:
     async def test_map_rank_get_values(self, session):
         rs = await (
             session.query(key=_key(2)).bin("settings").on_map_rank(0).get_values()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] is not None
@@ -181,7 +180,7 @@ class TestCdtListReads:
     async def test_list_index_get_values(self, session):
         rs = await (
             session.query(key=_key(1)).bin("scores").on_list_index(0).get_values()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 10
@@ -189,7 +188,7 @@ class TestCdtListReads:
     async def test_list_index_count(self, session):
         rs = await (
             session.query(key=_key(1)).bin("scores").on_list_index(0).count()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 1
@@ -198,7 +197,7 @@ class TestCdtListReads:
         """Rank 0 = lowest value; for key 2 scores=[20,40,60], lowest=20."""
         rs = await (
             session.query(key=_key(2)).bin("scores").on_list_rank(0).get_values()
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 20
@@ -271,7 +270,7 @@ class TestBatchKeyQueries:
     async def test_batch_bin_get(self, session):
         rs = await (
             session.query(keys_list=[_key(1), _key(2)]).bin("name").get()
-                .execute()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -281,8 +280,8 @@ class TestBatchKeyQueries:
     async def test_batch_cdt_map_read(self, session):
         rs = await (
             session.query(keys_list=[_key(1), _key(2), _key(3)])
-                .bin("settings").on_map_key("theme").get_values()
-                .execute()
+            .bin("settings").on_map_key("theme").get_values()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
@@ -293,8 +292,8 @@ class TestBatchKeyQueries:
     async def test_batch_cdt_list_size(self, session):
         rs = await (
             session.query(keys_list=[_key(1), _key(2), _key(3)])
-                .bin("scores").list_size()
-                .execute()
+            .bin("scores").list_size()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
@@ -305,8 +304,8 @@ class TestBatchKeyQueries:
     async def test_batch_cdt_list_get(self, session):
         rs = await (
             session.query(keys_list=[_key(1), _key(2), _key(3)])
-                .bin("scores").list_get(0)
-                .execute()
+            .bin("scores").list_get(0)
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
@@ -325,9 +324,9 @@ class TestCdtReadEdgeCases:
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30]
 
-    async def test_remove_from_nonexistent_key_raises(self, client):
+    async def test_remove_from_nonexistent_key_raises(self, cluster):
         """Map remove_by_key_list on a missing record raises KEY_NOT_FOUND_ERROR."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of(NS, SET)
         key = ds.id(f"{KEY_PREFIX}missing_rm")
         try:
@@ -351,7 +350,7 @@ class TestDatasetQueryGuard:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(NS, SET).bin("settings").on_map_key("theme").get_values()
-                    .execute()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
@@ -359,7 +358,7 @@ class TestDatasetQueryGuard:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(NS, SET).bin("name").get()
-                    .execute()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
@@ -373,9 +372,9 @@ class TestQueryStacking:
     async def test_stack_two_point_queries(self, session):
         rs = await (
             session
-                .query(key=_key(1)).bin("name").get()
-                .query(_key(2)).bin("age").get()
-                .execute()
+            .query(key=_key(1)).bin("name").get()
+            .query(_key(2)).bin("age").get()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -390,9 +389,9 @@ class TestQueryStacking:
     async def test_stack_batch_queries(self, session):
         rs = await (
             session
-                .query(keys_list=[_key(1), _key(2)]).bin("name").get()
-                .query([_key(3)]).bin("age").get()
-                .execute()
+            .query(keys_list=[_key(1), _key(2)]).bin("name").get()
+            .query([_key(3)]).bin("age").get()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
@@ -406,13 +405,13 @@ class TestQueryStacking:
         select_from, missing bin, and missing key."""
         rs = await (
             session
-                .query(key=_key(1)).bins(["name"])
-                .query(_key(2))
-                .query(_key(3)).with_no_bins()
-                .query(_key(1)).bin("score").select_from("$.score * 8")
-                .query(_key(2)).bins(["binnotfound"])
-                .query(Key(NS, SET, f"{KEY_PREFIX}999")).bins(["name"])
-                .execute()
+            .query(key=_key(1)).bins(["name"])
+            .query(_key(2))
+            .query(_key(3)).with_no_bins()
+            .query(_key(1)).bin("score").select_from("$.score * 8")
+            .query(_key(2)).bins(["binnotfound"])
+            .query(Key(NS, SET, f"{KEY_PREFIX}999")).bins(["name"])
+            .execute()
         )
         results = await rs.collect()
         # Missing key (key999) is excluded from stream by default
@@ -456,8 +455,8 @@ class TestInvertedReads:
         """Get all map values EXCEPT those in the range."""
         rs = await (
             session.query(key=_key(1))
-                .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
-                .execute()
+            .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
+            .execute()
         )
         result = await rs.first_or_raise()
         vals = result.record.bins["settings"]
@@ -471,8 +470,8 @@ class TestInvertedReads:
         """Get all list elements EXCEPT those matching the value."""
         rs = await (
             session.query(key=_key(1))
-                .bin("scores").on_list_value(10).get_all_other_values()
-                .execute()
+            .bin("scores").on_list_value(10).get_all_other_values()
+            .execute()
         )
         result = await rs.first_or_raise()
         vals = result.record.bins["scores"]
@@ -491,8 +490,8 @@ class TestExpressionReads:
     async def test_select_from_simple(self, session):
         rs = await (
             session.query(key=_key(1))
-                .bin("age_plus_20").select_from("$.age + 20")
-                .execute()
+            .bin("age_plus_20").select_from("$.age + 20")
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["age_plus_20"] == 41
@@ -500,9 +499,9 @@ class TestExpressionReads:
     async def test_select_from_multiple(self, session):
         rs = await (
             session.query(key=_key(2))
-                .bin("double_age").select_from("$.age * 2")
-                .bin("triple_score").select_from("$.score * 3")
-                .execute()
+            .bin("double_age").select_from("$.age * 2")
+            .bin("triple_score").select_from("$.score * 3")
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["double_age"] == 44   # (20+2)*2
@@ -511,9 +510,9 @@ class TestExpressionReads:
     async def test_select_from_with_get(self, session):
         rs = await (
             session.query(key=_key(1))
-                .bin("name").get()
-                .bin("age_in_10").select_from("$.age + 10")
-                .execute()
+            .bin("name").get()
+            .bin("age_in_10").select_from("$.age + 10")
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["name"] == "user1"
@@ -526,61 +525,61 @@ class TestExpressionReads:
 
 class TestNestedCdtReads:
 
-    async def test_nested_map_key_get_values(self, client):
+    async def test_nested_map_key_get_values(self, cluster):
         """Read a value 2 levels deep: nested.level1.a"""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(1))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .execute()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["nested"] == 100
 
-    async def test_nested_map_key_count(self, client):
+    async def test_nested_map_key_count(self, cluster):
         """Count at a nested path should be 1 for a scalar."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(1))
-                .bin("nested").on_map_key("level1").on_map_key("b").count()
-                .execute()
+            .bin("nested").on_map_key("level1").on_map_key("b").count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["nested"] == 1
 
-    async def test_nested_map_key_different_branches(self, client):
+    async def test_nested_map_key_different_branches(self, cluster):
         """Read from two different nested branches in separate queries."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs1 = await (
             await session.query(_key(2))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .execute()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .execute()
         ).first_or_raise()
         assert rs1.record.bins["nested"] == 200
 
         rs2 = await (
             await session.query(_key(2))
-                .bin("nested").on_map_key("level2").on_map_key("x").get_values()
-                .execute()
+            .bin("nested").on_map_key("level2").on_map_key("x").get_values()
+            .execute()
         ).first_or_raise()
         assert rs2.record.bins["nested"] == 2
 
-    async def test_nested_map_key_with_flat_bin(self, client):
+    async def test_nested_map_key_with_flat_bin(self, cluster):
         """Combine a nested CDT read with a flat bin read."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(3))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .bin("name").get()
-                .execute()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .bin("name").get()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["nested"] == 300
         assert rs.record.bins["name"] == "user3"
 
-    async def test_nested_map_key_get_values_key3(self, client):
+    async def test_nested_map_key_get_values_key3(self, cluster):
         """Read nested value for a different key to verify data independence."""
-        session = client.create_session()
+        session = cluster.create_session()
         rs = await (
             await session.query(_key(3))
-                .bin("nested").on_map_key("level2").on_map_key("y").get_values()
-                .execute()
+            .bin("nested").on_map_key("level2").on_map_key("y").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["nested"] == 4

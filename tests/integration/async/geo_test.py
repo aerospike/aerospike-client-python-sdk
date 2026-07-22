@@ -25,7 +25,7 @@ import asyncio
 
 import pytest
 
-from aerospike_sdk import Client, Exp
+from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
 
@@ -61,10 +61,10 @@ def _aero_circle(lng: float, lat: float, radius_m: float = 3000.0) -> str:
 
 
 @pytest.fixture
-async def geo_seeded_client(aerospike_host, client_policy, enterprise):
+async def geo_seeded_cluster(aerospike_host, make_cluster_definition, enterprise):
     """Set up a GEO2DSPHERE index plus 15 AeroCircle regions. Tear down on exit."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         regions = DataSet.of(NAMESPACE, REGION_SET)
 
         # Clean any leftover data from a previous run.
@@ -74,14 +74,14 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
             except Exception:
                 pass
         try:
-            await client.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
         except Exception:
             pass
 
         # Create the GEO2DSPHERE index.
         try:
             await (
-                client.index(NAMESPACE, REGION_SET)
+                session.index(NAMESPACE, REGION_SET)
                 .named(INDEX_NAME)
                 .on_bin(BIN_NAME)
                 .geo2dsphere()
@@ -101,7 +101,7 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
         # Give the secondary index a moment to populate on community edition.
         await asyncio.sleep(0.5 if not enterprise else 0.05)
 
-        yield client
+        yield cluster
 
         for i in range(len(STARBUCKS)):
             try:
@@ -109,14 +109,14 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
             except Exception:
                 pass
         try:
-            await client.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
         except Exception:
             pass
 
 
 @pytest.fixture
-async def session(geo_seeded_client):
-    return geo_seeded_client.create_session()
+async def session(geo_seeded_cluster):
+    return geo_seeded_cluster.create_session()
 
 
 class TestGeoQuery:

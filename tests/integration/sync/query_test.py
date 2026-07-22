@@ -18,14 +18,14 @@
 import time
 
 import pytest
-from aerospike_sdk import DataSet, Exp, SyncClient
+from aerospike_sdk import DataSet, Exp
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy, enterprise):
-    """Setup sync SDK client and test data for query tests."""
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+def cluster(aerospike_host, make_cluster_definition, enterprise):
+    """Setup sync SDK cluster and test data for query tests."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         for i in range(10):
             session.delete(ds.id(i)).execute()
@@ -34,12 +34,12 @@ def client(aerospike_host, client_policy, enterprise):
             session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()
 
         time.sleep(0.25 if not enterprise else 0.01)
-        yield client
+        yield cluster
 
 
 @pytest.fixture
-def session(client):
-    return client.create_session()
+def session(cluster):
+    return cluster.create_session()
 
 def test_query_basic(session):
     """Test basic query operation without filters."""
@@ -66,12 +66,12 @@ def test_query_with_dataset(session):
         if count >= 5:
             break
 
-def test_query_with_single_key(client):
+def test_query_with_single_key(cluster):
     """Test query using a single Key."""
     users = DataSet.of("test", "query_test")
     key = users.id(5)
 
-def test_query_with_multiple_keys(client):
+def test_query_with_multiple_keys(cluster):
     """Test query using multiple Keys."""
     users = DataSet.of("test", "query_test")
     keys = users.ids(6, 7)
@@ -95,10 +95,7 @@ def test_query_with_bins(session):
 def test_query_with_filter_expression(session):
     """Test query with Exp (FilterExpression) for server-side filtering."""
     # Create a filter expression for age >= 25
-    filter_exp = Exp.ge(
-        Exp.int_bin("age"),
-        Exp.int_val(25)
-    )
+    filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = (
         session.query("test", "query_test")
@@ -127,10 +124,10 @@ class TestSyncExecuteStreamAcrossBuilders:
     (the bug this covers), on both buffered ``execute()`` and lazy
     ``execute_stream()``."""
 
-    def test_batch_read_stream_matches_execute(self, client):
+    def test_batch_read_stream_matches_execute(self, cluster):
         """Multi-key read: execute_stream yields the same rows (by index)
         as buffered execute()."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(0, 1, 2)
 
@@ -139,14 +136,14 @@ class TestSyncExecuteStreamAcrossBuilders:
         assert {r.index for r in lazy} == {r.index for r in eager} == {0, 1, 2}
         assert all(r.is_ok for r in lazy)
 
-    def test_mixed_write_chain_stream_and_buffered(self, client):
+    def test_mixed_write_chain_stream_and_buffered(self, cluster):
         """A query→write→delete chain yields one row per op on both the
         buffered and streaming paths, and the chained reads are NOT dropped —
         they come back carrying their record data. This is the regression
         guard for the sync ``_start_write_verb`` finalize-first fix: before
         it, the read spec (indices 0, 1) was silently overwritten by the
         upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "sestream_qmix")
         keys = [ds.id(i) for i in range(4)]
         try:
@@ -158,8 +155,8 @@ class TestSyncExecuteStreamAcrossBuilders:
                 session.upsert(keys[3]).put({"v": 3}).execute()
                 chain = (
                     session.query(ds.ids(0, 1))
-                        .upsert(keys[2]).bin("status").set_to("active")
-                        .delete(keys[3])
+                    .upsert(keys[2]).bin("status").set_to("active")
+                    .delete(keys[3])
                 )
                 results = getattr(chain, terminal)().collect()
                 assert {r.index for r in results} == {0, 1, 2, 3}, terminal
@@ -175,9 +172,9 @@ class TestSyncExecuteStreamAcrossBuilders:
                 except Exception:
                     pass
 
-    def test_single_key_write_segment_stream(self, client):
+    def test_single_key_write_segment_stream(self, cluster):
         """A single-key write segment exposes execute_stream (one record)."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "sestream_qsingle")
         k = ds.id(0)
         try:
@@ -194,8 +191,8 @@ class TestSyncExecuteStreamAcrossBuilders:
 class TestSyncPopVsFirst:
     """`pop()` keeps the stream open; `first()` closes it — plus ``_or_raise``."""
 
-    def test_pop_keeps_stream_open(self, client):
-        session = client.create_session()
+    def test_pop_keeps_stream_open(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream = session.query(ds.ids(0, 1, 2)).execute_stream()
         head = stream.pop()
@@ -203,16 +200,16 @@ class TestSyncPopVsFirst:
         rest = stream.collect()
         assert {head.index} | {r.index for r in rest} == {0, 1, 2}
 
-    def test_first_closes_stream(self, client):
-        session = client.create_session()
+    def test_first_closes_stream(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream = session.query(ds.ids(0, 1, 2)).execute_stream()
         head = stream.first()
         assert head is not None
         assert stream.collect() == []
 
-    def test_pop_or_raise_and_first_or_raise(self, client):
-        session = client.create_session()
+    def test_pop_or_raise_and_first_or_raise(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
 
         open_stream = session.query(ds.ids(0, 1)).execute_stream()
@@ -229,8 +226,8 @@ class TestSyncExecuteStreamClose:
     idempotent close, close-on-exception via ``with``, plus re-iterate and
     client-usable-after-close."""
 
-    def test_close_mid_stream_stops_iteration(self, client):
-        session = client.create_session()
+    def test_close_mid_stream_stops_iteration(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(*range(10))
 
@@ -245,8 +242,8 @@ class TestSyncExecuteStreamClose:
         remaining = sum(1 for _ in stream)
         assert remaining == 0
 
-    def test_close_is_idempotent(self, client):
-        session = client.create_session()
+    def test_close_is_idempotent(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream = session.query(ds.ids(0, 1, 2)).execute_stream()
         stream.close()
@@ -254,16 +251,16 @@ class TestSyncExecuteStreamClose:
         stream.close()
         assert stream.collect() == []
 
-    def test_reiterate_after_close_yields_nothing(self, client):
-        session = client.create_session()
+    def test_reiterate_after_close_yields_nothing(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream = session.query(ds.ids(0, 1, 2, 3)).execute_stream()
         stream.close()
         assert list(stream) == []
         assert list(stream) == []
 
-    def test_client_usable_after_early_close(self, client):
-        session = client.create_session()
+    def test_client_usable_after_early_close(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream = session.query(ds.ids(*range(10))).execute_stream()
         for _ in stream:
@@ -272,8 +269,8 @@ class TestSyncExecuteStreamClose:
         rec = session.query(ds.id(0)).execute().first_or_raise()
         assert rec.record.bins["id"] == 0
 
-    def test_with_closes_on_normal_exit(self, client):
-        session = client.create_session()
+    def test_with_closes_on_normal_exit(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         seen = []
         with session.query(ds.ids(0, 1, 2)).execute_stream() as stream:
@@ -282,8 +279,8 @@ class TestSyncExecuteStreamClose:
         assert set(seen) == {0, 1, 2}
         assert stream.collect() == []
 
-    def test_with_closes_on_early_break(self, client):
-        session = client.create_session()
+    def test_with_closes_on_early_break(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         with session.query(ds.ids(*range(10))).execute_stream() as stream:
             for _ in stream:
@@ -292,8 +289,8 @@ class TestSyncExecuteStreamClose:
         rec = session.query(ds.id(1)).execute().first_or_raise()
         assert rec.record.bins["id"] == 1
 
-    def test_with_closes_on_exception(self, client):
-        session = client.create_session()
+    def test_with_closes_on_exception(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
@@ -309,10 +306,9 @@ class TestSyncExecuteStreamClose:
 def test_query_with_filter_expression_and(session):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
     # Create filter expression: age >= 25 AND age <= 27
-    filter_exp = Exp.and_([
-        Exp.ge(Exp.int_bin("age"), Exp.int_val(25)),
-        Exp.le(Exp.int_bin("age"), Exp.int_val(27))
-    ])
+    filter_exp = Exp.and_(
+        [Exp.ge(Exp.int_bin("age"), Exp.int_val(25)), Exp.le(Exp.int_bin("age"), Exp.int_val(27))]
+    )
 
     stream = (
         session.query("test", "query_test")

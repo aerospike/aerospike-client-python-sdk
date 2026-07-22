@@ -69,12 +69,10 @@ class TestWhenExpressions:
     def test_when_using_the_result_numeric_in_comparison(self):
         """When expression in comparison: (when (...) => 10, 20) > 15."""
         expected = Exp.gt(
-            Exp.cond([
-                Exp.eq(Exp.int_bin("who"), Exp.int_val(1)),
-                Exp.int_val(10),
-                Exp.int_val(20)
-            ]),
-            Exp.int_val(15)
+            Exp.cond(
+                [Exp.eq(Exp.int_bin("who"), Exp.int_val(1)), Exp.int_val(10), Exp.int_val(20)]
+            ),
+            Exp.int_val(15),
         )
         result = parse_ael('(when($.who == 1 => 10, default => 20)) > 15')
         assert result == expected
@@ -116,9 +114,7 @@ class TestWhenExpressions:
             )
         )
         result = parse_ael(
-            "not(when($.A == 0 => $.D + $.E, "
-            "$.A == 1 => $.D - $.E, "
-            "default => -1) == 2)"
+            "not(when($.A == 0 => $.D + $.E, $.A == 1 => $.D - $.E, default => -1) == 2)"
         )
         assert result == expected
 
@@ -150,10 +146,9 @@ class TestLetExpressions:
     """Test let/then (variable binding) expressions."""
 
     def test_let_single_variable(self):
-        expected = Exp.exp_let([
-            Exp.def_("x", Exp.int_val(1)),
-            Exp.num_add([Exp.var("x"), Exp.int_val(1)])
-        ])
+        expected = Exp.exp_let(
+            [Exp.def_("x", Exp.int_val(1)), Exp.num_add([Exp.var("x"), Exp.int_val(1)])]
+        )
         result = parse_ael("let (x = 1) then (${x} + 1)")
         assert result == expected
 
@@ -185,11 +180,10 @@ class TestLetExpressions:
 
     def test_let_in_comparison(self):
         expected = Exp.gt(
-            Exp.exp_let([
-                Exp.def_("sum", Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")])),
-                Exp.var("sum")
-            ]),
-            Exp.int_val(100)
+            Exp.exp_let(
+                [Exp.def_("sum", Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")])), Exp.var("sum")]
+            ),
+            Exp.int_val(100),
         )
         result = parse_ael("(let (sum = $.a + $.b) then (${sum})) > 100")
         assert result == expected
@@ -197,20 +191,16 @@ class TestLetExpressions:
     def test_let_as_operand_no_parens(self):
         """let(...) then(...) > value without extra parens."""
         expected = Exp.gt(
-            Exp.exp_let([
-                Exp.def_("sum", Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")])),
-                Exp.var("sum")
-            ]),
-            Exp.int_val(100)
+            Exp.exp_let(
+                [Exp.def_("sum", Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")])), Exp.var("sum")]
+            ),
+            Exp.int_val(100),
         )
         result = parse_ael("let (sum = $.a + $.b) then (${sum}) > 100")
         assert result == expected
 
     def test_variable_reference_syntax(self):
-        expected = Exp.exp_let([
-            Exp.def_("myVar", Exp.int_val(42)),
-            Exp.var("myVar")
-        ])
+        expected = Exp.exp_let([Exp.def_("myVar", Exp.int_val(42)), Exp.var("myVar")])
         result = parse_ael("let (myVar = 42) then (${myVar})")
         assert result == expected
 
@@ -310,19 +300,13 @@ class TestUnaryExpressions:
 
     def test_unary_minus_bin(self):
         """Unary minus on a bin expression uses num_mul(bin, -1)."""
-        expected = Exp.gt(
-            Exp.num_mul([Exp.int_bin("x"), Exp.int_val(-1)]),
-            Exp.int_val(0)
-        )
+        expected = Exp.gt(Exp.num_mul([Exp.int_bin("x"), Exp.int_val(-1)]), Exp.int_val(0))
         result = parse_ael("-$.x > 0")
         assert result == expected
 
     def test_unary_minus_higher_precedence_than_power(self):
         """-2.0 ** 2.0 should parse as (-2.0) ** 2.0, not -(2.0 ** 2.0)."""
-        expected = Exp.eq(
-            Exp.num_pow(Exp.float_val(-2.0), Exp.float_val(2.0)),
-            Exp.float_val(4.0)
-        )
+        expected = Exp.eq(Exp.num_pow(Exp.float_val(-2.0), Exp.float_val(2.0)), Exp.float_val(4.0))
         result = parse_ael("-2.0 ** 2.0 == 4.0")
         assert result == expected
 
@@ -333,11 +317,8 @@ class TestPrecedenceOrder:
     def test_shift_lower_than_add(self):
         """1 + 2 << 3 should parse as (1 + 2) << 3."""
         expected = Exp.eq(
-            Exp.int_lshift(
-                Exp.num_add([Exp.int_val(1), Exp.int_val(2)]),
-                Exp.int_val(3)
-            ),
-            Exp.int_val(24)
+            Exp.int_lshift(Exp.num_add([Exp.int_val(1), Exp.int_val(2)]), Exp.int_val(3)),
+            Exp.int_val(24),
         )
         result = parse_ael("(1 + 2 << 3) == 24")
         assert result == expected
@@ -345,11 +326,8 @@ class TestPrecedenceOrder:
     def test_bitwise_lower_than_shift(self):
         """1 << 2 & 0xFF should parse as (1 << 2) & 0xFF."""
         expected = Exp.eq(
-            Exp.int_and([
-                Exp.int_lshift(Exp.int_val(1), Exp.int_val(2)),
-                Exp.int_val(0xFF)
-            ]),
-            Exp.int_val(4)
+            Exp.int_and([Exp.int_lshift(Exp.int_val(1), Exp.int_val(2)), Exp.int_val(0xFF)]),
+            Exp.int_val(4),
         )
         result = parse_ael("(1 << 2 & 0xFF) == 4")
         assert result == expected
@@ -357,11 +335,8 @@ class TestPrecedenceOrder:
     def test_add_higher_than_shift(self):
         """1 << 2 + 1 should parse as 1 << (2 + 1) = 8."""
         expected = Exp.eq(
-            Exp.int_lshift(
-                Exp.int_val(1),
-                Exp.num_add([Exp.int_val(2), Exp.int_val(1)])
-            ),
-            Exp.int_val(8)
+            Exp.int_lshift(Exp.int_val(1), Exp.num_add([Exp.int_val(2), Exp.int_val(1)])),
+            Exp.int_val(8),
         )
         result = parse_ael("(1 << 2 + 1) == 8")
         assert result == expected
@@ -369,21 +344,15 @@ class TestPrecedenceOrder:
     def test_pow_higher_than_bitwise_and(self):
         """2 ** 3 & 5 should parse as (2 ** 3) & 5 = 8 & 5 = 0."""
         expected = Exp.eq(
-            Exp.int_and([
-                Exp.num_pow(Exp.int_val(2), Exp.int_val(3)),
-                Exp.int_val(5)
-            ]),
-            Exp.int_val(0)
+            Exp.int_and([Exp.num_pow(Exp.int_val(2), Exp.int_val(3)), Exp.int_val(5)]),
+            Exp.int_val(0),
         )
         result = parse_ael("(2 ** 3 & 5) == 0")
         assert result == expected
 
     def test_bitwise_not_at_unary_level(self):
         """~-5 should parse as ~(-5) = 4."""
-        expected = Exp.eq(
-            Exp.int_not(Exp.int_val(-5)),
-            Exp.int_val(4)
-        )
+        expected = Exp.eq(Exp.int_not(Exp.int_val(-5)), Exp.int_val(4))
         result = parse_ael("(~-5) == 4")
         assert result == expected
 
@@ -472,10 +441,7 @@ class TestNumericLiteralEdgeCases:
 
     def test_subtraction_of_negative(self):
         """5 - -3 should parse as 5 - (-3) = 8."""
-        expected = Exp.eq(
-            Exp.num_sub([Exp.int_val(5), Exp.int_val(-3)]),
-            Exp.int_val(8)
-        )
+        expected = Exp.eq(Exp.num_sub([Exp.int_val(5), Exp.int_val(-3)]), Exp.int_val(8))
         result = parse_ael("(5 - -3) == 8")
         assert result == expected
 
@@ -510,10 +476,7 @@ class TestNumericLiteralEdgeCases:
         assert result == expected
 
     def test_leading_dot_float_in_expression(self):
-        expected = Exp.eq(
-            Exp.num_add([Exp.float_val(0.5), Exp.float_val(0.5)]),
-            Exp.float_val(1.0)
-        )
+        expected = Exp.eq(Exp.num_add([Exp.float_val(0.5), Exp.float_val(0.5)]), Exp.float_val(1.0))
         result = parse_ael("(.5 + .5) == 1.0")
         assert result == expected
 
@@ -524,29 +487,20 @@ class TestNumericLiteralEdgeCases:
 
     def test_spaceless_addition(self):
         """5+3 must tokenize as INT(5) + INT(3), not INT(5) INT(+3)."""
-        expected = Exp.eq(
-            Exp.num_add([Exp.int_val(5), Exp.int_val(3)]),
-            Exp.int_val(8)
-        )
+        expected = Exp.eq(Exp.num_add([Exp.int_val(5), Exp.int_val(3)]), Exp.int_val(8))
         result = parse_ael("(5+3) == 8")
         assert result == expected
 
     def test_spaceless_subtraction(self):
         """5-3 must tokenize as INT(5) - INT(3), not INT(5) INT(-3)."""
-        expected = Exp.eq(
-            Exp.num_sub([Exp.int_val(5), Exp.int_val(3)]),
-            Exp.int_val(2)
-        )
+        expected = Exp.eq(Exp.num_sub([Exp.int_val(5), Exp.int_val(3)]), Exp.int_val(2))
         result = parse_ael("(5-3) == 2")
         assert result == expected
 
     def test_spaceless_mixed(self):
         expected = Exp.eq(
-            Exp.num_add([
-                Exp.num_sub([Exp.int_val(10), Exp.int_val(3)]),
-                Exp.int_val(1)
-            ]),
-            Exp.int_val(8)
+            Exp.num_add([Exp.num_sub([Exp.int_val(10), Exp.int_val(3)]), Exp.int_val(1)]),
+            Exp.int_val(8),
         )
         result = parse_ael("(10-3+1) == 8")
         assert result == expected

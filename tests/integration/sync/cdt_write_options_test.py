@@ -18,7 +18,6 @@
 import pytest
 
 from aerospike_async import Key
-from aerospike_sdk import SyncClient
 from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -27,14 +26,14 @@ SET = "cdt_wopt_sync"
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
 @pytest.fixture
-def session(client):
-    return client.create_session()
+def session(cluster):
+    return cluster.create_session()
 
 
 def _key(suffix: str) -> Key:
@@ -51,8 +50,8 @@ class TestListUniqueFlag:
         with pytest.raises(AerospikeError):
             (
                 session.upsert(k)
-                    .bin("lst").list_append(2, unique=True)
-                    .execute()
+                .bin("lst").list_append(2, unique=True)
+                .execute()
             )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -66,8 +65,8 @@ class TestListUniqueFlag:
 
         (
             session.upsert(k)
-                .bin("lst").list_append(4, unique=True)
-                .execute()
+            .bin("lst").list_append(4, unique=True)
+            .execute()
         )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -84,8 +83,8 @@ class TestListCombinedFlags:
 
         (
             session.upsert(k)
-                .bin("lst").list_append(1, unique=True, no_fail=True)
-                .execute()
+            .bin("lst").list_append(1, unique=True, no_fail=True)
+            .execute()
         )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -102,11 +101,11 @@ class TestMapNoFail:
 
         (
             session.upsert(k)
-                .bin("m").map_insert_items(
+            .bin("m").map_insert_items(
                     {"a": 99, "b": 2},
                     no_fail=True, partial=True,
                 )
-                .execute()
+            .execute()
         )
 
         rs = session.query(key=k).bin("m").get().execute()

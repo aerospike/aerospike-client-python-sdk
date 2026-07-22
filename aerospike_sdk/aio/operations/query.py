@@ -253,8 +253,7 @@ class QueryHint:
     def __post_init__(self) -> None:
         if self.index_name is not None and self.bin_name is not None:
             raise ValueError(
-                "index_name and bin_name are mutually exclusive; "
-                "provide one or neither, not both"
+                "index_name and bin_name are mutually exclusive; provide one or neither, not both"
             )
 
 
@@ -515,17 +514,13 @@ class _QueryBuilderBase:
         via ``await sdk_client._supports_mrt()``, so the coroutine is only
         created once the cheap conditions pass.
         """
-        return (
-            not self._txn_opted_out
-            and implicit_txn_enabled(self._sdk_client, self._txn, self._namespace_mode)
+        return not self._txn_opted_out and implicit_txn_enabled(
+            self._sdk_client, self._txn, self._namespace_mode
         )
 
     def _implicit_txn_gate_blocking(self) -> bool:
         """Full gate for blocking dispatchers (precheck + MRT capability)."""
-        return (
-            self._implicit_txn_precheck()
-            and self._sdk_client._supports_mrt_blocking()
-        )
+        return self._implicit_txn_precheck() and self._sdk_client._supports_mrt_blocking()
 
     def _implicit_txn_settings(self) -> Any:
         """Live transaction settings from the owning SDK client."""
@@ -625,7 +620,8 @@ class _QueryBuilderBase:
             ValueError: If ``bin_names`` is empty or :meth:`with_no_bins` was
                 already called.
 
-        Example:
+        Example::
+
             Restrict a query or key read to specific bins::
 
                 stream = await session.query(users.id(1)).bins(["name", "email"]).execute()
@@ -768,7 +764,8 @@ class _QueryBuilderBase:
         Returns:
             This builder for chaining.
 
-        Example:
+        Example::
+
             qb = session.query(ds).where("$.status == 'active'")
             qb = session.query(ds).where(f"$.score > {min_score}")
 
@@ -1292,9 +1289,7 @@ class _QueryBuilderBase:
             else:
                 self._single_key = arg1
         else:
-            raise TypeError(
-                f"requires a Key or List[Key], got {type(arg1).__name__}"
-            )
+            raise TypeError(f"requires a Key or List[Key], got {type(arg1).__name__}")
 
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
@@ -1465,8 +1460,7 @@ class _QueryBuilderBase:
         for r in all_results:
             if not r.is_ok and self._is_actionable(r.result_code, op_type):
                 if disp is _ErrorDisposition.THROW:
-                    raise _result_code_to_exception(
-                        r.result_code, str(r.result_code), r.in_doubt)
+                    raise _result_code_to_exception(r.result_code, str(r.result_code), r.in_doubt)
                 if disp is _ErrorDisposition.HANDLER and handler is not None:
                     handler(r.key, r.index, _result_code_to_exception(
                         r.result_code, str(r.result_code), r.in_doubt))
@@ -1538,9 +1532,7 @@ class _QueryBuilderBase:
                 handler(key, index, pfc_exc)
                 return RecordStream.from_list([])
 
-        if not self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
+        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
             return RecordStream.from_list([])
 
         return RecordStream.from_error(key, rc, in_doubt, exception=pfc_exc)
@@ -1761,8 +1753,7 @@ class _QueryBuilderBase:
             )
         if not self._operations:
             raise ValueError(
-                "At least one write operation is required; use "
-                "with_write_operations(...).",
+                "At least one write operation is required; use with_write_operations(...).",
             )
         self._reject_unsupported_background_write_ops(self._operations)
         wp = self._make_background_write_policy()
@@ -1791,8 +1782,7 @@ class _QueryBuilderBase:
             )
         if self._operations:
             raise ValueError(
-                "Do not combine with_write_operations with "
-                "execute_udf_background_task.",
+                "Do not combine with_write_operations with execute_udf_background_task.",
             )
         wp = self._make_background_write_policy()
         statement = self._build_statement()
@@ -1815,8 +1805,7 @@ class _QueryBuilderBase:
         fn = spec.udf_function
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
             if self._implicit_txn_gate_blocking():
@@ -1837,8 +1826,7 @@ class _QueryBuilderBase:
                 )
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(
-            batch_records, disp, handler, op_type="udf")
+        return self._filtered_batch_list(batch_records, disp, handler, op_type="udf")
 
     def _execute_batch_touch_blocking(
         self, spec: _OperationSpec,
@@ -1846,8 +1834,7 @@ class _QueryBuilderBase:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_touch` — uses
         ``batch_operate_blocking`` with a single touch op per key."""
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
@@ -1865,8 +1852,7 @@ class _QueryBuilderBase:
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(
-            batch_records, disp, handler, op_type="touch")
+        return self._filtered_batch_list(batch_records, disp, handler, op_type="touch")
 
     def _execute_batch_exists_blocking(
         self, spec: _OperationSpec,
@@ -1884,11 +1870,7 @@ class _QueryBuilderBase:
         results: list[RecordResult] = []
         for i, (key, found) in enumerate(zip(spec.keys, found_list)):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if (
-                not found
-                and self._is_actionable(rc, "exists")
-                and disp is _ErrorDisposition.THROW
-            ):
+            if not found and self._is_actionable(rc, "exists") and disp is _ErrorDisposition.THROW:
                 raise _result_code_to_exception(rc, str(rc), False)
             if not self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
@@ -1930,8 +1912,7 @@ class _QueryBuilderBase:
             try:
                 existed = self._client.delete_blocking(key, policy=wp)
             except Exception as e:
-                return self._handle_error_blocking_singlekey(
-                    key, e, "delete", disp, handler)
+                return self._handle_error_blocking_singlekey(key, e, "delete", disp, handler)
             rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
             if self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
@@ -1946,8 +1927,7 @@ class _QueryBuilderBase:
             try:
                 self._client.touch_blocking(key, policy=wp)
             except Exception as e:
-                return self._handle_error_blocking_singlekey(
-                    key, e, "touch", disp, handler)
+                return self._handle_error_blocking_singlekey(key, e, "touch", disp, handler)
             if self._should_include_result(
                 ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out,
             ):
@@ -1961,8 +1941,7 @@ class _QueryBuilderBase:
             try:
                 found = self._client.exists_blocking(key, policy=rp)
             except Exception as e:
-                return self._handle_error_blocking_singlekey(
-                    key, e, "exists", disp, handler)
+                return self._handle_error_blocking_singlekey(key, e, "exists", disp, handler)
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
             if self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
@@ -2031,15 +2010,9 @@ class _QueryBuilderBase:
             #  - no session-cached base policy (no Behavior bound), or
             #  - record-delete op present (applies_dd True; needs the spec's
             #    effective_dd resolution inside _make_write_policy).
-            if (
-                self._base_write_policy is not None
-                and not spec.contains_record_delete_op
-            ):
+            if self._base_write_policy is not None and not spec.contains_record_delete_op:
                 rea = _OP_TYPE_TO_REA.get(op_type)
-                exp = (
-                    _to_expiration(spec.ttl_seconds)
-                    if spec.ttl_seconds is not None else None
-                )
+                exp = _to_expiration(spec.ttl_seconds) if spec.ttl_seconds is not None else None
                 try:
                     record = self._client.operate_blocking(
                         key,
@@ -2135,8 +2108,7 @@ class _QueryBuilderBase:
             # Multi-key read-operate (bin projection, read-style ops on
             # batch) → batch_operate_blocking with a read-shaped policy
             if spec0.operations and spec0.op_type is None:
-                return self._execute_batch_read_operate_blocking(
-                    spec0, disp, handler)
+                return self._execute_batch_read_operate_blocking(spec0, disp, handler)
 
             # Multi-key UDF → batch_apply_blocking
             if spec0.op_type == "udf":
@@ -2214,12 +2186,10 @@ class _QueryBuilderBase:
         if self._specs_require_sequential_run():
             all_results: List[RecordResult] = []
             for spec in self._specs:
-                all_results.extend(
-                    self._execute_spec_blocking(spec, disp, handler))
+                all_results.extend(self._execute_spec_blocking(spec, disp, handler))
             return all_results
 
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
@@ -2236,8 +2206,7 @@ class _QueryBuilderBase:
                     lambda txn: self._client.batch_blocking(
                         all_ops, batch_policy=stamp_txn(batch_policy, txn)))
             else:
-                batch_records = self._client.batch_blocking(
-                    all_ops, batch_policy=batch_policy)
+                batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return self._handle_batch_error_list(all_keys, e, disp, handler)
         return self._filtered_batch_list(batch_records, disp, handler)
@@ -2272,10 +2241,7 @@ class _QueryBuilderBase:
 
         # Keyless query: either no specs (dataset query, attached at
         # builder construction) or specs without keys.
-        is_keyless = (
-            not self._specs
-            or all(not s.keys for s in self._specs)
-        )
+        is_keyless = not self._specs or all(not s.keys for s in self._specs)
         if not is_keyless:
             return None
 
@@ -2324,8 +2290,7 @@ class _QueryBuilderBase:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_write` — uses
         ``batch_operate_blocking``."""
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
@@ -2342,8 +2307,7 @@ class _QueryBuilderBase:
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(
-            batch_records, disp, handler, op_type=spec.op_type)
+        return self._filtered_batch_list(batch_records, disp, handler, op_type=spec.op_type)
 
     def _execute_batch_read_operate_blocking(
         self, spec: _OperationSpec,
@@ -2371,8 +2335,7 @@ class _QueryBuilderBase:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_delete` — uses
         ``batch_delete_blocking``."""
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
             if self._implicit_txn_gate_blocking():
@@ -2387,8 +2350,7 @@ class _QueryBuilderBase:
                     spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(
-            batch_records, disp, handler, op_type="delete")
+        return self._filtered_batch_list(batch_records, disp, handler, op_type="delete")
 
     def _execute_dataset_query_blocking(self) -> Any:
         """Sync counterpart of :meth:`_execute_dataset_query`.
@@ -2450,8 +2412,7 @@ class _QueryBuilderBase:
         statement = self._build_statement()
 
         try:
-            recordset = self._client.query_blocking(
-                statement, partition_filter, policy=policy)
+            recordset = self._client.query_blocking(statement, partition_filter, policy=policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
@@ -2492,9 +2453,7 @@ class _QueryBuilderBase:
                 handler(key, 0, pfc_exc)
                 return []
 
-        if not self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
+        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
             return []
         return [RecordResult(
             key=key, record=None, result_code=rc,
@@ -2525,10 +2484,12 @@ class _QueryBuilderBase:
 
         Example::
 
-            rs = await session.query(users.id(1)) \\
-                .bin("settings").on_map_key("theme").get_values() \\
-                .bin("age").get() \\
+            rs = await (
+                session.query(users.id(1))
+                .bin("settings").on_map_key("theme").get_values()
+                .bin("age").get()
                 .execute()
+            )
         """
         return QueryBinBuilder(cast("QueryBuilder", self), bin_name)
 
@@ -2581,14 +2542,15 @@ class _QueryBuilderBase:
 
         Example::
 
-            rs = await session.query(users.ids(1, 2, 3)) \\
-                .bin("map").get() \\
-                .query(users.ids(4, 5, 6)) \\
-                .bin("name").get() \\
+            rs = await (
+                session.query(users.ids(1, 2, 3))
+                .bin("map").get()
+                .query(users.ids(4, 5, 6))
+                .bin("name").get()
                 .execute()
+            )
         """
-        if (self._single_key is None and self._keys is None
-                and not self._specs):
+        if self._single_key is None and self._keys is None and not self._specs:
             raise ValueError(
                 "Dataset (index) queries cannot be stacked. "
                 "Query stacking is only supported for key-based queries."
@@ -2622,9 +2584,8 @@ class _QueryBuilderBase:
         statement = Statement(self._namespace, self._set_name, bins)
         if self._filter_records:
             hint = self._query_hint
-            needs_rebuild = (
-                hint is not None
-                and (hint.index_name is not None or hint.bin_name is not None)
+            needs_rebuild = hint is not None and (
+                hint.index_name is not None or hint.bin_name is not None
             )
             filters = []
             for rec in self._filter_records:
@@ -2734,8 +2695,7 @@ class _QueryBuilderBase:
             brp = self._make_batch_read_policy(spec)
             for key in spec.keys:
                 if spec.operations:
-                    ops.append(BatchReadOp(
-                        key, operations=list(spec.operations), policy=brp))
+                    ops.append(BatchReadOp(key, operations=list(spec.operations), policy=brp))
                 else:
                     ops.append(BatchReadOp(key, bins=spec.bins, policy=brp))
         elif op_type == "delete":
@@ -2754,8 +2714,7 @@ class _QueryBuilderBase:
         else:
             bwp = self._make_batch_write_policy_mixed(spec)
             for key in spec.keys:
-                ops.append(BatchWriteOp(
-                    key, list(spec.operations), policy=bwp))
+                ops.append(BatchWriteOp(key, list(spec.operations), policy=bwp))
         return ops
 
     @staticmethod
@@ -2777,10 +2736,7 @@ class _QueryBuilderBase:
         for use in mixed-batch calls."""
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        eff = (
-            self._batch_write_effective_dd(spec)
-            if spec.contains_record_delete_op else False
-        )
+        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2818,7 +2774,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
 
-    Example:
+    Example::
+
         Set-wide read with filter and projection::
 
             stream = await (
@@ -2923,7 +2880,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             AerospikeError: Typed subclasses for timeouts, connection failures, etc.
                 when the client raises instead of embedding errors.
 
-        Example:
+        Example::
+
             Single-key read with default error handling::
 
                 stream = await session.query(key).bins(["x"]).execute()
@@ -2981,8 +2939,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                         txn=self._txn,
                     )
                 except Exception as e:
-                    return self._handle_error(
-                        key, e, _ErrorDisposition.THROW, None)
+                    return self._handle_error(key, e, _ErrorDisposition.THROW, None)
                 if cmd_t0:
                     _cmd_done(
                         None, key.namespace, key.set_name, 1, cmd_t0,
@@ -3052,11 +3009,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 sub_disp = _resolve_disposition(on_error, is_single_key=False)
                 streams: List[RecordStream] = []
                 for spec in self._specs:
-                    streams.append(
-                        await self._execute_spec(spec, sub_disp, handler))
+                    streams.append(await self._execute_spec(spec, sub_disp, handler))
                 return RecordStream.chain(streams)
-            batch_policy = self._batch_policy_for(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+            batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
             all_ops: list = []
             all_keys: List[Key] = []
             for spec in self._specs:
@@ -3074,8 +3029,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                         lambda txn: self._client.batch(
                             all_ops, batch_policy=stamp_txn(batch_policy, txn)))
                 else:
-                    batch_records = await self._client.batch(
-                        all_ops, batch_policy=batch_policy)
+                    batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
             except Exception as e:
                 return self._handle_batch_error(all_keys, e, disp, handler)
             if cmd_t0:
@@ -3131,16 +3085,14 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             return await self.execute(on_error)
 
         handler = on_error if callable(on_error) else None
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            pac_stream = await self._client.batch_stream(
-                all_ops, batch_policy=batch_policy)
+            pac_stream = await self._client.batch_stream(all_ops, batch_policy=batch_policy)
         except Exception as e:
             disp = _resolve_disposition(on_error, is_single_key=False)
             return self._handle_batch_error(all_keys, e, disp, handler)
@@ -3170,8 +3122,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             )
         if not self._operations:
             raise ValueError(
-                "At least one write operation is required; use "
-                "with_write_operations(...).",
+                "At least one write operation is required; use with_write_operations(...).",
             )
         self._reject_unsupported_background_write_ops(self._operations)
         log.debug(
@@ -3207,8 +3158,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             )
         if self._operations:
             raise ValueError(
-                "Do not combine with_write_operations with "
-                "execute_udf_background_task.",
+                "Do not combine with_write_operations with execute_udf_background_task.",
             )
         log.debug(
             "background UDF: %s.%s %s.%s",
@@ -3252,13 +3202,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             has_ops = bool(spec.operations)
             if len(keys) == 1:
                 if has_ops:
-                    return await self._execute_single_key_operate(
-                        spec, disp, handler)
-                return await self._execute_single_key_read(
-                    spec, disp, handler)
+                    return await self._execute_single_key_operate(spec, disp, handler)
+                return await self._execute_single_key_read(spec, disp, handler)
             if has_ops:
-                return await self._execute_batch_read_operate(
-                    spec, disp, handler)
+                return await self._execute_batch_read_operate(spec, disp, handler)
             return await self._execute_batch_read(spec, disp, handler)
 
         if op_type == "udf":
@@ -3324,14 +3271,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         fn = spec.udf_function
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            if (
-                self._implicit_txn_precheck()
-                and await self._sdk_client._supports_mrt()
-            ):
+            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_apply(
@@ -3396,16 +3339,14 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                         txn=self._txn,
                     )
                 except Exception as e:
-                    return self._handle_error(
-                        key, e, _ErrorDisposition.THROW, None)
+                    return self._handle_error(key, e, _ErrorDisposition.THROW, None)
                 return RecordStream.from_single(key, record)
             # No base policy — fall back to the legacy build-in-Python path.
             rp = self._apply_txn(ReadPolicy())
             try:
                 record = await self._client.get(key, spec.bins, policy=rp)
             except Exception as e:
-                return self._handle_error(
-                    key, e, _ErrorDisposition.THROW, None)
+                return self._handle_error(key, e, _ErrorDisposition.THROW, None)
             return RecordStream.from_single(key, record)
 
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
@@ -3536,8 +3477,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         try:
             record = await self._client.operate(key, spec.operations, policy=wp)
         except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type=spec.op_type)
+            return self._handle_error(key, e, disp, handler, op_type=spec.op_type)
         return RecordStream.from_single(key, record)
 
     async def _execute_single_key_delete(
@@ -3549,12 +3489,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         try:
             existed = await self._client.delete(key, policy=wp)
         except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type="delete")
+            return self._handle_error(key, e, disp, handler, op_type="delete")
         rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
+        if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
             return RecordStream.from_error(key, rc)
         return RecordStream.from_list([])
 
@@ -3562,15 +3499,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            if (
-                self._implicit_txn_precheck()
-                and await self._sdk_client._supports_mrt()
-            ):
+            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate(
@@ -3583,21 +3516,16 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type=spec.op_type)
+        return self._filtered_batch_stream(batch_records, disp, handler, op_type=spec.op_type)
 
     async def _execute_batch_delete(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            if (
-                self._implicit_txn_precheck()
-                and await self._sdk_client._supports_mrt()
-            ):
+            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_delete(
@@ -3609,8 +3537,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="delete")
+        return self._filtered_batch_stream(batch_records, disp, handler, op_type="delete")
 
     async def _execute_single_key_touch(
         self, spec: _OperationSpec,
@@ -3632,16 +3559,12 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            if (
-                self._implicit_txn_precheck()
-                and await self._sdk_client._supports_mrt()
-            ):
+            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate(
@@ -3654,8 +3577,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="touch")
+        return self._filtered_batch_stream(batch_records, disp, handler, op_type="touch")
 
     async def _execute_single_key_exists(
         self, spec: _OperationSpec,
@@ -3675,12 +3597,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         try:
             found = await self._client.exists(key, policy=rp)
         except Exception as e:
-            return self._handle_error(
-                key, e, disp, handler, op_type="exists")
+            return self._handle_error(key, e, disp, handler, op_type="exists")
         rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(
-            rc, self._respond_all_keys, self._fail_on_filtered_out
-        ):
+        if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
             return RecordStream.from_error(key, rc)
         return RecordStream.from_list([])
 
@@ -3698,9 +3617,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         results = []
         for key, found in zip(spec.keys, found_list):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if self._should_include_result(
-                rc, self._respond_all_keys, self._fail_on_filtered_out
-            ):
+            if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
                 results.append(RecordResult(key, None, rc))
         return RecordStream.from_list(results)
 
@@ -3749,8 +3666,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
         statement = self._build_statement()
 
         try:
-            recordset = await self._client.query(
-                statement, partition_filter, policy=policy)
+            recordset = await self._client.query(statement, partition_filter, policy=policy)
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
@@ -3778,7 +3694,8 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     :meth:`execute` on this object or transition with :meth:`query` /
     another write verb on the mixin.
 
-    Example:
+    Example::
+
         Upsert two bins, then read the stream of results::
 
             stream = await (
@@ -3985,8 +3902,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             except Exception as exc:
                 return self._handle_fast_error(exc, "delete")
             if cmd_t0:
-                _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0,
-                          self._client_fast)
+                _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             if existed:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -4000,8 +3916,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             except Exception as exc:
                 return self._handle_fast_error(exc, "touch")
             if cmd_t0:
-                _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0,
-                          self._client_fast)
+                _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             return RecordStream.from_error(key, ResultCode.OK)
 
         # -- exists (uses ReadPolicy, returns bool) --
@@ -4019,8 +3934,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             except Exception as exc:
                 return self._handle_fast_error(exc, "exists")
             if cmd_t0:
-                _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0,
-                          self._client_fast)
+                _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             if found:
                 return RecordStream.from_error(key, ResultCode.OK)
             return RecordStream.from_list([])
@@ -4062,8 +3976,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         wp = self._apply_txn(wp)
 
         try:
-            record = await self._client_fast.operate(
-                key, self._ops, policy=wp)
+            record = await self._client_fast.operate(key, self._ops, policy=wp)
         except Exception as exc:
             return self._handle_fast_error(exc, op_type or "upsert")
         if cmd_t0:
@@ -4081,7 +3994,8 @@ class WriteBinBuilder(_WriteVerbs):
     builders capture context for maps and lists. Write verbs on this class
     finalize the segment and start a new one on new keys.
 
-    Example:
+    Example::
+
         Set a map key and append to a list within the same write::
 
             await (
@@ -6521,7 +6435,8 @@ class QueryBinBuilder(_WriteVerbs, Generic[_T]):
     :meth:`QueryBuilder.execute`. Write verbs delegate to the parent to chain
     writes after reads.
 
-    Example:
+    Example::
+
         Read map keys and list size in a single query::
 
             stream = await (

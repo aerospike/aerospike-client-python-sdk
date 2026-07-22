@@ -36,15 +36,14 @@ class HllConfig:
             Valid range when set is 4 to 51 inclusive. ``index_bit_count +
             min_hash_bit_count`` must not exceed 64.
 
-    Example:
-        >>> config = HllConfig.of(14)
-        >>> config.index_bit_count
-        14
-        >>> config.min_hash_bit_count
-        -1
-        >>> with_minhash = HllConfig.of(12, 20)
-        >>> with_minhash.min_hash_bit_count
-        20
+    Example::
+
+        config = HllConfig.of(14)
+        assert config.index_bit_count == 14
+        assert config.min_hash_bit_count == -1
+
+        with_minhash = HllConfig.of(12, 20)
+        assert with_minhash.min_hash_bit_count == 20
 
     See Also:
         :meth:`~aerospike_sdk.record_result.RecordResult.get_hll_config`:
@@ -65,8 +64,9 @@ class HllConfig:
         Returns:
             A frozen :class:`HllConfig` value.
 
-        Example:
-            >>> HllConfig.of(14)
-            HllConfig(index_bit_count=14, min_hash_bit_count=-1)
+        Example::
+
+            config = HllConfig.of(14)
+            assert config == HllConfig(index_bit_count=14, min_hash_bit_count=-1)
         """
         return HllConfig(index_bit_count, min_hash_bit_count)

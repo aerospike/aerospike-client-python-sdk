@@ -20,7 +20,6 @@ from aerospike_async import Filter, QueryDuration
 
 from aerospike_sdk import (
     DataSet,
-    Client,
     QueryHint,
 )
 
@@ -30,17 +29,15 @@ INDEX_NAME = "pfc_qhint_age_idx"
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(
-    aerospike_host, client_policy, enterprise,
+async def cluster(
+    aerospike_host, make_cluster_definition, enterprise,
     wait_for_index, wait_for_set_visible,
 ):
-    """Setup client, data, and a secondary index for hint tests."""
-    async with Client(
-        seeds=aerospike_host,
-        policy=client_policy,
-        index_refresh_interval=0.25,
-    ) as client:
-        session = client.create_session()
+    """Setup cluster, data, and a secondary index for hint tests."""
+    cluster_def = make_cluster_definition(aerospike_host)
+    cluster_def.with_index_refresh_interval(0.25)
+    async with await cluster_def.connect() as c:
+        session = c.create_session()
         ds = DataSet.of("test", SET_NAME)
 
         for i in range(10):
@@ -64,7 +61,7 @@ async def client(
 
         try:
             await (
-                client.index("test", SET_NAME)
+                session.index("test", SET_NAME)
                 .on_bin("age")
                 .named(INDEX_NAME)
                 .numeric()
@@ -73,19 +70,19 @@ async def client(
         except Exception:
             pass
 
-        await wait_for_index(client, "test", SET_NAME, Filter.range("age", 20, 29))
+        await wait_for_index(c, "test", SET_NAME, Filter.range("age", 20, 29))
 
-        yield client
+        yield c
 
         try:
-            await client.index("test", SET_NAME).named(INDEX_NAME).drop()
+            await session.index("test", SET_NAME).named(INDEX_NAME).drop()
         except Exception:
             pass
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 class TestQueryDurationHint:

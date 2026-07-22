@@ -32,7 +32,7 @@ from aerospike_async import (
     FilterExpression,
     Key,
 )
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.aio.operations.batch import (
     BatchBinBuilder,
@@ -41,7 +41,6 @@ from aerospike_sdk.aio.operations.batch import (
 )
 from aerospike_sdk.aio.operations.query import QueryBinBuilder, QueryBuilder
 from aerospike_sdk.ael.parser import parse_ael
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.operations_shared import BatchOpType, _build_exp_write_flags
 
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT

@@ -27,12 +27,14 @@ from unittest.mock import patch
 
 import pytest
 
+from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.aio.pool import AsyncPool
 
 
-def _factory():
-    """A no-op factory; AsyncPool construction never calls it (only start does)."""
-    raise AssertionError("client_factory must not be called at construction time")
+@pytest.fixture(name="definition")
+def _definition_fixture(aerospike_host) -> ClusterDefinition:
+    """An unconnected definition; AsyncPool construction performs no I/O."""
+    return ClusterDefinition(hosts=Host.parse_hosts(aerospike_host, 3000))
 
 
 @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
@@ -43,24 +45,24 @@ class TestAutoDecideThreshold:
     GIL is mocked off so the threshold (not the GIL gate) is what's tested.
     """
 
-    def test_loops_1_auto_off(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=1)
+    def test_loops_1_auto_off(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=1)
         assert pool._per_client_runtime is False
 
-    def test_loops_2_auto_off(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=2)
+    def test_loops_2_auto_off(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=2)
         assert pool._per_client_runtime is False
 
-    def test_loops_3_auto_off(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=3)
+    def test_loops_3_auto_off(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=3)
         assert pool._per_client_runtime is False
 
-    def test_loops_4_auto_on(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+    def test_loops_4_auto_on(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._per_client_runtime is True
 
-    def test_loops_8_auto_on(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=8)
+    def test_loops_8_auto_on(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=8)
         assert pool._per_client_runtime is True
 
 
@@ -75,24 +77,22 @@ class TestGilGate:
     """
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_gil_on_at_threshold_auto_off(self, _gil, _cpu):
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+    def test_gil_on_at_threshold_auto_off(self, _gil, _cpu, definition):
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._per_client_runtime is False
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_gil_on_high_loops_auto_off(self, _gil, _cpu):
-        pool = AsyncPool(client_factory=_factory, loop_count=8)
+    def test_gil_on_high_loops_auto_off(self, _gil, _cpu, definition):
+        pool = AsyncPool(definition, loop_count=8)
         assert pool._per_client_runtime is False
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_gil_on_explicit_true_warns_but_honors(self, _gil, _cpu):
+    def test_gil_on_explicit_true_warns_but_honors(self, _gil, _cpu, definition):
         """Explicit ``per_client_runtime=True`` on GIL-on emits a warning
         but honors the user's choice — known footgun, their problem."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            pool = AsyncPool(
-                client_factory=_factory, loop_count=4, per_client_runtime=True
-            )
+            pool = AsyncPool(definition, loop_count=4, per_client_runtime=True)
         assert pool._per_client_runtime is True
         gil_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
         assert len(gil_warnings) == 1
@@ -100,13 +100,11 @@ class TestGilGate:
         assert "deadlock" in str(gil_warnings[0].message)
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_gil_on_explicit_false_no_warning(self, _gil, _cpu):
+    def test_gil_on_explicit_false_no_warning(self, _gil, _cpu, definition):
         """Explicit ``per_client_runtime=False`` on GIL-on: no warning, off."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            pool = AsyncPool(
-                client_factory=_factory, loop_count=8, per_client_runtime=False
-            )
+            pool = AsyncPool(definition, loop_count=8, per_client_runtime=False)
         assert pool._per_client_runtime is False
         assert [w for w in caught if issubclass(w.category, RuntimeWarning)] == []
 
@@ -119,20 +117,20 @@ class TestExplicitOverride:
     GIL is mocked off so the override (not the GIL gate) is what's tested.
     """
 
-    def test_force_on_below_threshold(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=2, per_client_runtime=True)
+    def test_force_on_below_threshold(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=2, per_client_runtime=True)
         assert pool._per_client_runtime is True
 
-    def test_force_on_at_threshold(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=4, per_client_runtime=True)
+    def test_force_on_at_threshold(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=4, per_client_runtime=True)
         assert pool._per_client_runtime is True
 
-    def test_force_off_above_threshold(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=8, per_client_runtime=False)
+    def test_force_off_above_threshold(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=8, per_client_runtime=False)
         assert pool._per_client_runtime is False
 
-    def test_force_off_at_threshold(self, _cpu, _gil):
-        pool = AsyncPool(client_factory=_factory, loop_count=4, per_client_runtime=False)
+    def test_force_off_at_threshold(self, _cpu, _gil, definition):
+        pool = AsyncPool(definition, loop_count=4, per_client_runtime=False)
         assert pool._per_client_runtime is False
 
 
@@ -146,46 +144,46 @@ class TestWorkerCount:
     when one CPU is divided across many loops.
     """
 
-    def test_8cpu_4loops_2workers(self, mock_cpu, _gil):
+    def test_8cpu_4loops_2workers(self, mock_cpu, _gil, definition):
         mock_cpu.return_value = 8
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._per_client_runtime_workers == 2
 
-    def test_8cpu_8loops_floor(self, mock_cpu, _gil):
+    def test_8cpu_8loops_floor(self, mock_cpu, _gil, definition):
         # 8/8 = 1 would be too few; floor at 2
         mock_cpu.return_value = 8
-        pool = AsyncPool(client_factory=_factory, loop_count=8)
+        pool = AsyncPool(definition, loop_count=8)
         assert pool._per_client_runtime_workers == 2
 
-    def test_16cpu_4loops_4workers(self, mock_cpu, _gil):
+    def test_16cpu_4loops_4workers(self, mock_cpu, _gil, definition):
         mock_cpu.return_value = 16
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._per_client_runtime_workers == 4
 
-    def test_32cpu_8loops_4workers(self, mock_cpu, _gil):
+    def test_32cpu_8loops_4workers(self, mock_cpu, _gil, definition):
         mock_cpu.return_value = 32
-        pool = AsyncPool(client_factory=_factory, loop_count=8)
+        pool = AsyncPool(definition, loop_count=8)
         assert pool._per_client_runtime_workers == 4
 
-    def test_4cpu_2loops_2workers(self, mock_cpu, _gil):
+    def test_4cpu_2loops_2workers(self, mock_cpu, _gil, definition):
         # below threshold, but worker count still computes
         mock_cpu.return_value = 4
-        pool = AsyncPool(client_factory=_factory, loop_count=2)
+        pool = AsyncPool(definition, loop_count=2)
         assert pool._per_client_runtime_workers == 2
 
-    def test_cpu_count_none_defaults_to_4(self, mock_cpu, _gil):
+    def test_cpu_count_none_defaults_to_4(self, mock_cpu, _gil, definition):
         # If os.cpu_count() returns None (unusual containers), the pool
         # uses 4 as the fallback for both loop count and cpu count.
         mock_cpu.return_value = None
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._per_client_runtime_workers == 2  # max(2, 4 // 4) = 2
 
 
 @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
 @patch("aerospike_sdk.aio.pool.os.cpu_count", return_value=8)
-def test_default_loop_count_uses_cpu_count(_cpu, _gil):
+def test_default_loop_count_uses_cpu_count(_cpu, _gil, definition):
     """When ``loop_count`` is omitted, the pool falls back to ``os.cpu_count()``."""
-    pool = AsyncPool(client_factory=_factory)
+    pool = AsyncPool(definition)
     assert pool._n == 8
     # 8 loops on 8 CPUs, GIL off → above threshold, auto on
     assert pool._per_client_runtime is True
@@ -203,22 +201,22 @@ class TestUvloopGate:
     """
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
-    def test_auto_off_under_free_threading(self, _gil, _cpu):
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+    def test_auto_off_under_free_threading(self, _gil, _cpu, definition):
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._use_uvloop is False
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_auto_on_under_gil(self, _gil, _cpu):
-        pool = AsyncPool(client_factory=_factory, loop_count=4)
+    def test_auto_on_under_gil(self, _gil, _cpu, definition):
+        pool = AsyncPool(definition, loop_count=4)
         assert pool._use_uvloop is True
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
-    def test_explicit_true_overrides_ft_default(self, _gil, _cpu):
+    def test_explicit_true_overrides_ft_default(self, _gil, _cpu, definition):
         # Opt-in footgun: honored even under FT where it can stall.
-        pool = AsyncPool(client_factory=_factory, loop_count=4, use_uvloop=True)
+        pool = AsyncPool(definition, loop_count=4, use_uvloop=True)
         assert pool._use_uvloop is True
 
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=True)
-    def test_explicit_false_overrides_gil_default(self, _gil, _cpu):
-        pool = AsyncPool(client_factory=_factory, loop_count=4, use_uvloop=False)
+    def test_explicit_false_overrides_gil_default(self, _gil, _cpu, definition):
+        pool = AsyncPool(definition, loop_count=4, use_uvloop=False)
         assert pool._use_uvloop is False

@@ -1,8 +1,9 @@
 # Aerospike Python SDK
 
-High-performance, developer-friendly interface for Aerospike. Async-first,
-Pythonic API with a chainable session model, fluent query builder, and AEL
-string filters layered over the [Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
+Ultra-High-performance, developer-friendly interface for Aerospike. A dual first-class
+sync/async, Pythonic API — both high-performance — with a chainable session model,
+fluent query builder, and AEL string filters layered over the
+[Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
 (PAC) — with first-class free-threaded Python (`cp314t`) support for parallel-
 thread throughput well past what GIL-bound clients can sustain.
 

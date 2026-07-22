@@ -123,9 +123,7 @@ class _YcsbTracker:
         return float(self._BUCKETS * self._US_PER_BUCKET)
 
     def format_period_total(self, name: str) -> str:
-        win_avg = (
-            self._win_total_us / self._win_ops if self._win_ops else 0
-        )
+        win_avg = self._win_total_us / self._win_ops if self._win_ops else 0
         tot_avg = self._total_us / self._ops if self._ops else 0
 
         p95 = _format_latency_us(self._percentile_us(0.95))

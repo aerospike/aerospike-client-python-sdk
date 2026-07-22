@@ -22,36 +22,36 @@ from datetime import timedelta
 
 log = logging.getLogger(__name__)
 
-from aerospike_sdk import Behavior, DataSet, Client
+from aerospike_sdk import Behavior, DataSet
 
 
 @pytest.fixture
-async def session(client):
+async def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
-async def test_session_creation_default_behavior(client):
+async def test_session_creation_default_behavior(cluster):
     """Test creating a session with default behavior."""
-    session = client.create_session()
+    session = cluster.create_session()
     assert session is not None
     assert session.behavior.name == "DEFAULT"
-    assert session.client is client
+    assert session.client is cluster._client
 
 
-async def test_session_creation_custom_behavior(client):
+async def test_session_creation_custom_behavior(cluster):
     """Test creating a session with custom behavior."""
     custom_behavior = Behavior.DEFAULT.derive_with_changes(
         name="custom",
         total_timeout=timedelta(seconds=10),
         max_retries=5,
     )
-    session = client.create_session(custom_behavior)
+    session = cluster.create_session(custom_behavior)
     assert session is not None
     assert session.behavior.name == "custom"
     assert session.behavior.total_timeout == timedelta(seconds=10)
     assert session.behavior.max_retries == 5
-    assert session.client is client
+    assert session.client is cluster._client
 
 
 
@@ -228,10 +228,10 @@ async def test_session_upsert_error_no_key(session):
         await session.upsert().put({"name": "Test"}).execute()
 
 
-async def test_session_multiple_sessions_different_behaviors(client):
+async def test_session_multiple_sessions_different_behaviors(cluster):
     """Test creating multiple sessions with different behaviors."""
-    default_session = client.create_session(Behavior.DEFAULT)
-    fast_session = client.create_session(
+    default_session = cluster.create_session(Behavior.DEFAULT)
+    fast_session = cluster.create_session(
         Behavior.DEFAULT.derive_with_changes(
             name="fast",
             total_timeout=timedelta(seconds=5),

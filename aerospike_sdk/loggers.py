@@ -47,7 +47,8 @@ def refresh_log_levels() -> None:
     Levels on ``aerospike_sdk.*`` loggers are read live by Python's
     :mod:`logging` and never need a refresh.
 
-    Example:
+    Example::
+
         Raise cluster-tend verbosity on a live client during an incident::
 
             import logging
@@ -74,7 +75,8 @@ class SdkLoggers:
     way: ``aerospike_async`` (PAC client lifecycle) and ``aerospike_core``
     (Rust core: cluster tend, connection pools, wire protocol).
 
-    Example:
+    Example::
+
         Enable per-operation command summaries during an incident, keeping
         the rest of the stack quiet::
 

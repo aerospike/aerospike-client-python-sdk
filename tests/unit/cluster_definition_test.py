@@ -130,7 +130,7 @@ class TestPkiValidation:
         cd = (
             ClusterDefinition("localhost", 3000)
             .with_tls_config_of()
-                .tls_name("myTls")
+            .tls_name("myTls")
             .done()
             .with_certificate_credentials()
         )

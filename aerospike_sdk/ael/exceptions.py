@@ -24,7 +24,8 @@ class AelParseException(Exception):
     Indicates invalid syntax, unknown operators, type mismatches, or other
     input that the AEL layer refuses before building a server-side filter.
 
-    Example:
+    Example::
+
         Handling a user-supplied filter string::
 
             from aerospike_sdk import parse_ael, AelParseException

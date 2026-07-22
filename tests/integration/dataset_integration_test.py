@@ -13,17 +13,17 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Tests for DataSet integration with Client."""
+"""Tests for DataSet integration through the Cluster entry point."""
 
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 
 
-async def test_key_value_with_dataset(aerospike_host, client_policy):
+async def test_key_value_with_dataset(aerospike_host, make_cluster_definition):
     """Test key_value operation using DataSet."""
     users = DataSet.of("test", "users")
 
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         key = users.id("user1")
         # Put a record using DataSet
         await session.upsert(key).put({"name": "John", "age": 30}).execute()
@@ -38,13 +38,13 @@ async def test_key_value_with_dataset(aerospike_host, client_policy):
         # Clean up
         await session.delete(key).execute()
 
-async def test_key_value_with_key_object(aerospike_host, client_policy):
+async def test_key_value_with_key_object(aerospike_host, make_cluster_definition):
     """Test key_value operation using Key object."""
     users = DataSet.of("test", "users")
     key = users.id("user2")
 
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         # Put a record using Key object
         await session.upsert(key).put({"name": "Jane", "age": 25}).execute()
 
@@ -58,12 +58,12 @@ async def test_key_value_with_key_object(aerospike_host, client_policy):
         # Clean up
         await session.delete(key).execute()
 
-async def test_query_with_dataset(aerospike_host, client_policy):
+async def test_query_with_dataset(aerospike_host, make_cluster_definition):
     """Test query operation using DataSet."""
     users = DataSet.of("test", "query_test")
 
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         # Put some test data
         await session.upsert(users.id("q1")).put({"id": "q1", "value": 10}).execute()
         await session.upsert(users.id("q2")).put({"id": "q2", "value": 20}).execute()
@@ -84,13 +84,13 @@ async def test_query_with_dataset(aerospike_host, client_policy):
         await session.delete(users.id("q1")).execute()
         await session.delete(users.id("q2")).execute()
 
-async def test_query_with_single_key(aerospike_host, client_policy):
+async def test_query_with_single_key(aerospike_host, make_cluster_definition):
     """Test query operation using a single Key."""
     users = DataSet.of("test", "users")
     key = users.id("user3")
 
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         # Put a record
         await session.upsert(key).put({"name": "Bob", "age": 35}).execute()
 
@@ -108,13 +108,13 @@ async def test_query_with_single_key(aerospike_host, client_policy):
         # Clean up
         await session.delete(key).execute()
 
-async def test_query_with_multiple_keys(aerospike_host, client_policy):
+async def test_query_with_multiple_keys(aerospike_host, make_cluster_definition):
     """Test query operation using multiple Keys."""
     users = DataSet.of("test", "users")
     keys = users.ids("user4", "user5")
 
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         # Put records
         await session.upsert(keys[0]).put({"name": "Alice", "age": 28}).execute()
         await session.upsert(keys[1]).put({"name": "Charlie", "age": 32}).execute()
