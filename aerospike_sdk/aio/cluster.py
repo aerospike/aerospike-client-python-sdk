@@ -118,8 +118,7 @@ class Cluster:
         if not await sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
-                f"Connected to seeds '{sdk_client._seeds}' but cluster "
-                f"reports not connected"
+                f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected"
             )
         return cls(sdk_client)
     
@@ -202,8 +201,7 @@ class Cluster:
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf`
         """
-        return await self._sdk_client._register_udf(
-            body, server_path, language, policy=policy)
+        return await self._sdk_client._register_udf(body, server_path, language, policy=policy)
 
     async def register_udf_from_file(
         self,

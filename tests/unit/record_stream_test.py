@@ -104,8 +104,7 @@ class TestFromError:
         assert results[0].in_doubt is False
 
     async def test_preserves_in_doubt(self):
-        stream = RecordStream.from_error(
-            _key(), ResultCode.TIMEOUT, in_doubt=True)
+        stream = RecordStream.from_error(_key(), ResultCode.TIMEOUT, in_doubt=True)
         results = await stream.collect()
         assert results[0].in_doubt is True
 

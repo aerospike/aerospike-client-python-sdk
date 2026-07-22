@@ -92,9 +92,7 @@ class TestGilGate:
         but honors the user's choice — known footgun, their problem."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            pool = AsyncPool(
-                definition, loop_count=4, per_client_runtime=True
-            )
+            pool = AsyncPool(definition, loop_count=4, per_client_runtime=True)
         assert pool._per_client_runtime is True
         gil_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
         assert len(gil_warnings) == 1
@@ -106,9 +104,7 @@ class TestGilGate:
         """Explicit ``per_client_runtime=False`` on GIL-on: no warning, off."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            pool = AsyncPool(
-                definition, loop_count=8, per_client_runtime=False
-            )
+            pool = AsyncPool(definition, loop_count=8, per_client_runtime=False)
         assert pool._per_client_runtime is False
         assert [w for w in caught if issubclass(w.category, RuntimeWarning)] == []
 

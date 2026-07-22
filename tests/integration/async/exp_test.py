@@ -115,10 +115,9 @@ class TestExpComposition:
         assert expr is not None
 
     def test_and_expression(self):
-        expr = Exp.and_([
-            Exp.eq(Exp.string_bin("country"), val("US")),
-            Exp.gt(Exp.int_bin("age"), val(21))
-        ])
+        expr = Exp.and_(
+            [Exp.eq(Exp.string_bin("country"), val("US")), Exp.gt(Exp.int_bin("age"), val(21))]
+        )
         assert expr is not None
 
     def test_or_expression(self):
@@ -147,59 +146,35 @@ class TestArithmeticExpressions:
     """Test arithmetic expression building."""
 
     def test_num_add(self):
-        expr = Exp.eq(
-            Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")]),
-            val(10)
-        )
+        expr = Exp.eq(Exp.num_add([Exp.int_bin("a"), Exp.int_bin("b")]), val(10))
         assert expr is not None
 
     def test_num_sub(self):
-        expr = Exp.eq(
-            Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")]),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")]), val(5))
         assert expr is not None
 
     def test_num_mul(self):
-        expr = Exp.eq(
-            Exp.num_mul([Exp.int_bin("a"), val(2)]),
-            val(20)
-        )
+        expr = Exp.eq(Exp.num_mul([Exp.int_bin("a"), val(2)]), val(20))
         assert expr is not None
 
     def test_num_div(self):
-        expr = Exp.eq(
-            Exp.num_div([Exp.int_bin("a"), val(2)]),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_div([Exp.int_bin("a"), val(2)]), val(5))
         assert expr is not None
 
     def test_num_mod(self):
-        expr = Exp.eq(
-            Exp.num_mod(Exp.int_bin("a"), val(2)),
-            val(0)
-        )
+        expr = Exp.eq(Exp.num_mod(Exp.int_bin("a"), val(2)), val(0))
         assert expr is not None
 
     def test_num_abs(self):
-        expr = Exp.eq(
-            Exp.num_abs(Exp.int_bin("negative")),
-            val(5)
-        )
+        expr = Exp.eq(Exp.num_abs(Exp.int_bin("negative")), val(5))
         assert expr is not None
 
     def test_num_floor(self):
-        expr = Exp.eq(
-            Exp.num_floor(Exp.float_bin("f")),
-            val(2.0)
-        )
+        expr = Exp.eq(Exp.num_floor(Exp.float_bin("f")), val(2.0))
         assert expr is not None
 
     def test_num_ceil(self):
-        expr = Exp.eq(
-            Exp.num_ceil(Exp.float_bin("f")),
-            val(3.0)
-        )
+        expr = Exp.eq(Exp.num_ceil(Exp.float_bin("f")), val(3.0))
         assert expr is not None
 
 
@@ -207,45 +182,27 @@ class TestBitwiseExpressions:
     """Test bitwise expression building."""
 
     def test_int_and(self):
-        expr = Exp.eq(
-            Exp.int_and([Exp.int_bin("a"), val(0xFF)]),
-            val(1)
-        )
+        expr = Exp.eq(Exp.int_and([Exp.int_bin("a"), val(0xFF)]), val(1))
         assert expr is not None
 
     def test_int_or(self):
-        expr = Exp.eq(
-            Exp.int_or([Exp.int_bin("a"), val(0xFF)]),
-            val(0xFF)
-        )
+        expr = Exp.eq(Exp.int_or([Exp.int_bin("a"), val(0xFF)]), val(0xFF))
         assert expr is not None
 
     def test_int_xor(self):
-        expr = Exp.eq(
-            Exp.int_xor([Exp.int_bin("a"), val(0xFF)]),
-            val(0xFE)
-        )
+        expr = Exp.eq(Exp.int_xor([Exp.int_bin("a"), val(0xFF)]), val(0xFE))
         assert expr is not None
 
     def test_int_not(self):
-        expr = Exp.eq(
-            Exp.int_not(Exp.int_bin("a")),
-            val(-2)
-        )
+        expr = Exp.eq(Exp.int_not(Exp.int_bin("a")), val(-2))
         assert expr is not None
 
     def test_int_lshift(self):
-        expr = Exp.eq(
-            Exp.int_lshift(Exp.int_bin("a"), val(2)),
-            val(4)
-        )
+        expr = Exp.eq(Exp.int_lshift(Exp.int_bin("a"), val(2)), val(4))
         assert expr is not None
 
     def test_int_rshift(self):
-        expr = Exp.eq(
-            Exp.int_rshift(Exp.int_bin("a"), val(2)),
-            val(0)
-        )
+        expr = Exp.eq(Exp.int_rshift(Exp.int_bin("a"), val(2)), val(0))
         assert expr is not None
 
 
@@ -281,17 +238,11 @@ class TestTypeConversions:
     """Test type conversion expressions."""
 
     def test_to_int(self):
-        expr = Exp.eq(
-            Exp.to_int(Exp.float_bin("f")),
-            val(2)
-        )
+        expr = Exp.eq(Exp.to_int(Exp.float_bin("f")), val(2))
         assert expr is not None
 
     def test_to_float(self):
-        expr = Exp.eq(
-            Exp.to_float(Exp.int_bin("a")),
-            val(2.0)
-        )
+        expr = Exp.eq(Exp.to_float(Exp.int_bin("a")), val(2.0))
         assert expr is not None
 
 
@@ -444,10 +395,7 @@ class TestExpWithQuery:
 
     async def test_query_with_and_filter(self, session_with_data):
         """Test query with AND filter expression."""
-        filter_exp = Exp.and_([
-            Exp.eq(Exp.int_bin("A"), val(1)),
-            Exp.eq(Exp.int_bin("D"), val(1))
-        ])
+        filter_exp = Exp.and_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("D"), val(1))])
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -465,10 +413,7 @@ class TestExpWithQuery:
 
     async def test_query_with_or_filter(self, session_with_data):
         """Test query with OR filter expression."""
-        filter_exp = Exp.or_([
-            Exp.eq(Exp.int_bin("A"), val(1)),
-            Exp.eq(Exp.int_bin("A"), val(2))
-        ])
+        filter_exp = Exp.or_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("A"), val(2))])
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -502,10 +447,7 @@ class TestExpWithQuery:
 
     async def test_query_with_arithmetic_filter(self, session_with_data):
         """Test query with arithmetic filter: A + D == 2."""
-        filter_exp = Exp.eq(
-            Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]),
-            val(2)
-        )
+        filter_exp = Exp.eq(Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]), val(2))
 
         stream = await (
             session_with_data.query("test", "exp_test")
@@ -1770,9 +1712,9 @@ class TestAdvancedExpFilters:
         with pytest.raises(AerospikeError) as exc_info:
             rs = await (
                 session.query(key)
-                    .where(ael)
-                    .fail_on_filtered_out()
-                    .execute()
+                .where(ael)
+                .fail_on_filtered_out()
+                .execute()
             )
             await rs.first_or_raise()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
@@ -1781,10 +1723,10 @@ class TestAdvancedExpFilters:
         """Query with AEL filter that SHOULD match, validate returned bin."""
         rs = await (
             session.query(key)
-                .bins([bin_name])
-                .where(ael)
-                .fail_on_filtered_out()
-                .execute()
+            .bins([bin_name])
+            .where(ael)
+            .fail_on_filtered_out()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.record.bins[bin_name] == expected_value
@@ -2081,8 +2023,8 @@ class TestAelMapBlobIntegrationQueries:
             enc = base64.b64encode(payload).decode("ascii")
             stream = await (
                 session.query("test", "ael_blob_srv_it")
-                    .where(f'$.payload.get(type: BLOB) == "{enc}"')
-                    .execute()
+                .where(f'$.payload.get(type: BLOB) == "{enc}"')
+                .execute()
             )
             rows = [r.record async for r in stream]
             stream.close()

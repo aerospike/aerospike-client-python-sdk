@@ -189,22 +189,22 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
 
     await (
         session.upsert(k1)
-            .put({bin_name: {"inner": 10, "other": 99}})
-            .execute()
+        .put({bin_name: {"inner": 10, "other": 99}})
+        .execute()
     )
     await (
         session.upsert(k2)
-            .put({bin_name: {"inner": 20, "other": 99}})
-            .execute()
+        .put({bin_name: {"inner": 20, "other": 99}})
+        .execute()
     )
 
     await (
         cluster.create_session().index("test", "test")
-            .on_bin(bin_name)
-            .named(index_name)
-            .numeric()
-            .context([CTX.map_key("inner")])
-            .create()
+        .on_bin(bin_name)
+        .named(index_name)
+        .numeric()
+        .context([CTX.map_key("inner")])
+        .create()
     )
 
     flt = Filter.equal(bin_name, 10).context([CTX.map_key("inner")])

@@ -38,9 +38,9 @@ class TestDeleteBin:
         # Create record with two bins
         await (
             session.upsert(key)
-                .bin(bin_name1).set_to("value1")
-                .bin(bin_name2).set_to("value2")
-                .execute()
+            .bin(bin_name1).set_to("value1")
+            .bin(bin_name2).set_to("value2")
+            .execute()
         )
 
         # Verify both bins exist
@@ -69,18 +69,18 @@ class TestDeleteBin:
         # Create record with three bins
         await (
             session.upsert(key)
-                .bin("bin1").set_to("value1")
-                .bin("bin2").set_to("value2")
-                .bin("bin3").set_to("value3")
-                .execute()
+            .bin("bin1").set_to("value1")
+            .bin("bin2").set_to("value2")
+            .bin("bin3").set_to("value3")
+            .execute()
         )
 
         # Remove bin1 and bin2
         await (
             session.upsert(key)
-                .bin("bin1").remove()
-                .bin("bin2").remove()
-                .execute()
+            .bin("bin1").remove()
+            .bin("bin2").remove()
+            .execute()
         )
 
         # Verify only bin3 remains
@@ -120,17 +120,17 @@ class TestDeleteBin:
         # Create record with two bins
         await (
             session.upsert(key)
-                .bin("bin1").set_to("value1")
-                .bin("bin2").set_to("value2")
-                .execute()
+            .bin("bin1").set_to("value1")
+            .bin("bin2").set_to("value2")
+            .execute()
         )
 
         # Remove bin1 and update bin2 in same operation
         await (
             session.upsert(key)
-                .bin("bin1").remove()
-                .bin("bin2").set_to("new_value2")
-                .execute()
+            .bin("bin1").remove()
+            .bin("bin2").set_to("new_value2")
+            .execute()
         )
 
         # Verify

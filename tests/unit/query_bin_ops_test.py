@@ -373,8 +373,7 @@ class TestOperationSpec:
 class TestShouldIncludeResult:
 
     def test_ok_always_included(self):
-        assert QueryBuilder._should_include_result(
-            ResultCode.OK, False, False) is True
+        assert QueryBuilder._should_include_result(ResultCode.OK, False, False) is True
 
     def test_key_not_found_excluded_by_default(self):
         assert QueryBuilder._should_include_result(
@@ -385,20 +384,16 @@ class TestShouldIncludeResult:
             ResultCode.KEY_NOT_FOUND_ERROR, True, False) is True
 
     def test_filtered_out_excluded_by_default(self):
-        assert QueryBuilder._should_include_result(
-            ResultCode.FILTERED_OUT, False, False) is False
+        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, False, False) is False
 
     def test_filtered_out_included_with_fail_on_filtered(self):
-        assert QueryBuilder._should_include_result(
-            ResultCode.FILTERED_OUT, False, True) is True
+        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, False, True) is True
 
     def test_filtered_out_included_with_respond_all_keys(self):
-        assert QueryBuilder._should_include_result(
-            ResultCode.FILTERED_OUT, True, False) is True
+        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, True, False) is True
 
     def test_other_errors_always_included(self):
-        assert QueryBuilder._should_include_result(
-            ResultCode.TIMEOUT, False, False) is True
+        assert QueryBuilder._should_include_result(ResultCode.TIMEOUT, False, False) is True
 
 
 # ===================================================================

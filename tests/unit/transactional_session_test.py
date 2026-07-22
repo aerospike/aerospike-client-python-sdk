@@ -234,8 +234,7 @@ def test_pac_txn_state_is_writable_and_round_trips() -> None:
     """
     t = Txn()
     assert t.state == TxnState.OPEN
-    for target in (TxnState.COMMITTED, TxnState.ABORTED,
-                   TxnState.VERIFIED, TxnState.OPEN):
+    for target in (TxnState.COMMITTED, TxnState.ABORTED, TxnState.VERIFIED, TxnState.OPEN):
         t.state = target
         assert t.state == target
 

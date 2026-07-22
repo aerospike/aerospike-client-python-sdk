@@ -145,12 +145,7 @@ async def test_behaviors_section_defines_usable_behavior(aerospike_host, tmp_pat
 async def test_behaviors_hot_reload_updates_live_session(aerospike_host, tmp_path):
     """Editing a behavior in the file updates an already-created session."""
     host, port = _host_port(aerospike_host)
-    yaml_text = (
-        "behaviors:\n"
-        "  cfg-hot:\n"
-        "    allOperations:\n"
-        "      abandonCallAfter: 5s\n"
-    )
+    yaml_text = "behaviors:\n  cfg-hot:\n    allOperations:\n      abandonCallAfter: 5s\n"
     path = _write(tmp_path, "sdk.yaml", yaml_text)
     with _sdk_config_env(path):
         async with await ClusterDefinition(host, port).connect() as cluster:

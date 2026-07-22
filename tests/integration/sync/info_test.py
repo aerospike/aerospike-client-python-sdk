@@ -148,9 +148,7 @@ def test_secondary_index_details(session):
 
     # Test getting details for the first index
     test_index = indexes[0]
-    details = info.secondary_index_details(
-        test_index["namespace"], test_index["name"]
-    )
+    details = info.secondary_index_details(test_index["namespace"], test_index["name"])
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:

@@ -51,7 +51,8 @@ class RecordResult:
             when the client placed an error in-stream instead of raising.
         udf_result: Lua return value for successful foreground UDF calls.
 
-    Example:
+    Example::
+
         Inspect a row from a stream::
 
             row = await stream.first()
@@ -109,9 +110,7 @@ class RecordResult:
         if not self.is_ok:
             if self.exception is not None:
                 raise self.exception
-            raise _result_code_to_exception(
-                self.result_code, str(self.result_code), self.in_doubt
-            )
+            raise _result_code_to_exception(self.result_code, str(self.result_code), self.in_doubt)
         return self
 
     def record_or_raise(self) -> Record:
@@ -124,7 +123,8 @@ class RecordResult:
             Same as :meth:`or_raise`, plus ``ValueError`` if the result is OK
             but :attr:`record` is ``None`` (unexpected empty payload).
 
-        Example:
+        Example::
+
             rec = (await stream.first_or_raise()).record_or_raise()
         """
         self.or_raise()
@@ -193,8 +193,7 @@ class RecordResult:
             return None
         if not isinstance(value, list) or len(value) != 2:
             raise TypeError(
-                f"Bin {bin_name!r} is not a 2-element list "
-                f"(got {type(value).__name__})",
+                f"Bin {bin_name!r} is not a 2-element list (got {type(value).__name__})",
             )
         return HllConfig(int(value[0]), int(value[1]))
 
@@ -208,7 +207,8 @@ class RecordResult:
         Raises:
             AerospikeError: For any other non-OK code (via :meth:`or_raise`).
 
-        Example:
+        Example::
+
             found = (await exists_stream.first_or_raise()).as_bool()
         """
         if self.is_ok:

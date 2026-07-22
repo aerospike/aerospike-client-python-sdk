@@ -54,9 +54,9 @@ class TestReplaceOperations:
         with pytest.raises(AerospikeError) as exc_info:
             stream = await (
                 session.upsert(key)
-                    .replace_only()
-                    .put({"bin": "value"})
-                    .execute()
+                .replace_only()
+                .put({"bin": "value"})
+                .execute()
             )
             await stream.first_or_raise()
 
@@ -71,9 +71,9 @@ class TestReplaceOperations:
 
         await (
             session.upsert(key)
-                .replace_only()
-                .put({"bin3": "value3"})
-                .execute()
+            .replace_only()
+            .put({"bin3": "value3"})
+            .execute()
         )
 
         record = await (await session.query(key).execute()).first_or_raise()
@@ -98,11 +98,11 @@ class TestReplaceOperations:
 
         await (
             session.update(key1)
-                .set_to("value", "updated1")
+            .set_to("value", "updated1")
             .insert(key2)
-                .set_to("newbin", "inserted2")
+            .set_to("newbin", "inserted2")
             .replace(key3)
-                .set_to("value", "replaced3")
+            .set_to("value", "replaced3")
             .execute()
         )
 
@@ -140,8 +140,8 @@ class TestReplaceOperations:
         with pytest.raises(AerospikeError):
             stream = await (
                 session.replace_if_exists(key)
-                    .put({"name": "Should Fail"})
-                    .execute()
+                .put({"name": "Should Fail"})
+                .execute()
             )
             await stream.first_or_raise()
 
@@ -175,9 +175,9 @@ class TestReplaceOperations:
 
         await (
             session.batch()
-                .replace_if_exists(key1).bin("value").set_to("replaced1")
-                .replace_if_exists(key2).bin("value").set_to("replaced2")
-                .execute()
+            .replace_if_exists(key1).bin("value").set_to("replaced1")
+            .replace_if_exists(key2).bin("value").set_to("replaced2")
+            .execute()
         )
 
         record1 = await (await session.query(key1).execute()).first_or_raise()

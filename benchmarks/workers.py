@@ -493,8 +493,7 @@ def _build_op_sync(
             stream = cur.execute()
             results = stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -575,8 +574,7 @@ def _build_op_sync(
                 stream = cur.execute()
             results = stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -603,10 +601,7 @@ def _prebuilt_key_pairs(cfg: WorkloadConfig):
     ns_str = cfg.namespace
     set_str = cfg.set_name
     kc = cfg.key_count
-    return [
-        (key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i)
-        for _ in range(pkn)
-    ]
+    return [(key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i) for _ in range(pkn)]
 
 
 def _build_op_async(
@@ -694,8 +689,7 @@ def _build_op_async(
             stream = await cur.execute()
             results = await stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -778,8 +772,7 @@ def _build_op_async(
                 stream = await cur.execute()
             results = await stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -1142,10 +1135,7 @@ async def run_async_pool(
                             ws.bulk_record(decision[0], ret[0], ret[1], dt)
                     local_count += 1
 
-            tasks = [
-                asyncio.create_task(worker(i))
-                for i in range(cfg.async_tasks)
-            ]
+            tasks = [asyncio.create_task(worker(i)) for i in range(cfg.async_tasks)]
             try:
                 await asyncio.gather(*tasks)
             finally:
@@ -1268,13 +1258,10 @@ def run_pac_blocking(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-blocking mode currently supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"pac-blocking mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "pac-blocking mode does not yet support --batch-size > 1."
-        )
+        raise NotImplementedError("pac-blocking mode does not yet support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     seeds = cfg.seeds
@@ -1296,8 +1283,7 @@ def run_pac_blocking(
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
         _pk_pairs = [
-            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i)
-            for _ in range(pkn)
+            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i) for _ in range(pkn)
         ]
 
     # ct_runtime: each worker thread gets its own `_LocalClient` (per-thread
@@ -1402,9 +1388,7 @@ def run_pac_blocking(
                     elif rng.randint(1, 100) <= wab_pct:
                         payload = full_bins(fields_t)
                     else:
-                        payload = single_bin_put(
-                            fields_t, pick_bin_index(rng, len(fields_t))
-                        )
+                        payload = single_bin_put(fields_t, pick_bin_index(rng, len(fields_t)))
 
             sample = with_tel and (local_count % sample_every == 0)
             t0 = time.perf_counter() if sample else 0.0
@@ -1463,13 +1447,10 @@ async def run_pac_async(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-async mode currently supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"pac-async mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "pac-async mode does not support --batch-size > 1."
-        )
+        raise NotImplementedError("pac-async mode does not support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     read_policy = ReadPolicy()
@@ -1491,8 +1472,7 @@ async def run_pac_async(
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
         _pk_pairs = [
-            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i)
-            for _ in range(pkn)
+            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)
         ]
 
     client = await new_client(policy, cfg.seeds)
@@ -1536,11 +1516,7 @@ async def run_pac_async(
                         payload = None
                     else:
                         verb = "put"
-                        payload = (
-                            {b0_name: kid}
-                            if single_bin
-                            else full_bins(fields_t)
-                        )
+                        payload = {b0_name: kid} if single_bin else full_bins(fields_t)
 
                 sample = with_tel and (local_count % sample_every == 0)
                 t0 = time.perf_counter() if sample else 0.0
@@ -1593,13 +1569,10 @@ def run_legacy_sync(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"legacy-sync mode supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"legacy-sync mode supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "legacy-sync mode does not support --batch-size > 1."
-        )
+        raise NotImplementedError("legacy-sync mode does not support --batch-size > 1.")
 
     import os as _os
 
@@ -1651,10 +1624,7 @@ def run_legacy_sync(
     pkn = max(0, cfg.prebuilt_keys)
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
-        _pk_pairs = [
-            ((ns, set_name, str(i := _pk_rng.randint(1, kc))), i)
-            for _ in range(pkn)
-        ]
+        _pk_pairs = [((ns, set_name, str(i := _pk_rng.randint(1, kc))), i) for _ in range(pkn)]
 
     legacy_st_key = (ns, set_name, _SELF_TEST_KEY)
 
@@ -1714,11 +1684,7 @@ def run_legacy_sync(
                     payload = None
                 else:
                     verb = "put"
-                    payload = (
-                        {b0_name: kid}
-                        if single_bin
-                        else full_bins(fields_t)
-                    )
+                    payload = {b0_name: kid} if single_bin else full_bins(fields_t)
 
             sample = with_tel and (local_count % sample_every == 0)
             t0 = time.perf_counter() if sample else 0.0

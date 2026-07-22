@@ -324,8 +324,7 @@ async def test_type_derivation(session) -> None:
     await filter_print("TD19", session, 11, "$.a > 'hello'",
                        "INT bin compared to STRING literal — should error or return false")
     await read_check("TD20", session, 11, "$.a.asFloat() + $.e", 13.14)
-    await read_print("TD21", session, 11, "$.a + $.e",
-                     "INT + FLOAT without cast — should fail")
+    await read_print("TD21", session, 11, "$.a + $.e", "INT + FLOAT without cast — should fail")
 
 
 # ======================================================================
@@ -384,8 +383,7 @@ async def test_list_access(session) -> None:
     await read_print("L17", session, 2, "$.l.[!#0:2]", "Inverted rank range")
     await read_print("L18", session, 2, "$.l.[#-1:2~30]", "Relative rank range")
     await read_check("L19", session, 2, "$.l.[=10].count()", 1)
-    await read_print("L20", session, 2, "$.l.[=20:50].get(return: COUNT)",
-                     "Count on value range")
+    await read_print("L20", session, 2, "$.l.[=20:50].get(return: COUNT)", "Count on value range")
 
 
 # ======================================================================

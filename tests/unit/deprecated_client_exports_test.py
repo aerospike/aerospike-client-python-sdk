@@ -69,9 +69,7 @@ def test_internal_module_paths_stay_silent():
         warnings.simplefilter("always")
         from aerospike_sdk.aio.client import Client  # noqa: F401
         from aerospike_sdk.sync.client import SyncClient  # noqa: F401
-    assert [
-        w for w in caught if issubclass(w.category, DeprecationWarning)
-    ] == []
+    assert [w for w in caught if issubclass(w.category, DeprecationWarning)] == []
 
 
 def test_unknown_attribute_still_raises():

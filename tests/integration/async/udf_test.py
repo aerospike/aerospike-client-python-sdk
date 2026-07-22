@@ -44,8 +44,7 @@ async def cluster_with_udf(aerospike_host, make_cluster_definition):
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
-        reg = await udf_session.register_udf_from_file(
-            LUA_FILE, SERVER_PATH, UDFLang.LUA)
+        reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
         assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
         yield c
         try:
@@ -60,9 +59,9 @@ async def test_write_using_udf(cluster_with_udf):
     await session.delete(k).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("udfbin1", "string value")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("udfbin1", "string value")
+        .execute()
     )
     rr = await stream.first_or_raise()
     assert rr.is_ok
@@ -78,9 +77,9 @@ async def test_first_udf_result_read_bin(cluster_with_udf):
     await session.upsert(k).put({"udfbin2": "stored"}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("udfbin2")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("udfbin2")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert val == "stored"
@@ -92,15 +91,15 @@ async def test_write_read_blob_via_udf(cluster_with_udf):
     payload = b"\x00\x01\xfe\x2a"
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("bbin", payload)
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("bbin", payload)
+        .execute()
     )
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("bbin")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("bbin")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert bytes(val) == payload
@@ -115,15 +114,15 @@ async def test_nested_list_map_round_trip_via_udf_read_bin(cluster_with_udf):
     ]
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("complex", expected)
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("complex", expected)
+        .execute()
     )
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("complex")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("complex")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert val == expected
@@ -135,9 +134,9 @@ async def test_batch_udf(cluster_with_udf):
     await session.delete(k1, k2).execute()
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("B5", "value5")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("B5", "value5")
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -156,9 +155,9 @@ async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
     await session.delete(k1, k2).execute()
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeWithValidation")
-            .passing("B5", 999)
-            .execute()
+        .function(MODULE, "writeWithValidation")
+        .passing("B5", 999)
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -179,10 +178,10 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
     # Without include_missing_keys: filtered-out key is omitted
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit")
-            .where("$.v < 10")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit")
+        .where("$.v < 10")
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 1
@@ -192,11 +191,11 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
     # With include_missing_keys: filtered-out key appears in stream
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit2")
-            .where("$.v < 10")
-            .include_missing_keys()
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit2")
+        .where("$.v < 10")
+        .include_missing_keys()
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -211,8 +210,8 @@ async def test_get_generation_udf_result(cluster_with_udf):
     await session.upsert(k).put({"gprobe": 1}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "getGeneration")
-            .execute()
+        .function(MODULE, "getGeneration")
+        .execute()
     )
     gen = await stream.first_udf_result()
     assert isinstance(gen, int)
@@ -225,16 +224,16 @@ async def test_write_if_generation_not_changed(cluster_with_udf):
     await session.upsert(k).put({"gcol": "a"}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "getGeneration")
-            .execute()
+        .function(MODULE, "getGeneration")
+        .execute()
     )
     gen = await stream.first_udf_result()
     assert isinstance(gen, int)
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "b", gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "b", gen)
+        .execute()
     )
     assert await stream.first_udf_result() is None
     rr = await (
@@ -245,9 +244,9 @@ async def test_write_if_generation_not_changed(cluster_with_udf):
     stale_gen = gen
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "should_not_apply", stale_gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "should_not_apply", stale_gen)
+        .execute()
     )
     rr2 = await (
         await session.query(k).bins(["gcol"]).execute()
@@ -261,15 +260,15 @@ async def test_write_unique_idempotent(cluster_with_udf):
     await session.delete(k).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "first")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "first")
+        .execute()
     )
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "second")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "second")
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["ub"]).execute()
@@ -285,9 +284,9 @@ async def test_append_list_bin_via_udf(cluster_with_udf):
     for v in (10, 20, 30):
         await (
             session.execute_udf(k)
-                .function(MODULE, "appendListBin")
-                .passing("lb", v)
-                .execute()
+            .function(MODULE, "appendListBin")
+            .passing("lb", v)
+            .execute()
         )
     rr = await (
         await session.query(k).bins(["lb"]).execute()
@@ -304,9 +303,9 @@ async def test_process_record_even_adds_to_bin(cluster_with_udf):
     await session.insert(k).put({"n1": 4, "n2": 1}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 3)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 3)
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["n1", "n2"]).execute()
@@ -322,9 +321,9 @@ async def test_process_record_multiple_of_five_clears_second_bin(cluster_with_ud
     await session.insert(k).put({"n1": 10, "n2": 99}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 1)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 1)
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["n1", "n2"]).execute()
@@ -340,9 +339,9 @@ async def test_process_record_multiple_of_nine_removes_record(cluster_with_udf):
     await session.insert(k).put({"n1": 9, "n2": 1}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 1)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 1)
+        .execute()
     )
     rs = await session.query(k).execute()
     first = await rs.first()
@@ -357,12 +356,12 @@ async def test_chained_udf(cluster_with_udf):
     await session.delete(k1, k2).execute()
     stream = await (
         session
-            .execute_udf(k1)
-                .function(MODULE, "writeBin")
-                .passing("B5", "value1")
-            .execute_udf(k2)
-                .function(MODULE, "writeWithValidation")
-                .passing("B5", 5)
+        .execute_udf(k1)
+        .function(MODULE, "writeBin")
+        .passing("B5", "value1")
+        .execute_udf(k2)
+        .function(MODULE, "writeWithValidation")
+        .passing("B5", 5)
         .execute()
     )
     rows = await stream.collect()
@@ -385,15 +384,15 @@ async def test_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     await session.delete(k1, k2, k3).execute()
     stream = await (
         session
-            .execute_udf(k1)
-                .function(MODULE, "writeBin")
-                .passing("cx", "ok1")
-            .execute_udf(k2)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 7)
-            .execute_udf(k3)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 999)
+        .execute_udf(k1)
+        .function(MODULE, "writeBin")
+        .passing("cx", "ok1")
+        .execute_udf(k2)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 7)
+        .execute_udf(k3)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 999)
         .execute()
     )
     rows = await stream.collect()
@@ -424,9 +423,9 @@ async def test_single_key_validation_raises(cluster_with_udf):
     with pytest.raises(AerospikeError):
         await (
             session.execute_udf(k)
-                .function(MODULE, "writeWithValidation")
-                .passing("bx", 99)
-                .execute()
+            .function(MODULE, "writeWithValidation")
+            .passing("bx", 99)
+            .execute()
         )
 
 async def test_list_udf(aerospike_host, make_cluster_definition):

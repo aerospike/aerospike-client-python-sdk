@@ -153,10 +153,7 @@ async def test_cluster_create_session(cluster):
     assert session2 is not None
 
     # Create session with custom behavior
-    custom_behavior = Behavior.DEFAULT.derive_with_changes(
-        name="test",
-        max_retries=3
-    )
+    custom_behavior = Behavior.DEFAULT.derive_with_changes(name="test", max_retries=3)
     session3 = cluster.create_session(custom_behavior)
     assert session3 is not None
     assert session3.behavior.name == "test"

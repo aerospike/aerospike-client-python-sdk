@@ -87,7 +87,8 @@ class Session:
     sessions with :meth:`Client.create_session`; do not construct
     ``Session`` directly.
 
-    Example:
+    Example::
+
         async with Client("localhost:3000") as client:
             session = client.create_session(Behavior.DEFAULT)
             users = DataSet.of("test", "users")
@@ -266,10 +267,11 @@ class Session:
                 client without being wrapped in a
                 :class:`~aerospike_sdk.record_result.RecordResult`.
 
-        Example:
-            >>> users = DataSet.of("test", "users")
-            >>> rec = await session.get(users.id(1))
-            >>> name = rec.bins["name"]
+        Example::
+
+            users = DataSet.of("test", "users")
+            rec = await session.get(users.id(1))
+            name = rec.bins["name"]
 
         See Also:
             :meth:`query`: Builder-based reads for projections, streams, and secondary-index queries.
@@ -281,8 +283,7 @@ class Session:
                 policy=self._cached_read_policy,
                 policy_sc=self._cached_read_policy_sc,
             )
-        policy = to_read_policy(
-            self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
         return await self._pac_client.get(key, bins, policy=policy)
 
@@ -310,9 +311,10 @@ class Session:
             AerospikeError: Server or client errors are raised from the
                 underlying client.
 
-        Example:
-            >>> users = DataSet.of("test", "users")
-            >>> await session.put(users.id(1), {"name": "Tim", "age": 30})
+        Example::
+
+            users = DataSet.of("test", "users")
+            await session.put(users.id(1), {"name": "Tim", "age": 30})
 
         See Also:
             :meth:`upsert`: Builder-based writes with full feature set.
@@ -686,12 +688,14 @@ class Session:
             TypeError: If positional types do not match the supported overloads.
             ValueError: If a key list is empty or arguments are inconsistent.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             rs = await session.query(users.id(1)).bins(["name"]).execute()
             row = await rs.first_or_raise()
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             rs = await session.query(users.ids(1, 2, 3)).bins(["name"]).execute()
             rows = await rs.collect()
@@ -959,8 +963,7 @@ class Session:
             :meth:`register_udf_from_file`, :meth:`register_udf_from_resource`,
             :meth:`remove_udf`.
         """
-        return await self._client._register_udf(
-            body, server_path, language, policy=policy)
+        return await self._client._register_udf(body, server_path, language, policy=policy)
 
     async def register_udf_from_file(
         self,
@@ -1121,9 +1124,7 @@ class Session:
     @overload
     def info(self, command: str) -> Awaitable[Dict[str, str]]: ...
 
-    def info(
-        self, command: Optional[str] = None
-    ) -> Union[InfoCommands, Awaitable[Dict[str, str]]]:
+    def info(self, command: Optional[str] = None) -> Union[InfoCommands, Awaitable[Dict[str, str]]]:
         """
         Execute info commands or get the InfoCommands helper.
 
@@ -1211,8 +1212,7 @@ class Session:
             )
         return NamespaceScStatus(
             False,
-            f"Namespace {namespace!r} info did not report strong-consistency; "
-            "treating as non-SC.",
+            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
         )
 
     async def is_namespace_sc(self, namespace: str) -> bool:
@@ -1364,7 +1364,8 @@ class Session:
             ValueError: If no keys are resolved or lists are empty.
             TypeError: If positional arguments are not keys or lists of keys.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             await session.upsert(users.id(1)).put({"name": "Tim", "age": 30}).execute()
 
@@ -1421,7 +1422,8 @@ class Session:
             ValueError: If no keys are resolved.
             TypeError: If positional arguments are invalid.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             await session.insert(users.id(99)).put({"name": "new"}).execute()
 
@@ -1577,7 +1579,8 @@ class Session:
             ValueError: If no keys are resolved.
             TypeError: If positional arguments are invalid.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             await session.delete(users.id(1)).execute()
             await session.delete(users.ids(10, 11)).execute()
@@ -1660,7 +1663,8 @@ class Session:
             ValueError: If no keys are resolved.
             TypeError: If positional arguments are invalid.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             rs = await session.exists(users.id(1)).execute()
             exists = (await rs.first()).as_bool()
@@ -1708,11 +1712,7 @@ class Session:
         if self._client._client is None:
             raise RuntimeError("Client is not connected")
 
-        await self._client._client.truncate(
-            dataset.namespace,
-            dataset.set_name,
-            before_nanos
-        )
+        await self._client._client.truncate(dataset.namespace, dataset.set_name, before_nanos)
 
     def __repr__(self) -> str:
         """String representation of the session."""

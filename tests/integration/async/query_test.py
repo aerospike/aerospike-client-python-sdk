@@ -91,8 +91,7 @@ async def _wait_for_query_kinds(
             return
         await asyncio.sleep(interval)
     raise AssertionError(
-        f"query never returned {expected!r} within {timeout}s "
-        f"(last observed: {last_kinds!r})"
+        f"query never returned {expected!r} within {timeout}s (last observed: {last_kinds!r})"
     )
 
 
@@ -262,10 +261,7 @@ async def test_query_iteration(session):
 
 async def test_query_with_filter_expression(session):
     """Test query with Exp (FilterExpression) for server-side filtering."""
-    filter_exp = Exp.ge(
-        Exp.int_bin("age"),
-        Exp.int_val(25)
-    )
+    filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = await (
         session.query("test", "query_test")
@@ -292,10 +288,7 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
         pass
     await wait_for_index(cluster, "test", "query_test", Filter.range("age", 20, 30))
 
-    filter_exp = Exp.eq(
-        Exp.string_bin("name"),
-        Exp.string_val("User5")
-    )
+    filter_exp = Exp.eq(Exp.string_bin("name"), Exp.string_val("User5"))
 
     try:
         stream = await (
@@ -323,10 +316,9 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
 
 async def test_query_with_filter_expression_and(session):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
-    filter_exp = Exp.and_([
-        Exp.ge(Exp.int_bin("age"), Exp.int_val(25)),
-        Exp.le(Exp.int_bin("age"), Exp.int_val(27))
-    ])
+    filter_exp = Exp.and_(
+        [Exp.ge(Exp.int_bin("age"), Exp.int_val(25)), Exp.le(Exp.int_bin("age"), Exp.int_val(27))]
+    )
 
     stream = await (
         session.query("test", "query_test")
@@ -617,9 +609,9 @@ class TestExecuteStreamAcrossBuilders:
 
             stream = await (
                 session.query(ds.ids(0, 1))
-                    .upsert(keys[2]).bin("status").set_to("active")
-                    .delete(keys[3])
-                    .execute_stream()
+                .upsert(keys[2]).bin("status").set_to("active")
+                .delete(keys[3])
+                .execute_stream()
             )
             results = await stream.collect()
             assert {r.index for r in results} == {0, 1, 2, 3}

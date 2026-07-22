@@ -122,9 +122,7 @@ def __getattr__(name: str):
     if name in _DEPRECATED_ENTRY_POINTS:
         import warnings
 
-        warnings.warn(
-            _DEPRECATED_ENTRY_POINTS[name], DeprecationWarning, stacklevel=2
-        )
+        warnings.warn(_DEPRECATED_ENTRY_POINTS[name], DeprecationWarning, stacklevel=2)
         if name == "Client":
             from aerospike_sdk.aio.client import Client
 

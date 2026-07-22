@@ -61,7 +61,8 @@ class RecordStream:
     :meth:`first`. Do not call ``RecordStream(...)`` directly; use factories
     like :meth:`from_list` or :meth:`from_batch_records`.
 
-    Example:
+    Example::
+
         Typical consumption with ``async for``::
 
             stream = await session.query(key).bins(["name"]).execute()
@@ -166,14 +167,9 @@ class RecordStream:
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
                 async for idx, br in pac_stream:
-                    rc = (
-                        br.result_code
-                        if br.result_code is not None
-                        else ResultCode.OK
-                    )
+                    rc = br.result_code if br.result_code is not None else ResultCode.OK
                     if on_error is not None and rc != ResultCode.OK:
-                        on_error(br.key, idx, _result_code_to_exception(
-                            rc, str(rc), br.in_doubt))
+                        on_error(br.key, idx, _result_code_to_exception(rc, str(rc), br.in_doubt))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -504,7 +500,8 @@ class RecordStream:
             StopAsyncIteration: If the stream yields no rows (empty).
             AerospikeError: If the first row is not OK (from :meth:`RecordResult.or_raise`).
 
-        Example:
+        Example::
+
             rec = (await stream.first_or_raise()).record_or_raise()
 
         See Also:
@@ -539,7 +536,8 @@ class RecordStream:
             All remaining :class:`~aerospike_sdk.record_result.RecordResult`
             instances.
 
-        Example:
+        Example::
+
             rows = await stream.collect()
             oks = [r for r in rows if r.is_ok]
         """

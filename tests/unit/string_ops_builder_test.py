@@ -150,9 +150,9 @@ class TestChainableAddOperation:
     def test_query_builder_add_operation_multi_chain(self):
         qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
         result = (qb
-                  .add_operation(StringOperation.strlen("s"))
-                  .add_operation(StringOperation.upper("s"))
-                  .add_operation(StringOperation.lower("s")))
+            .add_operation(StringOperation.strlen("s"))
+            .add_operation(StringOperation.upper("s"))
+            .add_operation(StringOperation.lower("s")))
         assert result is qb
         assert len(qb._operations) == 3
 

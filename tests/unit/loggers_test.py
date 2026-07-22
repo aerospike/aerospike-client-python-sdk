@@ -55,8 +55,7 @@ class TestSdkLoggerNames:
 
     def test_all_names_live_under_the_sdk_root(self):
         names = [
-            v for k, v in vars(SdkLoggers).items()
-            if not k.startswith("_") and isinstance(v, str)
+            v for k, v in vars(SdkLoggers).items() if not k.startswith("_") and isinstance(v, str)
         ]
         assert names, "taxonomy unexpectedly empty"
         for name in names:
@@ -137,8 +136,7 @@ class TestClusterTag:
 
     def test_cmd_done_attaches_cluster_field(self, caplog):
         with caplog.at_level(logging.DEBUG, logger=SdkLoggers.COMMAND):
-            _cmd_done("upsert", "test", "users", 1, perf_counter(),
-                      _FakeClient("prod-1"))
+            _cmd_done("upsert", "test", "users", 1, perf_counter(), _FakeClient("prod-1"))
         record = caplog.records[0]
         assert getattr(record, "aerospike.cluster") == "prod-1"
 

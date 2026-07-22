@@ -241,8 +241,7 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 )
 
         raise NotImplementedError(
-            f"sync builder shape not yet covered by a blocking dispatcher: "
-            f"{_describe_specs(self)}",
+            f"sync builder shape not yet covered by a blocking dispatcher: {_describe_specs(self)}",
         )
 
     def execute_stream(
@@ -283,16 +282,14 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
 
         handler = on_error if callable(on_error) else None
         disp = _resolve_disposition(on_error, is_single_key=False)
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            pac_stream = self._client.batch_stream_blocking(
-                all_ops, batch_policy=batch_policy)
+            pac_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return SyncRecordStream.from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))

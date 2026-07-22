@@ -39,17 +39,12 @@ def test_no_asyncio_imports_in_sync_tree():
     offenders: list[tuple[Path, list[int]]] = []
     for py in _SYNC_PKG_ROOT.rglob("*.py"):
         text = py.read_text()
-        matches = [
-            text[:m.start()].count("\n") + 1
-            for m in _ASYNCIO_IMPORT.finditer(text)
-        ]
+        matches = [text[: m.start()].count("\n") + 1 for m in _ASYNCIO_IMPORT.finditer(text)]
         if matches:
             offenders.append((py.relative_to(_SYNC_PKG_ROOT.parent.parent), matches))
 
     if offenders:
-        report = "\n".join(
-            f"  {path}: line(s) {lines}" for path, lines in offenders
-        )
+        report = "\n".join(f"  {path}: line(s) {lines}" for path, lines in offenders)
         raise AssertionError(
             "asyncio import(s) found in aerospike_sdk/sync/ tree:\n"
             + report

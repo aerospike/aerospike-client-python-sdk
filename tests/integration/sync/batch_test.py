@@ -175,11 +175,11 @@ class TestSyncBatchExecuteStream:
 
         stream = (
             session.batch()
-                .upsert(keys[0]).bin("A").set_to(99)
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .update(keys[2]).bin("sum").select_from("$.A + $.B")
-                .delete(keys[3])
-                .execute_stream()
+            .upsert(keys[0]).bin("A").set_to(99)
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .update(keys[2]).bin("sum").select_from("$.A + $.B")
+            .delete(keys[3])
+            .execute_stream()
         )
         results = list(stream)
         assert len(results) == 4
@@ -227,9 +227,9 @@ class TestSyncBatchExecuteStream:
 
         stream = (
             session.batch()
-                .update(keys[0]).bin("sum").select_from("$.A + $.B")
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .execute_stream()
+            .update(keys[0]).bin("sum").select_from("$.A + $.B")
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .execute_stream()
         )
         results = list(stream)
         assert len(results) == 2

@@ -167,9 +167,7 @@ class ClusterDefinition:
         self._app_id: Optional[str] = None
         self._index_refresh_interval: float = 5.0
 
-    def with_index_refresh_interval(
-        self, seconds: float
-    ) -> ClusterDefinition:
+    def with_index_refresh_interval(self, seconds: float) -> ClusterDefinition:
         """Set how often the secondary-index metadata cache refreshes.
 
         The client polls ``sindex-list`` / ``sindex-stat`` on this interval to
@@ -406,12 +404,14 @@ class ClusterDefinition:
 
         Example::
 
-            cluster = await ClusterDefinition("localhost", 3000) \\
+            cluster = await (
+                ClusterDefinition("localhost", 3000)
                 .with_system_settings(SystemSettings(
                     max_connections_per_node=200,
                     tend_interval=timedelta(seconds=2),
-                )) \\
+                ))
                 .connect()
+            )
         """
         self._system_settings = settings
         return self
@@ -526,9 +526,7 @@ class ClusterDefinition:
                     f"Missing TLS name for: {', '.join(missing)}"
                 )
 
-    def _build_pool_members(
-        self, count: int, indexes_monitor: "IndexesMonitor"
-    ) -> List[Client]:
+    def _build_pool_members(self, count: int, indexes_monitor: "IndexesMonitor") -> List[Client]:
         """Construct *count* unconnected pool-member clients (AsyncPool hook).
 
         All members share a single ``ClientPolicy`` built from this
@@ -545,9 +543,7 @@ class ClusterDefinition:
         ``CompletionBridge`` to the caller's loop.
         """
         self._validate()
-        settings, _config_path, _raw = load_at_connect(
-            self._cluster_name, self._system_settings
-        )
+        settings, _config_path, _raw = load_at_connect(self._cluster_name, self._system_settings)
         policy = self._get_policy(settings)
         seeds = self._build_seeds_string()
         members: List[Client] = []

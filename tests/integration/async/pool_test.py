@@ -36,9 +36,7 @@ from aerospike_sdk import index_monitor as _index_monitor_module
 class TestAsyncPoolLifecycle:
     """Start / stop / repeat-use semantics."""
 
-    async def test_context_manager_starts_and_closes(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_context_manager_starts_and_closes(self, aerospike_host, make_cluster_definition):
         pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         assert not pool.is_started
         async with pool:
@@ -47,25 +45,19 @@ class TestAsyncPoolLifecycle:
             assert pool.loop_count == 2
         assert pool.is_closed
 
-    async def test_run_before_start_raises(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_run_before_start_raises(self, aerospike_host, make_cluster_definition):
         pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         with pytest.raises(RuntimeError, match="not started"):
             await pool.run(lambda c: _noop(c))
 
-    async def test_run_after_close_raises(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_run_after_close_raises(self, aerospike_host, make_cluster_definition):
         pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         await pool.start()
         await pool.aclose()
         with pytest.raises(RuntimeError, match="closed"):
             await pool.run(lambda c: _noop(c))
 
-    async def test_double_start_raises(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_double_start_raises(self, aerospike_host, make_cluster_definition):
         pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         await pool.start()
         try:
@@ -74,9 +66,7 @@ class TestAsyncPoolLifecycle:
         finally:
             await pool.aclose()
 
-    async def test_default_loop_count_is_cpu_count(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_default_loop_count_is_cpu_count(self, aerospike_host, make_cluster_definition):
         import os
         pool = AsyncPool(make_cluster_definition(aerospike_host))
         assert pool.loop_count == (os.cpu_count() or 4)
@@ -85,9 +75,7 @@ class TestAsyncPoolLifecycle:
 class TestAsyncPoolDispatch:
     """run() / map() correctness and round-robin behavior."""
 
-    async def test_run_roundtrips_on_pool_loop(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_run_roundtrips_on_pool_loop(self, aerospike_host, make_cluster_definition):
         """Each `run` call dispatches a put+get; completions land on the right loop.
 
         The cross-loop guard in PAC's CompletionBridge is what makes this a
@@ -95,9 +83,7 @@ class TestAsyncPoolDispatch:
         would fail with the owning-loop RuntimeError.
         """
         ds = DataSet.of("test", "asyncpool_run")
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=4
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
             async def roundtrip(cluster: Cluster) -> int:
                 session = cluster.create_session()
                 key = ds.id("k0")
@@ -113,9 +99,7 @@ class TestAsyncPoolDispatch:
     ):
         """map() returns results in input order even though dispatch is round-robin."""
         ds = DataSet.of("test", "asyncpool_map")
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=3
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
             async def put_and_read(cluster: Cluster, i: int) -> int:
                 session = cluster.create_session()
                 key = ds.id(f"k{i}")
@@ -128,13 +112,9 @@ class TestAsyncPoolDispatch:
             results = await pool.map(put_and_read, inputs)
             assert results == [i * 10 for i in inputs]
 
-    async def test_pick_selects_specific_loop(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_pick_selects_specific_loop(self, aerospike_host, make_cluster_definition):
         """`pick=` routes to a specific loop; every member is a Cluster."""
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=3
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
             async def id_self(cluster: Cluster) -> str:
                 return type(cluster).__name__
 
@@ -142,13 +122,9 @@ class TestAsyncPoolDispatch:
                 assert await pool.run(id_self, pick=i) == "Cluster"
             assert await pool.run(id_self, pick=10) == "Cluster"
 
-    async def test_each_loop_gets_distinct_member(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_each_loop_gets_distinct_member(self, aerospike_host, make_cluster_definition):
         """Identity-check: pick=i and pick=j return distinct members for i != j."""
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=3
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
             async def whoami(cluster: Cluster) -> int:
                 return id(cluster)
 
@@ -164,9 +140,7 @@ class TestAsyncPoolDeprecatedFactory:
     ):
         with pytest.warns(DeprecationWarning, match="client_factory"):
             pool = AsyncPool(
-                client_factory=lambda: Client(
-                    seeds=aerospike_host, policy=client_policy
-                ),
+                client_factory=lambda: Client(seeds=aerospike_host, policy=client_policy),
                 loop_count=2,
             )
         async with pool:
@@ -204,9 +178,7 @@ class TestAsyncPoolLoopType:
 
         if _gil_is_enabled():
             pytest.skip("GIL enabled: uvloop default is safe (FT race can't fire)")
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=2
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=2) as pool:
             for i, loop in enumerate(pool._loops):
                 assert loop is not None, f"loop {i} is None"
                 assert not self._is_uvloop(loop), (
@@ -214,9 +186,7 @@ class TestAsyncPoolLoopType:
                     f"free-threading — exposes the multi-loop libuv stall"
                 )
 
-    async def test_use_uvloop_false_forces_selector(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_use_uvloop_false_forces_selector(self, aerospike_host, make_cluster_definition):
         """Explicit ``use_uvloop=False`` forces the stdlib selector loop
         regardless of the global uvloop policy or GIL state."""
         async with AsyncPool(
@@ -235,13 +205,9 @@ class TestAsyncPoolLoopType:
 class TestAsyncPoolGuards:
     """Misuse detection."""
 
-    async def test_self_dispatch_guard_raises(
-        self, aerospike_host, make_cluster_definition
-    ):
+    async def test_self_dispatch_guard_raises(self, aerospike_host, make_cluster_definition):
         """Running run() from within a pool loop deadlocks; the guard prevents it."""
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=2
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=2) as pool:
             async def recursive(cluster: Cluster) -> None:
                 # Called on a pool loop — dispatching back into the pool from
                 # here would deadlock the originating loop.
@@ -258,15 +224,11 @@ class TestAsyncPoolSharedMonitor:
         self, aerospike_host, make_cluster_definition
     ):
         """Identity check: every member client's monitor is the same object."""
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host), loop_count=4
-        ) as pool:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
             async def grab_monitor_id(cluster: Cluster) -> int:
                 return id(cluster._client._indexes_monitor)
 
-            monitor_ids = [
-                await pool.run(grab_monitor_id, pick=i) for i in range(4)
-            ]
+            monitor_ids = [await pool.run(grab_monitor_id, pick=i) for i in range(4)]
             assert len(set(monitor_ids)) == 1, (
                 f"expected one shared IndexesMonitor across the pool, "
                 f"got distinct ids={monitor_ids}"
@@ -304,8 +266,7 @@ class TestAsyncPoolSharedMonitor:
         # query touched the daemon thread. When it does start, expect
         # ≥1 and ≤3 calls.
         assert call_count <= 3, (
-            f"expected ≤3 _fetch_indexes_blocking calls with a shared "
-            f"monitor; got {call_count}"
+            f"expected ≤3 _fetch_indexes_blocking calls with a shared monitor; got {call_count}"
         )
 
 

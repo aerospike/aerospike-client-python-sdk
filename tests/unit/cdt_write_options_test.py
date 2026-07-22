@@ -80,18 +80,14 @@ class TestResolveListPolicy:
 
     def test_combined_flags_bitmask(self):
         policy = _resolve_list_policy(None, unique=True, no_fail=True)
-        assert policy.write_flags == (
-            ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL
-        )
+        assert policy.write_flags == (ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL)
 
     def test_three_combined_flags_bitmask(self):
         policy = _resolve_list_policy(
             None, unique=True, no_fail=True, partial=True,
         )
         assert policy.write_flags == (
-            ListWriteFlags.ADD_UNIQUE
-            | ListWriteFlags.NO_FAIL
-            | ListWriteFlags.PARTIAL
+            ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL | ListWriteFlags.PARTIAL
         )
 
 

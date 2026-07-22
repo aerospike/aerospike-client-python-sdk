@@ -54,9 +54,9 @@ class TestOperate:
         # Add integer, write new string
         await (
             session.upsert(key)
-                .bin(bin_name1).add(4)
-                .bin(bin_name2).set_to("new string")
-                .execute()
+            .bin(bin_name1).add(4)
+            .bin(bin_name2).set_to("new string")
+            .execute()
         )
 
         # Read record and verify values after operations
@@ -130,9 +130,9 @@ class TestOperate:
 
         stream = await (
             session.upsert(key)
-                .bin("name").get()
-                .delete_record()
-                .execute()
+            .bin("name").get()
+            .delete_record()
+            .execute()
         )
         row = await stream.first_or_raise()
         assert row.record.bins["name"] == "Alice"
@@ -149,11 +149,11 @@ class TestOperate:
 
         stream = await (
             session.upsert(key)
-                .bin("a").get()
-                .delete_record()
-                .bin("b").set_to(99)
-                .bin("b").get()
-                .execute()
+            .bin("a").get()
+            .delete_record()
+            .bin("b").set_to(99)
+            .bin("b").get()
+            .execute()
         )
         row = await stream.first_or_raise()
         assert row.record.bins["a"] == 1
@@ -171,17 +171,17 @@ class TestOperate:
         key = test_set.id("touch_ttl")
         await (
             session.upsert(key)
-                .put({"score": 42})
-                .expire_record_after_seconds(60)
-                .execute()
+            .put({"score": 42})
+            .expire_record_after_seconds(60)
+            .execute()
         )
 
         stream = await (
             session.upsert(key)
-                .bin("score").get()
-                .touch_record()
-                .expire_record_after_seconds(120)
-                .execute()
+            .bin("score").get()
+            .touch_record()
+            .expire_record_after_seconds(120)
+            .execute()
         )
         row = await stream.first_or_raise()
         assert row.record.bins["score"] == 42

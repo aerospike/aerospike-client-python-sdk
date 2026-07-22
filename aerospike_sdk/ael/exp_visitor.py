@@ -1040,13 +1040,11 @@ class CDTPath:
                                    ListIndexRangePart, ListValueRangePart, ListValueListPart,
                                    ListRankRangePart, ListRankRangeRelativePart)):
             result = last_part.construct_expr(
-                self.bin_name, exp_type, list_ret, ctx,
-                bin_expr=bin_expr
+                self.bin_name, exp_type, list_ret, ctx, bin_expr=bin_expr
             )
         else:
             result = last_part.construct_expr(
-                self.bin_name, exp_type, map_ret, ctx,
-                bin_expr=bin_expr
+                self.bin_name, exp_type, map_ret, ctx, bin_expr=bin_expr
             )
 
         if self.cast_wrap == "to_int":
@@ -1077,9 +1075,7 @@ def _unquote(text: str) -> str:
 def _reject_bin_name_containing_null(bin_name: str) -> None:
     """Bin names containing ``null`` (case-insensitive) are reserved."""
     if "null" in bin_name.lower():
-        raise AelParseException(
-            f"Bin name must not contain the reserved word 'null': {bin_name}"
-        )
+        raise AelParseException(f"Bin name must not contain the reserved word 'null': {bin_name}")
 
 
 def _extract_bin_name(ctx) -> str:
@@ -1145,9 +1141,7 @@ def _object_to_exp(value: Any) -> FilterExpression:
         return FilterExpression.float_val(value)
     if isinstance(value, (bytes, bytearray)):
         return FilterExpression.blob_val(list(value))
-    raise AelParseException(
-        f"Unsupported value type for Exp conversion: {type(value).__name__}"
-    )
+    raise AelParseException(f"Unsupported value type for Exp conversion: {type(value).__name__}")
 
 
 def _get_type_hint(expr: ExprOrDeferred) -> InferredType:
@@ -1402,8 +1396,7 @@ def _resolve_for_in_list(expr: ExprOrDeferred) -> FilterExpression:
     if isinstance(expr, (DeferredBin, CDTPath)):
         if expr.explicit_type is not None and expr.explicit_type != InferredType.LIST:
             raise AelParseException(
-                f"IN operation requires a List as the right operand, "
-                f"got {expr.explicit_type.name}"
+                f"IN operation requires a List as the right operand, got {expr.explicit_type.name}"
             )
         if isinstance(expr, CDTPath) and expr.parts:
             return expr.to_expression(InferredType.STRING)
@@ -1411,8 +1404,7 @@ def _resolve_for_in_list(expr: ExprOrDeferred) -> FilterExpression:
     if isinstance(expr, TypedExpr):
         if expr.type_hint not in (InferredType.LIST, InferredType.UNKNOWN):
             raise AelParseException(
-                f"IN operation requires a List as the right operand, "
-                f"got {expr.type_hint.name}"
+                f"IN operation requires a List as the right operand, got {expr.type_hint.name}"
             )
         return expr.expr
     if isinstance(expr, FilterExpression):
@@ -1442,9 +1434,7 @@ def _validate_comparison_types(left: InferredType, right: InferredType) -> None:
     raise AelParseException(f"Cannot compare {left.name} to {right.name}")
 
 
-def _validate_in_type_compatibility(
-    left_type: InferredType, element_type: InferredType
-) -> None:
+def _validate_in_type_compatibility(left_type: InferredType, element_type: InferredType) -> None:
     """Reject incompatible type pairs in an IN expression.
 
     INT and FLOAT are numeric-compatible; all other cross-type pairs are rejected.
@@ -2176,8 +2166,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
 
     @staticmethod
     def _is_list_type_designator(ctx) -> bool:
-        return (hasattr(ctx, 'LIST_TYPE_DESIGNATOR')
-                and ctx.LIST_TYPE_DESIGNATOR() is not None)
+        return hasattr(ctx, "LIST_TYPE_DESIGNATOR") and ctx.LIST_TYPE_DESIGNATOR() is not None
 
     @staticmethod
     def _is_map_type_designator(ctx) -> bool:
@@ -2303,9 +2292,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
         start_ctx = ctx.getTypedRuleContext(ConditionParser.StartContext, 0)
         end_ctx = ctx.end() if hasattr(ctx, 'end') and callable(ctx.end) else None
 
-        start = (
-            int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
-        )
+        start = int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
         if end_ctx:
             end = int(cast(_AntlrText, end_ctx).getText(), 0)
             count = end - start
@@ -2321,9 +2308,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
         start_ctx = ctx.getTypedRuleContext(ConditionParser.StartContext, 0)
         end_ctx = ctx.end() if hasattr(ctx, 'end') and callable(ctx.end) else None
 
-        start = (
-            int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
-        )
+        start = int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
         if end_ctx:
             end = int(cast(_AntlrText, end_ctx).getText(), 0)
             count = end - start
@@ -2368,9 +2353,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
         
         # Get start
         start_ctx = ctx.getTypedRuleContext(ConditionParser.StartContext, 0)
-        rank = (
-            int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
-        )
+        rank = int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
 
         # Get relativeRankEnd
         rel_end = ctx.relativeRankEnd() if hasattr(ctx, 'relativeRankEnd') else None
@@ -2406,9 +2389,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
 
         # Get start
         start_ctx = ctx.getTypedRuleContext(ConditionParser.StartContext, 0)
-        index = (
-            int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
-        )
+        index = int(cast(_AntlrText, start_ctx).getText(), 0) if start_ctx else 0
 
         # Get relativeKeyEnd
         rel_end = ctx.relativeKeyEnd() if hasattr(ctx, 'relativeKeyEnd') else None
@@ -2777,7 +2758,8 @@ class ExpressionConditionVisitor(ConditionVisitor):
 
         Translates to: FilterExpression.exp_let([def1, def2, ..., action])
 
-        Example:
+        Example::
+
             let (x = 1, y = ${x} + 1) then (${x} + ${y})
             ->
             FilterExpression.exp_let([
@@ -2809,7 +2791,8 @@ class ExpressionConditionVisitor(ConditionVisitor):
         
         Translates to: FilterExpression.cond([bool1, action1, bool2, action2, ..., default_action])
         
-        Example:
+        Example::
+
             when ($.who == 1 => "bob", $.who == 2 => "fred", default => "other")
             ->
             FilterExpression.cond([
@@ -3235,10 +3218,7 @@ class ExpressionConditionVisitor(ConditionVisitor):
             lc = oper_ctx.listConstant()
             if lc.LIST_TYPE_DESIGNATOR() is not None:
                 return []
-            return [
-                self._unary_expr_to_python_value(u)
-                for u in lc.unaryExpression()
-            ]
+            return [self._unary_expr_to_python_value(u) for u in lc.unaryExpression()]
         if oper_ctx.orderedMapConstant() is not None:
             omc = oper_ctx.orderedMapConstant()
             if omc.MAP_TYPE_DESIGNATOR() is not None:

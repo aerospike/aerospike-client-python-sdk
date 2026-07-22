@@ -73,10 +73,10 @@ async def test_str_reads_via_builder(cluster):
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_strlen()
-                .bin("s").str_substr(1, 4)
-                .bin("s").str_find("ll")
-                .execute())
+        .bin("s").str_strlen()
+        .bin("s").str_substr(1, 4)
+        .bin("s").str_find("ll")
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [5, "ell", 2]
 
@@ -95,9 +95,9 @@ async def test_str_modify_and_read(cluster):
     await sess.upsert(k).bin("s").set_to("ab").execute()
 
     result = await (await sess.upsert(k)
-                    .bin("s").str_upper()
-                    .bin("s").get()
-                    .execute()).first_or_raise()
+        .bin("s").str_upper()
+        .bin("s").get()
+        .execute()).first_or_raise()
     rec = result.record_or_raise()
     assert rec.bins["s"] == "AB"
     assert rec.results == [None, "AB"]
@@ -114,15 +114,15 @@ async def test_str_append_and_prepend(cluster):
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
     result = await (await sess.upsert(k)
-                    .bin("s").str_append(" world")
-                    .bin("s").get()
-                    .execute()).first_or_raise()
+        .bin("s").str_append(" world")
+        .bin("s").get()
+        .execute()).first_or_raise()
     assert result.record_or_raise().bins["s"] == "hello world"
 
     result = await (await sess.upsert(k)
-                    .bin("s").str_prepend("oh ")
-                    .bin("s").get()
-                    .execute()).first_or_raise()
+        .bin("s").str_prepend("oh ")
+        .bin("s").get()
+        .execute()).first_or_raise()
     assert result.record_or_raise().bins["s"] == "oh hello world"
 
 
@@ -133,11 +133,11 @@ async def test_str_reads_via_add_operation(cluster):
     await sess.upsert(k).bin("s").set_to("hello").execute()
 
     rs = await (sess.query(k)
-                .add_operation(StringOperation.strlen("s"))
-                .add_operation(StringOperation.substr("s", 1, 4))
-                .add_operation(StringOperation.substr("s", 3))
-                .add_operation(StringOperation.find("s", "ll"))
-                .execute())
+        .add_operation(StringOperation.strlen("s"))
+        .add_operation(StringOperation.substr("s", 1, 4))
+        .add_operation(StringOperation.substr("s", 3))
+        .add_operation(StringOperation.find("s", "ll"))
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [5, "ell", "lo", 2]
 
@@ -275,11 +275,11 @@ async def test_str_find_nth_overlap_skip(cluster):
     await sess.upsert(k).bin("s").set_to("aaaaa").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_find("aa")              # 1st (default occurrence)
-                .bin("s").str_find("aa", occurrence=2)
-                .bin("s").str_find("aa", occurrence=3)  # absent → -1
-                .bin("s").str_find("aa", occurrence=4)  # absent → -1
-                .execute())
+        .bin("s").str_find("aa")              # 1st (default occurrence)
+        .bin("s").str_find("aa", occurrence=2)
+        .bin("s").str_find("aa", occurrence=3)  # absent → -1
+        .bin("s").str_find("aa", occurrence=4)  # absent → -1
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [0, 2, -1, -1]
 
@@ -296,10 +296,10 @@ async def test_str_find_nth_overlap_skip_longer(cluster):
     await sess.upsert(k).bin("s").set_to("abababab").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_find("abab")
-                .bin("s").str_find("abab", occurrence=2)
-                .bin("s").str_find("abab", occurrence=3)  # absent → -1
-                .execute())
+        .bin("s").str_find("abab")
+        .bin("s").str_find("abab", occurrence=2)
+        .bin("s").str_find("abab", occurrence=3)  # absent → -1
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [0, 4, -1]
 
@@ -347,9 +347,9 @@ async def test_str_find_needle_equals_haystack(cluster):
     await sess.upsert(k).bin("s").set_to("aaa").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_find("aaa")
-                .bin("s").str_find("aaa", occurrence=2)
-                .execute())
+        .bin("s").str_find("aaa")
+        .bin("s").str_find("aaa", occurrence=2)
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [0, -1]
 
@@ -365,10 +365,10 @@ async def test_str_contains_overlapping_pattern(cluster):
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_contains("aa")
-                .bin("s").str_starts_with("aa")
-                .bin("s").str_ends_with("aa")
-                .execute())
+        .bin("s").str_contains("aa")
+        .bin("s").str_starts_with("aa")
+        .bin("s").str_ends_with("aa")
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == [True, True, True]
 
@@ -384,8 +384,8 @@ async def test_str_find_overlap_skip_spec_canonical(cluster):
     await sess.upsert(k).bin("s").set_to("aaaa").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_find("aa", occurrence=2)
-                .execute())
+        .bin("s").str_find("aa", occurrence=2)
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == 2
 
@@ -403,7 +403,7 @@ async def test_str_find_overlap_skip_icu_path_emoji(cluster):
     await sess.upsert(k).bin("s").set_to("👋👋👋👋").execute()
 
     rs = await (sess.query(k)
-                .bin("s").str_find("👋👋", occurrence=2)
-                .execute())
+        .bin("s").str_find("👋👋", occurrence=2)
+        .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == 2

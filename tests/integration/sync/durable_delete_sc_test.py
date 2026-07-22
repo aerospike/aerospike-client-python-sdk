@@ -220,8 +220,7 @@ class TestDurableDeleteBatchOperateMultiKey:
         session.upsert(keys).bin(bin_name).add(10).execute()
         session.upsert(keys).bin(bin_name).add(5).execute()
 
-        seg = _require_default_durable_delete(
-            session.upsert(keys), ctx="multi-key operate delete")
+        seg = _require_default_durable_delete(session.upsert(keys), ctx="multi-key operate delete")
         del_rows = (
             seg.bin(bin_name).get().delete_record()
             .execute(on_error=ErrorStrategy.IN_STREAM)

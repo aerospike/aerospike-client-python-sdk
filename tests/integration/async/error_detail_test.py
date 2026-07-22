@@ -70,9 +70,7 @@ async def _read_out_of_bounds(session, key, *, kind):
 class TestErrorDetail:
     """Verbosity controls how much failure detail reaches the exception."""
 
-    async def test_default_behavior_yields_no_detail(
-        self, cluster, supports_error_detail
-    ):
+    async def test_default_behavior_yields_no_detail(self, cluster, supports_error_detail):
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _session(cluster, ErrorDetailVerbosity.NONE)
@@ -80,18 +78,14 @@ class TestErrorDetail:
         assert exc.sub_code is None
         assert exc.server_message is None
 
-    async def test_verbosity_subcode_sets_subcode(
-        self, cluster, supports_error_detail
-    ):
+    async def test_verbosity_subcode_sets_subcode(self, cluster, supports_error_detail):
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _session(cluster, ErrorDetailVerbosity.SUBCODE)
         exc = await _read_out_of_bounds(session, _DS.id("subcode"), kind="index")
         assert exc.sub_code == _SUB_CDT_INDEX_OUT_OF_BOUNDS
 
-    async def test_verbosity_message_adds_server_message(
-        self, cluster, supports_error_detail
-    ):
+    async def test_verbosity_message_adds_server_message(self, cluster, supports_error_detail):
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
@@ -100,9 +94,7 @@ class TestErrorDetail:
         assert exc.server_message is not None
         assert "out of bounds" in exc.server_message
 
-    async def test_subcode_is_scoped_to_result_code(
-        self, cluster, supports_error_detail
-    ):
+    async def test_subcode_is_scoped_to_result_code(self, cluster, supports_error_detail):
         # Distinct conditions under one result code carry distinct subcodes.
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
@@ -112,9 +104,7 @@ class TestErrorDetail:
         assert index_exc.sub_code == _SUB_CDT_INDEX_OUT_OF_BOUNDS
         assert rank_exc.sub_code == _SUB_CDT_RANK_OUT_OF_BOUNDS
 
-    async def test_subcode_absent_is_zero_with_message(
-        self, cluster, supports_error_detail
-    ):
+    async def test_subcode_absent_is_zero_with_message(self, cluster, supports_error_detail):
         # A failure the result code already fully identifies (appending to an
         # integer bin) carries subcode 0 (SubCode.NONE) — not ``None`` — with a
         # message, in a *different* result-code family than the CDT cases. The
@@ -133,9 +123,7 @@ class TestErrorDetail:
             return
         pytest.fail("expected appending to an integer bin to raise")
 
-    async def test_success_with_verbosity_returns_record(
-        self, cluster, supports_error_detail
-    ):
+    async def test_success_with_verbosity_returns_record(self, cluster, supports_error_detail):
         # Requesting detail on an operation that succeeds must not break it.
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
@@ -145,9 +133,7 @@ class TestErrorDetail:
         result = await (await session.query(key).execute()).first_or_raise()
         assert result.record.bins["nums"] == 42
 
-    async def test_filtered_out_has_no_subcode(
-        self, cluster, supports_error_detail
-    ):
+    async def test_filtered_out_has_no_subcode(self, cluster, supports_error_detail):
         # A read filtered out by an expression is a distinct result code that
         # carries no subcode (the server's filtered-subcode family was removed):
         # sub_code is NONE with a contextual message and no "subcode=" suffix.
@@ -169,9 +155,7 @@ class TestErrorDetail:
             return
         pytest.fail("expected a filtered-out read to raise")
 
-    async def test_bin_not_found_family_subcode(
-        self, cluster, supports_error_detail
-    ):
+    async def test_bin_not_found_family_subcode(self, cluster, supports_error_detail):
         # A subcode in a *third* result-code family (BIN_NOT_FOUND), proving
         # subcode dispatch is not CDT-specific: an HLL refresh-count op on a
         # missing bin cannot auto-create it.
@@ -187,9 +171,7 @@ class TestErrorDetail:
             return
         pytest.fail("expected an HLL op on a missing bin to raise")
 
-    async def test_message_verbosity_has_no_expression_trace(
-        self, cluster, supports_error_detail
-    ):
+    async def test_message_verbosity_has_no_expression_trace(self, cluster, supports_error_detail):
         # An expression that fails to build carries PARAMETER_ERROR + no subcode;
         # at verbosity 2 there must be NO trace (trace is additive at verbosity 3).
         # Robust on any 8.1.3 cluster, trace-emitting or not.
@@ -205,9 +187,7 @@ class TestErrorDetail:
             return
         pytest.fail("expected the type-mismatched expression to fail to build")
 
-    async def test_verbosity_3_expression_build_trace(
-        self, cluster, supports_error_detail
-    ):
+    async def test_verbosity_3_expression_build_trace(self, cluster, supports_error_detail):
         # At verbosity 3 a build failure carries a structured trace. Requires a
         # server build that emits it (SERVER-1137+); on a base-tier-only build
         # the server returns no trace and the test skips rather than fails.

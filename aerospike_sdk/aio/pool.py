@@ -242,9 +242,7 @@ class AsyncPool:
             )
             pool = AsyncPool(cluster_def, loop_count=N)
         """
-        if cluster_definition is not None and not isinstance(
-            cluster_definition, ClusterDefinition
-        ):
+        if cluster_definition is not None and not isinstance(cluster_definition, ClusterDefinition):
             # Old positional shape: AsyncPool(factory, loop_count). Shift the
             # callable into the deprecated kwarg path below.
             if callable(cluster_definition) and client_factory is None:
@@ -258,8 +256,7 @@ class AsyncPool:
         if client_factory is not None:
             if cluster_definition is not None:
                 raise ValueError(
-                    "Pass either cluster_definition or the deprecated "
-                    "client_factory, not both"
+                    "Pass either cluster_definition or the deprecated client_factory, not both"
                 )
             warnings.warn(
                 "AsyncPool(client_factory=...) is deprecated; pass a "
@@ -327,15 +324,11 @@ class AsyncPool:
         self._rr = itertools.cycle(range(self._n))
         self._started = False
         self._closed = False
-        self._loop_ready: List[threading.Event] = [
-            threading.Event() for _ in range(self._n)
-        ]
+        self._loop_ready: List[threading.Event] = [threading.Event() for _ in range(self._n)]
         # Shared monitor: one instance for all pool clients.  Constructed
         # here; started on loop 0 in `start()`, stopped before client 0 in
         # `aclose()`.
-        self._shared_monitor = IndexesMonitor(
-            refresh_interval=index_refresh_interval
-        )
+        self._shared_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -402,9 +395,7 @@ class AsyncPool:
         # read.
         if self._per_client_runtime:
             self._assert_shared_policy_invariant(clients)
-            clients[0]._policy.per_client_runtime_workers = (
-                self._per_client_runtime_workers
-            )
+            clients[0]._policy.per_client_runtime_workers = self._per_client_runtime_workers
 
         # Spawn the N loop threads. Safe now because clients are
         # fully constructed and their shared policy is finalized.
@@ -435,9 +426,7 @@ class AsyncPool:
             loop = self._loops[i]
             assert loop is not None
             if self._definition is not None:
-                coro: Coroutine[object, object, object] = (
-                    Cluster._connect_and_wrap(clients[i])
-                )
+                coro: Coroutine[object, object, object] = Cluster._connect_and_wrap(clients[i])
             else:
                 coro = clients[i].connect()
             cfut = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -460,9 +449,7 @@ class AsyncPool:
                 if isinstance(r, Cluster):
                     cfut = asyncio.run_coroutine_threadsafe(r.close(), loop)
                 elif clients[i].is_connected:
-                    cfut = asyncio.run_coroutine_threadsafe(
-                        clients[i].close(), loop
-                    )
+                    cfut = asyncio.run_coroutine_threadsafe(clients[i].close(), loop)
                 else:
                     continue
                 close_afuts.append(asyncio.wrap_future(cfut))
@@ -703,9 +690,7 @@ class AsyncPool:
         if self._closed:
             raise RuntimeError("AsyncPool is closed")
         if not self._started:
-            raise RuntimeError(
-                "AsyncPool is not started; call start() or use async with"
-            )
+            raise RuntimeError("AsyncPool is not started; call start() or use async with")
 
     def _assert_shared_policy_invariant(self, clients: List[Client]) -> None:
         """Verify all clients share a single ``ClientPolicy`` PyO3 object.

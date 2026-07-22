@@ -40,8 +40,8 @@ class TestListUniqueFlag:
         with pytest.raises(AerospikeError):
             await (
                 session.upsert(k)
-                    .bin("lst").list_append(2, unique=True)
-                    .execute()
+                .bin("lst").list_append(2, unique=True)
+                .execute()
             )
 
         rs = await session.query(key=k).bin("lst").get().execute()
@@ -57,8 +57,8 @@ class TestListUniqueFlag:
         with pytest.raises(AerospikeError):
             await (
                 session.upsert(k)
-                    .bin("lst").list_add(2, unique=True)
-                    .execute()
+                .bin("lst").list_add(2, unique=True)
+                .execute()
             )
 
     async def test_list_append_unique_allows_new(self, cluster):
@@ -69,8 +69,8 @@ class TestListUniqueFlag:
 
         await (
             session.upsert(k)
-                .bin("lst").list_append(4, unique=True)
-                .execute()
+            .bin("lst").list_append(4, unique=True)
+            .execute()
         )
 
         rs = await session.query(key=k).bin("lst").get().execute()
@@ -88,8 +88,8 @@ class TestListCombinedFlags:
 
         await (
             session.upsert(k)
-                .bin("lst").list_append(1, unique=True, no_fail=True)
-                .execute()
+            .bin("lst").list_append(1, unique=True, no_fail=True)
+            .execute()
         )
 
         rs = await session.query(key=k).bin("lst").get().execute()
@@ -108,8 +108,8 @@ class TestListBoundedFlag:
         with pytest.raises(AerospikeError):
             await (
                 session.upsert(k)
-                    .bin("lst").list_insert(99, "oob", bounded=True)
-                    .execute()
+                .bin("lst").list_insert(99, "oob", bounded=True)
+                .execute()
             )
 
 
@@ -123,8 +123,8 @@ class TestMapNoFail:
 
         await (
             session.upsert(k)
-                .bin("m").map_upsert_items({"a": 2, "b": 3}, no_fail=True)
-                .execute()
+            .bin("m").map_upsert_items({"a": 2, "b": 3}, no_fail=True)
+            .execute()
         )
 
         rs = await session.query(key=k).bin("m").get().execute()
@@ -140,11 +140,11 @@ class TestMapNoFail:
 
         await (
             session.upsert(k)
-                .bin("m").map_insert_items(
+            .bin("m").map_insert_items(
                     {"a": 99, "b": 2},
                     no_fail=True, partial=True,
                 )
-                .execute()
+            .execute()
         )
 
         rs = await session.query(key=k).bin("m").get().execute()

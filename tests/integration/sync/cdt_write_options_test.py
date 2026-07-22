@@ -50,8 +50,8 @@ class TestListUniqueFlag:
         with pytest.raises(AerospikeError):
             (
                 session.upsert(k)
-                    .bin("lst").list_append(2, unique=True)
-                    .execute()
+                .bin("lst").list_append(2, unique=True)
+                .execute()
             )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -65,8 +65,8 @@ class TestListUniqueFlag:
 
         (
             session.upsert(k)
-                .bin("lst").list_append(4, unique=True)
-                .execute()
+            .bin("lst").list_append(4, unique=True)
+            .execute()
         )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -83,8 +83,8 @@ class TestListCombinedFlags:
 
         (
             session.upsert(k)
-                .bin("lst").list_append(1, unique=True, no_fail=True)
-                .execute()
+            .bin("lst").list_append(1, unique=True, no_fail=True)
+            .execute()
         )
 
         rs = session.query(key=k).bin("lst").get().execute()
@@ -101,11 +101,11 @@ class TestMapNoFail:
 
         (
             session.upsert(k)
-                .bin("m").map_insert_items(
+            .bin("m").map_insert_items(
                     {"a": 99, "b": 2},
                     no_fail=True, partial=True,
                 )
-                .execute()
+            .execute()
         )
 
         rs = session.query(key=k).bin("m").get().execute()

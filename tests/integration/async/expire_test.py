@@ -43,9 +43,9 @@ async def test_expire(cluster):
 
     await (
         session.upsert(k)
-            .expire_record_after_seconds(1)
-            .bin(BIN_NAME).set_to("expirevalue")
-            .execute()
+        .expire_record_after_seconds(1)
+        .bin(BIN_NAME).set_to("expirevalue")
+        .execute()
     )
 
     result = await session.query(k).execute()
@@ -67,9 +67,9 @@ async def test_no_expire(cluster):
 
     await (
         session.upsert(k)
-            .never_expire()
-            .bin(BIN_NAME).set_to("noexpirevalue")
-            .execute()
+        .never_expire()
+        .bin(BIN_NAME).set_to("noexpirevalue")
+        .execute()
     )
 
     result = await session.query(k).execute()
@@ -90,9 +90,9 @@ async def test_reset_read_ttl(cluster):
 
     await (
         cluster.create_session().upsert(k)
-            .expire_record_after_seconds(2)
-            .bin(BIN_NAME).set_to("expirevalue")
-            .execute()
+        .expire_record_after_seconds(2)
+        .bin(BIN_NAME).set_to("expirevalue")
+        .execute()
     )
 
     # Read the record before it expires and reset read ttl.
@@ -135,9 +135,9 @@ async def test_expire_record_after_timedelta(cluster):
 
     await (
         session.upsert(k)
-            .expire_record_after(timedelta(minutes=5))
-            .bin(BIN_NAME).set_to("td_ttl")
-            .execute()
+        .expire_record_after(timedelta(minutes=5))
+        .bin(BIN_NAME).set_to("td_ttl")
+        .execute()
     )
 
     result = await session.query(k).with_no_bins().execute()
@@ -155,9 +155,9 @@ async def test_expire_record_at_datetime(cluster):
     target = datetime.now(timezone.utc) + timedelta(minutes=5)
     await (
         session.upsert(k)
-            .expire_record_at(target)
-            .bin(BIN_NAME).set_to("abs_ttl")
-            .execute()
+        .expire_record_at(target)
+        .bin(BIN_NAME).set_to("abs_ttl")
+        .execute()
     )
 
     result = await session.query(k).with_no_bins().execute()

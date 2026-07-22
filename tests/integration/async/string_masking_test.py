@@ -119,10 +119,7 @@ async def _apply_masking(admin_session, *, ns, set_name, bin_name, function, val
 
 
 async def _remove_masking(admin_session, *, ns, set_name, bin_name):
-    cmd = (
-        f"masking;set={set_name};namespace={ns};bin={bin_name};"
-        f"type=string;function=remove"
-    )
+    cmd = f"masking;set={set_name};namespace={ns};bin={bin_name};type=string;function=remove"
     try:
         await admin_session.info(cmd)
     except Exception:

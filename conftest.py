@@ -167,9 +167,7 @@ def make_cluster_definition():
 
     def _make(seed: str, *, auth: bool = False, sync: bool = False):
         if sync:
-            cluster_def = SyncClusterDefinition(
-                hosts=SyncHost.parse_hosts(seed, 3000)
-            )
+            cluster_def = SyncClusterDefinition(hosts=SyncHost.parse_hosts(seed, 3000))
         else:
             cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
         if _use_services_alternate_from_env():

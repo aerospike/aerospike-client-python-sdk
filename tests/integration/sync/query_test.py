@@ -95,10 +95,7 @@ def test_query_with_bins(session):
 def test_query_with_filter_expression(session):
     """Test query with Exp (FilterExpression) for server-side filtering."""
     # Create a filter expression for age >= 25
-    filter_exp = Exp.ge(
-        Exp.int_bin("age"),
-        Exp.int_val(25)
-    )
+    filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = (
         session.query("test", "query_test")
@@ -158,8 +155,8 @@ class TestSyncExecuteStreamAcrossBuilders:
                 session.upsert(keys[3]).put({"v": 3}).execute()
                 chain = (
                     session.query(ds.ids(0, 1))
-                        .upsert(keys[2]).bin("status").set_to("active")
-                        .delete(keys[3])
+                    .upsert(keys[2]).bin("status").set_to("active")
+                    .delete(keys[3])
                 )
                 results = getattr(chain, terminal)().collect()
                 assert {r.index for r in results} == {0, 1, 2, 3}, terminal
@@ -309,10 +306,9 @@ class TestSyncExecuteStreamClose:
 def test_query_with_filter_expression_and(session):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
     # Create filter expression: age >= 25 AND age <= 27
-    filter_exp = Exp.and_([
-        Exp.ge(Exp.int_bin("age"), Exp.int_val(25)),
-        Exp.le(Exp.int_bin("age"), Exp.int_val(27))
-    ])
+    filter_exp = Exp.and_(
+        [Exp.ge(Exp.int_bin("age"), Exp.int_val(25)), Exp.le(Exp.int_bin("age"), Exp.int_val(27))]
+    )
 
     stream = (
         session.query("test", "query_test")

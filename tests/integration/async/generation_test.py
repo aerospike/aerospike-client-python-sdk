@@ -81,9 +81,9 @@ class TestGeneration:
         # Update with correct generation - should succeed
         await (
             session.upsert(key)
-                .ensure_generation_is(current_gen)
-                .bin(bin_name).set_to("genvalue3")
-                .execute()
+            .ensure_generation_is(current_gen)
+            .bin(bin_name).set_to("genvalue3")
+            .execute()
         )
 
         # Verify update succeeded
@@ -111,9 +111,9 @@ class TestGeneration:
         with pytest.raises(GenerationError):
             await (
                 session.upsert(key)
-                    .ensure_generation_is(9999)
-                    .bin(bin_name).set_to("genvalue_should_fail")
-                    .execute()
+                .ensure_generation_is(9999)
+                .bin(bin_name).set_to("genvalue_should_fail")
+                .execute()
             )
 
         # Verify original value unchanged
@@ -147,9 +147,9 @@ class TestGeneration:
         new_value = current_value + 10
         await (
             session.upsert(key)
-                .ensure_generation_is(current_gen)
-                .bin(bin_name).set_to(new_value)
-                .execute()
+            .ensure_generation_is(current_gen)
+            .bin(bin_name).set_to(new_value)
+            .execute()
         )
 
         # Verify

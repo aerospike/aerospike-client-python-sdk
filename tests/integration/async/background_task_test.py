@@ -83,15 +83,15 @@ async def test_background_update(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .update(DS)
-            .bin(BG_BIN2).set_to("updated")
-            .execute()
+        .update(DS)
+        .bin(BG_BIN2).set_to("updated")
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -106,16 +106,16 @@ async def test_background_update_with_where(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .update(DS)
-            .where("$.bgval > 5")
-            .bin(BG_BIN2).set_to("filtered")
-            .execute()
+        .update(DS)
+        .where("$.bgval > 5")
+        .bin(BG_BIN2).set_to("filtered")
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -133,14 +133,14 @@ async def test_background_delete(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .execute()
         )
     task = await (
         session.background_task()
-            .delete(DS)
-            .where("$.bgval > 8")
-            .execute()
+        .delete(DS)
+        .where("$.bgval > 8")
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -159,9 +159,9 @@ async def test_background_touch(cluster):
         await session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = await (
         session.background_task()
-            .touch(DS)
-            .expire_record_after_seconds(60)
-            .execute()
+        .touch(DS)
+        .expire_record_after_seconds(60)
+        .execute()
     )
     assert await task.wait_till_complete()
     rs = await session.query(DS.id("bg_1")).execute()
@@ -176,16 +176,16 @@ async def test_background_udf(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeBin")
-            .passing(BG_BIN2, "udf_written")
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeBin")
+        .passing(BG_BIN2, "udf_written")
+        .execute()
     )
     assert await task.wait_till_complete()
     rs = await session.query(DS.id("bg_1")).bins([BG_BIN2]).execute()
@@ -199,15 +199,15 @@ async def test_background_udf_with_args(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .execute()
         )
     task = await (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "incrementBin")
-            .passing(BG_BIN, 100)
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "incrementBin")
+        .passing(BG_BIN, 100)
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -222,17 +222,17 @@ async def test_background_udf_with_where(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeBin")
-            .passing(BG_BIN2, "udf_filtered")
-            .where("$.bgval <= 3")
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeBin")
+        .passing(BG_BIN2, "udf_filtered")
+        .where("$.bgval <= 3")
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -250,17 +250,17 @@ async def test_background_udf_with_records_per_second(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeBin")
-            .passing(BG_BIN2, "rate_limited")
-            .records_per_second(100)
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeBin")
+        .passing(BG_BIN2, "rate_limited")
+        .records_per_second(100)
+        .execute()
     )
     assert await task.wait_till_complete()
     rs = await session.query(DS.id("bg_1")).bins([BG_BIN2]).execute()
@@ -274,16 +274,16 @@ async def test_background_udf_with_validation(cluster):
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = await (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeWithValidation")
-            .passing(BG_BIN2, 5)
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeWithValidation")
+        .passing(BG_BIN2, 5)
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(1, 11):
@@ -299,8 +299,8 @@ async def test_legacy_query_builder_background_scan(cluster):
         await session.upsert(DS.id(i)).put({BG_BIN: i}).execute()
     task = await (
         session.query(DS)
-            .with_write_operations([Operation.put(MARKER, 1)])
-            .execute_background_task()
+        .with_write_operations([Operation.put(MARKER, 1)])
+        .execute_background_task()
     )
     assert await task.wait_till_complete()
     rec = await (
@@ -316,6 +316,6 @@ async def test_point_query_rejects_background_task(cluster):
     with pytest.raises(ValueError, match="dataset queries"):
         await (
             session.query(k)
-                .with_write_operations([Operation.put(MARKER, 1)])
-                .execute_background_task()
+            .with_write_operations([Operation.put(MARKER, 1)])
+            .execute_background_task()
         )

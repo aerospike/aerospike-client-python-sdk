@@ -251,9 +251,7 @@ class TestSdkOpsProjRejects:
                 session.query(_NS, _SET)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
-                    ExpOperation.write(
-                        "foo", Exp.string_val("bar"), ExpWriteFlags.DEFAULT
-                    )
+                    ExpOperation.write("foo", Exp.string_val("bar"), ExpWriteFlags.DEFAULT)
                 )
                 .execute()
             )
@@ -277,8 +275,7 @@ class TestSdkOpsProjPre812Gate:
             pytest.skip("Could not detect server version")
         if supports_query_ops_projection_ext:
             pytest.skip(
-                "Server >= 8.1.2 accepts extended reads; "
-                "this test exercises the pre-8.1.2 gate"
+                "Server >= 8.1.2 accepts extended reads; this test exercises the pre-8.1.2 gate"
             )
 
         with pytest.raises(_AnyAerospikeError) as excinfo:
@@ -286,9 +283,7 @@ class TestSdkOpsProjPre812Gate:
                 session.query(_NS, _SET)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
-                    ExpOperation.read(
-                        "computed", Exp.int_bin(_BIN1), ExpReadFlags.DEFAULT
-                    )
+                    ExpOperation.read("computed", Exp.int_bin(_BIN1), ExpReadFlags.DEFAULT)
                 )
                 .execute()
             )

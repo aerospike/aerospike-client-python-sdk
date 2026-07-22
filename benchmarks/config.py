@@ -133,8 +133,7 @@ def parse_latency_arg(value: str) -> tuple[int, int, str]:
         return 7, 1, "ycsb"
     parts = value.split(",")
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError(
-            "expected COLUMNS,SHIFT (e.g. 7,1) or 'ycsb'")
+        raise argparse.ArgumentTypeError("expected COLUMNS,SHIFT (e.g. 7,1) or 'ycsb'")
     try:
         cols = int(parts[0].strip())
         shift = int(parts[1].strip())
@@ -236,8 +235,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--threads",
         type=int,
         default=None,
-        help="Number of OS threads for sync mode. "
-        "If not set, falls back to -z value.",
+        help="Number of OS threads for sync mode. If not set, falls back to -z value.",
     )
     p.add_argument(
         "-d",

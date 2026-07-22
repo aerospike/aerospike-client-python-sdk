@@ -29,26 +29,21 @@ class TestArithmeticExpressions:
     def test_add_1(self):
         """add() scenario 1: two bins."""
         expected = Exp.gt(
-            Exp.num_add([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.num_add([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples + $.bananas) > 10")
         assert result == expected
 
     def test_add_2(self):
         """add() scenario 2: bin and literal."""
-        expected = Exp.gt(
-            Exp.num_add([Exp.int_bin("apples"), Exp.int_val(5)]),
-            Exp.int_val(10)
-        )
+        expected = Exp.gt(Exp.num_add([Exp.int_bin("apples"), Exp.int_val(5)]), Exp.int_val(10))
         result = parse_ael("($.apples + 5) > 10")
         assert result == expected
 
     def test_add_3(self):
         """add() scenario 3: float (literal and bin)."""
         expected = Exp.gt(
-            Exp.num_add([Exp.float_val(5.2), Exp.float_bin("bananas")]),
-            Exp.float_val(10.2)
+            Exp.num_add([Exp.float_val(5.2), Exp.float_bin("bananas")]), Exp.float_val(10.2)
         )
         result = parse_ael("(5.2 + $.bananas) > 10.2")
         assert result == expected
@@ -57,27 +52,20 @@ class TestArithmeticExpressions:
     def test_subtract_1(self):
         """subtract() scenario 1: two bins."""
         expected = Exp.eq(
-            Exp.num_sub([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.num_sub([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples - $.bananas) == 10")
         assert result == expected
 
     def test_subtract_2(self):
         """subtract() scenario 2: bin and literal."""
-        expected = Exp.eq(
-            Exp.num_sub([Exp.int_bin("apples"), Exp.int_val(3)]),
-            Exp.int_val(10)
-        )
+        expected = Exp.eq(Exp.num_sub([Exp.int_bin("apples"), Exp.int_val(3)]), Exp.int_val(10))
         result = parse_ael("($.apples - 3) == 10")
         assert result == expected
 
     def test_subtract_3(self):
         """subtract() scenario 3: literal and bin."""
-        expected = Exp.eq(
-            Exp.num_sub([Exp.int_val(100), Exp.int_bin("apples")]),
-            Exp.int_val(10)
-        )
+        expected = Exp.eq(Exp.num_sub([Exp.int_val(100), Exp.int_bin("apples")]), Exp.int_val(10))
         result = parse_ael("(100 - $.apples) == 10")
         assert result == expected
 
@@ -85,27 +73,20 @@ class TestArithmeticExpressions:
     def test_multiply_1(self):
         """multiply() scenario 1: two bins."""
         expected = Exp.ne(
-            Exp.num_mul([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.num_mul([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples * $.bananas) != 10")
         assert result == expected
 
     def test_multiply_2(self):
         """multiply() scenario 2: bin and literal."""
-        expected = Exp.ne(
-            Exp.num_mul([Exp.int_bin("apples"), Exp.int_val(2)]),
-            Exp.int_val(10)
-        )
+        expected = Exp.ne(Exp.num_mul([Exp.int_bin("apples"), Exp.int_val(2)]), Exp.int_val(10))
         result = parse_ael("($.apples * 2) != 10")
         assert result == expected
 
     def test_multiply_3(self):
         """multiply() scenario 3: literal and bin."""
-        expected = Exp.ne(
-            Exp.num_mul([Exp.int_val(3), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
-        )
+        expected = Exp.ne(Exp.num_mul([Exp.int_val(3), Exp.int_bin("bananas")]), Exp.int_val(10))
         result = parse_ael("(3 * $.bananas) != 10")
         assert result == expected
 
@@ -113,27 +94,20 @@ class TestArithmeticExpressions:
     def test_divide_1(self):
         """divide() scenario 1: two bins."""
         expected = Exp.le(
-            Exp.num_div([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.num_div([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples / $.bananas) <= 10")
         assert result == expected
 
     def test_divide_2(self):
         """divide() scenario 2: bin and literal."""
-        expected = Exp.le(
-            Exp.num_div([Exp.int_bin("apples"), Exp.int_val(2)]),
-            Exp.int_val(10)
-        )
+        expected = Exp.le(Exp.num_div([Exp.int_bin("apples"), Exp.int_val(2)]), Exp.int_val(10))
         result = parse_ael("($.apples / 2) <= 10")
         assert result == expected
 
     def test_divide_3(self):
         """divide() scenario 3: literal and bin."""
-        expected = Exp.le(
-            Exp.num_div([Exp.int_val(100), Exp.int_bin("apples")]),
-            Exp.int_val(10)
-        )
+        expected = Exp.le(Exp.num_div([Exp.int_val(100), Exp.int_bin("apples")]), Exp.int_val(10))
         result = parse_ael("(100 / $.apples) <= 10")
         assert result == expected
 
@@ -141,27 +115,20 @@ class TestArithmeticExpressions:
     def test_modulo_1(self):
         """mod() scenario 1: two bins."""
         expected = Exp.ne(
-            Exp.num_mod(Exp.int_bin("apples"), Exp.int_bin("bananas")),
-            Exp.int_val(10)
+            Exp.num_mod(Exp.int_bin("apples"), Exp.int_bin("bananas")), Exp.int_val(10)
         )
         result = parse_ael("($.apples % $.bananas) != 10")
         assert result == expected
 
     def test_modulo_2(self):
         """mod() scenario 2: bin and literal."""
-        expected = Exp.ne(
-            Exp.num_mod(Exp.int_bin("apples"), Exp.int_val(7)),
-            Exp.int_val(10)
-        )
+        expected = Exp.ne(Exp.num_mod(Exp.int_bin("apples"), Exp.int_val(7)), Exp.int_val(10))
         result = parse_ael("($.apples % 7) != 10")
         assert result == expected
 
     def test_modulo_3(self):
         """mod() scenario 3: literal and bin."""
-        expected = Exp.ne(
-            Exp.num_mod(Exp.int_val(100), Exp.int_bin("apples")),
-            Exp.int_val(10)
-        )
+        expected = Exp.ne(Exp.num_mod(Exp.int_val(100), Exp.int_bin("apples")), Exp.int_val(10))
         result = parse_ael("(100 % $.apples) != 10")
         assert result == expected
 
@@ -169,27 +136,20 @@ class TestArithmeticExpressions:
     def test_int_and_1(self):
         """intAnd() scenario 1: two bins."""
         expected = Exp.ne(
-            Exp.int_and([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.int_and([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples & $.bananas) != 10")
         assert result == expected
 
     def test_int_and_2(self):
         """intAnd() scenario 2: bin and literal."""
-        expected = Exp.ne(
-            Exp.int_and([Exp.int_bin("apples"), Exp.int_val(0xFF)]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_and([Exp.int_bin("apples"), Exp.int_val(0xFF)]), Exp.int_val(0))
         result = parse_ael("($.apples & 255) != 0")
         assert result == expected
 
     def test_int_and_3(self):
         """intAnd() scenario 3: literal and bin."""
-        expected = Exp.ne(
-            Exp.int_and([Exp.int_val(0xFF), Exp.int_bin("flags")]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_and([Exp.int_val(0xFF), Exp.int_bin("flags")]), Exp.int_val(0))
         result = parse_ael("(255 & $.flags) != 0")
         assert result == expected
 
@@ -197,27 +157,20 @@ class TestArithmeticExpressions:
     def test_int_or_1(self):
         """intOr() scenario 1: two bins."""
         expected = Exp.ne(
-            Exp.int_or([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.int_or([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples | $.bananas) != 10")
         assert result == expected
 
     def test_int_or_2(self):
         """intOr() scenario 2: bin and literal."""
-        expected = Exp.ne(
-            Exp.int_or([Exp.int_bin("flags"), Exp.int_val(1)]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_or([Exp.int_bin("flags"), Exp.int_val(1)]), Exp.int_val(0))
         result = parse_ael("($.flags | 1) != 0")
         assert result == expected
 
     def test_int_or_3(self):
         """intOr() scenario 3: literal and bin."""
-        expected = Exp.ne(
-            Exp.int_or([Exp.int_val(1), Exp.int_bin("flags")]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_or([Exp.int_val(1), Exp.int_bin("flags")]), Exp.int_val(0))
         result = parse_ael("(1 | $.flags) != 0")
         assert result == expected
 
@@ -225,46 +178,33 @@ class TestArithmeticExpressions:
     def test_int_xor_1(self):
         """intXor() scenario 1: two bins."""
         expected = Exp.ne(
-            Exp.int_xor([Exp.int_bin("apples"), Exp.int_bin("bananas")]),
-            Exp.int_val(10)
+            Exp.int_xor([Exp.int_bin("apples"), Exp.int_bin("bananas")]), Exp.int_val(10)
         )
         result = parse_ael("($.apples ^ $.bananas) != 10")
         assert result == expected
 
     def test_int_xor_2(self):
         """intXor() scenario 2: bin and literal."""
-        expected = Exp.ne(
-            Exp.int_xor([Exp.int_bin("mask"), Exp.int_val(0xFF)]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_xor([Exp.int_bin("mask"), Exp.int_val(0xFF)]), Exp.int_val(0))
         result = parse_ael("($.mask ^ 255) != 0")
         assert result == expected
 
     def test_int_xor_3(self):
         """intXor() scenario 3: literal and bin."""
-        expected = Exp.ne(
-            Exp.int_xor([Exp.int_val(0xFF), Exp.int_bin("mask")]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_xor([Exp.int_val(0xFF), Exp.int_bin("mask")]), Exp.int_val(0))
         result = parse_ael("(255 ^ $.mask) != 0")
         assert result == expected
 
     # --- intNot (bitwise not) ---
     def test_int_not_1(self):
         """intNot() scenario 1: not bin."""
-        expected = Exp.ne(
-            Exp.int_not(Exp.int_bin("apples")),
-            Exp.int_val(10)
-        )
+        expected = Exp.ne(Exp.int_not(Exp.int_bin("apples")), Exp.int_val(10))
         result = parse_ael("(~$.apples) != 10")
         assert result == expected
 
     def test_int_not_2(self):
         """intNot() scenario 2: not in compound expression."""
-        expected = Exp.eq(
-            Exp.int_not(Exp.int_bin("flags")),
-            Exp.int_val(0)
-        )
+        expected = Exp.eq(Exp.int_not(Exp.int_bin("flags")), Exp.int_val(0))
         result = parse_ael("~$.flags == 0")
         assert result == expected
 
@@ -297,11 +237,8 @@ class TestArithmeticExpressions:
     def test_arithmetic_right_shift_2(self):
         """>> scenario 2: compound (bin >> literal) & literal."""
         expected = Exp.eq(
-            Exp.int_and([
-                Exp.int_arshift(Exp.int_bin("flags"), Exp.int_val(6)),
-                Exp.int_val(1)
-            ]),
-            Exp.int_val(1)
+            Exp.int_and([Exp.int_arshift(Exp.int_bin("flags"), Exp.int_val(6)), Exp.int_val(1)]),
+            Exp.int_val(1),
         )
         result = parse_ael("(($.flags >> 6) & 1) == 1")
         assert result == expected
@@ -322,11 +259,8 @@ class TestArithmeticExpressions:
     def test_logical_right_shift_2(self):
         """>>> scenario 2: compound (bin >>> literal) & literal."""
         expected = Exp.eq(
-            Exp.int_and([
-                Exp.int_rshift(Exp.int_bin("flags"), Exp.int_val(6)),
-                Exp.int_val(1)
-            ]),
-            Exp.int_val(1)
+            Exp.int_and([Exp.int_rshift(Exp.int_bin("flags"), Exp.int_val(6)), Exp.int_val(1)]),
+            Exp.int_val(1),
         )
         result = parse_ael("(($.flags >>> 6) & 1) == 1")
         assert result == expected
@@ -367,17 +301,13 @@ class TestArithmeticFunctions:
 
     def test_abs_nested(self):
         expected = Exp.lt(
-            Exp.num_abs(Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")])),
-            Exp.int_val(10)
+            Exp.num_abs(Exp.num_sub([Exp.int_bin("a"), Exp.int_bin("b")])), Exp.int_val(10)
         )
         result = parse_ael("abs($.a - $.b) < 10")
         assert result == expected
 
     def test_abs_float(self):
-        expected = Exp.eq(
-            Exp.num_abs(Exp.float_val(-3.14)),
-            Exp.float_val(3.14)
-        )
+        expected = Exp.eq(Exp.num_abs(Exp.float_val(-3.14)), Exp.float_val(3.14))
         result = parse_ael("abs(-3.14) == 3.14")
         assert result == expected
 
@@ -392,10 +322,7 @@ class TestArithmeticFunctions:
         assert result == expected
 
     def test_ceil_bin(self):
-        expected = Exp.eq(
-            Exp.num_ceil(Exp.float_bin("price")),
-            Exp.float_val(100.0)
-        )
+        expected = Exp.eq(Exp.num_ceil(Exp.float_bin("price")), Exp.float_val(100.0))
         result = parse_ael("ceil($.price) == 100.0")
         assert result == expected
 
@@ -414,10 +341,7 @@ class TestArithmeticFunctions:
         assert result == expected
 
     def test_floor_bin(self):
-        expected = Exp.lt(
-            Exp.num_floor(Exp.float_bin("score")),
-            Exp.float_val(50.0)
-        )
+        expected = Exp.lt(Exp.num_floor(Exp.float_bin("score")), Exp.float_val(50.0))
         result = parse_ael("floor($.score) < 50.0")
         assert result == expected
 
@@ -432,16 +356,14 @@ class TestArithmeticFunctions:
     # --- log ---
     def test_log_literals(self):
         expected = Exp.eq(
-            Exp.num_log(Exp.float_val(1024.0), Exp.float_val(2.0)),
-            Exp.float_val(10.0)
+            Exp.num_log(Exp.float_val(1024.0), Exp.float_val(2.0)), Exp.float_val(10.0)
         )
         result = parse_ael("log(1024.0, 2.0) == 10.0")
         assert result == expected
 
     def test_log_bin(self):
         expected = Exp.gt(
-            Exp.num_log(Exp.float_bin("val"), Exp.float_val(10.0)),
-            Exp.float_val(3.0)
+            Exp.num_log(Exp.float_bin("val"), Exp.float_val(10.0)), Exp.float_val(3.0)
         )
         result = parse_ael("log($.val, 10.0) > 3.0")
         assert result == expected
@@ -456,91 +378,70 @@ class TestArithmeticFunctions:
     # --- pow ---
     def test_pow_literals(self):
         expected = Exp.eq(
-            Exp.num_pow(Exp.float_val(2.0), Exp.float_val(10.0)),
-            Exp.float_val(1024.0)
+            Exp.num_pow(Exp.float_val(2.0), Exp.float_val(10.0)), Exp.float_val(1024.0)
         )
         result = parse_ael("pow(2.0, 10.0) == 1024.0")
         assert result == expected
 
     def test_pow_bin(self):
         expected = Exp.gt(
-            Exp.num_pow(Exp.float_val(2.0), Exp.float_bin("exponent")),
-            Exp.float_val(100.0)
+            Exp.num_pow(Exp.float_val(2.0), Exp.float_bin("exponent")), Exp.float_val(100.0)
         )
         result = parse_ael("pow(2.0, $.exponent) > 100.0")
         assert result == expected
 
     # --- max ---
     def test_max_two_args(self):
-        expected = Exp.gt(
-            Exp.max([Exp.int_bin("a"), Exp.int_bin("b")]),
-            Exp.int_val(10)
-        )
+        expected = Exp.gt(Exp.max([Exp.int_bin("a"), Exp.int_bin("b")]), Exp.int_val(10))
         result = parse_ael("max($.a, $.b) > 10")
         assert result == expected
 
     def test_max_three_args(self):
         expected = Exp.gt(
-            Exp.max([Exp.int_bin("a"), Exp.int_bin("b"), Exp.int_bin("c")]),
-            Exp.int_val(10)
+            Exp.max([Exp.int_bin("a"), Exp.int_bin("b"), Exp.int_bin("c")]), Exp.int_val(10)
         )
         result = parse_ael("max($.a, $.b, $.c) > 10")
         assert result == expected
 
     def test_max_literals(self):
-        expected = Exp.eq(
-            Exp.max([Exp.int_val(1), Exp.int_val(5), Exp.int_val(3)]),
-            Exp.int_val(5)
-        )
+        expected = Exp.eq(Exp.max([Exp.int_val(1), Exp.int_val(5), Exp.int_val(3)]), Exp.int_val(5))
         result = parse_ael("max(1, 5, 3) == 5")
         assert result == expected
 
     def test_max_float(self):
-        expected = Exp.gt(
-            Exp.max([Exp.float_bin("x"), Exp.float_bin("y")]),
-            Exp.float_val(0.0)
-        )
+        expected = Exp.gt(Exp.max([Exp.float_bin("x"), Exp.float_bin("y")]), Exp.float_val(0.0))
         result = parse_ael("max($.x, $.y) > 0.0")
         assert result == expected
 
     # --- min ---
     def test_min_two_args(self):
-        expected = Exp.lt(
-            Exp.min([Exp.int_bin("a"), Exp.int_bin("b")]),
-            Exp.int_val(10)
-        )
+        expected = Exp.lt(Exp.min([Exp.int_bin("a"), Exp.int_bin("b")]), Exp.int_val(10))
         result = parse_ael("min($.a, $.b) < 10")
         assert result == expected
 
     def test_min_three_args(self):
         expected = Exp.lt(
-            Exp.min([Exp.int_bin("a"), Exp.int_bin("b"), Exp.int_bin("c")]),
-            Exp.int_val(10)
+            Exp.min([Exp.int_bin("a"), Exp.int_bin("b"), Exp.int_bin("c")]), Exp.int_val(10)
         )
         result = parse_ael("min($.a, $.b, $.c) < 10")
         assert result == expected
 
     def test_min_literals(self):
-        expected = Exp.eq(
-            Exp.min([Exp.int_val(1), Exp.int_val(5), Exp.int_val(3)]),
-            Exp.int_val(1)
-        )
+        expected = Exp.eq(Exp.min([Exp.int_val(1), Exp.int_val(5), Exp.int_val(3)]), Exp.int_val(1))
         result = parse_ael("min(1, 5, 3) == 1")
         assert result == expected
 
     # --- nested functions ---
     def test_nested_abs_in_max(self):
         expected = Exp.gt(
-            Exp.max([Exp.num_abs(Exp.int_bin("a")), Exp.num_abs(Exp.int_bin("b"))]),
-            Exp.int_val(5)
+            Exp.max([Exp.num_abs(Exp.int_bin("a")), Exp.num_abs(Exp.int_bin("b"))]), Exp.int_val(5)
         )
         result = parse_ael("max(abs($.a), abs($.b)) > 5")
         assert result == expected
 
     def test_pow_with_ceil(self):
         expected = Exp.eq(
-            Exp.num_ceil(Exp.num_pow(Exp.float_val(2.0), Exp.float_val(0.5))),
-            Exp.float_val(2.0)
+            Exp.num_ceil(Exp.num_pow(Exp.float_val(2.0), Exp.float_val(0.5))), Exp.float_val(2.0)
         )
         result = parse_ael("ceil(pow(2.0, 0.5)) == 2.0")
         assert result == expected
@@ -551,17 +452,13 @@ class TestPowerInfixOperator:
 
     def test_pow_infix_literals(self):
         """Spec example: 2**7 = 128 (float-only)."""
-        expected = Exp.eq(
-            Exp.num_pow(Exp.float_val(2.0), Exp.float_val(7.0)),
-            Exp.float_val(128.0)
-        )
+        expected = Exp.eq(Exp.num_pow(Exp.float_val(2.0), Exp.float_val(7.0)), Exp.float_val(128.0))
         result = parse_ael("2.0 ** 7.0 == 128.0")
         assert result == expected
 
     def test_pow_infix_bin(self):
         expected = Exp.gt(
-            Exp.num_pow(Exp.float_val(2.0), Exp.float_bin("exponent")),
-            Exp.float_val(100.0)
+            Exp.num_pow(Exp.float_val(2.0), Exp.float_bin("exponent")), Exp.float_val(100.0)
         )
         result = parse_ael("2.0 ** $.exponent > 100.0")
         assert result == expected
@@ -569,11 +466,8 @@ class TestPowerInfixOperator:
     def test_pow_infix_right_associative(self):
         """4.0 ** 3.0 ** 2.0 should parse as 4.0 ** (3.0 ** 2.0), not (4.0 ** 3.0) ** 2.0."""
         expected = Exp.eq(
-            Exp.num_pow(
-                Exp.float_val(4.0),
-                Exp.num_pow(Exp.float_val(3.0), Exp.float_val(2.0))
-            ),
-            Exp.float_val(262144.0)
+            Exp.num_pow(Exp.float_val(4.0), Exp.num_pow(Exp.float_val(3.0), Exp.float_val(2.0))),
+            Exp.float_val(262144.0),
         )
         result = parse_ael("4.0 ** 3.0 ** 2.0 == 262144.0")
         assert result == expected
@@ -590,11 +484,8 @@ class TestPowerInfixOperator:
     def test_pow_infix_with_parens(self):
         """(2.0 ** 3.0) ** 2.0 with explicit parens overrides associativity."""
         expected = Exp.eq(
-            Exp.num_pow(
-                Exp.num_pow(Exp.float_val(2.0), Exp.float_val(3.0)),
-                Exp.float_val(2.0)
-            ),
-            Exp.float_val(64.0)
+            Exp.num_pow(Exp.num_pow(Exp.float_val(2.0), Exp.float_val(3.0)), Exp.float_val(2.0)),
+            Exp.float_val(64.0),
         )
         result = parse_ael("(2.0 ** 3.0) ** 2.0 == 64.0")
         assert result == expected
@@ -624,10 +515,7 @@ class TestNumberLiterals:
         assert result == expected
 
     def test_hex_in_bitwise_and(self):
-        expected = Exp.ne(
-            Exp.int_and([Exp.int_bin("flags"), Exp.int_val(0xFF)]),
-            Exp.int_val(0)
-        )
+        expected = Exp.ne(Exp.int_and([Exp.int_bin("flags"), Exp.int_val(0xFF)]), Exp.int_val(0))
         result = parse_ael("($.flags & 0xFF) != 0")
         assert result == expected
 
@@ -654,8 +542,7 @@ class TestNumberLiterals:
 
     def test_binary_in_bitwise_and(self):
         expected = Exp.eq(
-            Exp.int_and([Exp.int_bin("flags"), Exp.int_val(0b1111)]),
-            Exp.int_val(0b0101)
+            Exp.int_and([Exp.int_bin("flags"), Exp.int_val(0b1111)]), Exp.int_val(0b0101)
         )
         result = parse_ael("($.flags & 0b1111) == 0b0101")
         assert result == expected
@@ -667,18 +554,12 @@ class TestNumberLiterals:
 
     # --- mixed ---
     def test_hex_and_binary_in_expression(self):
-        expected = Exp.eq(
-            Exp.int_or([Exp.int_val(0xFF), Exp.int_val(0b1010)]),
-            Exp.int_val(255)
-        )
+        expected = Exp.eq(Exp.int_or([Exp.int_val(0xFF), Exp.int_val(0b1010)]), Exp.int_val(255))
         result = parse_ael("(0xFF | 0b1010) == 255")
         assert result == expected
 
     def test_hex_in_shift(self):
-        expected = Exp.eq(
-            Exp.int_lshift(Exp.int_val(0x1), Exp.int_val(8)),
-            Exp.int_val(0x100)
-        )
+        expected = Exp.eq(Exp.int_lshift(Exp.int_val(0x1), Exp.int_val(8)), Exp.int_val(0x100))
         result = parse_ael("(0x1 << 8) == 0x100")
         assert result == expected
 
@@ -756,18 +637,12 @@ class TestBitScanFunctions:
     # --- countOneBits ---
     def test_count_one_bits_literal(self):
         """Spec: countOneBits(-1) == 64"""
-        expected = Exp.eq(
-            Exp.int_count(Exp.int_val(-1)),
-            Exp.int_val(64)
-        )
+        expected = Exp.eq(Exp.int_count(Exp.int_val(-1)), Exp.int_val(64))
         result = parse_ael("countOneBits(-1) == 64")
         assert result == expected
 
     def test_count_one_bits_bin(self):
-        expected = Exp.eq(
-            Exp.int_count(Exp.int_bin("A")),
-            Exp.int_val(1)
-        )
+        expected = Exp.eq(Exp.int_count(Exp.int_bin("A")), Exp.int_val(1))
         result = parse_ael("countOneBits($.A) == 1")
         assert result == expected
 
@@ -776,62 +651,43 @@ class TestBitScanFunctions:
         assert parse_ael("countOneBits(0) == 0") == expected
 
     def test_count_one_bits_in_comparison(self):
-        expected = Exp.gt(
-            Exp.int_count(Exp.int_bin("flags")),
-            Exp.int_val(3)
-        )
+        expected = Exp.gt(Exp.int_count(Exp.int_bin("flags")), Exp.int_val(3))
         result = parse_ael("countOneBits($.flags) > 3")
         assert result == expected
 
     # --- findBitLeft ---
     def test_find_bit_left_true(self):
         """Spec: findBitLeft(30, true)"""
-        expected = Exp.eq(
-            Exp.int_lscan(Exp.int_val(30), Exp.bool_val(True)),
-            Exp.int_val(58)
-        )
+        expected = Exp.eq(Exp.int_lscan(Exp.int_val(30), Exp.bool_val(True)), Exp.int_val(58))
         result = parse_ael("findBitLeft(30, true) == 58")
         assert result == expected
 
     def test_find_bit_left_bin(self):
-        expected = Exp.eq(
-            Exp.int_lscan(Exp.int_bin("A"), Exp.bool_val(True)),
-            Exp.int_val(63)
-        )
+        expected = Exp.eq(Exp.int_lscan(Exp.int_bin("A"), Exp.bool_val(True)), Exp.int_val(63))
         result = parse_ael("findBitLeft($.A, true) == 63")
         assert result == expected
 
     def test_find_bit_left_false(self):
-        expected = Exp.lt(
-            Exp.int_lscan(Exp.int_bin("mask"), Exp.bool_val(False)),
-            Exp.int_val(10)
-        )
+        expected = Exp.lt(Exp.int_lscan(Exp.int_bin("mask"), Exp.bool_val(False)), Exp.int_val(10))
         result = parse_ael("findBitLeft($.mask, false) < 10")
         assert result == expected
 
     # --- findBitRight ---
     def test_find_bit_right_true(self):
         """Spec: findBitRight(27, false)"""
-        expected = Exp.eq(
-            Exp.int_rscan(Exp.int_val(27), Exp.bool_val(False)),
-            Exp.int_val(61)
-        )
+        expected = Exp.eq(Exp.int_rscan(Exp.int_val(27), Exp.bool_val(False)), Exp.int_val(61))
         result = parse_ael("findBitRight(27, false) == 61")
         assert result == expected
 
     def test_find_bit_right_bin(self):
-        expected = Exp.eq(
-            Exp.int_rscan(Exp.int_bin("A"), Exp.bool_val(True)),
-            Exp.int_val(63)
-        )
+        expected = Exp.eq(Exp.int_rscan(Exp.int_bin("A"), Exp.bool_val(True)), Exp.int_val(63))
         result = parse_ael("findBitRight($.A, true) == 63")
         assert result == expected
 
     def test_find_bit_right_nested(self):
         """countOneBits nested inside findBitRight comparison."""
         expected = Exp.gt(
-            Exp.int_rscan(Exp.int_bin("val"), Exp.bool_val(True)),
-            Exp.int_count(Exp.int_bin("val"))
+            Exp.int_rscan(Exp.int_bin("val"), Exp.bool_val(True)), Exp.int_count(Exp.int_bin("val"))
         )
         result = parse_ael("findBitRight($.val, true) > countOneBits($.val)")
         assert result == expected

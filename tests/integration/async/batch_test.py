@@ -56,14 +56,14 @@ class TestBatchOperations:
         # Insert multiple records with chained operations
         stream = await (
             session.batch()
-                .insert(key1)
-                    .bin("name").set_to("Alice")
-                    .bin("age").set_to(25)
-                .insert(key2)
-                    .bin("name").set_to("Bob")
-                    .bin("age").set_to(30)
-                .insert(key3).put({"name": "Charlie", "age": 35})
-                .execute()
+            .insert(key1)
+            .bin("name").set_to("Alice")
+            .bin("age").set_to(25)
+            .insert(key2)
+            .bin("name").set_to("Bob")
+            .bin("age").set_to(30)
+            .insert(key3).put({"name": "Charlie", "age": 35})
+            .execute()
         )
         results = await stream.collect()
 
@@ -114,10 +114,10 @@ class TestBatchOperations:
         # Execute mixed batch operations
         stream = await (
             session.batch()
-                .update(key1).bin("counter").add(5)
-                .delete(key2)
-                .insert(key3).bin("status").set_to("new")
-                .execute()
+            .update(key1).bin("counter").add(5)
+            .delete(key2)
+            .insert(key3).bin("status").set_to("new")
+            .execute()
         )
         results = await stream.collect()
 
@@ -161,9 +161,9 @@ class TestBatchOperations:
         # First batch: create records
         await (
             session.batch()
-                .upsert(key1).bin("value").set_to("initial1")
-                .upsert(key2).bin("value").set_to("initial2")
-                .execute()
+            .upsert(key1).bin("value").set_to("initial1")
+            .upsert(key2).bin("value").set_to("initial2")
+            .execute()
         )
         
         # Verify initial values
@@ -174,9 +174,9 @@ class TestBatchOperations:
         # Second batch: update existing records (upsert)
         await (
             session.batch()
-                .upsert(key1).bin("value").set_to("updated1")
-                .upsert(key2).bin("value").set_to("updated2")
-                .execute()
+            .upsert(key1).bin("value").set_to("updated1")
+            .upsert(key2).bin("value").set_to("updated2")
+            .execute()
         )
         
         # Verify updated values
@@ -208,10 +208,10 @@ class TestBatchOperations:
         # Delete all in one batch
         stream = await (
             session.batch()
-                .delete(key1)
-                .delete(key2)
-                .delete(key3)
-                .execute()
+            .delete(key1)
+            .delete(key2)
+            .delete(key3)
+            .execute()
         )
         results = await stream.collect()
 
@@ -244,9 +244,9 @@ class TestBatchOperations:
         # Append and prepend in batch
         await (
             session.batch()
-                .update(key1).bin("message").append(" World")
-                .update(key2).bin("message").prepend("Hello ")
-                .execute()
+            .update(key1).bin("message").append(" World")
+            .update(key2).bin("message").prepend("Hello ")
+            .execute()
         )
         
         # Verify
@@ -315,9 +315,7 @@ class TestHomogeneousBatchOperations:
             except Exception:
                 pass
 
-    async def test_batch_exists_homogeneous(
-        self, cluster, users: DataSet, setup_batch_data
-    ):
+    async def test_batch_exists_homogeneous(self, cluster, users: DataSet, setup_batch_data):
         """
         Test batch exists operation on multiple keys.
         Test batch exists operation.
@@ -338,9 +336,7 @@ class TestHomogeneousBatchOperations:
         for i, result in enumerate(results):
             assert result.as_bool() is True, f"exists[{i}] is False"
 
-    async def test_batch_reads_homogeneous(
-        self, cluster, users: DataSet, setup_batch_data
-    ):
+    async def test_batch_reads_homogeneous(self, cluster, users: DataSet, setup_batch_data):
         """
         Test batch read operation on multiple keys via query.
         Test batch reads operation.
@@ -370,9 +366,7 @@ class TestHomogeneousBatchOperations:
                 val = rec.bins.get("bbin")
                 assert val == i + 1, f"record[{i}] has wrong integer value"
 
-    async def test_batch_read_headers_homogeneous(
-        self, cluster, users: DataSet, setup_batch_data
-    ):
+    async def test_batch_read_headers_homogeneous(self, cluster, users: DataSet, setup_batch_data):
         """
         Test batch read headers (metadata only) via query.
         Test batch read headers operation.
@@ -396,9 +390,7 @@ class TestHomogeneousBatchOperations:
             rec = rr.record_or_raise()
             assert rec.generation != 0, f"record[{i}] generation is 0"
 
-    async def test_batch_delete_homogeneous(
-        self, cluster, users: DataSet
-    ):
+    async def test_batch_delete_homogeneous(self, cluster, users: DataSet):
         """
         Test batch delete operation on multiple keys.
         Test batch delete operation.
@@ -432,9 +424,7 @@ class TestHomogeneousBatchOperations:
         for result in exists_after:
             assert result.as_bool() is False
 
-    async def test_batch_exists_with_varargs(
-        self, cluster, users: DataSet
-    ):
+    async def test_batch_exists_with_varargs(self, cluster, users: DataSet):
         """Test batch exists using varargs style."""
         session = cluster.create_session()
         
@@ -460,9 +450,7 @@ class TestHomogeneousBatchOperations:
         await session.delete(key1).execute()
         await session.delete(key2).execute()
 
-    async def test_batch_delete_with_varargs(
-        self, cluster, users: DataSet
-    ):
+    async def test_batch_delete_with_varargs(self, cluster, users: DataSet):
         """Test batch delete using varargs style."""
         session = cluster.create_session()
         
@@ -491,9 +479,7 @@ class TestHomogeneousBatchOperations:
 class TestRecordResultIntegration:
     """Verify RecordResult / RecordStream behavior against a live server."""
 
-    async def test_exists_mixed_result_codes(
-        self, cluster, users: DataSet
-    ):
+    async def test_exists_mixed_result_codes(self, cluster, users: DataSet):
         """Exists with mixed present/absent keys yields per-key result codes."""
         session = cluster.create_session()
         key_exists = users.id("rr_exists_yes")
@@ -507,8 +493,8 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key_exists, key_missing)
-                .include_missing_keys()
-                .execute()
+            .include_missing_keys()
+            .execute()
         )
         results = await stream.collect()
 
@@ -520,9 +506,7 @@ class TestRecordResultIntegration:
 
         await session.delete(key_exists).execute()
 
-    async def test_or_raise_on_not_found_result(
-        self, cluster, users: DataSet
-    ):
+    async def test_or_raise_on_not_found_result(self, cluster, users: DataSet):
         """or_raise() raises a PFC exception for a KEY_NOT_FOUND result."""
         session = cluster.create_session()
         key_exists = users.id("rr_or_raise_ok")
@@ -536,8 +520,8 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key_exists, key_missing)
-                .include_missing_keys()
-                .execute()
+            .include_missing_keys()
+            .execute()
         )
         results = await stream.collect()
 
@@ -551,9 +535,7 @@ class TestRecordResultIntegration:
 
         await session.delete(key_exists).execute()
 
-    async def test_failures_filters_stream(
-        self, cluster, users: DataSet
-    ):
+    async def test_failures_filters_stream(self, cluster, users: DataSet):
         """failures() returns only non-OK results from a mixed stream."""
         session = cluster.create_session()
         key1 = users.id("rr_fail_filt_1")
@@ -569,8 +551,8 @@ class TestRecordResultIntegration:
 
         stream = await (
             session.exists(key1, key2, key3)
-                .include_missing_keys()
-                .execute()
+            .include_missing_keys()
+            .execute()
         )
         fails = await stream.failures()
 
@@ -580,9 +562,7 @@ class TestRecordResultIntegration:
         await session.delete(key1).execute()
         await session.delete(key2).execute()
 
-    async def test_first_on_query_stream(
-        self, cluster, users: DataSet
-    ):
+    async def test_first_on_query_stream(self, cluster, users: DataSet):
         """first() returns the first RecordResult from a single-key query."""
         session = cluster.create_session()
         key = users.id("rr_first")
@@ -598,9 +578,7 @@ class TestRecordResultIntegration:
 
         await session.delete(key).execute()
 
-    async def test_first_or_raise_on_batch_query_with_missing_key(
-        self, cluster, users: DataSet
-    ):
+    async def test_first_or_raise_on_batch_query_with_missing_key(self, cluster, users: DataSet):
         """first_or_raise() raises when the first batch-query result is not OK."""
         session = cluster.create_session()
         key_missing = users.id("rr_first_or_raise_miss")
@@ -619,9 +597,7 @@ class TestRecordResultIntegration:
         with pytest.raises(AerospikeError):
             await stream.first_or_raise()
 
-    async def test_batch_delete_returns_results_for_all_keys(
-        self, cluster, users: DataSet
-    ):
+    async def test_batch_delete_returns_results_for_all_keys(self, cluster, users: DataSet):
         """Batch delete returns a RecordResult per key."""
         session = cluster.create_session()
         keys = users.ids(*[f"rr_del_{i}" for i in range(3)])
@@ -650,10 +626,10 @@ class TestBatchExpressionOps:
 
         stream = await (
             session.batch()
-                .upsert(keys[0]).bin("C").upsert_from("$.A + 1")
-                .upsert(keys[1]).bin("C").upsert_from("$.A + 1")
-                .upsert(keys[2]).bin("C").upsert_from("$.A + 1")
-                .execute()
+            .upsert(keys[0]).bin("C").upsert_from("$.A + 1")
+            .upsert(keys[1]).bin("C").upsert_from("$.A + 1")
+            .upsert(keys[2]).bin("C").upsert_from("$.A + 1")
+            .execute()
         )
         results = await stream.collect()
         assert len(results) == 3
@@ -675,9 +651,9 @@ class TestBatchExpressionOps:
 
         stream = await (
             session.batch()
-                .update(keys[0]).bin("sum").select_from("$.A + $.B")
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .execute()
+            .update(keys[0]).bin("sum").select_from("$.A + $.B")
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .execute()
         )
         results = await stream.collect()
         assert len(results) == 2
@@ -695,10 +671,10 @@ class TestBatchExpressionOps:
 
         stream = await (
             session.batch()
-                .upsert(key)
-                    .bin("tag").set_to("done")
-                    .bin("doubled").upsert_from("$.A * 2")
-                .execute()
+            .upsert(key)
+            .bin("tag").set_to("done")
+            .bin("doubled").upsert_from("$.A * 2")
+            .execute()
         )
         results = await stream.collect()
         assert len(results) == 1
@@ -758,11 +734,11 @@ class TestBatchExecuteStream:
 
         stream = await (
             session.batch()
-                .upsert(keys[0]).bin("A").set_to(99)
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .update(keys[2]).bin("sum").select_from("$.A + $.B")
-                .delete(keys[3])
-                .execute_stream()
+            .upsert(keys[0]).bin("A").set_to(99)
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .update(keys[2]).bin("sum").select_from("$.A + $.B")
+            .delete(keys[3])
+            .execute_stream()
         )
         results = await stream.collect()
         assert len(results) == 4
@@ -813,9 +789,9 @@ class TestBatchExecuteStream:
 
         stream = await (
             session.batch()
-                .update(keys[0]).bin("sum").select_from("$.A + $.B")
-                .update(keys[1]).bin("sum").select_from("$.A + $.B")
-                .execute_stream()
+            .update(keys[0]).bin("sum").select_from("$.A + $.B")
+            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            .execute_stream()
         )
         results = await stream.collect()
         assert len(results) == 2

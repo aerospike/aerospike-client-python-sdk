@@ -245,9 +245,9 @@ class TestListMap:
 
         await (
             session.upsert(key)
-                .bin("listbin").set_to(list_data)
-                .bin("mapbin").set_to(map_data)
-                .execute()
+            .bin("listbin").set_to(list_data)
+            .bin("mapbin").set_to(map_data)
+            .execute()
         )
 
         result = await (await session.query(key).execute()).first_or_raise()
@@ -270,9 +270,9 @@ class TestListMap:
 
         await (
             session.upsert(key)
-                .bin("emptylist").set_to([])
-                .bin("emptymap").set_to({})
-                .execute()
+            .bin("emptylist").set_to([])
+            .bin("emptymap").set_to({})
+            .execute()
         )
 
         result = await (await session.query(key).execute()).first_or_raise()
@@ -297,12 +297,7 @@ class TestListMap:
         # Create nested structure
         blob = bytes([3, 52, 125])
         inner_list = ["string2", 5]
-        inner_map = {
-            "a": 1,
-            2: "b",
-            3: blob,
-            "list": inner_list
-        }
+        inner_map = {"a": 1, 2: "b", 3: blob, "list": inner_list}
 
         list_data = ["string1", 8, inner_list, inner_map]
 

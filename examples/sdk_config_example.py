@@ -69,10 +69,7 @@ async def part2_hot_reload() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "sdk-config.yaml"
         config.write_text(
-            "behaviors:\n"
-            "  demo-fast:\n"
-            "    allOperations:\n"
-            "      abandonCallAfter: 1s\n"
+            "behaviors:\n  demo-fast:\n    allOperations:\n      abandonCallAfter: 1s\n"
         )
         os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(config)
 
@@ -84,10 +81,7 @@ async def part2_hot_reload() -> None:
             # Edit the file; the client polls its mtime (~1s cadence) and
             # pushes rebuilt policies into sessions bound to the behavior.
             config.write_text(
-                "behaviors:\n"
-                "  demo-fast:\n"
-                "    allOperations:\n"
-                "      abandonCallAfter: 5s\n"
+                "behaviors:\n  demo-fast:\n    allOperations:\n      abandonCallAfter: 5s\n"
             )
             print("  edited config (abandonCallAfter 1s -> 5s); waiting for reload...")
 

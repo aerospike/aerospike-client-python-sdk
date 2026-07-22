@@ -107,9 +107,7 @@ async def _worker(
     return count
 
 
-async def _run_single_loop(
-    args: argparse.Namespace, fields, dataset: DataSet
-) -> Tuple[int, float]:
+async def _run_single_loop(args: argparse.Namespace, fields, dataset: DataSet) -> Tuple[int, float]:
     async with Client(seeds=args.host, policy=ClientPolicy()) as client:
         session = client.create_session()
         t0 = time.monotonic()

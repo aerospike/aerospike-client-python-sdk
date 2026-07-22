@@ -67,8 +67,8 @@ class TestNestedMapNavigationDeep:
 
         rs = await (
             await session.query(k)
-                .bin("doc").on_map_key("mid").on_map_key("leaf").get_values()
-                .execute()
+            .bin("doc").on_map_key("mid").on_map_key("leaf").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["doc"] == 7
 
@@ -81,14 +81,14 @@ class TestNestedMapNavigationDeep:
 
         await (
             session.update(k)
-                .bin("doc").on_map_key("mid").on_map_key("leaf").set_to(99)
-                .execute()
+            .bin("doc").on_map_key("mid").on_map_key("leaf").set_to(99)
+            .execute()
         )
 
         rs = await (
             await session.query(k)
-                .bin("doc").on_map_key("mid").on_map_key("leaf").get_values()
-                .execute()
+            .bin("doc").on_map_key("mid").on_map_key("leaf").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["doc"] == 99
 
@@ -101,8 +101,8 @@ class TestNestedMapNavigationDeep:
 
         rs = await (
             await session.query(k)
-                .bin("root").on_map_key("items").on_list_index(1).on_map_key("v").get_values()
-                .execute()
+            .bin("root").on_map_key("items").on_list_index(1).on_map_key("v").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["root"] == 20
 
@@ -123,8 +123,8 @@ class TestNestedRangeNavigation:
 
         rs = await (
             await session.query(k)
-                .bin("outer").on_map_key_range("b", "d").count()
-                .execute()
+            .bin("outer").on_map_key_range("b", "d").count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["outer"] == 2
 
@@ -137,8 +137,8 @@ class TestNestedRangeNavigation:
 
         rs = await (
             await session.query(k)
-                .bin("scores").on_map_value_range(85, 100).get_values()
-                .execute()
+            .bin("scores").on_map_value_range(85, 100).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["scores"]
         assert isinstance(vals, list)
@@ -153,8 +153,8 @@ class TestNestedRangeNavigation:
 
         rs = await (
             await session.query(k)
-                .bin("wrap").on_map_key("nums").on_list_index_range(1, 3).count()
-                .execute()
+            .bin("wrap").on_map_key("nums").on_list_index_range(1, 3).count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["wrap"] == 3
 
@@ -173,16 +173,16 @@ class TestCreateIfMissing:
 
         await (
             session.update(k)
-                .bin("shell")
-                .on_map_key("brand_new", create_type=MapOrder.UNORDERED)
-                .set_to(42)
-                .execute()
+            .bin("shell")
+            .on_map_key("brand_new", create_type=MapOrder.UNORDERED)
+            .set_to(42)
+            .execute()
         )
 
         rs = await (
             await session.query(k)
-                .bin("shell").on_map_key("brand_new").get_values()
-                .execute()
+            .bin("shell").on_map_key("brand_new").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["shell"] == 42
 
@@ -195,16 +195,16 @@ class TestCreateIfMissing:
 
         await (
             session.update(k)
-                .bin("root").on_map_key("inner")
-                .on_map_key("y", create_type=MapOrder.KEY_ORDERED)
-                .set_to(100)
-                .execute()
+            .bin("root").on_map_key("inner")
+            .on_map_key("y", create_type=MapOrder.KEY_ORDERED)
+            .set_to(100)
+            .execute()
         )
 
         rs = await (
             await session.query(k)
-                .bin("root").on_map_key("inner").on_map_key("y").get_values()
-                .execute()
+            .bin("root").on_map_key("inner").on_map_key("y").get_values()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["root"] == 100
 
@@ -217,10 +217,10 @@ class TestCreateIfMissing:
 
         await (
             session.update(k)
-                .bin("m").on_map_key("lst")
-                .on_list_index(5, order=ListOrderType.UNORDERED, pad=True)
-                .list_set(0, 9)
-                .execute()
+            .bin("m").on_map_key("lst")
+            .on_list_index(5, order=ListOrderType.UNORDERED, pad=True)
+            .list_set(0, 9)
+            .execute()
         )
 
         rs = await (
@@ -250,8 +250,8 @@ class TestValueSelectorChaining:
 
         rs = await (
             await session.query(k)
-                .bin("m").on_map_key("nums").on_list_value(5).count()
-                .execute()
+            .bin("m").on_map_key("nums").on_list_value(5).count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["m"] == 3
 
@@ -264,8 +264,8 @@ class TestValueSelectorChaining:
 
         await (
             session.update(k)
-                .bin("m").on_map_key("nums").on_list_value(9).remove()
-                .execute()
+            .bin("m").on_map_key("nums").on_list_value(9).remove()
+            .execute()
         )
 
         rs = await (
@@ -281,8 +281,8 @@ class TestValueSelectorChaining:
 
         rs = await (
             await session.query(k)
-                .bin("tags").on_list_value(10).get_all_other_values()
-                .execute()
+            .bin("tags").on_list_value(10).get_all_other_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["tags"]
         assert isinstance(vals, list)
@@ -316,8 +316,8 @@ class TestSpecialValueOpenRange:
 
         rs = await (
             await session.query(k)
-                .bin("m").on_map_key_range("m", SpecialValue.INFINITY).count()
-                .execute()
+            .bin("m").on_map_key_range("m", SpecialValue.INFINITY).count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["m"] == 2
 
@@ -333,8 +333,8 @@ class TestSpecialValueOpenRange:
 
         rs = await (
             await session.query(k)
-                .bin("m").on_map_value_list([SpecialValue.WILDCARD]).get_keys()
-                .execute()
+            .bin("m").on_map_value_list([SpecialValue.WILDCARD]).get_keys()
+            .execute()
         ).first_or_raise()
         keys = rs.record.bins["m"]
         assert sorted(keys) == ["a", "b", "c"]
@@ -349,8 +349,8 @@ class TestSpecialValueOpenRange:
 
         rs = await (
             await session.query(k)
-                .bin("nums").on_list_value_range(25, SpecialValue.INFINITY).get_values()
-                .execute()
+            .bin("nums").on_list_value_range(25, SpecialValue.INFINITY).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["nums"]
         assert sorted(int(x) for x in vals) == [30, 40, 50]
@@ -373,8 +373,8 @@ class TestMapValueSelector:
 
         rs = await (
             await session.query(k)
-                .bin("grades").on_map_value("A").count()
-                .execute()
+            .bin("grades").on_map_value("A").count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["grades"] == 2
 
@@ -388,8 +388,8 @@ class TestMapValueSelector:
 
         rs = await (
             await session.query(k)
-                .bin("colors").on_map_value("red").get_keys()
-                .execute()
+            .bin("colors").on_map_value("red").get_keys()
+            .execute()
         ).first_or_raise()
         keys = rs.record.bins["colors"]
         assert sorted(keys) == ["apple", "fire"]
@@ -404,8 +404,8 @@ class TestMapValueSelector:
 
         await (
             session.update(k)
-                .bin("scores").on_map_value(10).remove()
-                .execute()
+            .bin("scores").on_map_value(10).remove()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -427,8 +427,8 @@ class TestListValueRange:
 
         rs = await (
             await session.query(k)
-                .bin("nums").on_list_value_range(10, 30).get_values()
-                .execute()
+            .bin("nums").on_list_value_range(10, 30).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["nums"]
         assert sorted(int(x) for x in vals) == [15, 25]
@@ -441,8 +441,8 @@ class TestListValueRange:
 
         await (
             session.update(k)
-                .bin("nums").on_list_value_range(10, 30).remove()
-                .execute()
+            .bin("nums").on_list_value_range(10, 30).remove()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -467,8 +467,8 @@ class TestListSelectors:
 
         rs = await (
             await session.query(k)
-                .bin("m").on_map_key_list(["a", "c"]).get_values()
-                .execute()
+            .bin("m").on_map_key_list(["a", "c"]).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["m"]
         assert sorted(int(x) for x in vals) == [1, 3]
@@ -483,8 +483,8 @@ class TestListSelectors:
 
         rs = await (
             await session.query(k)
-                .bin("m").on_map_value_list([1, 3]).get_keys()
-                .execute()
+            .bin("m").on_map_value_list([1, 3]).get_keys()
+            .execute()
         ).first_or_raise()
         keys = rs.record.bins["m"]
         assert sorted(keys) == ["a", "c", "d"]
@@ -497,8 +497,8 @@ class TestListSelectors:
 
         rs = await (
             await session.query(k)
-                .bin("nums").on_list_value_list([2, 4]).get_values()
-                .execute()
+            .bin("nums").on_list_value_list([2, 4]).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["nums"]
         assert sorted(int(x) for x in vals) == [2, 4]
@@ -513,8 +513,8 @@ class TestListSelectors:
 
         await (
             session.update(k)
-                .bin("m").on_map_key_list(["a", "c"]).remove()
-                .execute()
+            .bin("m").on_map_key_list(["a", "c"]).remove()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -538,8 +538,8 @@ class TestRemoveAllOthers:
 
         await (
             session.update(k)
-                .bin("m").on_map_key_range("b", "d").remove_all_others()
-                .execute()
+            .bin("m").on_map_key_range("b", "d").remove_all_others()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -553,8 +553,8 @@ class TestRemoveAllOthers:
 
         await (
             session.update(k)
-                .bin("nums").on_list_value(5).remove_all_others()
-                .execute()
+            .bin("nums").on_list_value(5).remove_all_others()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -578,9 +578,9 @@ class TestDeepInvertedReads:
 
         rs = await (
             await session.query(k)
-                .bin("root").on_map_key("scores")
-                .on_map_value_range(85, 100).get_all_other_values()
-                .execute()
+            .bin("root").on_map_key("scores")
+            .on_map_value_range(85, 100).get_all_other_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["root"]
         assert isinstance(vals, list)
@@ -596,9 +596,9 @@ class TestDeepInvertedReads:
 
         rs = await (
             await session.query(k)
-                .bin("wrap").on_map_key("tags")
-                .on_list_value(20).get_all_other_values()
-                .execute()
+            .bin("wrap").on_map_key("tags")
+            .on_list_value(20).get_all_other_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["wrap"]
         assert sorted(int(x) for x in vals) == [10, 30, 40]
@@ -621,9 +621,9 @@ class TestDeepPathThenRange:
 
         rs = await (
             await session.query(k)
-                .bin("l1").on_map_key("l2")
-                .on_map_key_range("b", "d").count()
-                .execute()
+            .bin("l1").on_map_key("l2")
+            .on_map_key_range("b", "d").count()
+            .execute()
         ).first_or_raise()
         assert rs.record.bins["l1"] == 2
 
@@ -637,9 +637,9 @@ class TestDeepPathThenRange:
 
         rs = await (
             await session.query(k)
-                .bin("data").on_map_key("items")
-                .on_list_value_range(10, 30).get_values()
-                .execute()
+            .bin("data").on_map_key("items")
+            .on_list_value_range(10, 30).get_values()
+            .execute()
         ).first_or_raise()
         vals = rs.record.bins["data"]
         assert sorted(int(x) for x in vals) == [15, 25]
@@ -654,9 +654,9 @@ class TestDeepPathThenRange:
 
         await (
             session.update(k)
-                .bin("l1").on_map_key("l2")
-                .on_map_key_range("a", "c").remove()
-                .execute()
+            .bin("l1").on_map_key("l2")
+            .on_map_key_range("a", "c").remove()
+            .execute()
         )
 
         rs = await (await session.query(k).execute()).first_or_raise()
@@ -679,10 +679,10 @@ class TestRemoveReturnType:
 
         stream = await (
             session.update(k)
-                .bin("scores")
-                .on_map_value_range(85, 100)
-                .remove(return_type=MapReturnType.VALUE)
-                .execute()
+            .bin("scores")
+            .on_map_value_range(85, 100)
+            .remove(return_type=MapReturnType.VALUE)
+            .execute()
         )
         rs = await stream.first_or_raise()
         raw = _cdt_remove_payload(rs.record_or_raise().bins, "scores")
@@ -700,10 +700,10 @@ class TestRemoveReturnType:
 
         stream = await (
             session.update(k)
-                .bin("m")
-                .on_map_key_range("b", "d")
-                .remove(return_type=MapReturnType.COUNT)
-                .execute()
+            .bin("m")
+            .on_map_key_range("b", "d")
+            .remove(return_type=MapReturnType.COUNT)
+            .execute()
         )
         rs = await stream.first_or_raise()
         cnt = _cdt_remove_payload(rs.record_or_raise().bins, "m")
@@ -722,10 +722,10 @@ class TestRemoveReturnType:
 
         stream = await (
             session.update(k)
-                .bin("m")
-                .on_map_key_range("b", "d")
-                .remove(return_type=MapReturnType.KEY)
-                .execute()
+            .bin("m")
+            .on_map_key_range("b", "d")
+            .remove(return_type=MapReturnType.KEY)
+            .execute()
         )
         rs = await stream.first_or_raise()
         keys = _cdt_remove_payload(rs.record_or_raise().bins, "m")
@@ -743,10 +743,10 @@ class TestRemoveReturnType:
 
         stream = await (
             session.update(k)
-                .bin("m")
-                .on_map_key_range("b", "d")
-                .remove_all_others(return_type=MapReturnType.VALUE)
-                .execute()
+            .bin("m")
+            .on_map_key_range("b", "d")
+            .remove_all_others(return_type=MapReturnType.VALUE)
+            .execute()
         )
         rs = await stream.first_or_raise()
         raw = _cdt_remove_payload(rs.record_or_raise().bins, "m")
@@ -764,11 +764,11 @@ class TestRemoveReturnType:
 
         stream = await (
             session.update(k)
-                .bin("m")
-                .on_map_key("nums")
-                .on_list_value(9)
-                .remove(return_type=ListReturnType.COUNT)
-                .execute()
+            .bin("m")
+            .on_map_key("nums")
+            .on_list_value(9)
+            .remove(return_type=ListReturnType.COUNT)
+            .execute()
         )
         rs = await stream.first_or_raise()
         cnt = _cdt_remove_payload(rs.record_or_raise().bins, "m")
@@ -777,10 +777,10 @@ class TestRemoveReturnType:
 
         lst_rs = await (
             await session.query(k)
-                .bin("m")
-                .on_map_key("nums")
-                .list_get_range(0, None)
-                .execute()
+            .bin("m")
+            .on_map_key("nums")
+            .list_get_range(0, None)
+            .execute()
         ).first_or_raise()
         lst = lst_rs.record_or_raise().bins["m"]
         assert [int(x) for x in lst] == [1, 3]

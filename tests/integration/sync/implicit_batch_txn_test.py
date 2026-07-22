@@ -103,11 +103,7 @@ def _reset(session, keys):
 
 def _bin_values(session, keys, bin_name):
     rows = session.query(keys).execute().collect()
-    return {
-        row.key.value: row.record.bins.get(bin_name)
-        for row in rows
-        if row.record is not None
-    }
+    return {row.key.value: row.record.bins.get(bin_name) for row in rows if row.record is not None}
 
 
 def test_multi_key_upsert_is_wrapped(session, ds, txn_spy):

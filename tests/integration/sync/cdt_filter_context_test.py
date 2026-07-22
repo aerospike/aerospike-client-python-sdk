@@ -35,9 +35,7 @@ _INNER = "inner"
 def _require_filter_context() -> None:
     probe = Filter.equal("__bin", 1)
     if not hasattr(probe, "context"):
-        pytest.skip(
-            "aerospike_async Filter.context is required; upgrade the native async client."
-        )
+        pytest.skip("aerospike_async Filter.context is required; upgrade the native async client.")
 
 
 @pytest.fixture
@@ -139,9 +137,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
     except Exception as e:
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
-    flt = Filter.equal(_BIN, target).context(
-        [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-    )
+    flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
     sync_wait_for_index(cluster, _NS, _SET, flt)
 
     try:
@@ -153,9 +149,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
 
         assert user_keys == ["cdt_ctx_hi"]
 
-        flt2 = Filter.equal(_BIN, 9999).context(
-            [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-        )
+        flt2 = Filter.equal(_BIN, 9999).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
         stream2 = session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream2)) == ["cdt_ctx_lo"]

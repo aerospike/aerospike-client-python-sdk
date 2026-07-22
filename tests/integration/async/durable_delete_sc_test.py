@@ -175,8 +175,7 @@ def _skip_if_role_violation(exc: BaseException) -> None:
     rc = getattr(exc, "result_code", None)
     if "RoleViolation" in msg or (rc is not None and "RoleViolation" in repr(rc)):
         pytest.skip(
-            "Cluster user lacks privileges for background query UDF execution "
-            f"(server: {msg})",
+            f"Cluster user lacks privileges for background query UDF execution (server: {msg})",
         )
 
 
@@ -193,9 +192,7 @@ def _assert_batch_operate_delete_stream_all_ok(rows: list, expected_count: int) 
     assert len(rows) == expected_count
     for rr in rows:
         rc = rr.result_code
-        assert rc == ResultCode.OK, (
-            f"unexpected operate-delete resultCode={rc} key={rr.key}"
-        )
+        assert rc == ResultCode.OK, f"unexpected operate-delete resultCode={rc} key={rr.key}"
 
 
 async def _validate_process_record_outcome(session, ds: DataSet, bin1: str, bin2: str, size: int) -> None:
@@ -234,16 +231,13 @@ async def _validate_process_record_outcome(session, ds: DataSet, bin1: str, bin2
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster_sc(aerospike_host_sc, make_cluster_definition):
     """One shared cluster for the module (UDF registration once per module)."""
-    async with await make_cluster_definition(
-        aerospike_host_sc, auth=True
-    ).connect() as cluster:
+    async with await make_cluster_definition(aerospike_host_sc, auth=True).connect() as cluster:
         reg = await cluster.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
         await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
 
-        reg2 = await cluster.register_udf(
-            BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
+        reg2 = await cluster.register_udf(BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
         await reg2.wait_till_complete()
 
         yield cluster

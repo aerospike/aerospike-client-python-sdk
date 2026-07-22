@@ -74,17 +74,14 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
     try:
         return ReadPolicy.from_fields(
             total_timeout=(
-                _ms(settings.total_timeout)
-                if settings.total_timeout is not None else None
+                _ms(settings.total_timeout) if settings.total_timeout is not None else None
             ),
             socket_timeout=(
-                _ms(settings.socket_timeout)
-                if settings.socket_timeout is not None else None
+                _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
             ),
             max_retries=settings.max_retries,
             sleep_between_retries=(
-                _ms(settings.retry_delay)
-                if settings.retry_delay is not None else None
+                _ms(settings.retry_delay) if settings.retry_delay is not None else None
             ),
             replica=settings.replica,
             read_mode_ap=settings.read_mode_ap,
@@ -105,18 +102,13 @@ def to_write_policy(settings: Settings) -> WritePolicy:
     Rust boundary exactly once instead of once per field.
     """
     return WritePolicy.from_fields(
-        total_timeout=(
-            _ms(settings.total_timeout)
-            if settings.total_timeout is not None else None
-        ),
+        total_timeout=(_ms(settings.total_timeout) if settings.total_timeout is not None else None),
         socket_timeout=(
-            _ms(settings.socket_timeout)
-            if settings.socket_timeout is not None else None
+            _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
-            _ms(settings.retry_delay)
-            if settings.retry_delay is not None else None
+            _ms(settings.retry_delay) if settings.retry_delay is not None else None
         ),
         send_key=settings.send_key,
         durable_delete=settings.durable_delete,
@@ -184,18 +176,13 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
     Rust boundary exactly once instead of once per field.
     """
     return BatchPolicy.from_fields(
-        total_timeout=(
-            _ms(settings.total_timeout)
-            if settings.total_timeout is not None else None
-        ),
+        total_timeout=(_ms(settings.total_timeout) if settings.total_timeout is not None else None),
         socket_timeout=(
-            _ms(settings.socket_timeout)
-            if settings.socket_timeout is not None else None
+            _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
-            _ms(settings.retry_delay)
-            if settings.retry_delay is not None else None
+            _ms(settings.retry_delay) if settings.retry_delay is not None else None
         ),
         allow_inline=settings.allow_inline,
         allow_inline_ssd=settings.allow_inline_ssd,

@@ -66,9 +66,9 @@ def test_sync_write_using_udf(cluster_with_udf):
     session.delete(k).execute()
     stream = (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("sb1", "sync val")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("sb1", "sync val")
+        .execute()
     )
     stream.first_or_raise()
     rr = session.query(k).bins(["sb1"]).execute().first_or_raise()
@@ -143,9 +143,9 @@ def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
     session.delete(k1, k2).execute()
     stream = (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeWithValidation")
-            .passing("B5", 999)
-            .execute()
+        .function(MODULE, "writeWithValidation")
+        .passing("B5", 999)
+        .execute()
     )
     results = stream.collect()
     assert len(results) == 2
@@ -166,10 +166,10 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
 
     stream = (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit")
-            .where("$.v < 10")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit")
+        .where("$.v < 10")
+        .execute()
     )
     results = stream.collect()
     assert len(results) == 1
@@ -178,11 +178,11 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
 
     stream = (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit2")
-            .where("$.v < 10")
-            .include_missing_keys()
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit2")
+        .where("$.v < 10")
+        .include_missing_keys()
+        .execute()
     )
     results = stream.collect()
     assert len(results) == 2
@@ -199,25 +199,25 @@ def test_sync_write_if_generation_not_changed(cluster_with_udf):
     session.upsert(k).put({"gcol": "a"}).execute()
     gen = (
         session.execute_udf(k)
-            .function(MODULE, "getGeneration")
-            .execute()
-            .first_udf_result()
+        .function(MODULE, "getGeneration")
+        .execute()
+        .first_udf_result()
     )
     assert isinstance(gen, int)
     (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "b", gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "b", gen)
+        .execute()
     )
     rr = session.query(k).bins(["gcol"]).execute().first_or_raise()
     assert rr.record is not None
     assert rr.record.bins.get("gcol") == "b"
     (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "should_not_apply", gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "should_not_apply", gen)
+        .execute()
     )
     rr2 = session.query(k).bins(["gcol"]).execute().first_or_raise()
     assert rr2.record is not None
@@ -230,15 +230,15 @@ def test_sync_write_unique_idempotent(cluster_with_udf):
     session.delete(k).execute()
     (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "first")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "first")
+        .execute()
     )
     (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "second")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "second")
+        .execute()
     )
     rr = session.query(k).bins(["ub"]).execute().first_or_raise()
     assert rr.record is not None
@@ -253,9 +253,9 @@ def test_sync_append_list_bin_via_udf(cluster_with_udf):
     for v in (10, 20, 30):
         (
             session.execute_udf(k)
-                .function(MODULE, "appendListBin")
-                .passing("lb", v)
-                .execute()
+            .function(MODULE, "appendListBin")
+            .passing("lb", v)
+            .execute()
         )
     rr = session.query(k).bins(["lb"]).execute().first_or_raise()
     assert rr.record is not None
@@ -274,15 +274,15 @@ def test_sync_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     session.delete(k1, k2, k3).execute()
     stream = (
         session
-            .execute_udf(k1)
-                .function(MODULE, "writeBin")
-                .passing("cx", "ok1")
-            .execute_udf(k2)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 7)
-            .execute_udf(k3)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 999)
+        .execute_udf(k1)
+        .function(MODULE, "writeBin")
+        .passing("cx", "ok1")
+        .execute_udf(k2)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 7)
+        .execute_udf(k3)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 999)
         .execute()
     )
     rows = stream.collect()

@@ -34,7 +34,5 @@ async def cluster(aerospike_host, make_cluster_definition):
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster_sc(aerospike_host_sc, make_cluster_definition):
     """One Cluster per module against ``AEROSPIKE_HOST_SC`` (MRT / SC-only suites)."""
-    async with await make_cluster_definition(
-        aerospike_host_sc, auth=True
-    ).connect() as c:
+    async with await make_cluster_definition(aerospike_host_sc, auth=True).connect() as c:
         yield c

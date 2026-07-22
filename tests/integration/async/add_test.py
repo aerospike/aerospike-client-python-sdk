@@ -116,9 +116,9 @@ class TestAdd:
         # Combined add + get in a single operate (direct segment style)
         rs = await (
             session.upsert(keys)
-                .add(bin_name, 30)
-                .get(bin_name)
-                .execute()
+            .add(bin_name, 30)
+            .get(bin_name)
+            .execute()
         )
         records = await rs.collect()
         assert len(records) == 10

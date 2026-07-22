@@ -147,9 +147,7 @@ class TestInLiteral:
             Exp.list_val(["RACK_RATE", "DISCOUNT"]),
             [],
         )
-        assert parse_ael(
-            '$.rooms.room1.rates.rateType in ["RACK_RATE", "DISCOUNT"]'
-        ) == expected
+        assert parse_ael('$.rooms.room1.rates.rateType in ["RACK_RATE", "DISCOUNT"]') == expected
 
     def test_explicit_int_bin_in_list_designator(self):
         expected = Exp.list_get_by_value(
@@ -278,9 +276,7 @@ class TestInBin:
             ),
             [],
         )
-        assert parse_ael(
-            "$.intBin.get(type: INT) in $.rooms.config.allowedNames"
-        ) == expected
+        assert parse_ael("$.intBin.get(type: INT) in $.rooms.config.allowedNames") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -295,9 +291,7 @@ class TestInPlaceholder:
             Exp.list_val(["gold", "silver"]),
             [],
         )
-        assert parse_ael(
-            '?0 in ["gold", "silver"]', "gold"
-        ) == expected
+        assert parse_ael('?0 in ["gold", "silver"]', "gold") == expected
 
     def test_int_placeholder_as_left_operand(self):
         expected = Exp.list_get_by_value(
@@ -333,9 +327,7 @@ class TestInPlaceholder:
             Exp.list_val([[1, 2, 3], [4, 5, 6]]),
             [],
         )
-        assert parse_ael(
-            "?0 in [[1,2,3], [4,5,6]]", [1, 2, 3]
-        ) == expected
+        assert parse_ael("?0 in [[1,2,3], [4,5,6]]", [1, 2, 3]) == expected
 
     def test_map_placeholder_as_left_operand(self):
         expected = Exp.list_get_by_value(
@@ -344,9 +336,7 @@ class TestInPlaceholder:
             Exp.list_val([{1: "a"}, {2: "b"}]),
             [],
         )
-        assert parse_ael(
-            '?0 in [{1: "a"}, {2: "b"}]', {1: "a"}
-        ) == expected
+        assert parse_ael('?0 in [{1: "a"}, {2: "b"}]', {1: "a"}) == expected
 
     def test_placeholder_as_right_operand(self):
         expected = Exp.list_get_by_value(
@@ -367,9 +357,7 @@ class TestInPlaceholder:
             Exp.list_val([1, 2, 3]),
             [],
         )
-        assert parse_ael(
-            "$.age.get(type: INT) in ?0", [1, 2, 3]
-        ) == expected
+        assert parse_ael("$.age.get(type: INT) in ?0", [1, 2, 3]) == expected
 
     def test_float_list_placeholder_as_right(self):
         expected = Exp.list_get_by_value(
@@ -378,9 +366,7 @@ class TestInPlaceholder:
             Exp.list_val([1.5, 2.5]),
             [],
         )
-        assert parse_ael(
-            "$.score.get(type: FLOAT) in ?0", [1.5, 2.5]
-        ) == expected
+        assert parse_ael("$.score.get(type: FLOAT) in ?0", [1.5, 2.5]) == expected
 
     def test_bool_list_placeholder_as_right(self):
         expected = Exp.list_get_by_value(
@@ -389,9 +375,7 @@ class TestInPlaceholder:
             Exp.list_val([True, False]),
             [],
         )
-        assert parse_ael(
-            "$.isActive.get(type: BOOL) in ?0", [True, False]
-        ) == expected
+        assert parse_ael("$.isActive.get(type: BOOL) in ?0", [True, False]) == expected
 
     def test_list_of_lists_placeholder_as_right(self):
         outer = [[1, 2, 3], [4, 5, 6]]
@@ -401,9 +385,7 @@ class TestInPlaceholder:
             Exp.list_val(outer),
             [],
         )
-        assert parse_ael(
-            "$.listBin.get(type: LIST) in ?0", outer
-        ) == expected
+        assert parse_ael("$.listBin.get(type: LIST) in ?0", outer) == expected
 
     def test_map_list_placeholder_as_right(self):
         map_list = [{1: "a"}, {2: "b"}]
@@ -413,9 +395,7 @@ class TestInPlaceholder:
             Exp.list_val(map_list),
             [],
         )
-        assert parse_ael(
-            "$.mapBin.get(type: MAP) in ?0", map_list
-        ) == expected
+        assert parse_ael("$.mapBin.get(type: MAP) in ?0", map_list) == expected
 
     def test_empty_list_placeholder_as_right(self):
         expected = Exp.list_get_by_value(
@@ -424,9 +404,7 @@ class TestInPlaceholder:
             Exp.list_val([]),
             [],
         )
-        assert parse_ael(
-            "$.intBin1.get(type: INT) in ?0", []
-        ) == expected
+        assert parse_ael("$.intBin1.get(type: INT) in ?0", []) == expected
 
     def test_both_placeholders(self):
         expected = Exp.list_get_by_value(
@@ -435,9 +413,7 @@ class TestInPlaceholder:
             Exp.list_val(["gold", "silver"]),
             [],
         )
-        assert parse_ael(
-            "?0 in ?1", "gold", ["gold", "silver"]
-        ) == expected
+        assert parse_ael("?0 in ?1", "gold", ["gold", "silver"]) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -454,9 +430,7 @@ class TestInExplicitType:
             Exp.list_bin("tags"),
             [],
         )
-        assert parse_ael(
-            "$.intBin1.get(type: INT) in $.tags.get(type: LIST)"
-        ) == expected
+        assert parse_ael("$.intBin1.get(type: INT) in $.tags.get(type: LIST)") == expected
 
     def test_explicit_int_in_int_list(self):
         expected = Exp.list_get_by_value(
@@ -713,9 +687,7 @@ class TestInExplicitType:
             ),
             [],
         )
-        assert parse_ael(
-            "$.rooms.name.get(type: STRING) in $.rooms2.list"
-        ) == expected
+        assert parse_ael("$.rooms.name.get(type: STRING) in $.rooms2.list") == expected
 
     # --- Explicit type on both sides ---
 
@@ -726,9 +698,7 @@ class TestInExplicitType:
             Exp.list_bin("tags"),
             [],
         )
-        assert parse_ael(
-            "$.val.get(type: INT) in $.tags.get(type: LIST)"
-        ) == expected
+        assert parse_ael("$.val.get(type: INT) in $.tags.get(type: LIST)") == expected
 
     # --- Explicit type with placeholder right ---
 
@@ -739,9 +709,7 @@ class TestInExplicitType:
             Exp.list_val(["Bob"]),
             [],
         )
-        assert parse_ael(
-            '$.name.get(type: STRING) in ?0', ["Bob"]
-        ) == expected
+        assert parse_ael("$.name.get(type: STRING) in ?0", ["Bob"]) == expected
 
     def test_explicit_path_in_placeholder(self):
         expected = Exp.list_get_by_value(
@@ -753,9 +721,7 @@ class TestInExplicitType:
             Exp.list_val(["Bob"]),
             [],
         )
-        assert parse_ael(
-            '$.rooms.name.get(type: STRING) in ?0', ["Bob"]
-        ) == expected
+        assert parse_ael("$.rooms.name.get(type: STRING) in ?0", ["Bob"]) == expected
 
     # --- Explicit type with list designator right ---
 
@@ -777,9 +743,7 @@ class TestInExplicitType:
             Exp.list_val(["gold", "silver"]),
             [],
         )
-        assert parse_ael(
-            "?0 in ?1", "gold", ["gold", "silver"]
-        ) == expected
+        assert parse_ael("?0 in ?1", "gold", ["gold", "silver"]) == expected
 
     def test_pos_placeholder_in_bin(self):
         expected = Exp.list_get_by_value(
@@ -1397,31 +1361,21 @@ class TestInNegative:
 
     def test_neg_var_bound_to_explicit_int_bin(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'let (x = $.someBin.get(type: INT)) then ("foo" in ${x})'
-            )
+            parse_ael('let (x = $.someBin.get(type: INT)) then ("foo" in ${x})')
 
     def test_neg_var_bound_to_explicit_str_path(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'let (x = $.a.b.get(type: STRING)) then ("foo" in ${x})'
-            )
+            parse_ael('let (x = $.a.b.get(type: STRING)) then ("foo" in ${x})')
 
     # --- Nested LET variable validation ---
 
     def test_neg_nested_let_outer_non_list_var(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'let (x = 1) then'
-                ' (let (y = [1, 2]) then ("foo" in ${x}))'
-            )
+            parse_ael('let (x = 1) then (let (y = [1, 2]) then ("foo" in ${x}))')
 
     def test_neg_nested_shadowed_var_let_scalar(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'let (x = [1]) then'
-                ' (let (x = 1) then ("foo" in ${x}))'
-            )
+            parse_ael('let (x = [1]) then (let (x = 1) then ("foo" in ${x}))')
 
     def test_neg_not_wrapping_in_let_scalar_var(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
@@ -1433,24 +1387,17 @@ class TestInNegative:
 
     def test_neg_var_def_let_in_scalar_var(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'let (x = 5, y = ($.bin.get(type: INT) in ${x}))'
-                ' then (${y} == true)'
-            )
+            parse_ael("let (x = 5, y = ($.bin.get(type: INT) in ${x})) then (${y} == true)")
 
     # --- Explicit bin in non-list placeholder ---
 
     def test_neg_explicit_bin_in_not_list(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                '$.name.get(type: STRING) in ?0', "Bob"
-            )
+            parse_ael("$.name.get(type: STRING) in ?0", "Bob")
 
     def test_neg_placeholder_in_not_list(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                "?0 in ?1", "gold", "notAList"
-            )
+            parse_ael("?0 in ?1", "gold", "notAList")
 
     # --- Missing placeholder values ---
 
@@ -1466,22 +1413,15 @@ class TestInNegative:
 
     def test_neg_ambiguous_left_in_when_cond(self):
         with pytest.raises(AelParseException, match="cannot infer the type"):
-            parse_ael(
-                'when($.name in $.allowedNames => "ok", default => "no")'
-            )
+            parse_ael('when($.name in $.allowedNames => "ok", default => "no")')
 
     def test_neg_non_list_right_in_when_cond(self):
         with pytest.raises(AelParseException, match="IN operation requires a List"):
-            parse_ael(
-                'when($.name.get(type: STRING) in "Bob" => "ok",'
-                ' default => "no")'
-            )
+            parse_ael('when($.name.get(type: STRING) in "Bob" => "ok", default => "no")')
 
     def test_neg_mixed_type_list_in_when_cond(self):
         with pytest.raises(AelParseException, match="same type"):
-            parse_ael(
-                'when($.name in [1, "hello"] => "ok", default => "no")'
-            )
+            parse_ael('when($.name in [1, "hello"] => "ok", default => "no")')
 
 
 # ---------------------------------------------------------------------------

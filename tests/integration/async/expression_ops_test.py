@@ -86,7 +86,7 @@ class TestSelectFrom:
         """select_from evaluating an integer AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("$.A + 4")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == 5
@@ -95,7 +95,7 @@ class TestSelectFrom:
         """select_from evaluating a string AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("'hello'")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] == "hello"
@@ -104,7 +104,7 @@ class TestSelectFrom:
         """select_from evaluating a boolean AEL expression."""
         rs = await (
             session.query(_key(KEY_A)).bin("ev").select_from("$.A == 1")
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ev"] is True
@@ -114,7 +114,7 @@ class TestSelectFrom:
         with pytest.raises((AerospikeError, ServerError)):
             rs = await (
                 session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4")
-                    .execute()
+                .execute()
             )
             await rs.first_or_raise()
 
@@ -122,7 +122,7 @@ class TestSelectFrom:
         """select_from with ignore_eval_failure returns None on missing bin."""
         rs = await (
             session.query(_key(KEY_B)).bin("ev").select_from("$.A + 4", ignore_eval_failure=True)
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
@@ -131,7 +131,7 @@ class TestSelectFrom:
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
             session.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
-                .execute()
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
@@ -140,9 +140,9 @@ class TestSelectFrom:
         """Multiple select_from in same execute (expMerge pattern)."""
         rs = await (
             session.query(_key(KEY_A))
-                .bin("r1").select_from("$.A == 0 and $.D == 2")
-                .bin("r2").select_from("$.A == 0 or $.D == 2")
-                .execute()
+            .bin("r1").select_from("$.A == 0 and $.D == 2")
+            .bin("r2").select_from("$.A == 0 or $.D == 2")
+            .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["r1"] is False
@@ -160,7 +160,7 @@ class TestUpsertFrom:
         session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").upsert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("C").get().execute()
         result = await rec.first_or_raise()
@@ -171,7 +171,7 @@ class TestUpsertFrom:
         session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("D").upsert_from("$.A + 10")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("D").get().execute()
         result = await rec.first_or_raise()
@@ -185,7 +185,7 @@ class TestUpdateFrom:
         session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("D").update_from("$.A + 100")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("D").get().execute()
         result = await rec.first_or_raise()
@@ -197,7 +197,7 @@ class TestUpdateFrom:
         with pytest.raises((AerospikeError, ServerError)):
             await (
                 session.update(_key(KEY_A)).bin("C").update_from("$.A + 4")
-                    .execute()
+                .execute()
             )
 
     async def test_update_from_missing_bin_ignore_op_failure(self, cluster):
@@ -205,7 +205,7 @@ class TestUpdateFrom:
         session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_A)).bin("C").update_from("$.A + 4", ignore_op_failure=True)
-                .execute()
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -220,7 +220,7 @@ class TestInsertFrom:
         session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         rec = await session.query(_key(KEY_A)).bin("C").get().execute()
         result = await rec.first_or_raise()
@@ -232,13 +232,13 @@ class TestInsertFrom:
         # First insert succeeds
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         # Second insert fails
         with pytest.raises((AerospikeError, ServerError)):
             await (
                 session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                    .execute()
+                .execute()
             )
 
     async def test_insert_from_existing_bin_ignore_op_failure(self, cluster):
@@ -246,11 +246,11 @@ class TestInsertFrom:
         session = cluster.create_session()
         await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 4")
-                .execute()
+            .execute()
         )
         stream = await (
             session.update(_key(KEY_A)).bin("C").insert_from("$.A + 99", ignore_op_failure=True)
-                .execute()
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -267,9 +267,9 @@ class TestCombinedExpression:
         session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_A))
-                .bin("D").upsert_from("$.D + 10")
-                .bin("ev").select_from("$.A")
-                .execute()
+            .bin("D").upsert_from("$.D + 10")
+            .bin("ev").select_from("$.A")
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -291,9 +291,9 @@ class TestCombinedExpression:
         session = cluster.create_session()
         stream = await (
             session.update(_key(KEY_B))
-                .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
-                .bin("ev").select_from("$.A", ignore_eval_failure=True)
-                .execute()
+            .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
+            .bin("ev").select_from("$.A", ignore_eval_failure=True)
+            .execute()
         )
         result = await stream.first_or_raise()
         assert result is not None
@@ -312,15 +312,15 @@ class TestMixedOps:
         session = cluster.create_session()
         await (
             session.upsert(_key(KEY_A))
-                .bin("name").set_to("Alice")
-                .bin("computed").upsert_from("$.A * 2")
-                .execute()
+            .bin("name").set_to("Alice")
+            .bin("computed").upsert_from("$.A * 2")
+            .execute()
         )
         rec = await (
             session.query(_key(KEY_A))
-                .bin("name").get()
-                .bin("computed").get()
-                .execute()
+            .bin("name").get()
+            .bin("computed").get()
+            .execute()
         )
         result = await rec.first_or_raise()
         assert result.record.bins["name"] == "Alice"
@@ -339,7 +339,7 @@ class TestGuards:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(namespace=NS, set_name=SET).bin("ev").select_from("$.A + 4")
-                    .execute()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
@@ -347,7 +347,7 @@ class TestGuards:
         """select_from on batch key query works (no guard)."""
         rs = await (
             session.query([_key(KEY_A), _key(KEY_B)]).bin("ev").select_from("$.D * 3")
-                .execute()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2

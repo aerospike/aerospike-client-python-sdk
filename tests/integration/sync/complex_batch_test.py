@@ -65,9 +65,9 @@ class TestMixedReadWrite:
 
         results = (
             session
-                .query(k1)
-                .upsert(k2).bin("status").set_to("active")
-                .execute()
+            .query(k1)
+            .upsert(k2).bin("status").set_to("active")
+            .execute()
         ).collect()
         # Input order preserved: read (k1) first, write (k2) second — and the
         # read is NOT dropped (the finalize-first fix).
@@ -88,9 +88,9 @@ class TestMixedReadWrite:
 
         results = (
             session
-                .upsert(k1).bin("label").set_to("new")
-                .query(k2).bins(["x"])
-                .execute()
+            .upsert(k1).bin("label").set_to("new")
+            .query(k2).bins(["x"])
+            .execute()
         ).collect()
         assert len(results) == 2
         assert results[0].result_code == ResultCode.OK
@@ -110,9 +110,9 @@ class TestMixedReadWrite:
 
         results = (
             session
-                .query(k1).bin("doubled").select_from("$.score * 2")
-                .upsert(k2).bin("tag").set_to("written")
-                .execute()
+            .query(k1).bin("doubled").select_from("$.score * 2")
+            .upsert(k2).bin("tag").set_to("written")
+            .execute()
         ).collect()
         assert results[0].record.bins["doubled"] == 100
 
@@ -135,11 +135,11 @@ class TestMixedOpTypes:
 
         results = (
             session
-                .query(k_upsert)
-                .upsert(k_upsert).bin("type").set_to("upsert")
-                .insert(k_insert).bin("type").set_to("insert")
-                .replace_if_exists(k_replace).bin("type").set_to("replaced")
-                .execute()
+            .query(k_upsert)
+            .upsert(k_upsert).bin("type").set_to("upsert")
+            .insert(k_insert).bin("type").set_to("insert")
+            .replace_if_exists(k_replace).bin("type").set_to("replaced")
+            .execute()
         ).collect()
         ok_count = sum(1 for r in results if r.result_code == ResultCode.OK)
         assert ok_count >= 3
@@ -160,9 +160,9 @@ class TestMixedOpTypes:
 
         results = (
             session
-                .query(k)
-                .insert(k).bin("x").set_to(999)
-                .execute()
+            .query(k)
+            .insert(k).bin("x").set_to(999)
+            .execute()
         ).collect()
         assert results[1].result_code != ResultCode.OK
 
@@ -182,9 +182,9 @@ class TestWriteWithExpressions:
 
         (
             session
-                .query(k)
-                .upsert(k).bin("computed").upsert_from("$.value + 1000")
-                .execute()
+            .query(k)
+            .upsert(k).bin("computed").upsert_from("$.value + 1000")
+            .execute()
         ).collect()
 
         assert session.query(k).execute().first_or_raise().record.bins["computed"] == 1006
@@ -199,11 +199,11 @@ class TestWriteWithExpressions:
 
         (
             session
-                .query(k)
-                .upsert(k)
-                    .bin("derived").upsert_from("$.base * 3")
-                    .bin("label").set_to("combo")
-                .execute()
+            .query(k)
+            .upsert(k)
+            .bin("derived").upsert_from("$.base * 3")
+            .bin("label").set_to("combo")
+            .execute()
         ).collect()
 
         rec = session.query(k).execute().first_or_raise().record
@@ -225,10 +225,10 @@ class TestDeleteInChain:
 
         results = (
             session
-                .query(k1)
-                .upsert(k1).bin("score").set_to(100)
-                .delete(k2)
-                .execute()
+            .query(k1)
+            .upsert(k1).bin("score").set_to(100)
+            .delete(k2)
+            .execute()
         ).collect()
         assert len(results) >= 2
 
@@ -248,10 +248,10 @@ class TestDeleteInChain:
 
         results = (
             session
-                .query(k1)
-                .upsert(k2).bin("created").set_to(True)
-                .delete(k3)
-                .execute()
+            .query(k1)
+            .upsert(k2).bin("created").set_to(True)
+            .delete(k3)
+            .execute()
         ).collect()
         assert len(results) == 3
         assert results[0].record.bins["name"] == "Alice"
@@ -271,11 +271,11 @@ class TestPerSpecSettings:
 
         (
             session
-                .query(k)
-                .upsert(k)
-                    .bin("data").set_to("expiring")
-                    .expire_record_after_seconds(86400)
-                .execute()
+            .query(k)
+            .upsert(k)
+            .bin("data").set_to("expiring")
+            .expire_record_after_seconds(86400)
+            .execute()
         ).collect()
 
         rec = session.query(k).execute().first_or_raise().record
@@ -293,11 +293,11 @@ class TestPerSpecSettings:
 
         results = (
             session
-                .query(k)
-                .update(k)
-                    .bin("v").set_to(2)
-                    .ensure_generation_is(gen)
-                .execute()
+            .query(k)
+            .update(k)
+            .bin("v").set_to(2)
+            .ensure_generation_is(gen)
+            .execute()
         ).collect()
         # results[0] = read (OK), results[1] = write (OK)
         assert len(results) == 2
@@ -315,11 +315,11 @@ class TestPerSpecSettings:
 
         results = (
             session
-                .query(k)
-                .update(k)
-                    .bin("v").set_to(2)
-                    .ensure_generation_is(999)
-                .execute()
+            .query(k)
+            .update(k)
+            .bin("v").set_to(2)
+            .ensure_generation_is(999)
+            .execute()
         ).collect()
         # results[0] = read (OK), results[1] = write (generation error)
         assert len(results) == 2
@@ -341,11 +341,11 @@ class TestChainLevelDefaults:
 
         (
             session
-                .query(k1)
-                .default_expire_record_after_seconds(3600)
-                .upsert(k1).bin("a").set_to(1)
-                .upsert(k2).bin("b").set_to(2)
-                .execute()
+            .query(k1)
+            .default_expire_record_after_seconds(3600)
+            .upsert(k1).bin("a").set_to(1)
+            .upsert(k2).bin("b").set_to(2)
+            .execute()
         ).collect()
 
         r1 = session.query(k1).execute().first_or_raise().record
@@ -365,13 +365,13 @@ class TestChainLevelDefaults:
 
         (
             session
-                .query(k1)
-                .default_expire_record_after_seconds(3600)
-                .upsert(k1)
-                    .bin("a").set_to(1)
-                    .expire_record_after_seconds(86400)
-                .upsert(k2).bin("b").set_to(2)
-                .execute()
+            .query(k1)
+            .default_expire_record_after_seconds(3600)
+            .upsert(k1)
+            .bin("a").set_to(1)
+            .expire_record_after_seconds(86400)
+            .upsert(k2).bin("b").set_to(2)
+            .execute()
         ).collect()
 
         r1 = session.query(k1).execute().first_or_raise().record
@@ -395,9 +395,9 @@ class TestBatchTouch:
 
             results = (
                 session
-                    .query(k1).bins(["a"])
-                    .touch(k2)
-                    .execute()
+                .query(k1).bins(["a"])
+                .touch(k2)
+                .execute()
             ).collect()
             assert len(results) == 2
             read_r = [r for r in results if r.key == k1][0]
@@ -417,9 +417,9 @@ class TestBatchTouch:
 
             results = (
                 session
-                    .upsert(k2).bin("a").set_to(99)
-                    .touch(k1)
-                    .execute()
+                .upsert(k2).bin("a").set_to(99)
+                .touch(k1)
+                .execute()
             ).collect()
             assert len(results) == 2
 
@@ -437,9 +437,9 @@ class TestBatchTouch:
 
             results = (
                 session
-                    .query(k_exists).bins(["a"])
-                    .touch(k_missing).include_missing_keys()
-                    .execute()
+                .query(k_exists).bins(["a"])
+                .touch(k_missing).include_missing_keys()
+                .execute()
             ).collect()
             assert len(results) == 2
             read_r = [r for r in results if r.key == k_exists][0]
@@ -464,9 +464,9 @@ class TestChainedExists:
 
             results = (
                 session
-                    .query(k1).bins(["a"])
-                    .exists(k2).include_missing_keys()
-                    .execute()
+                .query(k1).bins(["a"])
+                .exists(k2).include_missing_keys()
+                .execute()
             ).collect()
             assert len(results) == 2
             read_r = [r for r in results if r.key == k1][0]
@@ -486,9 +486,9 @@ class TestChainedExists:
 
             results = (
                 session
-                    .query(k_exists).bins(["a"])
-                    .exists(k_missing).include_missing_keys()
-                    .execute()
+                .query(k_exists).bins(["a"])
+                .exists(k_missing).include_missing_keys()
+                .execute()
             ).collect()
             assert len(results) == 2
             read_r = [r for r in results if r.key == k_exists][0]
@@ -510,10 +510,10 @@ class TestChainedExists:
 
             results = (
                 session
-                    .query(k1).bins(["a"])
-                    .touch(k2)
-                    .exists(k3).include_missing_keys()
-                    .execute()
+                .query(k1).bins(["a"])
+                .touch(k2)
+                .exists(k3).include_missing_keys()
+                .execute()
             ).collect()
             assert len(results) == 3
             read_r = [r for r in results if r.key == k1][0]

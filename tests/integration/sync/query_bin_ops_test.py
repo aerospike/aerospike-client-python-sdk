@@ -82,10 +82,10 @@ class TestSimpleBinReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("name").get()
-                .bin("age").get()
-                .execute()
-                .first_or_raise()
+            .bin("name").get()
+            .bin("age").get()
+            .execute()
+            .first_or_raise()
         )
         assert result.record.bins["name"] == "user1"
         assert result.record.bins["age"] == 21
@@ -132,7 +132,7 @@ class TestCdtMapReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_key("theme").get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["settings"] == "dark"
 
@@ -140,7 +140,7 @@ class TestCdtMapReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_key("theme").count()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["settings"] == 1
 
@@ -148,7 +148,7 @@ class TestCdtMapReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         vals = result.record.bins["settings"]
         assert isinstance(vals, list)
@@ -158,7 +158,7 @@ class TestCdtMapReads:
         session = cluster.create_session()
         result = (
             session.query(_key(2)).bin("settings").on_map_rank(0).get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["settings"] is not None
 
@@ -173,7 +173,7 @@ class TestCdtListReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").on_list_index(0).get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 10
 
@@ -181,7 +181,7 @@ class TestCdtListReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").on_list_index(0).count()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 1
 
@@ -190,7 +190,7 @@ class TestCdtListReads:
         session = cluster.create_session()
         result = (
             session.query(_key(2)).bin("scores").on_list_rank(0).get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == 20
 
@@ -259,7 +259,7 @@ class TestBatchKeyQueries:
         session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2)]).bin("name").get()
-                .execute().collect()
+            .execute().collect()
         )
         assert len(results) == 2
         names = {r.record.bins["name"] for r in results if r.is_ok}
@@ -269,8 +269,8 @@ class TestBatchKeyQueries:
         session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
-                .bin("settings").on_map_key("theme").get_values()
-                .execute().collect()
+            .bin("settings").on_map_key("theme").get_values()
+            .execute().collect()
         )
         assert len(results) == 3
         for r in results:
@@ -281,8 +281,8 @@ class TestBatchKeyQueries:
         session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
-                .bin("scores").list_size()
-                .execute().collect()
+            .bin("scores").list_size()
+            .execute().collect()
         )
         assert len(results) == 3
         for r in results:
@@ -293,8 +293,8 @@ class TestBatchKeyQueries:
         session = cluster.create_session()
         results = (
             session.query([_key(1), _key(2), _key(3)])
-                .bin("scores").list_get(0)
-                .execute().collect()
+            .bin("scores").list_get(0)
+            .execute().collect()
         )
         assert len(results) == 3
         by_first = {r.record.bins["scores"] for r in results if r.is_ok}
@@ -309,7 +309,7 @@ class TestCdtReadEdgeCases:
         session = cluster.create_session()
         result = (
             session.query(_key(1)).bin("scores").list_get_range(0, 100)
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["scores"] == [10, 20, 30]
 
@@ -338,8 +338,8 @@ class TestInvertedReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
-                .execute().first_or_raise()
+            .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
+            .execute().first_or_raise()
         )
         vals = result.record.bins["settings"]
         assert isinstance(vals, list)
@@ -350,8 +350,8 @@ class TestInvertedReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("scores").on_list_value(10).get_all_other_values()
-                .execute().first_or_raise()
+            .bin("scores").on_list_value(10).get_all_other_values()
+            .execute().first_or_raise()
         )
         vals = result.record.bins["scores"]
         assert isinstance(vals, list)
@@ -370,8 +370,8 @@ class TestExpressionReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("age_plus_20").select_from("$.age + 20")
-                .execute().first_or_raise()
+            .bin("age_plus_20").select_from("$.age + 20")
+            .execute().first_or_raise()
         )
         assert result.record.bins["age_plus_20"] == 41
 
@@ -379,9 +379,9 @@ class TestExpressionReads:
         session = cluster.create_session()
         result = (
             session.query(_key(2))
-                .bin("double_age").select_from("$.age * 2")
-                .bin("triple_score").select_from("$.score * 3")
-                .execute().first_or_raise()
+            .bin("double_age").select_from("$.age * 2")
+            .bin("triple_score").select_from("$.score * 3")
+            .execute().first_or_raise()
         )
         assert result.record.bins["double_age"] == 44   # (20+2)*2
         assert result.record.bins["triple_score"] == 600  # 200*3
@@ -390,9 +390,9 @@ class TestExpressionReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("name").get()
-                .bin("age_in_10").select_from("$.age + 10")
-                .execute().first_or_raise()
+            .bin("name").get()
+            .bin("age_in_10").select_from("$.age + 10")
+            .execute().first_or_raise()
         )
         assert result.record.bins["name"] == "user1"
         assert result.record.bins["age_in_10"] == 31
@@ -409,8 +409,8 @@ class TestNestedCdtReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .execute().first_or_raise()
         )
         assert result.record.bins["nested"] == 100
 
@@ -419,8 +419,8 @@ class TestNestedCdtReads:
         session = cluster.create_session()
         result = (
             session.query(_key(1))
-                .bin("nested").on_map_key("level1").on_map_key("b").count()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level1").on_map_key("b").count()
+            .execute().first_or_raise()
         )
         assert result.record.bins["nested"] == 1
 
@@ -429,15 +429,15 @@ class TestNestedCdtReads:
         session = cluster.create_session()
         r1 = (
             session.query(_key(2))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .execute().first_or_raise()
         )
         assert r1.record.bins["nested"] == 200
 
         r2 = (
             session.query(_key(2))
-                .bin("nested").on_map_key("level2").on_map_key("x").get_values()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level2").on_map_key("x").get_values()
+            .execute().first_or_raise()
         )
         assert r2.record.bins["nested"] == 2
 
@@ -446,9 +446,9 @@ class TestNestedCdtReads:
         session = cluster.create_session()
         result = (
             session.query(_key(3))
-                .bin("nested").on_map_key("level1").on_map_key("a").get_values()
-                .bin("name").get()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level1").on_map_key("a").get_values()
+            .bin("name").get()
+            .execute().first_or_raise()
         )
         assert result.record.bins["nested"] == 300
         assert result.record.bins["name"] == "user3"
@@ -458,7 +458,7 @@ class TestNestedCdtReads:
         session = cluster.create_session()
         result = (
             session.query(_key(3))
-                .bin("nested").on_map_key("level2").on_map_key("y").get_values()
-                .execute().first_or_raise()
+            .bin("nested").on_map_key("level2").on_map_key("y").get_values()
+            .execute().first_or_raise()
         )
         assert result.record.bins["nested"] == 4

@@ -330,8 +330,8 @@ async def test_java_example_query_with_where(session, customer_dataset):
     """
     stream = await (
         session.query(customer_dataset)
-            .where('$.name == "Tim" and $.age > 18')
-            .execute()
+        .where('$.name == "Tim" and $.age > 18')
+        .execute()
     )
     count = 0
     async for result in stream:
@@ -359,10 +359,10 @@ async def test_java_example_insert(session, customer_dataset):
 
     await (
         session.insert(customer_dataset.id(10))
-            .bin("name").set_to("Tim")
-            .bin("age").set_to(1)
-            .bin("gender").set_to("male")
-            .execute()
+        .bin("name").set_to("Tim")
+        .bin("age").set_to(1)
+        .bin("gender").set_to("male")
+        .execute()
     )
 
     result = await (await session.query(customer_dataset.id(10)).execute()).first_or_raise()
@@ -402,9 +402,9 @@ async def test_java_example_update(session, customer_dataset):
     """
     await (
         session.update(customer_dataset.id(2))
-            .bin("name").set_to("Tim")
-            .bin("age").increment_by(1)
-            .execute()
+        .bin("name").set_to("Tim")
+        .bin("age").increment_by(1)
+        .execute()
     )
 
     result = await (await session.query(customer_dataset.id(2)).execute()).first_or_raise()
@@ -438,9 +438,9 @@ async def test_java_example_replace(session, customer_dataset):
     """
     await (
         session.replace(customer_dataset.id(2))
-            .bin("name").set_to("Tim")
-            .bin("age").set_to(31)
-            .execute()
+        .bin("name").set_to("Tim")
+        .bin("age").set_to(31)
+        .execute()
     )
 
     result = await (await session.query(customer_dataset.id(2)).execute()).first_or_raise()
@@ -459,9 +459,9 @@ async def test_java_example_upsert(session, customer_dataset):
     """
     await (
         session.upsert(customer_dataset.id(1))
-            .bin("name").set_to("Tim Updated")
-            .bin("age").set_to(26)
-            .execute()
+        .bin("name").set_to("Tim Updated")
+        .bin("age").set_to(26)
+        .execute()
     )
 
     result = await (await session.query(customer_dataset.id(1)).execute()).first_or_raise()
@@ -505,8 +505,8 @@ async def test_java_example_filter_control_with_chunk_size(session, customer_dat
     # Test that chunk_size can be called
     stream = await (
         session.query(customer_dataset)
-            .chunk_size(100)
-            .execute()
+        .chunk_size(100)
+        .execute()
     )
 
     # Verify it executes and can be iterated
@@ -522,8 +522,8 @@ async def test_java_example_filter_control_on_partitions(session, customer_datas
     # Test that on_partitions can be called with partition IDs
     stream = await (
         session.query(customer_dataset)
-            .on_partitions(1, 2, 3)
-            .execute()
+        .on_partitions(1, 2, 3)
+        .execute()
     )
 
     # Verify it executes and can be iterated
@@ -539,8 +539,8 @@ async def test_java_example_filter_control_on_partition(session, customer_datase
     # Test that on_partition can be called with a single partition ID
     stream = await (
         session.query(customer_dataset)
-            .on_partition(5)
-            .execute()
+        .on_partition(5)
+        .execute()
     )
     # Just verify it doesn't raise an error
     async for _ in stream:
@@ -553,8 +553,8 @@ async def test_java_example_filter_control_on_partition_range(session, customer_
     # Test that on_partition_range can be called with a partition range
     stream = await (
         session.query(customer_dataset)
-            .on_partition_range(0, 2048)
-            .execute()
+        .on_partition_range(0, 2048)
+        .execute()
     )
     # Just verify it doesn't raise an error
     async for _ in stream:
@@ -568,10 +568,10 @@ async def test_java_example_filter_control_full(session, customer_dataset):
     """
     stream = await (
         session.query(customer_dataset)
-            .chunk_size(100)
-            .on_partitions(1, 2, 3)
-            .where("$.age > 20")
-            .execute()
+        .chunk_size(100)
+        .on_partitions(1, 2, 3)
+        .where("$.age > 20")
+        .execute()
     )
 
     count = 0

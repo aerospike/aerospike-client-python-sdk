@@ -102,9 +102,7 @@ def _parse_sindex_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[st
     return list(index_map.values())
 
 
-def parse_index_list(
-    raw_responses: Dict[str, Dict[str, str]]
-) -> List[Dict[str, str]]:
+def parse_index_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
     """Parse a raw ``sindex-list`` response into public index descriptors.
 
     Wraps :func:`_parse_sindex_list` and normalizes the server's field names
@@ -183,9 +181,7 @@ def _fetch_indexes_blocking(pac_client: "PacClient") -> Dict[str, IndexContext]:
         )
         indexes_by_ns.setdefault(ns, []).append(index)
 
-    return {
-        ns: IndexContext.of(ns, idxs) for ns, idxs in indexes_by_ns.items()
-    }
+    return {ns: IndexContext.of(ns, idxs) for ns, idxs in indexes_by_ns.items()}
 
 
 class IndexesMonitor:

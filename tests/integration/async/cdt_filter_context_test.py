@@ -40,9 +40,7 @@ def _require_filter_context() -> None:
     """Skip when PAC lacks :meth:`~Filter.context` (CDT path on secondary-index filters)."""
     probe = Filter.equal("__bin", 1)
     if not hasattr(probe, "context"):
-        pytest.skip(
-            "aerospike_async Filter.context is required; upgrade the native async client."
-        )
+        pytest.skip("aerospike_async Filter.context is required; upgrade the native async client.")
 
 
 async def _cleanup_records(session, keys):
@@ -117,9 +115,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
     except Exception as e:
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
-    flt = Filter.equal(_BIN, target).context(
-        [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-    )
+    flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
     await wait_for_index(cluster, _NS, _SET, flt)
 
     try:
@@ -134,9 +130,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
         user_keys = sorted(_user_keys_from_stream(found))
         assert user_keys == ["cdt_ctx_hi"]
 
-        flt2 = Filter.equal(_BIN, 9999).context(
-            [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-        )
+        flt2 = Filter.equal(_BIN, 9999).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
         stream2 = await session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
         found2 = []
         try:

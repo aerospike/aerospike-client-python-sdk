@@ -53,9 +53,9 @@ def test_delete_record_reads_then_deletes(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("name").get()
-            .delete_record()
-            .execute()
+        .bin("name").get()
+        .delete_record()
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["name"] == "Alice"
@@ -72,11 +72,11 @@ def test_delete_record_then_write_recreates(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("a").get()
-            .delete_record()
-            .bin("b").set_to(99)
-            .bin("b").get()
-            .execute()
+        .bin("a").get()
+        .delete_record()
+        .bin("b").set_to(99)
+        .bin("b").get()
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["a"] == 1
@@ -96,10 +96,10 @@ def test_touch_record_resets_ttl(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("score").get()
-            .touch_record()
-            .expire_record_after_seconds(120)
-            .execute()
+        .bin("score").get()
+        .touch_record()
+        .expire_record_after_seconds(120)
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["score"] == 42

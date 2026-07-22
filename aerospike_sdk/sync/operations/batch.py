@@ -61,8 +61,7 @@ def _dispatch_batch_stream_blocking(inner: AsyncBatchOperationBuilder) -> Any:
     place on the sync side.
     """
     if not inner._key_operations:
-        raise ValueError(
-            "No operations to execute. Add operations with insert(), update(), etc.")
+        raise ValueError("No operations to execute. Add operations with insert(), update(), etc.")
 
     all_keys = [key_op._key for key_op in inner._key_operations]
     batch_mode = inner._resolved_mode_for_keys_blocking(all_keys)
@@ -80,8 +79,7 @@ def _dispatch_batch_stream_blocking(inner: AsyncBatchOperationBuilder) -> Any:
     delete_policy: Optional[BatchDeletePolicy] = None
     has_delete = any(k._op_type == BatchOpType.DELETE for k in inner._key_operations)
     if has_delete and inner._behavior is not None:
-        delete_keys = [k._key for k in inner._key_operations
-                       if k._op_type == BatchOpType.DELETE]
+        delete_keys = [k._key for k in inner._key_operations if k._op_type == BatchOpType.DELETE]
         bs = inner._behavior.get_settings(
             OpKind.WRITE_NON_RETRYABLE,
             OpShape.BATCH,

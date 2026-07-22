@@ -88,10 +88,10 @@ def test_chaining_policy_fields(session):
     # Test chaining multiple policy methods
     query_builder = (
         session.query(users)
-            .records_per_second(1000)
-            .max_records(10000)
-            .expected_duration(QueryDuration.SHORT)
-            .replica(Replica.SEQUENCE)
+        .records_per_second(1000)
+        .max_records(10000)
+        .expected_duration(QueryDuration.SHORT)
+        .replica(Replica.SEQUENCE)
     )
     assert query_builder is not None
 

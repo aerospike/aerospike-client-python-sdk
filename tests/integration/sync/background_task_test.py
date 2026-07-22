@@ -73,15 +73,15 @@ def test_sync_background_update(cluster):
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = (
         session.background_task()
-            .update(DS)
-            .bin(BG_BIN2).set_to("sync_updated")
-            .execute()
+        .update(DS)
+        .bin(BG_BIN2).set_to("sync_updated")
+        .execute()
     )
     assert _wait_task(cluster, task)
     for i in range(1, 11):
@@ -96,9 +96,9 @@ def test_sync_background_delete(cluster):
         session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = (
         session.background_task()
-            .delete(DS)
-            .where("$.bgval > 8")
-            .execute()
+        .delete(DS)
+        .where("$.bgval > 8")
+        .execute()
     )
     assert _wait_task(cluster, task)
     for i in range(1, 11):
@@ -116,9 +116,9 @@ def test_sync_background_touch(cluster):
         session.upsert(DS.id(f"bg_{i}")).bin(BG_BIN).set_to(i).execute()
     task = (
         session.background_task()
-            .touch(DS)
-            .expire_record_after_seconds(60)
-            .execute()
+        .touch(DS)
+        .expire_record_after_seconds(60)
+        .execute()
     )
     assert _wait_task(cluster, task)
     rr = session.query(DS.id("bg_1")).execute().first_or_raise()
@@ -132,16 +132,16 @@ def test_sync_background_udf(cluster):
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeBin")
-            .passing(BG_BIN2, "sync_udf")
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeBin")
+        .passing(BG_BIN2, "sync_udf")
+        .execute()
     )
     assert _wait_task(cluster, task)
     rr = session.query(DS.id("bg_1")).bins([BG_BIN2]).execute().first_or_raise()
@@ -154,16 +154,16 @@ def test_sync_background_udf_with_validation(cluster):
     for i in range(1, 11):
         (
             session.upsert(DS.id(f"bg_{i}"))
-                .bin(BG_BIN).set_to(i)
-                .bin(BG_BIN2).set_to("original")
-                .execute()
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
         )
     task = (
         session.background_task()
-            .execute_udf(DS)
-            .function(UDF_MODULE, "writeWithValidation")
-            .passing(BG_BIN2, 5)
-            .execute()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeWithValidation")
+        .passing(BG_BIN2, 5)
+        .execute()
     )
     assert _wait_task(cluster, task)
     for i in range(1, 11):

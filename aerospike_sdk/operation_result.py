@@ -84,9 +84,7 @@ class OperationResult:
             return int(v)
         if isinstance(v, int):
             return v
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not int"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not int")
 
     def get_int(self) -> int:
         """Alias for :meth:`get_long` — Python ``int`` is unbounded so the
@@ -109,9 +107,7 @@ class OperationResult:
             return float(v)
         if isinstance(v, (int, float)):
             return float(v)
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not float"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not float")
 
     def get_float(self) -> float:
         """Alias for :meth:`get_double`."""
@@ -133,9 +129,7 @@ class OperationResult:
             return v
         if isinstance(v, int):
             return v != 0
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not bool"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not bool")
 
     # -- String / bytes accessors --------------------------------------------
 
@@ -150,9 +144,7 @@ class OperationResult:
             return None
         if isinstance(v, str):
             return v
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not str"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not str")
 
     def get_bytes(self) -> bytes | None:
         """Return the value as ``bytes``; ``None`` is propagated.
@@ -166,9 +158,7 @@ class OperationResult:
             return v
         if isinstance(v, bytearray):
             return bytes(v)
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not bytes"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not bytes")
 
     # -- Collection accessors -------------------------------------------------
 
@@ -183,9 +173,7 @@ class OperationResult:
             return None
         if isinstance(v, list):
             return v
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not list"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not list")
 
     def get_map(self) -> dict[Any, Any] | None:
         """Return the value as ``dict``; ``None`` is propagated.
@@ -198,9 +186,7 @@ class OperationResult:
             return None
         if isinstance(v, dict):
             return v
-        raise TypeError(
-            f"OperationResult value is {type(v).__name__}, not dict"
-        )
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not dict")
 
     def __repr__(self) -> str:
         return f"OperationResult({self._value!r})"

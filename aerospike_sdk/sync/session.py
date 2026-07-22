@@ -142,8 +142,7 @@ class SyncSession:
             )
         # Under MRT the cached policies are skipped (txn not stamped);
         # rebuild a per-call policy from behavior.
-        policy = to_read_policy(
-            self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
         return self._pac_client.get_blocking(key, bins, policy=policy)
 
@@ -211,8 +210,7 @@ class SyncSession:
             )
         return NamespaceScStatus(
             False,
-            f"Namespace {namespace!r} info did not report strong-consistency; "
-            "treating as non-SC.",
+            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
         )
 
     def is_namespace_sc(self, namespace: str) -> bool:
@@ -468,8 +466,7 @@ class SyncSession:
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf`
         """
-        return self._client._register_udf(
-            body, server_path, language, policy=policy)
+        return self._client._register_udf(body, server_path, language, policy=policy)
 
     def register_udf_from_file(
         self,

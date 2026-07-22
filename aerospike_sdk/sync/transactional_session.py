@@ -40,10 +40,11 @@ class SyncTransactionalSession(SyncSession):
     the transaction aborts. Explicit :meth:`commit`, :meth:`abort`, and
     :meth:`rollback` (alias for ``abort``) are available for manual control.
 
-    Example:
-        >>> with client.create_session().transaction() as tx:
-        ...     tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-        ...     tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
+    Example::
+
+        with client.create_session().transaction() as tx:
+            tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
+            tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
     See Also:
         :meth:`SyncSession.transaction`:
