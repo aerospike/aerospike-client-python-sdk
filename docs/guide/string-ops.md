@@ -16,7 +16,7 @@ projection on the bin without changing its value.
 ```python
 profile = DataSet.of("test", "profile")
 key = profile.id("user-42")
-await session.upsert(key).bin("name").set_to("hello world").execute()
+await session.upsert(key).put({"name": "hello world"}).execute()
 
 # Codepoint length
 stream = await session.query(key).bin("name").str_strlen().execute()
@@ -36,7 +36,7 @@ assert (await stream.first_or_raise()).record_or_raise().bins["name"] == 6
 Several reads return booleans suitable for filtering or guarding subsequent ops.
 
 ```python
-await session.upsert(key).bin("email").set_to("alice@example.com").execute()
+await session.upsert(key).put({"email": "alice@example.com"}).execute()
 
 stream = await session.query(key).bin("email").str_contains("@").execute()
 assert (await stream.first_or_raise()).record_or_raise().bins["email"] is True
@@ -55,7 +55,7 @@ Multiple reads on the same bin in one ``execute()`` come back as a list
 on the bin value, in op-arrival order:
 
 ```python
-await session.upsert(key).bin("s").set_to("hello").execute()
+await session.upsert(key).put({"s": "hello"}).execute()
 
 stream = await (session.query(key)
                 .bin("s").str_strlen()
@@ -72,7 +72,7 @@ Modify operations mutate the bin in place. Chain freely; the bin's
 post-modify state is reflected in subsequent reads on the same key.
 
 ```python
-await session.upsert(key).bin("name").set_to("alice").execute()
+await session.upsert(key).put({"name": "alice"}).execute()
 
 # Case change
 await session.upsert(key).bin("name").str_upper().execute()
@@ -107,7 +107,7 @@ than the start or end.
 ### Replace, Trim, Pad
 
 ```python
-await session.upsert(key).bin("greeting").set_to("  hi there  ").execute()
+await session.upsert(key).put({"greeting": "  hi there  "}).execute()
 
 await session.upsert(key).bin("greeting").str_trim().execute()
 # → "hi there"
@@ -127,7 +127,7 @@ ICU regex syntax. Set the ``GLOBAL`` flag to replace every match
 ```python
 from aerospike_sdk import StringRegexFlags
 
-await session.upsert(key).bin("text").set_to("a1 b2 c3").execute()
+await session.upsert(key).put({"text": "a1 b2 c3"}).execute()
 
 await (session.upsert(key)
        .bin("text").str_regex_replace(r"\d", "X", flags=StringRegexFlags.GLOBAL)
@@ -177,7 +177,7 @@ path. Use the low-level :class:`~aerospike_async.StringOperation` with
 ```python
 from aerospike_sdk import StringOperation, CTX
 
-await session.upsert(key).bin("tags").set_to(["alpha", "beta", "gamma"]).execute()
+await session.upsert(key).put({"tags": ["alpha", "beta", "gamma"]}).execute()
 
 # Uppercase the element at list index 1
 await (session.upsert(key)
@@ -193,7 +193,7 @@ assert (await stream.first_or_raise()).record_or_raise().bins["tags"] == [
 Map keys work the same way:
 
 ```python
-await session.upsert(key).bin("attrs").set_to({"k1": "abcd", "k2": "xyz"}).execute()
+await session.upsert(key).put({"attrs": {"k1": "abcd", "k2": "xyz"}}).execute()
 
 stream = await (session.upsert(key)
                 .add_operation(StringOperation.strlen("attrs", ctx=[CTX.map_key("k1")]))
@@ -231,7 +231,7 @@ Accepts integer, float, string, and blob source types. The op has no CTX
 overload and no ``flags`` argument.
 
 ```python
-await session.upsert(key).bin("count").set_to(42).execute()
+await session.upsert(key).put({"count": 42}).execute()
 
 await (session.upsert(key)
        .add_operation(StringOperation.to_string("count"))
@@ -250,7 +250,7 @@ wire and surface as ``None`` in the positional list — the by-name
 ``bins`` dictionary reflects only the post-modify state.
 
 ```python
-await session.upsert(key).bin("s").set_to("ab").execute()
+await session.upsert(key).put({"s": "ab"}).execute()
 
 stream = await (session.upsert(key)
                 .bin("s").str_upper()

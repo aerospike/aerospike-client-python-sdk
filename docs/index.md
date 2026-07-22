@@ -21,8 +21,7 @@ async def main():
         # Write
         await (
             session.upsert(users.id(1))
-            .bin("name").set_to("Alice")
-            .bin("age").set_to(30)
+            .put({"name": "Alice", "age": 30})
             .execute()
         )
 
@@ -55,7 +54,7 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
     users = DataSet.of("test", "users")
 
     # Write
-    session.upsert(users.id(1)).bin("name").set_to("Alice").bin("age").set_to(30).execute()
+    session.upsert(users.id(1)).put({"name": "Alice", "age": 30}).execute()
 
     # Read
     stream = session.query(users.id(1)).execute()

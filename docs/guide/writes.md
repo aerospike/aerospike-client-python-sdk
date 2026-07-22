@@ -1,8 +1,8 @@
 # Writing Data
 
 All writes go through session entry points that return a
-[`WriteSegmentBuilder`](../api/write-segment.md). Chain bin operations, then
-call `.execute()`.
+[`WriteSegmentBuilder`](../api/write-segment.md). Assign bin values via dict
+(or chain bin operations), then call `.execute()`.
 
 ## Write Verbs
 
@@ -16,30 +16,31 @@ call `.execute()`.
 | `touch()` | Reset TTL | Yes |
 | `exists()` | Check existence | No |
 
-## Bin Chaining
+## Dict Pattern
 
-Set individual bins with the chainable `.bin().set_to()` pattern:
+Set bins by passing a dict to `.put()` — the common case:
 
 ```python
 users = DataSet.of("test", "users")
 
 await (
     session.upsert(users.id(1))
-    .bin("name").set_to("Alice")
-    .bin("age").set_to(30)
-    .bin("active").set_to(True)
+    .put({"name": "Alice", "age": 30, "active": True})
     .execute()
 )
 ```
 
-## Dict Pattern
+## Bin Chaining
 
-Set multiple bins at once with `.put()`:
+Set bins individually with the chainable `.bin().set_to()` pattern — useful when
+building bins conditionally or mixing in per-bin operations:
 
 ```python
 await (
     session.upsert(users.id(1))
-    .put({"name": "Alice", "age": 30, "active": True})
+    .bin("name").set_to("Alice")
+    .bin("age").set_to(30)
+    .bin("active").set_to(True)
     .execute()
 )
 ```
