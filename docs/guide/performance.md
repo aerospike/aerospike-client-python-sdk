@@ -8,7 +8,7 @@ This guide is the short, user-facing decision tree. The full numbers and methodo
 
 1. **Single-key reads/writes, want max throughput?** Use [`session.get()` / `session.put()`](#fast-path-sessionget--sessionput) — the fast-path API.
 2. **Complex queries (secondary index, AEL filters, batch ops, error handlers)?** Use [chained builders](#chained-builder-api) — `session.query(...).where(...).execute()` and friends.
-3. **Sync or async?** If you have an existing sync codebase, use the sync entry path (`aerospike_sdk.sync`). For new code or web servers, async is the standard.
+3. **Sync or async?** If you have an existing sync codebase, use the sync entry path ([`aerospike_sdk.sync`](../api/sync/cluster-definition.md)). For new code or web servers, async is the standard.
 4. **Free-threaded Python (e.g. 3.14t)?** Yes if you need high throughput across many threads. No if you depend on C extensions that aren't FT-safe.
 5. **AsyncPool?** Only on free-threaded Python. Slower than single-client on non-FT.
 
@@ -162,12 +162,12 @@ On regular Python it's a wash — pick AsyncPool if it fits your code shape (you
 
 ## Sync vs async — when to pick which
 
-- **Sync (`aerospike_sdk.sync`)** is best when:
+- **Sync ([`aerospike_sdk.sync`](../api/sync/cluster-definition.md))** is best when:
   - You're integrating into an existing sync codebase (Django views, scripts, etc.)
   - Per-op latency matters more than concurrency depth
   - You want the absolute lowest per-op overhead — PSDK sync fast-path is roughly at parity with PAC's direct blocking API
 
-- **Async (top-level `aerospike_sdk`)** is best when:
+- **Async (top-level [`aerospike_sdk`](../api/cluster-definition.md))** is best when:
   - You already have an asyncio event loop (FastAPI, aiohttp, etc.)
   - You need to overlap I/O across many concurrent operations
   - You're willing to use uvloop for higher throughput (default in modern asyncio + free-threaded Python setups)

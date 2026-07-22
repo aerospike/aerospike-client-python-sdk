@@ -2,7 +2,7 @@
 
 All writes go through session entry points that return a
 [`WriteSegmentBuilder`](../api/write-segment.md). Assign bin values via dict
-(or chain bin operations), then call `.execute()`.
+(or chained bin operations), then call `.execute()`.
 
 ## Write Verbs
 
