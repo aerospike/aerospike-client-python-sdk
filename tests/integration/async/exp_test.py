@@ -744,7 +744,7 @@ class TestCdtPathWithExp:
 
     async def test_list_get_by_index(self, session_with_cdt_data):
         """Test list_get_by_index using Exp builder."""
-        from aerospike_async import ExpType, ListReturnType
+        from aerospike_sdk import ExpType, ListReturnType
 
         # Filter: numbers[0] == 10
         filter_exp = Exp.eq(
@@ -773,7 +773,7 @@ class TestCdtPathWithExp:
 
     async def test_map_get_by_key(self, session_with_cdt_data):
         """Test map_get_by_key using Exp builder."""
-        from aerospike_async import ExpType, MapReturnType
+        from aerospike_sdk import ExpType, MapReturnType
 
         # Filter: info.age == 30
         filter_exp = Exp.eq(
@@ -1799,7 +1799,7 @@ class TestInExpression:
 
     async def test_string_in_list_bin_with_exp(self, session_with_cdt_data):
         """Filter: "bob" in $.names — should match rec1 only."""
-        from aerospike_async import ListReturnType
+        from aerospike_sdk import ListReturnType
         filter_exp = Exp.list_get_by_value(
             ListReturnType.EXISTS,
             Exp.string_val("bob"),

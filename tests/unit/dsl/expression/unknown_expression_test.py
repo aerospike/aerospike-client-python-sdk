@@ -20,8 +20,7 @@ an evaluator-unknown error, which short-circuits enclosing expressions.
 """
 
 import pytest
-from aerospike_async import ExpType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import Exp, ExpType, MapReturnType, parse_ael
 
 
 class TestUnknownAndErrorAreEquivalent:

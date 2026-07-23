@@ -18,7 +18,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import Expiration, Filter, Key, MapOperation, MapPolicy, Operation
+from aerospike_sdk import Filter, Key
+from aerospike_async import Expiration, MapOperation, MapPolicy, Operation
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder,

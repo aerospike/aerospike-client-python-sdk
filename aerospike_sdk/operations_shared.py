@@ -15,19 +15,16 @@
 
 """Neutral helpers for write operations — shared by async + sync, single-key + batch.
 
-No asyncio anywhere. Holds the verb model (:class:`BatchOpType` enum,
-:data:`_OP_TYPE_TO_REA` mapping) used by both the single-key write path
-(:mod:`aerospike_sdk.aio.operations.query`) and the batch path
-(:mod:`aerospike_sdk.aio.operations.batch` /
-:mod:`aerospike_sdk.sync.operations.batch`), plus the PAC op-list builder
-used by the batch dispatchers.
+No asyncio anywhere. Holds the verb model (:data:`_OP_TYPE_TO_REA`
+mapping) used by both the single-key write path
+(:mod:`aerospike_sdk.aio.operations.query`) and the multi-key batch path
+of the verb chain (:mod:`aerospike_sdk.query_shared`).
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from enum import Enum
 from time import perf_counter
 from typing import (
     TYPE_CHECKING,
@@ -44,11 +41,6 @@ from typing import (
 from typing_extensions import Self
 
 from aerospike_async import (
-    BatchDeleteOp,
-    BatchDeletePolicy,
-    BatchReadOp,
-    BatchWriteOp,
-    BatchWritePolicy,
     Client,
     ExpOperation,
     ExpReadFlags,
@@ -61,7 +53,6 @@ from aerospike_async import (
     RecordExistsAction,
     Txn,
     WritePolicy,
-    has_any_write_op,
 )
 from aerospike_async.exceptions import ResultCode
 
@@ -78,6 +69,7 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.op
         WriteBinBuilder,
         WriteSegmentBuilder,
     )
+    from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
     from aerospike_sdk.error_strategy import OnError
     from aerospike_sdk.record_result import RecordResult
 
@@ -142,19 +134,9 @@ def _cmd_failed(
         )
 
 
-class BatchOpType(Enum):
-    """Type of batch operation."""
-    INSERT = "insert"
-    UPDATE = "update"
-    UPSERT = "upsert"
-    REPLACE = "replace"
-    REPLACE_IF_EXISTS = "replace_if_exists"
-    DELETE = "delete"
-
-
-# Verb → record_exists_action enforcement on the wire. Same mapping is used
-# by the single-key write path (string verbs from ``Session.insert/update/...``)
-# and the batch path (:attr:`BatchOpType` values are the string verbs).
+# Verb → record_exists_action enforcement on the wire. Used by the
+# single-key and multi-key batch write paths alike (string verbs from
+# ``Session.insert/update/...``).
 # `UPSERT` is the server default (no enforcement) and `DELETE` uses a
 # different policy type, hence both are absent.
 _OP_TYPE_TO_REA: dict[str, RecordExistsAction] = {
@@ -163,19 +145,6 @@ _OP_TYPE_TO_REA: dict[str, RecordExistsAction] = {
     "replace": RecordExistsAction.REPLACE,
     "replace_if_exists": RecordExistsAction.REPLACE_ONLY,
 }
-
-
-def _write_policy_for_op_type(op_type: BatchOpType) -> Optional[BatchWritePolicy]:
-    """Build a per-key :class:`BatchWritePolicy` enforcing the verb's existence
-    semantics, or ``None`` for ``UPSERT`` / ``DELETE`` (server default already
-    matches / delete uses a different policy).
-    """
-    rea = _OP_TYPE_TO_REA.get(op_type.value)
-    if rea is None:
-        return None
-    wp = BatchWritePolicy()
-    wp.record_exists_action = rea
-    return wp
 
 
 # TTL sentinels — match the signed-int convention the server uses on the wire.
@@ -345,41 +314,6 @@ class _WriteVerbs:
         return self._start_write_verb("exists", arg1, *more_keys)
 
 
-def _build_pac_batch_ops(
-    key_operations: List[Any],
-    delete_policy: Optional[BatchDeletePolicy],
-) -> List[Any]:
-    """Translate the builder's accumulated per-key ops into PAC's pre-wrapped
-    op list (:class:`BatchWriteOp` / :class:`BatchReadOp` /
-    :class:`BatchDeleteOp`), one entry per key in input order.
-
-    Each write carries a per-key :class:`BatchWritePolicy` derived from its
-    verb (:func:`_write_policy_for_op_type`). Read-only op lists land as
-    :class:`BatchReadOp` so PAC routes them via the read wire path —
-    wrapping a read-only op list in :class:`BatchWriteOp` would force write
-    semantics on the wire and the per-node batch group would error out.
-    """
-    ops: List[Any] = []
-    for key_op in key_operations:
-        if key_op._op_type == BatchOpType.DELETE:
-            ops.append(BatchDeleteOp(key_op._key, policy=delete_policy))
-            continue
-        key_ops = key_op._operations.copy()
-        if not key_ops and key_op._bins:
-            for bin_name, value in key_op._bins.items():
-                key_ops.append(Operation.put(bin_name, value))
-        if not key_ops:
-            key_ops.append(Operation.touch())
-        if has_any_write_op(key_ops):
-            ops.append(BatchWriteOp(
-                key_op._key, key_ops,
-                policy=_write_policy_for_op_type(key_op._op_type),
-            ))
-        else:
-            ops.append(BatchReadOp(key_op._key, operations=key_ops))
-    return ops
-
-
 def _build_exp_write_flags(
     base: int,
     ignore_op_failure: bool,
@@ -403,7 +337,7 @@ class _WriteSegmentBuilderBase:
     Holds the wrapped query-builder reference (``_qb``) and the chaining
     methods that mutate state on it. Concrete subclasses
     (:class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder` for
-    async, :class:`~aerospike_sdk.sync.operations.query.SyncWriteSegmentBuilder`
+    async, :class:`~aerospike_sdk.sync.operations.query.WriteSegmentBuilder`
     for sync) add their respective ``execute()`` paths.
 
     Subclasses inject their tier-appropriate :class:`WriteBinBuilder` class
@@ -588,7 +522,7 @@ class _WriteSegmentBuilderBase:
         self._qb._op_type = "replace_if_exists"
         return self
 
-    def execute_blocking_fast_path(
+    def _execute_blocking_fast_path(
         self,
         on_error: Optional[Any] = None,
     ) -> Optional[List[Any]]:
@@ -599,7 +533,7 @@ class _WriteSegmentBuilderBase:
         ``None`` when the spec shape isn't yet handled by the blocking
         dispatch. Raises a converted PAC exception on failure.
         """
-        return self._qb.execute_blocking_fast_path(on_error)
+        return self._qb._execute_blocking_fast_path(on_error)
 
     def bin(self, bin_name: str) -> "WriteBinBuilder":
         """Start a bin-level write operation.
@@ -794,6 +728,33 @@ class _WriteSegmentBuilderBase:
         self._qb._set_current_keys(arg1, *more_keys)
         return self._qb
 
+    def execute_udf(self, *keys: Key) -> "UdfFunctionBuilder":
+        """Finalize the current write segment and chain a UDF execution.
+
+        The write segment is packaged as-is; the returned builder targets
+        the new key(s), and the whole chain still executes as one batch.
+        Call ``function(package, name)`` next.
+
+        Args:
+            *keys: One or more keys for the UDF segment.
+
+        Returns:
+            A ``UdfFunctionBuilder`` — call ``function`` next.
+
+        Raises:
+            ValueError: If no keys are provided.
+
+        Example::
+
+            rs = await (
+                session.upsert(order_key).put({"status": "paid"})
+                .execute_udf(stats_key)
+                .function("order_stats", "record_payment")
+                .execute()
+            )
+        """
+        return self._qb.execute_udf(*keys)
+
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> Self:
@@ -816,15 +777,14 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     ``_op_type_fast``, ``_ops``, durable-delete overrides, MRT plumbing) and
     the methods that toggle between fast-path mutation and promoted
     delegation. The concrete ``_promote()`` implementation differs per
-    subclass: the async :class:`_SingleKeyWriteSegment` constructs a
-    :class:`QueryBuilder`; ``SyncSingleKeyWriteSegment`` constructs a
-    ``SyncQueryBuilder``.
+    subclass: each tier's ``_SingleKeyWriteSegment`` constructs its own
+    tier's ``QueryBuilder``.
 
     Subclasses:
         - :class:`~aerospike_sdk.aio.operations.query._SingleKeyWriteSegment`:
-          ``_promote()`` constructs a :class:`QueryBuilder`; async ``execute()``.
-        - :class:`~aerospike_sdk.sync.operations.query.SyncSingleKeyWriteSegment`:
-          ``_promote()`` constructs a ``SyncQueryBuilder``; sync ``execute()``.
+          ``_promote()`` constructs the async ``QueryBuilder``; async ``execute()``.
+        - :class:`~aerospike_sdk.sync.operations.query._SingleKeyWriteSegment`:
+          ``_promote()`` constructs the sync ``QueryBuilder``; sync ``execute()``.
 
     Private class — never seen by end users; constructed by the session
     when a single-key write verb is invoked.
@@ -843,9 +803,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def _promote(self) -> None:
         """Lift the fast-path state into a full builder. Subclasses override.
 
-        The base implementation raises — concrete subclasses
-        (:class:`~aerospike_sdk.aio.operations.query._SingleKeyWriteSegment`
-        and ``SyncSingleKeyWriteSegment``) override.
+        The base implementation raises — the concrete per-tier
+        ``_SingleKeyWriteSegment`` subclasses override.
         """
         raise NotImplementedError("subclass must implement _promote")
 
@@ -862,9 +821,14 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
         write_policy_sc: Optional[WritePolicy] = None,
         read_policy_sc: Optional[ReadPolicy] = None,
+        sdk_client: Optional[Any] = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
+        # Owning SDK client, forwarded on promotion so implicit batch-write
+        # transactions still gate correctly for chains grown from this
+        # fast segment. One attribute store on the fast ctor.
+        self._sdk_client_fast = sdk_client
         self._key = key
         self._op_type_fast = op_type
         self._ops: list[Any] = []
@@ -1007,6 +971,10 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().query(arg1, *more_keys)
 
+    def execute_udf(self, *keys):
+        self._promote()
+        return super().execute_udf(*keys)
+
     def _start_write_verb(self, op_type, arg1, *more_keys):
         self._promote()
         return super()._start_write_verb(op_type, arg1, *more_keys)
@@ -1034,12 +1002,12 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._write_policy = wp
         return self._apply_txn(wp or WritePolicy())
 
-    def execute_blocking_fast_path(
+    def _execute_blocking_fast_path(
         self,
         on_error: "Optional[OnError]" = None,
     ) -> "Optional[List[RecordResult]]":
         """Blocking fast path. Promotes to a full builder first, then defers
-        to the inherited :meth:`QueryBuilder.execute_blocking_fast_path`.
+        to the inherited :meth:`QueryBuilder._execute_blocking_fast_path`.
 
         Returns a list of :class:`RecordResult` on success; ``None`` when
         the spec shape isn't eligible (caller falls back to runner-driven).
@@ -1048,4 +1016,4 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             # Fast path requires THROW disposition; bail.
             return None
         self._promote()
-        return self._qb.execute_blocking_fast_path(on_error)  # type: ignore[union-attr]
+        return self._qb._execute_blocking_fast_path(on_error)  # type: ignore[union-attr]

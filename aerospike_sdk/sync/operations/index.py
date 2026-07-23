@@ -13,113 +13,46 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""SyncIndexBuilder - Synchronous wrapper for index operations."""
+"""Synchronous secondary-index builder (blocking terminals).
+
+Chain state and chaining methods live on the shared, runtime-agnostic
+:class:`~aerospike_sdk.index_shared._IndexBuilderBase`; this module adds
+``create()`` / ``drop()`` terminals that dispatch through PAC's blocking
+entries — no asyncio loop is involved.
+"""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import TYPE_CHECKING
 
-from aerospike_async import CTX, CollectionIndexType, IndexType
+from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.index_shared import _IndexBuilderBase
 
-from aerospike_sdk.aio.client import Client
-from aerospike_sdk.aio.operations.index import IndexBuilder
+if TYPE_CHECKING:
+    from aerospike_sdk.sync.client import SyncClient
 
 
-class SyncIndexBuilder:
-    """Synchronous façade over :class:`~aerospike_sdk.aio.operations.index.IndexBuilder`.
+class IndexBuilder(_IndexBuilderBase):
+    """Synchronous secondary-index builder.
 
-    Chain :meth:`on_bin`, :meth:`named`, :meth:`numeric` / :meth:`string`, optional
-    :meth:`collection`, then :meth:`create` or :meth:`drop`; each mutating step
-    is stored locally and replayed onto a fresh async builder when executing.
+    Chain :meth:`on_bin` (or :meth:`on_expression`), :meth:`named`,
+    :meth:`numeric` / :meth:`string` / :meth:`geo2dsphere`, optional
+    :meth:`collection` or :meth:`context` (inherited from the shared base),
+    then :meth:`create` or :meth:`drop`.
 
     See Also:
-        :class:`~aerospike_sdk.aio.operations.index.IndexBuilder`
+        :class:`~aerospike_sdk.aio.operations.index.IndexBuilder`: Async equivalent.
     """
 
     def __init__(
         self,
-        async_client: Client,
+        async_client: SyncClient,
         namespace: str,
         set_name: str,
     ) -> None:
         """Pair with ``namespace``/``set`` from the parent SyncSession."""
+        super().__init__(namespace, set_name)
         self._async_client = async_client
-        self._namespace = namespace
-        self._set_name = set_name
-        self._bin_name: Optional[str] = None
-        self._index_name: Optional[str] = None
-        self._index_type: Optional[IndexType] = None
-        self._collection_index_type: Optional[CollectionIndexType] = None
-        self._ctx: Optional[List[CTX]] = None
-
-    def _get_async_builder(self) -> IndexBuilder:
-        """Get the underlying async index builder."""
-        builder = IndexBuilder(
-            client=self._async_client._async_client,
-            namespace=self._namespace,
-            set_name=self._set_name,
-        )
-        if self._bin_name:
-            builder.on_bin(self._bin_name)
-        if self._index_name:
-            builder.named(self._index_name)
-        if self._index_type:
-            if self._index_type == IndexType.NUMERIC:
-                builder.numeric()
-            elif self._index_type == IndexType.STRING:
-                builder.string()
-        if self._collection_index_type:
-            builder.collection(self._collection_index_type)
-        if self._ctx:
-            builder.context(self._ctx)
-        return builder
-
-    def on_bin(self, bin_name: str) -> SyncIndexBuilder:
-        """Set which bin this secondary index covers."""
-        self._bin_name = bin_name
-        return self
-
-    def named(self, index_name: str) -> SyncIndexBuilder:
-        """Set the secondary index name the cluster uses (required for create and drop)."""
-        self._index_name = index_name
-        return self
-
-    def numeric(self) -> SyncIndexBuilder:
-        """Set the secondary index type to numeric; use :meth:`string` for string bins."""
-        self._index_type = IndexType.NUMERIC
-        return self
-
-    def string(self) -> SyncIndexBuilder:
-        """Set the secondary index type to string; use :meth:`numeric` for numeric bins."""
-        self._index_type = IndexType.STRING
-        return self
-
-    def geo2dsphere(self) -> SyncIndexBuilder:
-        """Set the secondary index type to GEO2DSPHERE (for GeoJSON bin values)."""
-        self._index_type = IndexType.GEO2D_SPHERE
-        return self
-
-    def collection(self, collection_index_type: CollectionIndexType) -> SyncIndexBuilder:
-        """Set the collection index variant for map or list bins.
-
-        Args:
-            collection_index_type: Same as
-                :meth:`~aerospike_sdk.aio.operations.index.IndexBuilder.collection`.
-        """
-        self._collection_index_type = collection_index_type
-        return self
-
-    def context(self, ctx: List[CTX]) -> SyncIndexBuilder:
-        """Set a CDT context path for indexing a nested list or map element.
-
-        Args:
-            ctx: CDT path entries (e.g., ``[CTX.map_key("outer")]``).
-
-        Returns:
-            ``self`` for method chaining.
-        """
-        self._ctx = ctx
-        return self
 
     def create(self) -> None:
         """Create the index (blocks until the admin call completes).
@@ -128,13 +61,26 @@ class SyncIndexBuilder:
             ValueError: Same validation as async :meth:`~aerospike_sdk.aio.operations.index.IndexBuilder.create`.
             AerospikeError: On failure from the cluster (typed when mapped).
         """
+        if self._expression is not None:
+            index_name, index_type, expression = self._validate_expression_create()
+            try:
+                self._async_client._async_client.create_index_using_expression_blocking(
+                    self._namespace,
+                    self._set_name,
+                    index_name,
+                    index_type,
+                    expression,
+                    self._collection_index_type,
+                )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
+            return
         if not self._bin_name:
             raise ValueError("bin_name is required. Call on_bin() first.")
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
         if not self._index_type:
             raise ValueError("index_type is required. Call numeric() or string() first.")
-        from aerospike_sdk.exceptions import _convert_pac_exception
         try:
             self._async_client._async_client.create_index_blocking(
                 self._namespace,
@@ -157,7 +103,6 @@ class SyncIndexBuilder:
         """
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
-        from aerospike_sdk.exceptions import _convert_pac_exception
         try:
             self._async_client._async_client.drop_index_blocking(
                 self._namespace, self._set_name, self._index_name,
@@ -165,3 +110,6 @@ class SyncIndexBuilder:
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
+
+# Deprecated alias, kept importable for one release cycle.
+SyncIndexBuilder = IndexBuilder

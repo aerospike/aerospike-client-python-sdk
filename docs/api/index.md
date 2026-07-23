@@ -17,7 +17,6 @@ The primary API. All operations are `async`/`await`.
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
 | [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.1.3+) |
-| [`BatchOperationBuilder`](batch.md) | Low-level batch operation builder |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
@@ -34,12 +33,11 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`ClusterDefinition`](sync/cluster-definition.md) | Sync entry point — configure, then `connect()` |
 | [`Cluster`](sync/cluster.md) | Sync cluster handle |
 | [`SyncSession`](sync/session.md) | Sync session |
-| [`SyncQueryBuilder`](sync/query.md) | Sync query builder |
-| [`SyncWriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
-| [`SyncBatchOperationBuilder`](sync/batch.md) | Sync batch operation builder |
-| [`SyncIndexBuilder`](sync/index-builder.md) | Sync secondary index builder |
+| [`QueryBuilder`](sync/query.md) | Sync query builder |
+| [`WriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
+| [`IndexBuilder`](sync/index-builder.md) | Sync secondary index builder |
 | [`SyncBackgroundTaskSession`](sync/background.md) | Sync server-side background jobs |
-| [`SyncUdfFunctionBuilder`](sync/udf.md) | Sync foreground UDF execution |
+| [`UdfFunctionBuilder`](sync/udf.md) | Sync foreground UDF execution |
 | [`SyncInfoCommands`](sync/info.md) | Sync info protocol commands |
 | [`SyncTransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
 | [`SyncRecordStream`](sync/record-stream.md) | Sync iterator over query results |
@@ -91,7 +89,6 @@ write-segment
 cdt-read
 cdt-write
 string-builder
-batch
 index-builder
 background
 udf
@@ -102,7 +99,6 @@ sync/cluster
 sync/session
 sync/query
 sync/write-segment
-sync/batch
 sync/transactional-session
 sync/record-stream
 sync/cluster-definition

@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError
 
 

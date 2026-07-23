@@ -23,15 +23,8 @@ Covers:
 
 import pytest
 
-from aerospike_async import (
-    Key,
-    ListOrderType,
-    ListPolicy,
-    ListWriteFlags,
-    MapOrder,
-    MapPolicy,
-    MapWriteFlags,
-)
+from aerospike_sdk import Key, ListOrderType, ListWriteFlags, MapOrder, MapWriteFlags
+from aerospike_async import ListPolicy, MapPolicy
 
 from aerospike_sdk.aio.operations.cdt_write import (
     _resolve_list_policy,

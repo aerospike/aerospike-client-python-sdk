@@ -13,200 +13,97 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-"""Synchronous foreground UDF builders delegating to ``aio.operations.udf``."""
+"""Synchronous foreground UDF builders (blocking terminals).
+
+Chain state and chaining methods live on the shared, runtime-agnostic bases
+in :mod:`aerospike_sdk.udf_shared`; this module adds the blocking
+``execute()`` terminal. The wrapped query builder is the sync
+:class:`~aerospike_sdk.sync.operations.query.QueryBuilder` (constructed by
+:meth:`SyncSession.execute_udf`), so verb transitions inherited from the
+base already return sync segment types.
+"""
 
 from __future__ import annotations
 
-from typing import Any, List, Union, overload
+from typing import List, Union
 
-from aerospike_async import FilterExpression, Key
+from aerospike_async import Key
 
-from aerospike_sdk.aio.client import Client
-from aerospike_sdk.aio.operations.udf import (
-    UdfBuilder as AsyncUdfBuilder,
-    UdfFunctionBuilder as AsyncUdfFunctionBuilder,
-)
 from aerospike_sdk.error_strategy import OnError
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder, SyncWriteSegmentBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder
 from aerospike_sdk.sync.record_stream import SyncRecordStream
+from aerospike_sdk.udf_shared import _UdfBuilderBase, _UdfFunctionBuilderBase
+
+__all__ = [
+    "UdfBuilder",
+    "UdfFunctionBuilder",
+]
 
 
-class SyncUdfFunctionBuilder:
+class UdfFunctionBuilder(_UdfFunctionBuilderBase):
     """First step after ``execute_udf``: select package and function name.
 
     See Also:
-        :class:`~aerospike_sdk.aio.operations.udf.UdfFunctionBuilder`
+        :class:`~aerospike_sdk.aio.operations.udf.UdfFunctionBuilder`: Async equivalent.
 
     Examples:
         session.execute_udf(key).function("pkg", "fn")
     """
 
-    __slots__ = ("_inner", "_sdk_client")
-
-    def __init__(
-        self,
-        inner: AsyncUdfFunctionBuilder,
-        sdk_client: Client,
-    ) -> None:
-        self._inner = inner
-        self._sdk_client = sdk_client
-
-    def function(self, package: str, function_name: str) -> SyncUdfBuilder:
-        """Select the UDF package and Lua function."""
-        async_udf_builder = self._inner.function(package, function_name)
-        return SyncUdfBuilder(async_udf_builder, self._sdk_client)
+    __slots__ = ()
 
 
-class SyncUdfBuilder:
+class UdfBuilder(_UdfBuilderBase):
     """Chain UDF arguments, optional filter, and execution (sync).
 
     See Also:
-        :class:`~aerospike_sdk.aio.operations.udf.UdfBuilder`
+        :class:`~aerospike_sdk.aio.operations.udf.UdfBuilder`: Async equivalent.
 
     Examples:
         session.execute_udf(key).function("pkg", "fn").passing(1, 2).execute()
         session.execute_udf(key).function("pkg", "fn").query(key).where("true").execute()
     """
 
-    __slots__ = ("_inner", "_sdk_client")
-
-    def __init__(
-        self,
-        inner: AsyncUdfBuilder,
-        sdk_client: Client,
-    ) -> None:
-        self._inner = inner
-        self._sdk_client = sdk_client
-
-    def passing(self, *args: Any) -> SyncUdfBuilder:
-        """Forward arguments to the server UDF (chainable)."""
-        self._inner.passing(*args)
-        return self
-
-    @overload
-    def where(self, expression: str) -> SyncUdfBuilder: ...
-
-    @overload
-    def where(self, expression: FilterExpression) -> SyncUdfBuilder: ...
-
-    def where(
-        self,
-        expression: Union[str, FilterExpression],
-    ) -> SyncUdfBuilder:
-        """Restrict rows with an AEL string or :class:`~aerospike_async.FilterExpression`."""
-        self._inner.where(expression)
-        return self
-
-    def include_missing_keys(self) -> SyncUdfBuilder:
-        """Include results for missing keys in the stream.
-
-        Returns:
-            self for method chaining.
-        """
-        self._inner.include_missing_keys()
-        return self
-
-    def respond_all_keys(self) -> SyncUdfBuilder:
-        """Alias for :meth:`include_missing_keys` (underlying client's name)."""
-        return self.include_missing_keys()
-
-    def execute_udf(self, *keys: Key) -> SyncUdfFunctionBuilder:
-        """Finalize this UDF spec and start another on *keys*."""
-        async_function_builder = self._inner.execute_udf(*keys)
-        return SyncUdfFunctionBuilder(async_function_builder, self._sdk_client)
+    __slots__ = ()
 
     def query(
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
-    ) -> SyncQueryBuilder:
-        # The inner UdfBuilder's _qb is a SyncQueryBuilder (set up by
-        # :meth:`SyncSession.execute_udf`); the inner ``query`` transition
-        # returns it directly.
-        qb = self._inner.query(arg1, *more_keys)
-        assert isinstance(qb, SyncQueryBuilder)
+    ) -> QueryBuilder:
+        """Close the UDF operation and begin a sync read query segment."""
+        qb = super().query(arg1, *more_keys)
+        # The wrapped query builder is a sync QueryBuilder per
+        # SyncSession.execute_udf's construction contract; assert so the
+        # sync type flows to callers.
+        assert isinstance(qb, QueryBuilder)
         return qb
-
-    def upsert(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start an upsert write segment."""
-        wsb = self._inner.upsert(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def insert(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start an insert-only write segment."""
-        wsb = self._inner.insert(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def update(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        wsb = self._inner.update(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def replace(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start a replace write segment."""
-        wsb = self._inner.replace(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def replace_if_exists(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        wsb = self._inner.replace_if_exists(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def delete(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start a delete segment."""
-        wsb = self._inner.delete(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def touch(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start a touch segment."""
-        wsb = self._inner.touch(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
-
-    def exists(
-        self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
-        """Finalize the UDF spec and start an exists-check segment."""
-        wsb = self._inner.exists(arg1, *more_keys)
-        return SyncWriteSegmentBuilder(wsb)
 
     def execute(self, on_error: OnError | None = None) -> SyncRecordStream:
         """Run the UDF and return a :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
 
         Args:
             on_error: Same semantics as query/write
-                :meth:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder.execute`.
+                :meth:`~aerospike_sdk.sync.operations.query.QueryBuilder.execute`.
 
         See Also:
             :meth:`~aerospike_sdk.aio.operations.udf.UdfBuilder.execute`
         """
-        inner = self._inner
-        if inner._qb._udf_function is None:
+        qb = self._qb
+        if qb._udf_function is None:
             raise ValueError(
                 "function(package, name) must be called before execute()",
             )
-        inner._qb._finalize_udf_spec()
-        qb = inner._qb
+        qb._finalize_udf_spec()
 
         # Tier 1: list-returning blocking dispatch (single + multi-key UDF
         # land here via "udf" op_type → execute_udf_blocking / batch_apply_blocking).
-        fast = qb.execute_blocking_fast_path(on_error)
+        fast = qb._execute_blocking_fast_path(on_error)
         if fast is not None:
             return SyncRecordStream.from_list(fast)
 
         # Tier 1b: multi-spec blocking dispatch.
-        multispec = qb.execute_multispec_blocking(on_error)
+        multispec = qb._execute_multispec_blocking(on_error)
         if multispec is not None:
             return SyncRecordStream.from_list(multispec)
 
@@ -224,3 +121,16 @@ class SyncUdfBuilder:
         raise NotImplementedError(
             f"sync UDF builder shape not yet covered by a blocking dispatcher: "
             f"{shape}")
+
+
+# Bind the tier-appropriate leaf classes into the shared bases' factory
+# hooks (see udf_shared for why these are class attributes, not imports).
+UdfFunctionBuilder._udf_builder_cls = UdfBuilder
+UdfBuilder._udf_function_builder_cls = UdfFunctionBuilder
+# Chain transition hook: lets sync query/write chains open a UDF segment
+# (`QueryBuilder.execute_udf`) and get the sync builder back.
+QueryBuilder._udf_function_builder_cls = UdfFunctionBuilder
+
+# Deprecated aliases, kept importable for one release cycle.
+SyncUdfFunctionBuilder = UdfFunctionBuilder
+SyncUdfBuilder = UdfBuilder

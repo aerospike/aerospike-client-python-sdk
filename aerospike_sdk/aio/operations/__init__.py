@@ -15,20 +15,10 @@
 
 """Async operations for the Aerospike SDK API."""
 
-from aerospike_sdk.aio.operations.batch import (
-    BatchOperationBuilder,
-    BatchKeyOperationBuilder,
-    BatchBinBuilder,
-)
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.operations_shared import BatchOpType
 
 __all__ = [
-    "BatchOperationBuilder",
-    "BatchKeyOperationBuilder",
-    "BatchBinBuilder",
-    "BatchOpType",
     "IndexBuilder",
     "QueryBuilder",
 ]

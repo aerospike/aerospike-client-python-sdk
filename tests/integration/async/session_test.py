@@ -92,7 +92,7 @@ async def test_session_upsert_with_dataset(session):
 
 async def test_session_upsert_with_namespace_set(session):
     """Test session.upsert() with explicit namespace/set."""
-    from aerospike_async import Key
+    from aerospike_sdk import Key
 
     key = Key("test", "users", "user789")
     await session.upsert(

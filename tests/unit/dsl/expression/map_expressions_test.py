@@ -15,8 +15,7 @@
 
 """Unit tests for AEL map expressions. Order matches MapExpressionsTests."""
 
-from aerospike_async import CTX, ExpType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import CTX, Exp, ExpType, MapReturnType, parse_ael
 
 
 class TestMapExpressions:

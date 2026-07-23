@@ -15,8 +15,7 @@
 
 """Unit tests for AEL map and list combined expressions."""
 
-from aerospike_async import CTX, ExpType, ListReturnType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import CTX, Exp, ExpType, ListReturnType, MapReturnType, parse_ael
 
 
 class TestMapAndListExpressions:

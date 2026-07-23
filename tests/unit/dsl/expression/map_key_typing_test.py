@@ -26,8 +26,7 @@ Map keys are typed at parse time:
 """
 
 import pytest
-from aerospike_async import CTX, ExpType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import CTX, Exp, ExpType, MapReturnType, parse_ael
 
 
 def _map_get_by_int_key(bin_name: str, key: int, ctx=None):

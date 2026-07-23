@@ -20,7 +20,8 @@ See async :mod:`tests.integration.async.cdt_filter_context_test` for notes on
 """
 
 import pytest
-from aerospike_async import CTX, Filter, IndexType
+from aerospike_sdk import CTX, Filter
+from aerospike_async import IndexType
 
 from aerospike_sdk import DataSet
 

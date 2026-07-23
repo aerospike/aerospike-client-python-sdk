@@ -26,18 +26,8 @@ Covers:
 
 import pytest
 
-from aerospike_async import (
-    Key,
-    ListOperation,
-    ListOrderType,
-    ListReturnType,
-    ListSortFlags,
-    MapOperation,
-    MapOrder,
-    MapPolicy,
-    MapReturnType,
-    MapWriteFlags,
-)
+from aerospike_sdk import Key, ListOrderType, ListReturnType, ListSortFlags, MapOrder, MapReturnType, MapWriteFlags
+from aerospike_async import ListOperation, MapOperation, MapPolicy
 
 from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,

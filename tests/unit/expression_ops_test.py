@@ -20,28 +20,24 @@ Covers:
 - parse_ael -> FilterExpression conversion
 - QueryBinBuilder.select_from
 - OP_NOT_APPLICABLE guard on dataset queries with expression ops
-- BatchBinBuilder expression methods
+- WriteBinBuilder expression methods
 """
 
 import pytest
 from unittest.mock import MagicMock
 
-from aerospike_async import (
-    ExpReadFlags,
-    ExpWriteFlags,
-    FilterExpression,
-    Key,
-)
+from aerospike_sdk import Key
+from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk.aio.operations.batch import (
-    BatchBinBuilder,
-    BatchKeyOperationBuilder,
-    BatchOperationBuilder,
+from aerospike_sdk.aio.operations.query import (
+    QueryBinBuilder,
+    QueryBuilder,
+    WriteBinBuilder,
+    WriteSegmentBuilder,
 )
-from aerospike_sdk.aio.operations.query import QueryBinBuilder, QueryBuilder
 from aerospike_sdk.ael.parser import parse_ael
-from aerospike_sdk.operations_shared import BatchOpType, _build_exp_write_flags
+from aerospike_sdk.operations_shared import _build_exp_write_flags
 
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT
 _EXP_READ_EVAL_NO_FAIL = ExpReadFlags.EVAL_NO_FAIL
@@ -170,47 +166,48 @@ class TestDatasetQueryGuard:
 
 
 # ===================================================================
-# BatchBinBuilder expression methods
+# WriteBinBuilder expression methods
 # ===================================================================
 
-class TestBatchBinBuilderExpression:
+class TestWriteBinBuilderExpression:
 
-    def _make_batch_builder(self, bin_name: str = "ev"):
-        batch = BatchOperationBuilder(client=MagicMock())
-        key_op = BatchKeyOperationBuilder(batch, Key("test", "s", "k1"), BatchOpType.UPDATE)
-        return BatchBinBuilder(key_op, bin_name), key_op
+    def _make_write_builder(self, bin_name: str = "ev", op_type: str = "update"):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="s")
+        qb._single_key = Key("test", "s", "k1")
+        qb._op_type = op_type
+        segment = WriteSegmentBuilder(qb)
+        return WriteBinBuilder(segment, bin_name), segment, qb
 
     def test_select_from_string(self):
-        bb, key_op = self._make_batch_builder("ev")
+        bb, segment, qb = self._make_write_builder("ev")
         result = bb.select_from("$.A + 4")
-        assert result is key_op
-        assert len(key_op._operations) == 1
+        assert result is segment
+        assert len(qb._operations) == 1
 
     def test_insert_from_string(self):
-        bb, key_op = self._make_batch_builder("c")
+        bb, segment, qb = self._make_write_builder("c")
         result = bb.insert_from("$.A + 4")
-        assert result is key_op
-        assert len(key_op._operations) == 1
+        assert result is segment
+        assert len(qb._operations) == 1
 
     def test_update_from_string(self):
-        bb, key_op = self._make_batch_builder("c")
+        bb, segment, qb = self._make_write_builder("c")
         result = bb.update_from("$.A + 4")
-        assert result is key_op
-        assert len(key_op._operations) == 1
+        assert result is segment
+        assert len(qb._operations) == 1
 
     def test_upsert_from_string(self):
-        bb, key_op = self._make_batch_builder("c")
+        bb, segment, qb = self._make_write_builder("c")
         result = bb.upsert_from("$.A + 4")
-        assert result is key_op
-        assert len(key_op._operations) == 1
+        assert result is segment
+        assert len(qb._operations) == 1
 
     def test_upsert_from_with_flags(self):
-        bb, key_op = self._make_batch_builder("c")
+        bb, segment, qb = self._make_write_builder("c")
         bb.upsert_from("$.A + 4", ignore_op_failure=True, ignore_eval_failure=True, delete_if_null=True)
-        assert len(key_op._operations) == 1
+        assert len(qb._operations) == 1
 
     def test_chaining_set_to_and_expression(self):
-        batch = BatchOperationBuilder(client=MagicMock())
-        key_op = BatchKeyOperationBuilder(batch, Key("test", "s", "k1"), BatchOpType.UPSERT)
-        key_op.bin("name").set_to("Alice").bin("computed").upsert_from("$.age * 2")
-        assert len(key_op._operations) == 2
+        _, segment, qb = self._make_write_builder("unused", op_type="upsert")
+        segment.bin("name").set_to("Alice").bin("computed").upsert_from("$.age * 2")
+        assert len(qb._operations) == 2

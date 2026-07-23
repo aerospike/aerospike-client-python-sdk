@@ -34,14 +34,12 @@ from typing_extensions import deprecated
 if TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
-    from aerospike_sdk.record_result import RecordResult
 
 from aerospike_async import Key, Record, ResultCode, Txn, UDFLang
 
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
-from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
@@ -354,55 +352,6 @@ class Session:
 
     # Delegate all Client operations to maintain same API
 
-    def batch(self) -> "BatchOperationBuilder":
-        """Start a multi-key batch of mixed write operations executed in one server round trip.
-
-        Chain ``insert``, ``update``, ``upsert``, ``replace``, ``delete``, and related
-        bin builders, then ``await ...execute()`` (buffered) or ``execute_stream()``
-        (lazy) to obtain per-key outcomes.
-
-        This is a write-focused convenience: it accepts write verbs and
-        expression reads (``bin(...).select_from(...)``) only. To combine plain
-        reads, ``touch``, or ``exists`` with writes in a single batch, use the
-        :meth:`query` chain, which accepts the same write verbs and is a
-        superset of this builder.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.batch.BatchOperationBuilder`
-            for chaining operations.
-
-        Raises:
-            RuntimeError: If the client is not connected.
-
-        Example::
-
-            results = await (
-                session.batch()
-                .insert(key1).put({"name": "Alice", "age": 25})
-                .update(key2).bin("counter").add(1)
-                .upsert(key3).put({"status": "active"})
-                .delete(key4)
-                .execute()
-            )
-            for row in results:
-                print(row.key, row.result_code)
-
-        See Also:
-            :meth:`query`: Chainable builder for reads and mixed read+write batches (a superset of this write-focused builder).
-            :meth:`upsert`: Single-record writes without batching.
-        """
-        if self._client._client is None:
-            raise RuntimeError("Client is not connected")
-
-        return BatchOperationBuilder(
-            self._client._client,
-            self._behavior,
-            txn=self._txn,
-            namespace_mode_resolver=self._resolve_namespace_mode,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            sdk_client=self._client,
-        )
-
     def background_task(self) -> "BackgroundTaskSession":
         """Configure a server-side background job (query + scan scope) on a dataset.
 
@@ -590,6 +539,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
         )
 
     # -- Read entry point -----------------------------------------------------
@@ -1380,7 +1330,10 @@ class Session:
             and namespace is None and key_value is None
         ):
             # Inline _fast_write_segment + use positional args to skip the
-            # extra function call and kwargs-dict construction. Bench-hot.
+            # extra function call and kwargs-dict construction. Bench-hot:
+            # every arg (including sdk_client, last) must stay positional —
+            # one keyword here forces slot_tp_init to materialize a kwargs
+            # dict for the whole call.
             return _SingleKeyWriteSegment(
                 self._client._async_client,
                 arg1,
@@ -1393,6 +1346,7 @@ class Session:
                 self._resolve_namespace_mode_blocking,
                 self._cached_write_policy_sc,
                 self._cached_read_policy_sc,
+                self._client,
             )
         return self._build_write_segment(
             "upsert", arg1, arg2, *keys,

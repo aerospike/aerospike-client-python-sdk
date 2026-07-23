@@ -46,13 +46,12 @@ For single-key operations where you don't need filters, error handlers, projecti
 ### Sync example
 
 ```python
-from aerospike_sdk import Behavior
+from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.sync import ClusterDefinition
-from aerospike_async import Key
 
 with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
-    k = Key("test", "users", "alice")
+    k = DataSet.of("test", "users").id("alice")
     session.put(k, {"name": "Alice", "age": 28})
     record = session.get(k)
     print(record.bins)
@@ -62,13 +61,12 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 
 ```python
 import asyncio
-from aerospike_sdk import Behavior, ClusterDefinition
-from aerospike_async import Key
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 async def main():
     async with await ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
-        k = Key("test", "users", "alice")
+        k = DataSet.of("test", "users").id("alice")
         await session.put(k, {"name": "Alice", "age": 28})
         record = await session.get(k)
         print(record.bins)
@@ -81,7 +79,7 @@ The fast-path APIs accept an optional `bins=` projection for reads and an arbitr
 **When NOT to use fast-path:**
 - Anything that needs `where(...)` filters, `expire_record_after_seconds`, `with_durable_delete`, generation checks, or `record_exists_action` overrides — use the builder.
 - Reads from a `DataSet` with a secondary-index query — use the builder.
-- Batch reads/writes across multiple keys — use the builder or the `session.batch()` chain.
+- Batch reads/writes across multiple keys — use the builder (a verb chain spanning more than one key executes as a single batch).
 - `RecordResult.is_ok` / `error` introspection per record — use the builder, which yields wrapped `RecordResult` instances.
 
 (chained-builder-api)=
@@ -237,7 +235,7 @@ When the workload can group keys per call, the chained-builder API amortizes its
 | Async single-loop builder, 32 tasks | 128 | ~205K |
 
 **Practical reading:**
-- If your workload can batch keys, the **sync builder with `session.batch()` or multi-key `session.query([keys])`** is the highest-throughput mode — scales to ~485K TPS at batch=128. Doubling the batch size keeps amortizing the per-call cost.
+- If your workload can batch keys, the **sync builder with multi-key `session.query([keys])` or multi-key write chains** is the highest-throughput mode — scales to ~485K TPS at batch=128. Doubling the batch size keeps amortizing the per-call cost.
 - For single-key workloads on free-threaded Python, **AsyncPool fast-path at 4-8 loops** delivers **~260-292K TPS** — the highest non-experimental single-key mode, above sync fast-path (~214K). If you prefer sync, the fast-path is still the best non-experimental sync mode.
 - On regular Python (GIL on), AsyncPool 4×64 (~108K) edges out single-client async (~106K) and is roughly 2× sync fast-path (~51K). Under non-FT, AsyncPool is now a slight win rather than a loss thanks to uvloop inside the pool.
 

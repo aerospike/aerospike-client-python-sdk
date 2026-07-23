@@ -20,11 +20,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from aerospike_async import BatchPolicy, Key, Operation, Txn
+from aerospike_sdk import Key, Txn
+from aerospike_async import BatchPolicy
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.implicit_txn import (
-    batch_ops_contain_write,
     implicit_txn_enabled,
     run_in_implicit_txn,
     run_in_implicit_txn_blocking,
@@ -33,6 +33,7 @@ from aerospike_sdk.implicit_txn import (
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
+from aerospike_sdk.sync.operations.query import SyncQueryBuilder
 
 
 def _sdk_client(implicit=True):
@@ -102,31 +103,6 @@ class TestGate:
 
     def test_no_sdk_client(self):
         assert implicit_txn_enabled(None, None, Mode.SC) is False
-
-
-class TestBatchOpsContainWrite:
-    """Classification mirrors _build_pac_batch_ops wire routing."""
-
-    def test_put_ops_are_writes(self):
-        op = SimpleNamespace(_bins={}, _operations=[Operation.put("a", 1)])
-        assert batch_ops_contain_write([op]) is True
-
-    def test_bins_payload_is_a_write(self):
-        op = SimpleNamespace(_bins={"a": 1}, _operations=[])
-        assert batch_ops_contain_write([op]) is True
-
-    def test_empty_ops_default_to_touch(self):
-        op = SimpleNamespace(_bins={}, _operations=[])
-        assert batch_ops_contain_write([op]) is True
-
-    def test_read_only_ops(self):
-        op = SimpleNamespace(_bins={}, _operations=[Operation.get_bin("a")])
-        assert batch_ops_contain_write([op]) is False
-
-    def test_mixed_reads_and_writes(self):
-        read = SimpleNamespace(_bins={}, _operations=[Operation.get_bin("a")])
-        write = SimpleNamespace(_bins={}, _operations=[Operation.add("n", 1)])
-        assert batch_ops_contain_write([read, write]) is True
 
 
 class TestStampTxn:
@@ -274,14 +250,18 @@ class TestAsyncRunner:
 
 
 class _RecordingBatchClient:
-    """Fake PAC surface for driving the batch builder's blocking execute."""
+    """Fake PAC surface for driving the sync chain's blocking batch dispatch."""
 
     def __init__(self):
         self.batch_policies: list = []
         self.commits: list = []
         self.aborts: list = []
 
-    def batch_blocking(self, ops, batch_policy=None):
+    def batch_operate_blocking(self, keys, ops_per_key, batch_policy=None, write_policy=None):
+        self.batch_policies.append(batch_policy)
+        return []
+
+    def batch_read_blocking(self, keys, bins, batch_policy=None, read_policy=None):
         self.batch_policies.append(batch_policy)
         return []
 
@@ -292,79 +272,75 @@ class _RecordingBatchClient:
         self.aborts.append(txn)
 
 
-def _batch_builder(pac, sdk_client, mode=Mode.SC, txn=None):
-    from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
-
-    return BatchOperationBuilder(
-        pac,
-        None,
+def _write_chain_builder(pac, sdk_client, mode=Mode.SC, txn=None):
+    return SyncQueryBuilder(
+        client=pac,
+        namespace="test",
+        set_name="s",
         txn=txn,
         namespace_mode_resolver_blocking=lambda ns: mode,
         sdk_client=sdk_client,
     )
 
 
-class TestBatchBuilderWrap:
-    """End-to-end gate + wrap through BatchOperationBuilder.execute_blocking."""
+class TestMultiKeyWriteChainWrap:
+    """End-to-end gate + wrap through the sync multi-key write chain."""
 
     def _sdk_client(self, implicit=True, supports_mrt=True):
         client = _sdk_client(implicit=implicit)
         client._supports_mrt_blocking = lambda: supports_mrt
         return client
 
+    def _keys(self):
+        return [Key("test", "s", 1), Key("test", "s", 2)]
+
     def test_sc_write_batch_is_wrapped(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client())
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client())
+        builder.upsert(self._keys()).bin("a").set_to(1).execute()
         assert len(pac.commits) == 1
         assert pac.batch_policies[0] is not None
         assert pac.batch_policies[0].txn is not None
 
     def test_ap_batch_is_not_wrapped(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client(), mode=Mode.AP)
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client(), mode=Mode.AP)
+        builder.upsert(self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
         assert pac.batch_policies[0] is None
 
     def test_explicit_txn_is_not_double_wrapped(self):
         pac = _RecordingBatchClient()
         explicit = Txn()
-        builder = _batch_builder(pac, self._sdk_client(), txn=explicit)
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client(), txn=explicit)
+        builder.upsert(self._keys()).bin("a").set_to(1).execute()
         # The explicit txn is stamped; no implicit commit happens.
         assert pac.commits == []
         assert pac.batch_policies[0].txn is not None
 
     def test_with_txn_none_opts_out(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client())
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.with_txn(None)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client())
+        builder.upsert(self._keys()).bin("a").set_to(1).with_txn(None).execute()
         assert pac.commits == []
         assert pac.batch_policies[0] is None
 
     def test_setting_disabled_is_not_wrapped(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client(implicit=False))
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client(implicit=False))
+        builder.upsert(self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
 
     def test_cluster_without_mrt_is_not_wrapped(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client(supports_mrt=False))
-        builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client(supports_mrt=False))
+        builder.upsert(self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
 
     def test_read_only_batch_is_not_wrapped(self):
         pac = _RecordingBatchClient()
-        builder = _batch_builder(pac, self._sdk_client())
-        builder.upsert(Key("test", "s", 1)).bin("a").select_from("$.a")
-        builder.execute_blocking()
+        builder = _write_chain_builder(pac, self._sdk_client())
+        builder._keys = self._keys()
+        builder.execute()
         assert pac.commits == []
+        assert len(pac.batch_policies) == 1

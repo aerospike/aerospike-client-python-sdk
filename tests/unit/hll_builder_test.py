@@ -23,22 +23,15 @@ vs ``update_only`` surfaces a ``ValueError`` at the builder level.
 
 import pytest
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk import HllConfig
-from aerospike_sdk.aio.operations.batch import (
-    BatchBinBuilder,
-    BatchKeyOperationBuilder,
-    BatchOperationBuilder,
-)
-from aerospike_sdk.operations_shared import BatchOpType
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
     WriteBinBuilder,
     WriteSegmentBuilder,
 )
-from aerospike_sdk.sync.operations.batch import SyncBatchBinBuilder
 from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
 
 
@@ -60,7 +53,6 @@ class TestAllBuildersHaveAllHllMethods:
 
     @pytest.mark.parametrize("builder_cls", [
         WriteBinBuilder, SyncWriteBinBuilder,
-        BatchBinBuilder, SyncBatchBinBuilder,
     ])
     @pytest.mark.parametrize("method", HLL_WRITE_METHODS + HLL_READ_METHODS)
     def test_write_capable_builder_has_method(self, builder_cls, method):
@@ -123,40 +115,14 @@ class TestWriteBuilderFlagWiring:
         with pytest.raises(ValueError, match="mutually exclusive"):
             method(first_arg, create_only=True, update_only=True)
 
-
-# ---------------------------------------------------------------------------
-# BatchBinBuilder — HLL methods newly added in this work
-# ---------------------------------------------------------------------------
-
-class TestBatchBuilderHll:
-
-    def _make_bbb(self):
-        bob = BatchOperationBuilder(client=object())
-        key_op = BatchKeyOperationBuilder(bob, Key("test", "unit", 1), BatchOpType.UPSERT)
-        return BatchBinBuilder(key_op, "h"), key_op
-
-    def test_hll_init_queues_one_op(self):
-        bbb, key_op = self._make_bbb()
-        result = bbb.hll_init(HllConfig.of(14), no_fail=True)
-        assert result is key_op
-        assert len(key_op._operations) == 1
-
-    def test_hll_add_with_config(self):
-        bbb, key_op = self._make_bbb()
-        bbb.hll_add(["x", "y"], config=HllConfig.of(12))
-        assert len(key_op._operations) == 1
-
     def test_all_reads_queue_ops(self):
-        bbb, key_op = self._make_bbb()
-        bbb.hll_get_count()
-        bbb.hll_describe()
-        bbb.hll_get_union([b"\x00"])
-        bbb.hll_get_union_count([b"\x00"])
-        bbb.hll_get_intersect_count([b"\x00"])
-        bbb.hll_get_similarity([b"\x00"])
-        assert len(key_op._operations) == 6
-
-    def test_mutual_exclusion_raises(self):
-        bbb, _ = self._make_bbb()
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            bbb.hll_init(HllConfig.of(14), create_only=True, update_only=True)
+        """All 6 HLL read methods queue an op (parity with the dropped
+        BatchBinBuilder coverage — batch now chains off this shared builder)."""
+        wbb, segment = _make_wbb()
+        wbb.hll_get_count()
+        wbb.hll_describe()
+        wbb.hll_get_union([b"\x00"])
+        wbb.hll_get_union_count([b"\x00"])
+        wbb.hll_get_intersect_count([b"\x00"])
+        wbb.hll_get_similarity([b"\x00"])
+        assert len(segment._qb._operations) == 6

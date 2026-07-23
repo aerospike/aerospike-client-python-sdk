@@ -19,7 +19,7 @@ import pytest
 from types import SimpleNamespace
 from typing import AsyncIterator
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.record_result import RecordResult

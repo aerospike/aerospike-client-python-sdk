@@ -19,8 +19,12 @@
 
 import pytest
 
-from aerospike_async import CTX, ExpType, Filter, ListReturnType, MapReturnType
 from aerospike_sdk import (
+    CTX,
+    ExpType,
+    Filter,
+    ListReturnType,
+    MapReturnType,
     AelParseException,
     Exp,
     Index,

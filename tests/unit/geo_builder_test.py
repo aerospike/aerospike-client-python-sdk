@@ -13,19 +13,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Unit tests for ``set_to_geo_json(...)`` on the four bin builders."""
+"""Unit tests for ``set_to_geo_json(...)`` on the write bin builders."""
 
-from aerospike_async import GeoJSON, Key
+from aerospike_sdk import Key
 
-from aerospike_sdk.sync.operations.batch import SyncBatchBinBuilder
 from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
 
-from aerospike_sdk.aio.operations.batch import (
-    BatchBinBuilder,
-    BatchKeyOperationBuilder,
-    BatchOperationBuilder,
-)
-from aerospike_sdk.operations_shared import BatchOpType
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteBinBuilder,
@@ -81,25 +74,3 @@ class TestSyncWriteBinBuilderSetToGeoJson:
         # async test above plus the integration test.
         assert hasattr(SyncWriteBinBuilder, "set_to_geo_json")
         assert callable(SyncWriteBinBuilder.set_to_geo_json)
-
-
-class TestBatchBinBuilderSetToGeoJson:
-
-    def test_queues_put_with_geojson_value(self):
-        bob = BatchOperationBuilder(client=object())
-        key_op = BatchKeyOperationBuilder(bob, _make_key(), BatchOpType.UPSERT)
-        bbb = BatchBinBuilder(key_op, "loc")
-
-        result = bbb.set_to_geo_json(POINT)
-
-        assert result is key_op
-        assert "loc" in key_op._bins
-        assert isinstance(key_op._bins["loc"], GeoJSON)
-        assert len(key_op._operations) == 1
-
-
-class TestSyncBatchBinBuilderSetToGeoJson:
-
-    def test_method_exists_and_is_callable(self):
-        assert hasattr(SyncBatchBinBuilder, "set_to_geo_json")
-        assert callable(SyncBatchBinBuilder.set_to_geo_json)

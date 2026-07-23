@@ -17,10 +17,8 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_async import (
-    MapOperation, MapOrder, MapPolicy, MapReturnType,
-    WritePolicy,
-)
+from aerospike_sdk import MapOrder, MapReturnType
+from aerospike_async import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
 
 

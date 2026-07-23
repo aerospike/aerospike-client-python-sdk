@@ -71,3 +71,55 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
         assert _wait_visible(session.list_indexes, IDX, present=False)
     finally:
         cluster.close()
+
+
+def _build_at_least(session, floor) -> bool:
+    """Best-effort probe: True when every node's build is >= *floor*."""
+    for raw in session.info("build").values():
+        parts = raw.strip().split(".")
+        try:
+            triple = (int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, IndexError):
+            return False
+        if triple < floor:
+            return False
+    return True
+
+
+def test_sync_expression_index_create_and_drop(aerospike_host):
+    """Sync smoke for expression-based index creation (blocking PAC entry)."""
+    import pytest
+    from aerospike_sdk import Exp
+
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname, port = aerospike_host, 3000
+
+    idx = "psdk_exp_idx_sync"
+    cluster = ClusterDefinition(hostname, port).connect()
+    try:
+        session = cluster.create_session()
+        if not _build_at_least(session, (8, 1, 2)):
+            pytest.skip("expression-based indexes require server 8.1.2+")
+
+        try:
+            session.index(NS, SET).named(idx).drop()
+        except Exception:
+            pass
+        assert _wait_visible(cluster.list_indexes, idx, present=False)
+
+        (
+            session.index(NS, SET)
+            .on_expression(Exp.int_bin(BIN))
+            .named(idx)
+            .numeric()
+            .create()
+        )
+        assert _wait_visible(cluster.list_indexes, idx, present=True)
+
+        session.index(NS, SET).named(idx).drop()
+        assert _wait_visible(session.list_indexes, idx, present=False)
+    finally:
+        cluster.close()

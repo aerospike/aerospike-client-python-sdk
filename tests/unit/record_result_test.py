@@ -18,7 +18,7 @@
 import pytest
 from types import SimpleNamespace
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from aerospike_sdk import HllConfig

@@ -110,8 +110,8 @@ The wrap fires only when **all** of the following hold; otherwise the
 batch executes exactly as before:
 
 - the batch contains writes (multi-key `upsert`/`insert`/`update`/
-  `replace`/`delete`/`touch`/UDF, or a `session.batch()` chain with
-  write verbs) and targets more than a single key,
+  `replace`/`delete`/`touch`/UDF, or a chain whose segments span
+  multiple keys with write verbs) and targets more than a single key,
 - every key's namespace is strong-consistency,
 - the whole cluster supports transactions (server 8.0+ on every node),
 - no explicit transaction is active and the operation was not opted out
@@ -137,7 +137,7 @@ settings = SystemSettings(
 )
 ```
 
-Two caveats. The lazy streaming terminal (`execute_stream`) never wraps —
+Two caveats. The lazy streaming terminal (`stream`) never wraps —
 an implicit commit would have to wait for the stream to drain; use the
 buffered `execute()` or an explicit transaction when atomicity is
 required. And because the wrap inherits full transaction semantics, a

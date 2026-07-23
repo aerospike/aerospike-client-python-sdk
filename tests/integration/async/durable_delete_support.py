@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 
 async def delete_keys_durable(session, keys: Iterable[Key]) -> None:

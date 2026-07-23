@@ -314,7 +314,7 @@ class SyncRecordStream:
         Pairs with :meth:`__exit__` so the stream is always :meth:`close`\\ d
         on block exit — the recommended way to consume a lazy stream::
 
-            with session.query(keys).execute_stream() as stream:
+            with session.query(keys).stream() as stream:
                 for row in stream:
                     ...
             # close() runs here, even on early break or exception.
@@ -329,7 +329,7 @@ class SyncRecordStream:
         """Stop iteration and release the underlying producer.
 
         Marks the stream closed so further iteration raises ``StopIteration``,
-        and — for lazily-fed streams (a batch ``execute_stream`` or a query
+        and — for lazily-fed streams (a batch ``stream`` or a query
         recordset) — forwards to the underlying producer's ``close()`` so its
         receiver / server-side scan is released now rather than at
         garbage-collection time. In-flight batch requests still complete in the

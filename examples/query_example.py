@@ -585,8 +585,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("\n--- Multi operation batches ---")
     stream = await (
-        session.batch()
-        .update(SET.id(1000)).bin("age").add(1)
+        session.update(SET.id(1000)).bin("age").add(1)
         .update(SET.id(1001)).bin("age").add(1)
         .delete(SET.id(1003))
         .execute()

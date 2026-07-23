@@ -35,8 +35,7 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_async import ResultCode
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
 from integration.sc_namespace_resolve import (
