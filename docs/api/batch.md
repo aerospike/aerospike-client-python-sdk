@@ -1,7 +1,0 @@
-# Batch Operation Builders
-
-```{eval-rst}
-.. automodule:: aerospike_sdk.aio.operations.batch
-   :members:
-   :show-inheritance:
-```

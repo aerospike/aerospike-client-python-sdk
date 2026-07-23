@@ -174,8 +174,7 @@ class TestReplaceOperations:
         await session.upsert(key2).put({"value": "original2"}).execute()
 
         await (
-            session.batch()
-            .replace_if_exists(key1).bin("value").set_to("replaced1")
+            session.replace_if_exists(key1).bin("value").set_to("replaced1")
             .replace_if_exists(key2).bin("value").set_to("replaced2")
             .execute()
         )

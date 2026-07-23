@@ -48,6 +48,39 @@ await (
 )
 ```
 
+## Expression-Based Indexes
+
+On server 8.1.2+, an index can cover the value an expression computes per
+record instead of a plain bin. Replace `on_bin()` with `on_expression()`
+(they are mutually exclusive). The expression's result type must match the
+index type — index a value-producing expression, not a boolean predicate:
+
+```python
+from aerospike_async import Filter, FilterExpression
+
+# Index the value of the "age" bin computed through an expression
+expr = FilterExpression.int_bin("age")
+
+await (
+    session.index(users)
+    .on_expression(expr)
+    .named("users_age_exp_idx")
+    .numeric()
+    .create()
+)
+```
+
+To query through an expression index, attach the same expression to the
+filter:
+
+```python
+flt = Filter.range("age", 25, 40).expression(expr)
+stream = await session.query(users).filter(flt).execute()
+```
+
+`context()` is not supported with expression indexes — encode CDT
+navigation inside the expression instead.
+
 ## Dropping Indexes
 
 ```python

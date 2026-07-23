@@ -16,7 +16,7 @@
 """Tests for batch operations with multi-key chaining.
 
 Tests both:
-1. Heterogeneous batch operations (different ops on different keys) - session.batch()
+1. Heterogeneous batch operations (different ops on different keys) - multi-segment verb chains
 2. Homogeneous batch operations (same op on multiple keys) - session.exists/delete/query with multiple keys
 3. RecordResult/RecordStream integration (result codes, or_raise, failures, first)
 """
@@ -35,7 +35,7 @@ def users():
 
 
 class TestBatchOperations:
-    """Test batch operation builder with multi-key chaining."""
+    """Test multi-key write chains executed as a single batch."""
 
     async def test_batch_insert_multiple_keys(self, cluster, users: DataSet):
         """Test inserting multiple records in a single batch."""
@@ -55,8 +55,7 @@ class TestBatchOperations:
         
         # Insert multiple records with chained operations
         stream = await (
-            session.batch()
-            .insert(key1)
+            session.insert(key1)
             .bin("name").set_to("Alice")
             .bin("age").set_to(25)
             .insert(key2)
@@ -113,8 +112,7 @@ class TestBatchOperations:
         
         # Execute mixed batch operations
         stream = await (
-            session.batch()
-            .update(key1).bin("counter").add(5)
+            session.update(key1).bin("counter").add(5)
             .delete(key2)
             .insert(key3).bin("status").set_to("new")
             .execute()
@@ -160,8 +158,7 @@ class TestBatchOperations:
         
         # First batch: create records
         await (
-            session.batch()
-            .upsert(key1).bin("value").set_to("initial1")
+            session.upsert(key1).bin("value").set_to("initial1")
             .upsert(key2).bin("value").set_to("initial2")
             .execute()
         )
@@ -173,8 +170,7 @@ class TestBatchOperations:
 
         # Second batch: update existing records (upsert)
         await (
-            session.batch()
-            .upsert(key1).bin("value").set_to("updated1")
+            session.upsert(key1).bin("value").set_to("updated1")
             .upsert(key2).bin("value").set_to("updated2")
             .execute()
         )
@@ -207,8 +203,7 @@ class TestBatchOperations:
 
         # Delete all in one batch
         stream = await (
-            session.batch()
-            .delete(key1)
+            session.delete(key1)
             .delete(key2)
             .delete(key3)
             .execute()
@@ -223,13 +218,6 @@ class TestBatchOperations:
             result = await exists_stream.first()
             assert result is not None and result.as_bool() is False
 
-    async def test_batch_empty_raises_error(self, cluster):
-        """Test that executing an empty batch raises an error."""
-        session = cluster.create_session()
-        
-        with pytest.raises(ValueError, match="No operations to execute"):
-            await session.batch().execute()
-
     async def test_batch_bin_string_operations(self, cluster, users: DataSet):
         """Test batch with string bin operations (append/prepend)."""
         session = cluster.create_session()
@@ -243,8 +231,7 @@ class TestBatchOperations:
 
         # Append and prepend in batch
         await (
-            session.batch()
-            .update(key1).bin("message").append(" World")
+            session.update(key1).bin("message").append(" World")
             .update(key2).bin("message").prepend("Hello ")
             .execute()
         )
@@ -625,8 +612,7 @@ class TestBatchExpressionOps:
             await session.upsert(key).put({"A": (i + 1) * 10}).execute()
 
         stream = await (
-            session.batch()
-            .upsert(keys[0]).bin("C").upsert_from("$.A + 1")
+            session.upsert(keys[0]).bin("C").upsert_from("$.A + 1")
             .upsert(keys[1]).bin("C").upsert_from("$.A + 1")
             .upsert(keys[2]).bin("C").upsert_from("$.A + 1")
             .execute()
@@ -650,9 +636,8 @@ class TestBatchExpressionOps:
         await session.upsert(keys[1]).put({"A": 10, "B": 7}).execute()
 
         stream = await (
-            session.batch()
-            .update(keys[0]).bin("sum").select_from("$.A + $.B")
-            .update(keys[1]).bin("sum").select_from("$.A + $.B")
+            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
+            .query(keys[1]).bin("sum").select_from("$.A + $.B")
             .execute()
         )
         results = await stream.collect()
@@ -670,8 +655,7 @@ class TestBatchExpressionOps:
         await session.upsert(key).put({"A": 10}).execute()
 
         stream = await (
-            session.batch()
-            .upsert(key)
+            session.upsert(key)
             .bin("tag").set_to("done")
             .bin("doubled").upsert_from("$.A * 2")
             .execute()
@@ -686,8 +670,8 @@ class TestBatchExpressionOps:
         assert rec.record.bins["doubled"] == 20
 
 
-class TestBatchExecuteStream:
-    """Lazy `execute_stream()` — completion-order yields, no
+class TestBatchStream:
+    """Lazy `stream()` — completion-order yields, no
     writes-complete-on-return guarantee. Mixed ops in one call."""
 
     @pytest_asyncio.fixture
@@ -713,7 +697,7 @@ class TestBatchExecuteStream:
             except Exception:
                 pass
 
-    async def test_execute_stream_mixed_ops_yields_all(
+    async def test_stream_mixed_ops_yields_all(
         self, cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete in one streaming batch.
@@ -733,12 +717,11 @@ class TestBatchExecuteStream:
             await session.upsert(k).put({"A": i, "B": i * 2}).execute()
 
         stream = await (
-            session.batch()
-            .upsert(keys[0]).bin("A").set_to(99)
-            .update(keys[1]).bin("sum").select_from("$.A + $.B")
-            .update(keys[2]).bin("sum").select_from("$.A + $.B")
+            session.upsert(keys[0]).bin("A").set_to(99)
+            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            .query(keys[2]).bin("sum").select_from("$.A + $.B")
             .delete(keys[3])
-            .execute_stream()
+            .stream()
         )
         results = await stream.collect()
         assert len(results) == 4
@@ -773,25 +756,23 @@ class TestBatchExecuteStream:
         empty = await (await session.query(keys[3]).execute()).collect()
         assert empty == []
 
-    async def test_execute_stream_read_only_ops_dispatch_as_reads(
+    async def test_stream_read_only_ops_dispatch_as_reads(
         self, cluster, users: DataSet, track_key,
     ):
-        """AEL select_from under the UPDATE verb is a read — must dispatch
-        as BatchReadOp on the wire so the server accepts it. Catches the
-        regression where read-only op lists got wrapped in BatchWriteOp.
-        Also verifies the persisted record was NOT mutated (select_from is
-        a read; if the bug regressed and it landed as a write, the `sum`
-        bin would persist)."""
+        """AEL select_from under the read verb dispatches as BatchReadOp on
+        the wire so the server accepts it, even in a lazy write-batch
+        stream. Also verifies the persisted record was NOT mutated
+        (select_from is a read; if it landed as a write, the `sum` bin
+        would persist)."""
         session = cluster.create_session()
         keys = [track_key(users.id(f"estream_ro_{i}")) for i in range(2)]
         for i, k in enumerate(keys):
             await session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = await (
-            session.batch()
-            .update(keys[0]).bin("sum").select_from("$.A + $.B")
-            .update(keys[1]).bin("sum").select_from("$.A + $.B")
-            .execute_stream()
+            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
+            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            .stream()
         )
         results = await stream.collect()
         assert len(results) == 2
@@ -806,9 +787,9 @@ class TestBatchExecuteStream:
         assert rec1.record.bins == {"A": 6, "B": 3}
 
 
-class TestBatchExecuteStreamClose:
-    """Closing a lazy WRITE-batch stream (``session.batch()``) releases the
-    producer and stops iteration. Early abandon, idempotent close,
+class TestBatchStreamClose:
+    """Closing a lazy WRITE-batch stream (multi-key write chain) releases
+    the producer and stops iteration. Early abandon, idempotent close,
     close-on-exception via ``async with``, re-iterate, and
     client-usable-after-close — asserted against a cluster. Complements the
     read-batch stream close coverage in ``query_test.py``."""
@@ -837,9 +818,9 @@ class TestBatchExecuteStreamClose:
         return keys
 
     def _write_batch(self, session, keys):
-        """Build a multi-key write batch (one upsert per key)."""
-        b = session.batch()
-        for i, k in enumerate(keys):
+        """Build a multi-key write chain (one upsert segment per key)."""
+        b = session.upsert(keys[0]).put({"v": 0})
+        for i, k in enumerate(keys[1:], start=1):
             b = b.upsert(k).put({"v": i})
         return b
 
@@ -849,7 +830,7 @@ class TestBatchExecuteStreamClose:
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
 
-        stream = await self._write_batch(session, keys).execute_stream()
+        stream = await self._write_batch(session, keys).stream()
         seen = 0
         async for _ in stream:
             seen += 1
@@ -866,7 +847,7 @@ class TestBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 3)
-        stream = await self._write_batch(session, keys).execute_stream()
+        stream = await self._write_batch(session, keys).stream()
         stream.close()
         stream.close()
         stream.close()
@@ -877,7 +858,7 @@ class TestBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 4)
-        stream = await self._write_batch(session, keys).execute_stream()
+        stream = await self._write_batch(session, keys).stream()
         stream.close()
         assert [r async for r in stream] == []
         assert [r async for r in stream] == []
@@ -887,7 +868,7 @@ class TestBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
-        stream = await self._write_batch(session, keys).execute_stream()
+        stream = await self._write_batch(session, keys).stream()
         async for _ in stream:
             stream.close()
             break
@@ -900,7 +881,7 @@ class TestBatchExecuteStreamClose:
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 3)
         seen = 0
-        async with (await self._write_batch(session, keys).execute_stream()) as stream:
+        async with (await self._write_batch(session, keys).stream()) as stream:
             async for _ in stream:
                 seen += 1
         assert seen == 3
@@ -911,7 +892,7 @@ class TestBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = await self._seed(session, users, track_key, 10)
-        async with (await self._write_batch(session, keys).execute_stream()) as stream:
+        async with (await self._write_batch(session, keys).stream()) as stream:
             async for _ in stream:
                 break
         assert await stream.collect() == []
@@ -923,7 +904,7 @@ class TestBatchExecuteStreamClose:
         keys = await self._seed(session, users, track_key, 10)
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
-            async with (await self._write_batch(session, keys).execute_stream()) as stream:
+            async with (await self._write_batch(session, keys).stream()) as stream:
                 stream_ref["s"] = stream
                 async for _ in stream:
                     raise RuntimeError("boom")
@@ -957,16 +938,22 @@ class TestBatchVerbExistenceEnforcement:
         self, cluster, users: DataSet, track_key,
     ):
         """``update`` against a non-existent key must surface KEY_NOT_FOUND
-        — not silently upsert."""
+        — not silently upsert. A control upsert keeps the chain multi-key
+        so it dispatches as a batch."""
         session = cluster.create_session()
+        control = track_key(users.id("verb_update_control"))
         missing = track_key(users.id("verb_update_missing"))
         stream = await (
-            session.batch().update(missing).bin("v").set_to(1).execute()
+            session.upsert(control).bin("v").set_to(0)
+            .update(missing).bin("v").set_to(1)
+            .include_missing_keys()
+            .execute()
         )
         results = await stream.collect()
-        assert len(results) == 1
-        assert not results[0].is_ok
-        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        assert len(results) == 2
+        missing_r = [r for r in results if r.key == missing][0]
+        assert not missing_r.is_ok
+        assert missing_r.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_insert_existing_returns_key_exists(
         self, cluster, users: DataSet, track_key,
@@ -974,52 +961,70 @@ class TestBatchVerbExistenceEnforcement:
         """``insert`` against an existing key must surface KEY_EXISTS
         — not silently upsert."""
         session = cluster.create_session()
+        control = track_key(users.id("verb_insert_control"))
         existing = track_key(users.id("verb_insert_existing"))
         await session.upsert(existing).put({"v": 1}).execute()
 
         stream = await (
-            session.batch().insert(existing).bin("v").set_to(2).execute()
+            session.upsert(control).bin("v").set_to(0)
+            .insert(existing).bin("v").set_to(2)
+            .execute()
         )
         results = await stream.collect()
-        assert len(results) == 1
-        assert not results[0].is_ok
-        assert results[0].result_code == ResultCode.KEY_EXISTS_ERROR
+        assert len(results) == 2
+        existing_r = [r for r in results if r.key == existing][0]
+        assert not existing_r.is_ok
+        assert existing_r.result_code == ResultCode.KEY_EXISTS_ERROR
 
     async def test_replace_if_exists_nonexistent_returns_key_not_found(
         self, cluster, users: DataSet, track_key,
     ):
         """``replace_if_exists`` against a non-existent key surfaces KEY_NOT_FOUND."""
         session = cluster.create_session()
+        control = track_key(users.id("verb_replace_if_exists_control"))
         missing = track_key(users.id("verb_replace_if_exists_missing"))
         stream = await (
-            session.batch().replace_if_exists(missing).bin("v").set_to(1).execute()
+            session.upsert(control).bin("v").set_to(0)
+            .replace_if_exists(missing).bin("v").set_to(1)
+            .include_missing_keys()
+            .execute()
         )
         results = await stream.collect()
-        assert len(results) == 1
-        assert not results[0].is_ok
-        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        assert len(results) == 2
+        missing_r = [r for r in results if r.key == missing][0]
+        assert not missing_r.is_ok
+        assert missing_r.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_upsert_against_nonexistent_succeeds(
         self, cluster, users: DataSet, track_key,
     ):
         """``upsert`` is the no-enforcement verb — succeeds on either side."""
         session = cluster.create_session()
-        k = track_key(users.id("verb_upsert_missing"))
-        stream = await (session.batch().upsert(k).bin("v").set_to(1).execute())
+        keys = [
+            track_key(users.id("verb_upsert_missing_1")),
+            track_key(users.id("verb_upsert_missing_2")),
+        ]
+        stream = await (session.upsert(keys).bin("v").set_to(1).execute())
         results = await stream.collect()
-        assert results[0].is_ok
+        assert len(results) == 2
+        for r in results:
+            assert r.is_ok
 
-    async def test_execute_stream_enforces_verbs(
+    async def test_stream_enforces_verbs(
         self, cluster, users: DataSet, track_key,
     ):
         """Streaming path enforces verb existence semantics the same as
         the buffered path."""
         session = cluster.create_session()
-        missing = track_key(users.id("verb_stream_missing"))
+        missing = [
+            track_key(users.id("verb_stream_missing_1")),
+            track_key(users.id("verb_stream_missing_2")),
+        ]
         stream = await (
-            session.batch().update(missing).bin("v").set_to(1).execute_stream()
+            session.update(missing).bin("v").set_to(1).stream()
         )
         results = await stream.collect()
-        assert len(results) == 1
-        assert not results[0].is_ok
-        assert results[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        assert len(results) == 2
+        for r in results:
+            assert not r.is_ok
+            assert r.result_code == ResultCode.KEY_NOT_FOUND_ERROR

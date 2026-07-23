@@ -301,3 +301,28 @@ def test_sync_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     r2 = session.query(k2).bins(["cx"]).execute().first_or_raise()
     assert r2.record is not None
     assert r2.record.bins.get("cx") == 7
+
+
+def test_sync_write_chain_then_udf(cluster_with_udf):
+    """Sync smoke for the write -> UDF forward transition (shared-base impl;
+    exercises the blocking multi-spec dispatcher)."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("sync_chain_w2u_1")
+    k2 = DS.id("sync_chain_w2u_2")
+    session.delete(k1, k2).execute()
+    stream = (
+        session.upsert(k1).put({"wu": "written"})
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("wu", "via_udf")
+        .execute()
+    )
+    rows = stream.collect()
+    assert len(rows) == 2
+    assert all(r.is_ok for r in rows)
+    r1 = session.query(k1).bins(["wu"]).execute().first_or_raise()
+    assert r1.record is not None
+    assert r1.record.bins.get("wu") == "written"
+    r2 = session.query(k2).bins(["wu"]).execute().first_or_raise()
+    assert r2.record is not None
+    assert r2.record.bins.get("wu") == "via_udf"

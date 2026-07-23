@@ -227,3 +227,57 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
             await cluster.create_session().index("test", "test").named(index_name).drop()
         except Exception:
             pass
+
+
+async def test_create_expression_index_and_query(cluster, server_version, wait_for_index):
+    """Create an expression-based index, list it, query through it, drop it."""
+    if server_version is None or server_version < (8, 1, 2, 0):
+        pytest.skip("expression-based indexes require server 8.1.2+")
+    from aerospike_async import Filter, FilterExpression
+
+    set_name = "exp_idx_set"
+    index_name = "psdk_exp_age_idx"
+    ds = DataSet.of("test", set_name)
+    session = cluster.create_session()
+
+    try:
+        await session.index("test", set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+    keys = [ds.id(f"exp_u{i}") for i in range(5)]
+    for i, k in enumerate(keys):
+        await session.upsert(k).put({"age": 30 + i}).execute()
+
+    expr = FilterExpression.int_bin("age")
+    try:
+        await (
+            session.index("test", set_name)
+            .on_expression(expr)
+            .named(index_name)
+            .numeric()
+            .create()
+        )
+
+        listed = [i for i in await session.list_indexes() if i["name"] == index_name]
+        assert listed, "expression index not visible in list_indexes"
+        assert listed[0]["namespace"] == "test"
+        assert listed[0]["set"] == set_name
+
+        flt = Filter.range("age", 31, 33).expression(expr)
+        await wait_for_index(cluster, "test", set_name, flt)
+
+        stream = await session.query("test", set_name).filter(flt).bins(["age"]).execute()
+        ages = sorted(
+            [r.record.bins["age"] async for r in stream if r.is_ok and r.record],
+        )
+        assert ages == [31, 32, 33]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index("test", set_name).named(index_name).drop()
+        except Exception:
+            pass
+    assert not any(
+        i["name"] == index_name for i in await session.list_indexes()
+    ), "expression index still listed after drop"

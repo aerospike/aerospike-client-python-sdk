@@ -27,7 +27,6 @@ setting turned off.
 
 This module holds the gate predicate and the per-runtime execution
 runners (async and blocking). The batch dispatchers in
-:mod:`aerospike_sdk.aio.operations.batch` and
 :mod:`aerospike_sdk.aio.operations.query` consult the gate at execute
 time — so a hot-reload of the setting takes effect on the next
 operation — and route through a runner when it passes.
@@ -40,7 +39,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from aerospike_async import BatchPolicy, Txn, has_any_write_op
+from aerospike_async import BatchPolicy, Txn
 from aerospike_async.exceptions import CommitFailedError, ResultCode
 
 from aerospike_sdk.loggers import SdkLoggers
@@ -82,22 +81,6 @@ def implicit_txn_enabled(sdk_client: Any, txn: Optional[Txn], mode: Optional[Mod
         return False
     transactions = sdk_client._sdk_settings.transactions
     return bool(transactions.implicit_batch_write_transactions)
-
-
-def batch_ops_contain_write(key_operations: list) -> bool:
-    """Whether any accumulated batch key-op lands on the write wire path.
-
-    Mirrors the classification in ``_build_pac_batch_ops``: deletes are
-    writes; an empty op list defaults to ``touch`` (a write); ``_bins``
-    payloads become ``put`` ops (writes); otherwise the op list is
-    inspected via :func:`aerospike_async.has_any_write_op`.
-    """
-    for key_op in key_operations:
-        if key_op._bins or not key_op._operations:
-            return True
-        if has_any_write_op(key_op._operations):
-            return True
-    return False
 
 
 def stamp_txn(policy: Optional[Any], txn: Txn) -> Any:

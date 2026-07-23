@@ -88,7 +88,7 @@ class TestResolveDisposition:
 class TestFilterRecordsWithHandler:
     """``_filter_records_with_handler`` routes non-OK rows to the callback
     and returns successes only. Backs the ``on_error`` parameter on the
-    batch ``execute()`` / ``execute_stream()`` surface."""
+    batch ``execute()`` / ``stream()`` surface."""
 
     def _ok(self, key_val: int, idx: int) -> RecordResult:
         return RecordResult(

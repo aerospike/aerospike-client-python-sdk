@@ -42,7 +42,7 @@ guarantees release if you leave the loop early. See
 ## Buffered vs. Lazy Delivery
 
 Every query-path builder exposes two terminals with different result-delivery
-semantics. **`execute()` is the default** — reach for `execute_stream()` only
+semantics. **`execute()` is the default** — reach for `stream()` only
 when a large result set makes buffering expensive.
 
 - **`execute()`** — buffered. Awaits every result, then returns a
@@ -51,7 +51,7 @@ when a large result set makes buffering expensive.
   complete server-side by the time the call returns. Use this for most
   workloads.
 
-- **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
+- **`stream()`** — lazy. Returns a `RecordStream` that yields one
   `RecordResult` per `__anext__` (`__next__` on sync) as each node responds.
   The first results are available as soon as the first node responds, without
   waiting for the rest, so peak memory stays bounded to the in-flight node
@@ -71,16 +71,16 @@ when a large result set makes buffering expensive.
 
 ```python
 # Bounded-memory scan — process records as they arrive
-async with await session.query(users).execute_stream() as stream:
+async with await session.query(users).stream() as stream:
     async for result in stream:
         handle(result.record)
 ```
 
 Keyless dataset queries and scans already stream lazily from the server, so
-`execute_stream()` and `execute()` deliver the same incremental behavior there;
+`stream()` and `execute()` deliver the same incremental behavior there;
 the distinction matters most for multi-key batch shapes. The same two terminals
-exist on `session.batch()` and the chained write builders — see
-[Writing Data](#execute-vs-execute_stream). Sync builders have the
+exist on the chained write builders — see
+[Writing Data](#execute-vs-stream). Sync builders have the
 identical contract; iterate with `for result in stream`.
 
 (closing-streams)=
@@ -106,13 +106,13 @@ path — normal completion, early `break`, or exception:
 
 ```python
 # async — `async with`
-async with await session.query(*users.ids(1, 2, 3)).execute_stream() as stream:
+async with await session.query(*users.ids(1, 2, 3)).stream() as stream:
     async for result in stream:
         if done(result):
             break            # close() still runs on the way out
 
 # sync — `with`
-with session.query(*users.ids(1, 2, 3)).execute_stream() as stream:
+with session.query(*users.ids(1, 2, 3)).stream() as stream:
     for result in stream:
         ...
 ```
@@ -148,7 +148,7 @@ Four accessors take a single row. They split on two independent axes —
 rec = await (await session.query(users.id(1)).execute()).first_or_raise()
 
 # Peek the head, then process the remainder — pop keeps the stream open
-stream = await session.query(*users.ids(1, 2, 3)).execute_stream()
+stream = await session.query(*users.ids(1, 2, 3)).stream()
 head = await stream.pop()
 async for rest in stream:
     ...

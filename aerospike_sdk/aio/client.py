@@ -621,7 +621,7 @@ class Client:
 
         Allocates a fresh :class:`~aerospike_async.Txn` on entry. Operations
         chained off the returned session (``tx.upsert(...)``, ``tx.query(...)``,
-        ``tx.batch()``, ...) auto-participate in the transaction — every
+        ...) auto-participate in the transaction — every
         builder stamps ``policy.txn = tx.txn`` under the hood. On clean exit
         the transaction is committed; if an exception propagates out of the
         block it is aborted.

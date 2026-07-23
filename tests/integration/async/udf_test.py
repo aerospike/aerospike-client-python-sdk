@@ -517,3 +517,82 @@ async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
         assert not any(m["name"] == path for m in await cluster.list_udf())
     finally:
         await cluster.close()
+
+
+async def test_write_chain_then_udf(cluster_with_udf):
+    """A write segment chained into a UDF segment executes as one batch."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_w2u_1")
+    k2 = DS.id("chain_w2u_2")
+    await session.delete(k1, k2).execute()
+    stream = await (
+        session.upsert(k1).put({"wu": "written"})
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("wu", "via_udf")
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 2
+    assert all(r.is_ok for r in rows)
+    r1 = await (
+        await session.query(k1).bins(["wu"]).execute()
+    ).first_or_raise()
+    assert r1.record is not None
+    assert r1.record.bins.get("wu") == "written"
+    r2 = await (
+        await session.query(k2).bins(["wu"]).execute()
+    ).first_or_raise()
+    assert r2.record is not None
+    assert r2.record.bins.get("wu") == "via_udf"
+
+
+async def test_query_chain_then_udf(cluster_with_udf):
+    """A read segment chained into a UDF segment returns both results in order."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_q2u_1")
+    k2 = DS.id("chain_q2u_2")
+    await session.upsert(k1).put({"qa": 1}).execute()
+    await session.delete(k2).execute()
+    stream = await (
+        session.query(k1).bins(["qa"])
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("qa", 2)
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 2
+    assert rows[0].is_ok
+    assert rows[0].record is not None
+    assert rows[0].record.bins.get("qa") == 1
+    assert rows[1].is_ok
+    r2 = await (
+        await session.query(k2).bins(["qa"]).execute()
+    ).first_or_raise()
+    assert r2.record is not None
+    assert r2.record.bins.get("qa") == 2
+
+
+async def test_write_chain_udf_then_read_chain(cluster_with_udf):
+    """Write -> UDF -> read: the forward transition composes with the existing
+    UDF-to-read transition in a single three-segment batch."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_w2u2q_1")
+    k2 = DS.id("chain_w2u2q_2")
+    await session.delete(k1, k2).execute()
+    await session.upsert(k2).put({"seed": "old"}).execute()
+    stream = await (
+        session.upsert(k1).put({"seed": "new"})
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("seed", "udf")
+        .query(k1)
+        .bins(["seed"])
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 3
+    assert all(r.is_ok for r in rows)
+    assert rows[2].record is not None
+    assert rows[2].record.bins.get("seed") == "new"

@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Synchronous :meth:`SyncSession.batch` integration tests (mirrors async batch paths)."""
+"""Synchronous multi-key write-chain batch integration tests (mirrors async batch paths)."""
 
 import time
 
@@ -48,8 +48,7 @@ class TestSyncBatchOperations:
                 pass
 
         stream = (
-            session.batch()
-            .insert(key1).bin("name").set_to("Ada")
+            session.insert(key1).bin("name").set_to("Ada")
             .insert(key2).bin("name").set_to("Bob")
             .execute()
         )
@@ -78,8 +77,7 @@ class TestSyncBatchOperations:
             pass
 
         stream = (
-            session.batch()
-            .update(key1).bin("counter").add(5)
+            session.update(key1).bin("counter").add(5)
             .delete(key2)
             .insert(key3).bin("status").set_to("new")
             .execute()
@@ -94,12 +92,6 @@ class TestSyncBatchOperations:
         session.delete(key1).execute()
         session.delete(key3).execute()
 
-    def test_batch_empty_raises(self, cluster: Cluster):
-        session = cluster.create_session()
-        with pytest.raises(ValueError, match="No operations to execute"):
-            session.batch().execute()
-
-
 class TestSyncBatchExpressionOps:
 
     def test_batch_upsert_from(self, cluster: Cluster, users: DataSet, enterprise):
@@ -110,8 +102,7 @@ class TestSyncBatchExpressionOps:
             session.upsert(key).put({"A": (i + 1) * 10}).execute()
 
         stream = (
-            session.batch()
-            .upsert(keys[0]).bin("C").upsert_from("$.A + 1")
+            session.upsert(keys[0]).bin("C").upsert_from("$.A + 1")
             .upsert(keys[1]).bin("C").upsert_from("$.A + 1")
             .execute()
         )
@@ -126,8 +117,8 @@ class TestSyncBatchExpressionOps:
             session.delete(key).execute()
 
 
-class TestSyncBatchExecuteStream:
-    """Sync lazy `execute_stream()` — same contract as the async sibling."""
+class TestSyncBatchStream:
+    """Sync lazy `stream()` — same contract as the async sibling."""
 
     @pytest.fixture
     def track_key(self, cluster):
@@ -152,7 +143,7 @@ class TestSyncBatchExecuteStream:
             except Exception:
                 pass
 
-    def test_execute_stream_mixed_ops_yields_all(
+    def test_stream_mixed_ops_yields_all(
         self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete dispatch correctly via
@@ -174,12 +165,11 @@ class TestSyncBatchExecuteStream:
             session.upsert(k).put({"A": i, "B": i * 2}).execute()
 
         stream = (
-            session.batch()
-            .upsert(keys[0]).bin("A").set_to(99)
-            .update(keys[1]).bin("sum").select_from("$.A + $.B")
-            .update(keys[2]).bin("sum").select_from("$.A + $.B")
+            session.upsert(keys[0]).bin("A").set_to(99)
+            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            .query(keys[2]).bin("sum").select_from("$.A + $.B")
             .delete(keys[3])
-            .execute_stream()
+            .stream()
         )
         results = list(stream)
         assert len(results) == 4
@@ -212,24 +202,22 @@ class TestSyncBatchExecuteStream:
         empty = list(session.query(keys[3]).execute())
         assert empty == []
 
-    def test_execute_stream_read_only_ops_dispatch_as_reads(
+    def test_stream_read_only_ops_dispatch_as_reads(
         self, cluster: Cluster, users: DataSet, track_key,
     ):
-        """Read-only op lists (AEL `select_from` under UPDATE) must land as
-        BatchReadOp on the wire — verifies the has_any_write_op inspection
-        in the sync dispatch helper. Also verifies the persisted record
-        was NOT mutated (if select_from regressed and landed as a write,
-        the `sum` bin would persist)."""
+        """Read-only op lists (AEL `select_from` under the read verb) land
+        as BatchReadOp on the wire, even in a lazy write-batch stream.
+        Also verifies the persisted record was NOT mutated (if select_from
+        landed as a write, the `sum` bin would persist)."""
         session = cluster.create_session()
         keys = [track_key(users.id(f"sb_estream_ro_{i}")) for i in range(2)]
         for i, k in enumerate(keys):
             session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = (
-            session.batch()
-            .update(keys[0]).bin("sum").select_from("$.A + $.B")
-            .update(keys[1]).bin("sum").select_from("$.A + $.B")
-            .execute_stream()
+            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
+            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            .stream()
         )
         results = list(stream)
         assert len(results) == 2
@@ -244,7 +232,7 @@ class TestSyncBatchExecuteStream:
         assert rec1.record.bins == {"A": 6, "B": 3}
 
 
-class TestSyncBatchExecuteStreamClose:
+class TestSyncBatchStreamClose:
     """Sync sibling of the async write-batch close/context-manager suite:
     early abandon, idempotent close, close-on-exception via ``with``,
     re-iterate, and client-usable-after-close."""
@@ -273,8 +261,8 @@ class TestSyncBatchExecuteStreamClose:
         return keys
 
     def _write_batch(self, session, keys):
-        b = session.batch()
-        for i, k in enumerate(keys):
+        b = session.upsert(keys[0]).put({"v": 0})
+        for i, k in enumerate(keys[1:], start=1):
             b = b.upsert(k).put({"v": i})
         return b
 
@@ -283,7 +271,7 @@ class TestSyncBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
-        stream = self._write_batch(session, keys).execute_stream()
+        stream = self._write_batch(session, keys).stream()
         seen = 0
         for _ in stream:
             seen += 1
@@ -297,7 +285,7 @@ class TestSyncBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 3)
-        stream = self._write_batch(session, keys).execute_stream()
+        stream = self._write_batch(session, keys).stream()
         stream.close()
         stream.close()
         stream.close()
@@ -308,7 +296,7 @@ class TestSyncBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 4)
-        stream = self._write_batch(session, keys).execute_stream()
+        stream = self._write_batch(session, keys).stream()
         stream.close()
         assert list(stream) == []
         assert list(stream) == []
@@ -318,7 +306,7 @@ class TestSyncBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
-        stream = self._write_batch(session, keys).execute_stream()
+        stream = self._write_batch(session, keys).stream()
         for _ in stream:
             stream.close()
             break
@@ -331,7 +319,7 @@ class TestSyncBatchExecuteStreamClose:
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 3)
         seen = 0
-        with self._write_batch(session, keys).execute_stream() as stream:
+        with self._write_batch(session, keys).stream() as stream:
             for _ in stream:
                 seen += 1
         assert seen == 3
@@ -342,7 +330,7 @@ class TestSyncBatchExecuteStreamClose:
     ):
         session = cluster.create_session()
         keys = self._seed(session, users, track_key, 10)
-        with self._write_batch(session, keys).execute_stream() as stream:
+        with self._write_batch(session, keys).stream() as stream:
             for _ in stream:
                 break
         assert stream.collect() == []
@@ -354,7 +342,7 @@ class TestSyncBatchExecuteStreamClose:
         keys = self._seed(session, users, track_key, 10)
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
-            with self._write_batch(session, keys).execute_stream() as stream:
+            with self._write_batch(session, keys).stream() as stream:
                 stream_ref["s"] = stream
                 for _ in stream:
                     raise RuntimeError("boom")

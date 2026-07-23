@@ -113,3 +113,105 @@ async def test_where_sets_filter_on_builder():
     )
     wp = qb._client.execute_udf.await_args.kwargs["policy"]
     assert wp.filter_expression is not None
+
+
+class TestChainToUdfTransition:
+    """Chain-shape tests for the query/write -> UDF forward transition."""
+
+    def test_query_chain_returns_function_builder(self):
+        qb = _connected_qb()
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        qb._set_current_keys(k1)
+        fb = qb.execute_udf(k2)
+        assert type(fb) is UdfFunctionBuilder
+        assert fb._qb is qb
+
+    def test_query_chain_finalizes_read_spec_and_targets_new_key(self):
+        qb = _connected_qb()
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        qb._set_current_keys(k1)
+        qb.execute_udf(k2)
+        assert len(qb._specs) == 1
+        assert qb._specs[0].op_type is None
+        assert qb._specs[0].keys == [k1]
+        assert qb._single_key == k2
+
+    def test_write_segment_transition_finalizes_write_spec(self):
+        qb = _connected_qb()
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        seg = qb._start_write_verb("upsert", k1)
+        seg.put({"a": 1})
+        fb = seg.execute_udf(k2)
+        assert type(fb) is UdfFunctionBuilder
+        assert len(qb._specs) == 1
+        assert qb._specs[0].op_type == "upsert"
+        assert len(qb._specs[0].operations) == 1
+        assert qb._single_key == k2
+
+    def test_bin_builder_transition(self):
+        qb = _connected_qb()
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        fb = (
+            qb._start_write_verb("upsert", k1)
+            .bin("count").set_to(5)
+            .execute_udf(k2)
+        )
+        assert type(fb) is UdfFunctionBuilder
+        assert qb._specs[0].op_type == "upsert"
+
+    def test_single_key_fast_segment_promotes_then_transitions(self):
+        from aerospike_sdk.aio.operations.query import _SingleKeyWriteSegment
+
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        seg = _SingleKeyWriteSegment(
+            MagicMock(), k1, "upsert", Behavior.DEFAULT, None,
+        )
+        seg.put({"a": 1})
+        fb = seg.execute_udf(k2)
+        assert type(fb) is UdfFunctionBuilder
+        assert seg._qb is not None
+        assert seg._qb._specs[0].op_type == "upsert"
+        assert seg._qb._single_key == k2
+
+    def test_multi_key_transition_sets_batch_keys(self):
+        qb = _connected_qb()
+        k1 = Key("test", "set", 1)
+        batch = (Key("test", "set", 2), Key("test", "set", 3))
+        qb._set_current_keys(k1)
+        qb.execute_udf(*batch)
+        assert qb._keys == list(batch)
+        assert qb._single_key is None
+
+    def test_requires_at_least_one_key(self):
+        qb = _connected_qb()
+        qb._set_current_keys(Key("test", "set", 1))
+        with pytest.raises(ValueError, match="At least one key"):
+            qb.execute_udf()
+
+    def test_dataset_query_cannot_transition(self):
+        qb = _connected_qb()
+        with pytest.raises(ValueError, match="Dataset"):
+            qb.execute_udf(Key("test", "set", 1))
+
+    def test_function_then_execute_udf_round_trip_specs(self):
+        qb = _connected_qb()
+        k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
+        qb._set_current_keys(k1)
+        ub = qb.execute_udf(k2).function("pkg", "fn").passing(7)
+        ub._qb._finalize_udf_spec()
+        assert [s.op_type for s in qb._specs] == [None, "udf"]
+        assert qb._specs[1].udf_package == "pkg"
+        assert qb._specs[1].udf_args == [7]
+
+    def test_sync_chain_returns_sync_builder(self):
+        # Cross-surface invariant: the ClassVar hook must hand back the
+        # sync leaf type when the chain started on the sync surface.
+        from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQB
+        from aerospike_sdk.sync.operations.udf import (
+            UdfFunctionBuilder as SyncUFB,
+        )
+
+        qb = SyncQB(MagicMock(), "test", "set", Behavior.DEFAULT)
+        qb._set_current_keys(Key("test", "set", 1))
+        fb = qb.execute_udf(Key("test", "set", 2))
+        assert type(fb) is SyncUFB

@@ -565,7 +565,7 @@ class RecordStream:
         Pairs with :meth:`__aexit__` so the stream is always :meth:`close`\\ d
         on block exit — the recommended way to consume a lazy stream::
 
-            async with await session.query(keys).execute_stream() as stream:
+            async with await session.query(keys).stream() as stream:
                 async for row in stream:
                     ...
             # close() runs here, even on early break or exception.
@@ -580,7 +580,7 @@ class RecordStream:
         """Stop iteration and release the underlying producer.
 
         Marks the stream closed so any further ``async for`` / :meth:`__anext__`
-        ends immediately, and — for lazily-fed streams (a batch ``execute_stream``
+        ends immediately, and — for lazily-fed streams (a batch ``stream``
         or a query recordset) — forwards to the underlying producer's ``close()``
         so its receiver and any buffered-but-unconsumed results are released now,
         rather than at garbage-collection time.

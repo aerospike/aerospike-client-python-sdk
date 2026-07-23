@@ -13,9 +13,27 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Shared helpers for UDF admin operations (used by the aio and sync clients)."""
+"""Shared UDF helpers and runtime-agnostic foreground-UDF builder bases.
+
+Holds the ``udf-list`` info-response parser used by both admin surfaces,
+plus the chain state and chaining methods shared by the async and sync
+foreground UDF builders — no I/O. Terminal ``execute()`` dispatchers are
+runtime-bound and live on the leaves:
+:mod:`aerospike_sdk.aio.operations.udf` (async) and
+:mod:`aerospike_sdk.sync.operations.udf` (blocking).
+"""
 
 from __future__ import annotations
+
+from typing import Any, ClassVar, List, TYPE_CHECKING, Union, overload
+
+from aerospike_async import FilterExpression, Key
+
+from aerospike_sdk.ael.parser import parse_ael
+
+if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
+    from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
+    from aerospike_sdk.aio.operations.udf import UdfBuilder, UdfFunctionBuilder
 
 
 def parse_udf_list(raw: str) -> list[dict[str, str]]:
@@ -45,3 +63,269 @@ def parse_udf_list(raw: str) -> list[dict[str, str]]:
             }
         )
     return modules
+
+
+class _UdfFunctionBuilderBase:
+    """State + chaining shared by the async and sync UdfFunctionBuilder.
+
+    Subclasses inject their tier-appropriate ``UdfBuilder`` class via
+    :attr:`_udf_builder_cls` (set at module load, after the concrete class
+    is defined) so :meth:`function` stays runtime-agnostic.
+    """
+
+    __slots__ = ("_qb",)
+
+    # Leaf modules bind this after their concrete UdfBuilder is defined.
+    _udf_builder_cls: ClassVar[type]
+
+    def __init__(self, qb: QueryBuilder) -> None:
+        self._qb = qb
+
+    def function(self, package: str, function_name: str) -> UdfBuilder:
+        """Select the registered module and function to invoke.
+
+        Args:
+            package: Server-side module name (no ``.lua`` suffix).
+            function_name: Lua function symbol exported by the module.
+
+        Returns:
+            A ``UdfBuilder`` for arguments and execution.
+
+        Raises:
+            ValueError: If ``package`` or ``function_name`` is empty.
+        """
+        if not package:
+            raise ValueError("package must be a non-empty string")
+        if not function_name:
+            raise ValueError("function_name must be a non-empty string")
+        self._qb._udf_package = package
+        self._qb._udf_function = function_name
+        self._qb._udf_args = None
+        self._qb._op_type = "udf"
+        return type(self)._udf_builder_cls(self._qb)
+
+
+class _UdfBuilderBase:
+    """State + chaining shared by the async and sync UdfBuilder.
+
+    Subclasses inject their tier-appropriate ``UdfFunctionBuilder`` class
+    via :attr:`_udf_function_builder_cls` so :meth:`execute_udf` stays
+    runtime-agnostic. Write-verb and ``query`` transitions delegate to the
+    wrapped query builder, whose overrides already return the right tier's
+    segment/builder types.
+    """
+
+    __slots__ = ("_qb",)
+
+    # Leaf modules bind this after their concrete UdfFunctionBuilder is defined.
+    _udf_function_builder_cls: ClassVar[type]
+
+    def __init__(self, qb: QueryBuilder) -> None:
+        self._qb = qb
+
+    def passing(self, *args: Any) -> UdfBuilder:
+        """Set positional arguments forwarded to the Lua function.
+
+        The Aerospike server automatically passes the record as the first
+        argument to the UDF; values provided here follow it.
+
+        Args:
+            *args: Values serialized by the async client (scalars, lists, maps, bytes).
+
+        Returns:
+            This builder for chaining.
+
+        Example::
+            builder.passing("binName", 42)
+        """
+        self._qb._udf_args = list(args)
+        return self
+
+    @overload
+    def where(self, expression: str) -> UdfBuilder: ...
+
+    @overload
+    def where(self, expression: FilterExpression) -> UdfBuilder: ...
+
+    def where(
+        self,
+        expression: Union[str, FilterExpression],
+    ) -> UdfBuilder:
+        """Apply a filter expression so the UDF runs only when the predicate matches.
+
+        Args:
+            expression: AEL string or ``FilterExpression``.
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`QueryBuilder.where`: Same AEL for reads.
+        """
+        if isinstance(expression, str):
+            self._qb._filter_expression = parse_ael(expression)
+        else:
+            self._qb._filter_expression = expression
+        return self
+
+    def default_with_durable_delete(self) -> UdfBuilder:
+        """Prefer durable deletes when resolving policy defaults."""
+        self._qb._durable_delete_command_default = True
+        return self
+
+    def default_without_durable_delete(self) -> UdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._qb._durable_delete_command_default = False
+        return self
+
+    def with_durable_delete(self) -> UdfBuilder:
+        """Force durable delete for this UDF invocation."""
+        self._qb._durable_delete = True
+        return self
+
+    def without_durable_delete(self) -> UdfBuilder:
+        """Force non-durable delete for this UDF invocation."""
+        self._qb._durable_delete = False
+        return self
+
+    def include_missing_keys(self) -> UdfBuilder:
+        """For batch UDF, emit a row per requested key (including not-found).
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`QueryBuilder.include_missing_keys`: Same flag for reads.
+            :meth:`respond_all_keys`: Alias using the underlying client's name.
+        """
+        self._qb._respond_all_keys = True
+        return self
+
+    def respond_all_keys(self) -> UdfBuilder:
+        """Alias for :meth:`include_missing_keys` (underlying client's ``respondAllKeys`` name)."""
+        return self.include_missing_keys()
+
+    def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
+        """Finalize this UDF operation and start another on *keys*.
+
+        Args:
+            *keys: One or more keys for the next UDF segment.
+
+        Returns:
+            A new ``UdfFunctionBuilder`` to call ``function`` again.
+
+        Raises:
+            ValueError: If no keys are provided.
+        """
+        if not keys:
+            raise ValueError("At least one key is required")
+        self._qb._finalize_udf_spec()
+        self._qb._set_current_keys_from_varargs(keys)
+        return type(self)._udf_function_builder_cls(self._qb)
+
+    def query(
+        self,
+        arg1: Union[Key, List[Key]],
+        *more_keys: Key,
+    ) -> QueryBuilder:
+        """Close the UDF operation and begin a read query segment.
+
+        Args:
+            arg1: One key or a list of keys.
+            *more_keys: Additional keys when ``arg1`` is a single key.
+
+        Returns:
+            The wrapped query builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        self._qb._op_type = None
+        self._qb._set_current_keys(arg1, *more_keys)
+        return self._qb
+
+    def upsert(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start an upsert write segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("upsert", arg1, *more_keys)
+
+    def insert(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start an insert-only write segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("insert", arg1, *more_keys)
+
+    def update(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start an update-only write segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("update", arg1, *more_keys)
+
+    def replace(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start a replace write segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("replace", arg1, *more_keys)
+
+    def replace_if_exists(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start a replace-if-exists segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("replace_if_exists", arg1, *more_keys)
+
+    def delete(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start a delete segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("delete", arg1, *more_keys)
+
+    def touch(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start a touch segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("touch", arg1, *more_keys)
+
+    def exists(
+        self, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> WriteSegmentBuilder:
+        """Finalize the UDF operation and start an exists-check segment.
+
+        Returns:
+            A write-segment builder for chaining.
+        """
+        self._qb._finalize_udf_spec()
+        return self._qb._start_write_verb("exists", arg1, *more_keys)

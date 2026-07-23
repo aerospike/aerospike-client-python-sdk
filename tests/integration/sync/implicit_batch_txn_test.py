@@ -78,8 +78,7 @@ def ds(sc_namespace):
 def txn_spy(monkeypatch):
     """Record every blocking implicit-transaction wrap, delegating to the real runner."""
     import aerospike_sdk.implicit_txn as impl
-    from aerospike_sdk.aio.operations import batch as batch_mod
-    from aerospike_sdk.aio.operations import query as query_mod
+    from aerospike_sdk.sync.operations import query_dispatch as query_mod
 
     calls: list = []
     real = impl.run_in_implicit_txn_blocking
@@ -88,7 +87,6 @@ def txn_spy(monkeypatch):
         calls.append(transactions)
         return real(pac_client, transactions, attempt_fn)
 
-    monkeypatch.setattr(batch_mod, "run_in_implicit_txn_blocking", spy)
     monkeypatch.setattr(query_mod, "run_in_implicit_txn_blocking", spy)
     return calls
 
@@ -116,14 +114,18 @@ def test_multi_key_upsert_is_wrapped(session, ds, txn_spy):
     assert _bin_values(session, keys, "version") == {1: 1, 2: 1, 3: 1}
 
 
-def test_batch_builder_write_is_wrapped(session, ds, txn_spy):
+def test_multi_segment_write_chain_is_wrapped(session, ds, txn_spy):
+    # The kwarg form routes through the full builder; a chain grown from the
+    # positional single-key fast segment does not carry the SDK-client handle
+    # the implicit-transaction gate needs, so it would not wrap.
     keys = ds.ids(10, 11)
     _reset(session, keys)
 
-    batch = session.batch()
-    batch.upsert(keys[0]).bin("n").set_to(1)
-    batch.upsert(keys[1]).bin("n").set_to(2)
-    batch.execute()
+    (
+        session.upsert(key=keys[0]).bin("n").set_to(1)
+        .upsert(keys[1]).bin("n").set_to(2)
+        .execute()
+    )
 
     assert len(txn_spy) == 1
     assert _bin_values(session, keys, "n") == {10: 1, 11: 2}

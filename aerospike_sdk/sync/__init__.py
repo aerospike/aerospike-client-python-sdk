@@ -18,18 +18,21 @@
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.sync.info import SyncInfoCommands
-from aerospike_sdk.sync.operations.batch import SyncBatchOperationBuilder
-from aerospike_sdk.sync.operations.index import SyncIndexBuilder
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.index import IndexBuilder, SyncIndexBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder, SyncQueryBuilder
 from aerospike_sdk.sync.session import SyncSession
 from aerospike_sdk.sync.tls_builder import TlsBuilder
 from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
+# The bare builder names are the committed convention (path-differentiated
+# from the aio classes of the same name); the Sync*-prefixed aliases stay
+# importable for one release cycle.
 __all__ = [
     "Cluster",
     "ClusterDefinition",
     "Host",
-    "SyncBatchOperationBuilder",
+    "IndexBuilder",
+    "QueryBuilder",
     "SyncInfoCommands",
     "SyncIndexBuilder",
     "SyncQueryBuilder",

@@ -19,7 +19,7 @@ Owns a PAC ``aerospike_async.Client`` and a daemon-thread
 :class:`~aerospike_sdk.index_monitor.IndexesMonitor`. Every lifecycle and
 IO entry calls PAC's ``_blocking`` methods; no asyncio event loop is
 constructed. Builder and session factories return synchronous wrappers
-(:class:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder`,
+(:class:`~aerospike_sdk.sync.operations.query.QueryBuilder`,
 :class:`~aerospike_sdk.sync.session.SyncSession`).
 """
 
@@ -50,7 +50,7 @@ from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
-    from aerospike_sdk.sync.operations.index import SyncIndexBuilder
+    from aerospike_sdk.sync.operations.index import IndexBuilder
     from aerospike_sdk.sync.session import SyncSession
     from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
 
@@ -332,11 +332,11 @@ class SyncClient:
     @overload
     def index(
         self, *, dataset: DataSet, behavior: Optional[Behavior] = None,
-    ) -> SyncIndexBuilder: ...
+    ) -> IndexBuilder: ...
     @overload
     def index(
         self, namespace: str, set_name: str, *, behavior: Optional[Behavior] = None,
-    ) -> SyncIndexBuilder: ...
+    ) -> IndexBuilder: ...
 
     def index(
         self,
@@ -345,9 +345,9 @@ class SyncClient:
         *,
         dataset: Optional[DataSet] = None,
         behavior: Optional[Behavior] = None,
-    ) -> SyncIndexBuilder:
+    ) -> IndexBuilder:
         """Create a secondary-index builder (synchronous)."""
-        from aerospike_sdk.sync.operations.index import SyncIndexBuilder
+        from aerospike_sdk.sync.operations.index import IndexBuilder
 
         self._ensure_connected()
         if dataset is not None:
@@ -355,7 +355,7 @@ class SyncClient:
             set_name = dataset.set_name
         if not namespace or not set_name:
             raise ValueError("namespace and set_name are required (or provide dataset)")
-        return SyncIndexBuilder(
+        return IndexBuilder(
             async_client=self,
             namespace=namespace,
             set_name=set_name,

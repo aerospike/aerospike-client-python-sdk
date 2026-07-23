@@ -305,9 +305,8 @@ async def _one_op_async(
                 bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -335,9 +334,8 @@ async def _one_op_async(
             bins = full_bins(fields)
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.replace_if_exists(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.replace_if_exists(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -362,9 +360,8 @@ async def _one_op_async(
             bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -486,9 +483,8 @@ def _build_op_sync(
             decision[0] = False
             keys = [ds_id(str(bench.next_insert_key())) for _ in range(bsz)]
             bins = full_bins(fields_t)
-            b = session.batch()
-            cur = b
-            for k in keys:
+            cur = session.upsert(keys[0]).put(bins)
+            for k in keys[1:]:
                 cur = cur.upsert(k).put(bins)
             stream = cur.execute()
             results = stream.collect()
@@ -567,9 +563,8 @@ def _build_op_sync(
                     bins = full_bins(fields_t)
                 else:
                     bins = single_bin_put(fields_t, pick_bin_index(rng, field_count))
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
             results = stream.collect()
@@ -682,9 +677,8 @@ def _build_op_async(
             decision[0] = False
             keys = [ds_id(str(bench.next_insert_key())) for _ in range(bsz)]
             bins = full_bins(fields_t)
-            b = session.batch()
-            cur: Any = b
-            for k in keys:
+            cur: Any = session.upsert(keys[0]).put(bins)
+            for k in keys[1:]:
                 cur = cur.upsert(k).put(bins)
             stream = await cur.execute()
             results = await stream.collect()
@@ -765,9 +759,8 @@ def _build_op_async(
                     bins = full_bins(fields_t)
                 else:
                     bins = single_bin_put(fields_t, pick_bin_index(rng, field_count))
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
             results = await stream.collect()
@@ -829,9 +822,8 @@ def _one_op_sync(
                 bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
@@ -859,9 +851,8 @@ def _one_op_sync(
             bins = full_bins(fields)
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.replace_if_exists(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.replace_if_exists(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
@@ -886,9 +877,8 @@ def _one_op_sync(
             bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
