@@ -114,3 +114,15 @@ class TestWriteBuilderFlagWiring:
         method = getattr(wbb, method_name)
         with pytest.raises(ValueError, match="mutually exclusive"):
             method(first_arg, create_only=True, update_only=True)
+
+    def test_all_reads_queue_ops(self):
+        """All 6 HLL read methods queue an op (parity with the dropped
+        BatchBinBuilder coverage — batch now chains off this shared builder)."""
+        wbb, segment = _make_wbb()
+        wbb.hll_get_count()
+        wbb.hll_describe()
+        wbb.hll_get_union([b"\x00"])
+        wbb.hll_get_union_count([b"\x00"])
+        wbb.hll_get_intersect_count([b"\x00"])
+        wbb.hll_get_similarity([b"\x00"])
+        assert len(segment._qb._operations) == 6
