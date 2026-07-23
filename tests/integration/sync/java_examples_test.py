@@ -21,8 +21,7 @@ Focused examples for documentation and API verification.
 import time
 
 import pytest
-from aerospike_async import Key
-from aerospike_sdk import DataSet, Behavior
+from aerospike_sdk import Behavior, DataSet, Key
 from aerospike_sdk.sync import ClusterDefinition
 
 
@@ -634,7 +633,7 @@ def test_java_example_index_operations(session, customer_dataset):
               session.index(customerDataSet).onBin("roles").named("roles_idx").collection(CollectionIndexType.LIST).create();
               session.index(customerDataSet).named("age_idx").drop();
     """
-    from aerospike_async import CollectionIndexType
+    from aerospike_sdk import CollectionIndexType
 
     try:
         try:

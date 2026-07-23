@@ -16,7 +16,7 @@
 """Unit tests for AEL casting expressions."""
 
 import pytest
-from aerospike_async import ExpType, ListReturnType, MapReturnType
+from aerospike_sdk import ExpType, ListReturnType, MapReturnType
 
 from aerospike_sdk import AelParseException, Exp, parse_ael
 
@@ -256,7 +256,7 @@ class TestCDTCasting:
         assert parse_ael("$.mapBin1.{#-1}.asInt() == 100") == expected
 
     def test_nested_map_rank_as_int(self):
-        from aerospike_async import CTX
+        from aerospike_sdk import CTX
         expected = Exp.eq(
             Exp.to_int(Exp.map_get_by_rank(
                 MapReturnType.VALUE, ExpType.FLOAT,

@@ -17,7 +17,7 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_async import ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode

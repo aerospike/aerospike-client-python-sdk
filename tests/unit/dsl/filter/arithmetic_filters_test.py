@@ -18,8 +18,7 @@
 Each parseFilterAndCompare or assert filter null is a separate test for clear failure isolation.
 """
 
-from aerospike_async import Filter
-from aerospike_sdk import Index, IndexContext, IndexTypeEnum, parse_ael_with_index
+from aerospike_sdk import Filter, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
 
 MIN = -(2**63)
 MAX = 2**63 - 1

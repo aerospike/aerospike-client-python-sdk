@@ -15,14 +15,7 @@
 
 """Unit tests for string-operation fluent builders (no cluster)."""
 
-from aerospike_async import (
-    FilterExpression,
-    StringOperation,
-    StringRegexFlags,
-    StringWriteFlags,
-)
-
-from aerospike_sdk import Exp
+from aerospike_sdk import Exp, StringOperation, StringRegexFlags, StringWriteFlags
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
@@ -116,23 +109,23 @@ class TestExpVal:
 
     def test_exp_val_dispatches_string(self):
         e = Exp.val("hello")
-        assert isinstance(e, FilterExpression)
+        assert isinstance(e, Exp)
 
     def test_exp_val_dispatches_int(self):
         e = Exp.val(42)
-        assert isinstance(e, FilterExpression)
+        assert isinstance(e, Exp)
 
     def test_exp_val_dispatches_none(self):
         e = Exp.val(None)
-        assert isinstance(e, FilterExpression)
+        assert isinstance(e, Exp)
 
     def test_exp_string_strlen_compiles(self):
         e = Exp.string_strlen(Exp.string_bin("s"))
-        assert isinstance(e, FilterExpression)
+        assert isinstance(e, Exp)
 
     def test_exp_string_find_with_exp_val(self):
         e = Exp.string_find(Exp.val("needle"), Exp.string_bin("s"))
-        assert isinstance(e, FilterExpression)
+        assert isinstance(e, Exp)
 
 
 # ---------------------------------------------------------------------------

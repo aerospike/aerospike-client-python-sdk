@@ -16,7 +16,7 @@
 """Unit tests for ClusterDefinition auth mode support."""
 
 import pytest
-from aerospike_async import AuthMode
+from aerospike_sdk import AuthMode
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition

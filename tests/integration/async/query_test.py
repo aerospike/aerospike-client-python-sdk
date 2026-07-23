@@ -20,7 +20,8 @@ import time
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, Key, PartitionFilter, QueryPolicy
+from aerospike_sdk import Filter, Key
+from aerospike_async import PartitionFilter, QueryPolicy
 from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder

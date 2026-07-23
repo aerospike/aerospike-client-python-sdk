@@ -46,13 +46,12 @@ For single-key operations where you don't need filters, error handlers, projecti
 ### Sync example
 
 ```python
-from aerospike_sdk import Behavior
+from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.sync import ClusterDefinition
-from aerospike_async import Key
 
 with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
-    k = Key("test", "users", "alice")
+    k = DataSet.of("test", "users").id("alice")
     session.put(k, {"name": "Alice", "age": 28})
     record = session.get(k)
     print(record.bins)
@@ -62,13 +61,12 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 
 ```python
 import asyncio
-from aerospike_sdk import Behavior, ClusterDefinition
-from aerospike_async import Key
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 async def main():
     async with await ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
-        k = Key("test", "users", "alice")
+        k = DataSet.of("test", "users").id("alice")
         await session.put(k, {"name": "Alice", "age": 28})
         record = await session.get(k)
         print(record.bins)

@@ -34,8 +34,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from aerospike_async import ResultCode
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
 from integration.sc_namespace_resolve import (
@@ -183,7 +182,7 @@ async def test_txn_write_conflict(session, mrt_set):
 async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.
     del session
-    from aerospike_async import Txn, TxnState
+    from aerospike_sdk import Txn, TxnState
 
     key = mrt_set.id("txnReadFailsForAllStatesExceptOpen")
 

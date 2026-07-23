@@ -16,7 +16,8 @@
 """Integration tests for put/get and core SDK operations."""
 
 import pytest
-from aerospike_async import ListOperation, ListPolicy, ListOrderType, MapOperation, MapPolicy, MapReturnType, Operation, WritePolicy
+from aerospike_sdk import ListOrderType, MapReturnType
+from aerospike_async import ListOperation, ListPolicy, MapOperation, MapPolicy, Operation, WritePolicy
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 

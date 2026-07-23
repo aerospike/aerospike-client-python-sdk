@@ -18,7 +18,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder

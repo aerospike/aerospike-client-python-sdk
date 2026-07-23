@@ -17,7 +17,8 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Operation, UDFLang
+from aerospike_sdk import UDFLang
+from aerospike_async import Operation
 
 from aerospike_sdk import DataSet
 

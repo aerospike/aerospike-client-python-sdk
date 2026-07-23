@@ -23,7 +23,8 @@ without requiring an SC cluster.
 
 import pytest
 
-from aerospike_async import TxnState, WritePolicy
+from aerospike_sdk import TxnState
+from aerospike_async import WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, Txn, TransactionalSession
 from aerospike_sdk.aio.session import Session

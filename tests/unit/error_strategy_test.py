@@ -19,7 +19,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aerospike_async import Expiration, Key
+from aerospike_sdk import Key
+from aerospike_async import Expiration
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder

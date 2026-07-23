@@ -23,7 +23,7 @@ vs ``update_only`` surfaces a ``ValueError`` at the builder level.
 
 import pytest
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.aio.operations.query import (

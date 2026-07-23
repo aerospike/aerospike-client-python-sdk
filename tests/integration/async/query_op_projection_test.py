@@ -33,16 +33,8 @@ imported from ``aerospike_async`` directly.
 
 import pytest
 import pytest_asyncio
-from aerospike_async import (
-    CTX,
-    CdtOperation,
-    ExpOperation,
-    ExpReadFlags,
-    ExpWriteFlags,
-    Filter,
-    FilterExpression as Exp,
-    Operation,
-)
+from aerospike_sdk import CdtOperation, CTX, Filter
+from aerospike_async import ExpOperation, ExpReadFlags, ExpWriteFlags, FilterExpression as Exp, Operation
 from aerospike_sdk import DataSet
 # The rejects tests catch both the PSDK error type and the raw PAC error
 # (streams can propagate the PAC type unconverted); PacAerospikeError is

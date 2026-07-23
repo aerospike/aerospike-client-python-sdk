@@ -27,7 +27,7 @@ await (
 )
 
 # Collection index (list elements)
-from aerospike_async import CollectionIndexType
+from aerospike_sdk import CollectionIndexType
 
 await (
     session.index(users)
@@ -56,10 +56,10 @@ record instead of a plain bin. Replace `on_bin()` with `on_expression()`
 index type — index a value-producing expression, not a boolean predicate:
 
 ```python
-from aerospike_async import Filter, FilterExpression
+from aerospike_sdk import Exp, Filter
 
 # Index the value of the "age" bin computed through an expression
-expr = FilterExpression.int_bin("age")
+expr = Exp.int_bin("age")
 
 await (
     session.index(users)

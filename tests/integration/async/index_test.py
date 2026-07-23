@@ -19,8 +19,7 @@ import asyncio
 import os
 
 import pytest
-from aerospike_async import CTX, CollectionIndexType, Filter
-from aerospike_sdk import DataSet
+from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -233,7 +232,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
     """Create an expression-based index, list it, query through it, drop it."""
     if server_version is None or server_version < (8, 1, 2, 0):
         pytest.skip("expression-based indexes require server 8.1.2+")
-    from aerospike_async import Filter, FilterExpression
+    from aerospike_sdk import Exp, Filter
 
     set_name = "exp_idx_set"
     index_name = "psdk_exp_age_idx"
@@ -249,7 +248,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
     for i, k in enumerate(keys):
         await session.upsert(k).put({"age": 30 + i}).execute()
 
-    expr = FilterExpression.int_bin("age")
+    expr = Exp.int_bin("age")
     try:
         await (
             session.index("test", set_name)

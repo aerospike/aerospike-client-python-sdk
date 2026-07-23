@@ -16,7 +16,7 @@
 """Integration tests for QueryHint with index_name, bin_name, and query_duration."""
 
 import pytest_asyncio
-from aerospike_async import Filter, QueryDuration
+from aerospike_sdk import Filter, QueryDuration
 
 from aerospike_sdk import (
     DataSet,

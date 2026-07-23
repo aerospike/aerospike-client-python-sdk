@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from aerospike_async import UDFLang
+from aerospike_sdk import UDFLang
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet

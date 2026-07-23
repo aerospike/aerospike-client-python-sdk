@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.policy.behavior import Behavior

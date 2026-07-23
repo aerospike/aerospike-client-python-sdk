@@ -16,7 +16,8 @@
 """Tests for QueryPolicy field exposure."""
 
 import pytest
-from aerospike_async import BasePolicy, QueryDuration, QueryPolicy, Replica
+from aerospike_sdk import QueryDuration
+from aerospike_async import BasePolicy, QueryPolicy, Replica
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.policy.behavior import Behavior

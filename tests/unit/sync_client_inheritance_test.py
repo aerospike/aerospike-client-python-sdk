@@ -25,7 +25,8 @@ got :class:`AttributeError` on the next method call.
 
 from unittest.mock import MagicMock
 
-from aerospike_async import ClientPolicy, Key
+from aerospike_sdk import Key
+from aerospike_async import ClientPolicy
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior

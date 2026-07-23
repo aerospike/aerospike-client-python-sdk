@@ -26,12 +26,8 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 
-from aerospike_async import (
-    ExpReadFlags,
-    ExpWriteFlags,
-    FilterExpression,
-    Key,
-)
+from aerospike_sdk import Key
+from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.aio.operations.query import (

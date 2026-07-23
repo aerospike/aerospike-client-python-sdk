@@ -15,7 +15,7 @@
 
 """Unit tests for ``set_to_geo_json(...)`` on the write bin builders."""
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
 

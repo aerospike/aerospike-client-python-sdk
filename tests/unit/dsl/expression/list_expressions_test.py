@@ -16,8 +16,7 @@
 """Unit tests for AEL list expressions."""
 
 import pytest
-from aerospike_async import CTX, ExpType, ListReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import CTX, Exp, ExpType, ListReturnType, parse_ael
 from aerospike_sdk.ael.exceptions import AelParseException
 
 

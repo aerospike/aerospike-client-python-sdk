@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
 from aerospike_sdk.background_shared import make_background_write_policy

@@ -26,7 +26,7 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 
-from aerospike_async import Key, ListReturnType, MapReturnType
+from aerospike_sdk import Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.aio.operations.cdt_read import (

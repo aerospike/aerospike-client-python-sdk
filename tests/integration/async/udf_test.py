@@ -21,7 +21,7 @@ import importlib
 import os
 
 import pytest
-from aerospike_async import UDFLang
+from aerospike_sdk import UDFLang
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk import ClusterDefinition, DataSet
 

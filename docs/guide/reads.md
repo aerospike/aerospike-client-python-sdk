@@ -222,7 +222,7 @@ stream = await (
 Fine-tune query behavior:
 
 ```python
-from aerospike_async import QueryDuration
+from aerospike_sdk import QueryDuration
 
 stream = await (
     session.query(users)

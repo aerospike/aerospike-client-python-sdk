@@ -17,8 +17,7 @@
 
 import pytest
 
-from aerospike_async import CTX, CollectionIndexType, Filter
-from aerospike_sdk import Exp, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
+from aerospike_sdk import CollectionIndexType, CTX, Exp, Filter, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
 
 NAMESPACE = "test1"
 

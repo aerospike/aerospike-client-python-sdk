@@ -20,7 +20,7 @@ The underlying PAC client is mocked so these tests don't need an SC cluster.
 
 import pytest
 
-from aerospike_async import ResultCode
+from aerospike_sdk import ResultCode
 
 from aerospike_sdk import (
     AbortStatus,

@@ -30,7 +30,7 @@ SC enforcement, batch wiring) live in the integration suite.
 
 from unittest.mock import AsyncMock, MagicMock
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder,

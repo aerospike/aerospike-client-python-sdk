@@ -16,7 +16,7 @@
 """Integration tests for session.background_task() (sync)."""
 
 import pytest
-from aerospike_async import UDFLang
+from aerospike_sdk import UDFLang
 
 from aerospike_sdk import DataSet
 

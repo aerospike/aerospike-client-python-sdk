@@ -18,7 +18,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import CTX, CollectionIndexType, FilterExpression, IndexType
+from aerospike_sdk import CollectionIndexType, CTX
+from aerospike_async import FilterExpression, IndexType
 
 from aerospike_sdk.aio.operations.index import IndexBuilder
 

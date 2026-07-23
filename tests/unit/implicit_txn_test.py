@@ -20,7 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aerospike_async import BatchPolicy, Key, Txn
+from aerospike_sdk import Key, Txn
+from aerospike_async import BatchPolicy
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.implicit_txn import (

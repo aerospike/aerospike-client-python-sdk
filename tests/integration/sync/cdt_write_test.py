@@ -16,7 +16,7 @@
 """Integration tests for sync CDT write operations: list_add, append, pop, trim, remove, exists."""
 
 import pytest
-from aerospike_async import ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet

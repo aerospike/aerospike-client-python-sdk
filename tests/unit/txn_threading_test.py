@@ -25,15 +25,8 @@ network I/O.
 
 import pytest
 
-from aerospike_async import (
-    BatchPolicy,
-    Key,
-    QueryPolicy,
-    ReadPolicy,
-    ResultCode,
-    Txn,
-    WritePolicy,
-)
+from aerospike_sdk import Key, ResultCode, Txn
+from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
 from aerospike_sdk.aio.operations.query import (

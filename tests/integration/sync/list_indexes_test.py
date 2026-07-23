@@ -89,7 +89,7 @@ def _build_at_least(session, floor) -> bool:
 def test_sync_expression_index_create_and_drop(aerospike_host):
     """Sync smoke for expression-based index creation (blocking PAC entry)."""
     import pytest
-    from aerospike_async import FilterExpression
+    from aerospike_sdk import Exp
 
     if ":" in aerospike_host:
         hostname, port_str = aerospike_host.split(":", 1)
@@ -112,7 +112,7 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
 
         (
             session.index(NS, SET)
-            .on_expression(FilterExpression.int_bin(BIN))
+            .on_expression(Exp.int_bin(BIN))
             .named(idx)
             .numeric()
             .create()
