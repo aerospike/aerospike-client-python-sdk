@@ -81,7 +81,7 @@ class RecordStream:
         # sources. close() forwards to it so resources release
         # deterministically instead of at garbage-collection time.
         "_closeable",
-        # Chunked-iteration state (set lazily by from_chunked_recordset).
+        # Chunked-iteration state (set lazily by _from_chunked_pac_recordset).
         # Slots so set-after-init is allowed without per-instance dict.
         "_chunked", "_chunk_first", "_chunk_recordset",
         "_chunk_reexecute", "_chunk_limit", "_chunk_count", "_counter_ref",
@@ -94,7 +94,7 @@ class RecordStream:
         # Fast-path cache for single-result streams: avoids async
         # iteration overhead in first() / first_or_raise() / __anext__.
         self._single_result: RecordResult | None = None
-        # Chunked fields lazily initialized: from_chunked_recordset is the
+        # Chunked fields lazily initialized: _from_chunked_pac_recordset is the
         # only path that touches them. has_more_chunks() reads via getattr
         # so a freshly-constructed stream needs no extra writes here.
         self._chunked = False
@@ -138,10 +138,10 @@ class RecordStream:
         return cls.from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
-    def from_pac_batch_stream(
+    def _from_pac_batch_stream(
         cls, pac_stream: Any, on_error: ErrorHandler | None = None,
     ) -> RecordStream:
-        """Lazy-feed adapter over a PAC ``BatchRecordStream``.
+        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (internal plumbing).
 
         The PAC stream yields ``(idx, BatchRecord)`` tuples in completion
         order (the node that responds first yields first), not input order.
@@ -191,14 +191,11 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_recordset(cls, recordset) -> RecordStream:
-        """Wrap a ``Recordset`` (async iterable of ``Record``).
+    def _from_pac_recordset(cls, recordset) -> RecordStream:
+        """Wrap a PAC ``Recordset`` (async iterable of ``Record``) — internal plumbing.
 
         Each yielded ``Record`` is converted to a :class:`RecordResult` with
         ``result_code=OK`` and ``index=-1`` (queries have no positional index).
-
-        Example::
-            stream = RecordStream.from_recordset(recordset)
         """
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
@@ -216,13 +213,13 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_chunked_recordset(
+    def _from_chunked_pac_recordset(
         cls,
         recordset: Any,
         reexecute: Callable[[PartitionFilter], Awaitable[Any]],
         limit: int = 0,
     ) -> RecordStream:
-        """Wrap a ``Recordset`` for chunked iteration.
+        """Wrap a PAC ``Recordset`` for chunked iteration — internal plumbing.
 
         The stream yields records from the current chunk.  Call
         :meth:`has_more_chunks` to advance to the next server chunk.
@@ -352,7 +349,7 @@ class RecordStream:
         Returns ``False`` when:
         * the server cursor is done (all partitions scanned), or
         * the overall ``limit`` has been reached, or
-        * the stream was not created with :meth:`from_chunked_recordset`.
+        * the stream was not created with :meth:`_from_chunked_pac_recordset`.
 
         Example::
 

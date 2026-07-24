@@ -93,6 +93,10 @@ def client_policy_from_config(cfg: object) -> ClientPolicy:
     if getattr(cfg, "seed_only_cluster", False):
         policy.seed_only_cluster = True
 
+    pools = int(getattr(cfg, "conn_pools_per_node", 0) or 0)
+    if pools > 0:
+        policy.conn_pools_per_node = pools
+
     ca = getattr(cfg, "tls_ca_file", None)
     cert = getattr(cfg, "tls_cert_file", None)
     key = getattr(cfg, "tls_key_file", None)

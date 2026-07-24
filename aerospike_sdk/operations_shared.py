@@ -32,8 +32,10 @@ from typing import (
     Awaitable,
     Callable,
     ClassVar,
+    Generic,
     List,
     Optional,
+    TypeVar,
     Union,
     overload,
 )
@@ -64,17 +66,25 @@ from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.operations.query.
-    from aerospike_sdk.aio.operations.query import (
-        QueryBuilder,
-        WriteBinBuilder,
-        WriteSegmentBuilder,
-    )
+    from aerospike_sdk.aio.operations.query import WriteBinBuilder
     from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
     from aerospike_sdk.error_strategy import OnError
+    from aerospike_sdk.query_shared import _QueryBuilderBase
     from aerospike_sdk.record_result import RecordResult
 
 
 NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
+
+# Each write-segment leaf binds this to its tree's concrete ``QueryBuilder`` so
+# the wrapped ``_qb`` — and the ``QueryBuilder`` returned by :meth:`query` — keep
+# their runtime-appropriate type instead of a single hard-coded tree's.
+_QB = TypeVar("_QB", bound="_QueryBuilderBase")
+
+# Each ``_WriteVerbs`` mixer binds this to the ``WriteSegmentBuilder`` its write
+# verbs open: tier-specific builders (async/sync ``QueryBuilder`` /
+# ``WriteSegmentBuilder``) bind their concrete class; the tier-neutral bin
+# builders bind the shared ``_WriteSegmentBuilderBase``.
+_WSB = TypeVar("_WSB", bound="_WriteSegmentBuilderBase")
 
 _cmd_log = logging.getLogger(SdkLoggers.COMMAND)
 
@@ -192,22 +202,26 @@ def _to_expiration(ttl: int) -> Expiration:
     return Expiration.seconds(ttl)
 
 
-class _WriteVerbs:
+class _WriteVerbs(Generic[_WSB]):
     """Mixin exposing write verbs that open a :class:`WriteSegmentBuilder`.
 
     Implemented on :class:`QueryBuilder` (chain from a read query) and
     :class:`WriteBinBuilder` (chain from a bin-scoped write). Each method
     finalizes the prior segment when applicable and targets new key(s).
+
+    Generic over the ``WriteSegmentBuilder`` type each mixer opens so a
+    sync mixer's verbs return the sync builder (and vice versa) rather than a
+    single hard-coded tree's.
     """
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         raise NotImplementedError
 
     def upsert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a create-or-update segment for the given key(s).
 
         Example::
@@ -223,7 +237,7 @@ class _WriteVerbs:
 
     def insert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a create-only segment (fails if the record exists).
 
         Example::
@@ -236,7 +250,7 @@ class _WriteVerbs:
 
     def update(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open an update-only segment (fails if the record is missing).
 
         Example::
@@ -249,7 +263,7 @@ class _WriteVerbs:
 
     def replace(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a full replace segment (removes bins not written in this segment).
 
         Example::
@@ -262,7 +276,7 @@ class _WriteVerbs:
 
     def replace_if_exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open replace-if-exists semantics (like replace, but only if the record exists).
 
         Example::
@@ -275,7 +289,7 @@ class _WriteVerbs:
 
     def delete(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a delete segment.
 
         Example::
@@ -288,7 +302,7 @@ class _WriteVerbs:
 
     def touch(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a touch segment (TTL refresh).
 
         Example::
@@ -301,7 +315,7 @@ class _WriteVerbs:
 
     def exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open an exists-check segment.
 
         Example::
@@ -331,7 +345,7 @@ def _build_exp_write_flags(
     return flags
 
 
-class _WriteSegmentBuilderBase:
+class _WriteSegmentBuilderBase(Generic[_QB]):
     """State + chaining shared by async and sync write-segment builders.
 
     Holds the wrapped query-builder reference (``_qb``) and the chaining
@@ -351,8 +365,8 @@ class _WriteSegmentBuilderBase:
     # cross-tier reverse import).
     _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
 
-    def __init__(self, qb: "QueryBuilder") -> None:
-        self._qb = qb
+    def __init__(self, qb: _QB) -> None:
+        self._qb: _QB = qb
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
@@ -370,10 +384,10 @@ class _WriteSegmentBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> "WriteSegmentBuilder": ...
+    def where(self, expression: str) -> Self: ...
 
     @overload
-    def where(self, expression: FilterExpression) -> "WriteSegmentBuilder": ...
+    def where(self, expression: FilterExpression) -> Self: ...
 
     def where(
         self,
@@ -713,7 +727,7 @@ class _WriteSegmentBuilderBase:
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
-    ) -> "QueryBuilder":
+    ) -> _QB:
         """Finalize current write segment and start a read segment.
 
         Args:

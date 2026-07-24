@@ -32,15 +32,15 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 |-------|-------------|
 | [`ClusterDefinition`](sync/cluster-definition.md) | Sync entry point — configure, then `connect()` |
 | [`Cluster`](sync/cluster.md) | Sync cluster handle |
-| [`SyncSession`](sync/session.md) | Sync session |
+| [`Session`](sync/session.md) | Sync session |
 | [`QueryBuilder`](sync/query.md) | Sync query builder |
 | [`WriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
 | [`IndexBuilder`](sync/index-builder.md) | Sync secondary index builder |
 | [`SyncBackgroundTaskSession`](sync/background.md) | Sync server-side background jobs |
 | [`UdfFunctionBuilder`](sync/udf.md) | Sync foreground UDF execution |
-| [`SyncInfoCommands`](sync/info.md) | Sync info protocol commands |
-| [`SyncTransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
-| [`SyncRecordStream`](sync/record-stream.md) | Sync iterator over query results |
+| [`InfoCommands`](sync/info.md) | Sync info protocol commands |
+| [`TransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
+| [`RecordStream`](sync/record-stream.md) | Sync iterator over query results |
 | [`SyncClient`](sync/client.md) | Low-level connection primitive (deprecated — use `ClusterDefinition`) |
 | [`TlsBuilder`](sync/tls-builder.md) | Sync TLS configuration builder |
 

@@ -54,7 +54,7 @@ from aerospike_sdk.operations_shared import (
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError, _resolve_disposition
-from aerospike_sdk.sync.record_stream import SyncRecordStream
+from aerospike_sdk.sync.record_stream import RecordStream
 
 # Bin builders are parent-generic; the same class serves both the async and
 # sync write segments.
@@ -87,7 +87,7 @@ def _describe_specs(qb) -> str:
     return f"specs={len(specs)}: " + ", ".join(parts)
 
 
-class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
+class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["WriteSegmentBuilder"]):
     """Synchronous query builder.
 
     Inherits state + chaining from :class:`_QueryBuilderBase` and the
@@ -150,7 +150,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
 
     def execute(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the configured query/write chain synchronously.
 
         Tier 1: single-key + multi-key + all op-types (returns list).
@@ -201,18 +201,18 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
                             self._single_key.set_name, 1, cmd_t0, self._client,
                         )
                     if self._respond_all_keys:
-                        return SyncRecordStream.from_list([RecordResult(
+                        return RecordStream.from_list([RecordResult(
                             key=self._single_key, record=None,
                             result_code=rc, exception=psdk_exc, index=0,
                         )])
-                    return SyncRecordStream.from_list([])
+                    return RecordStream.from_list([])
                 raise psdk_exc from e
             if cmd_t0:
                 _cmd_done(
                     None, self._single_key.namespace,
                     self._single_key.set_name, 1, cmd_t0, self._client,
                 )
-            return SyncRecordStream.from_list([RecordResult(
+            return RecordStream.from_list([RecordResult(
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
@@ -225,7 +225,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
                     spec0.op_type, self._namespace, self._set_name,
                     len(spec0.keys), cmd_t0, self._client,
                 )
-            return SyncRecordStream.from_list(fast)
+            return RecordStream.from_list(fast)
 
         multispec = self._execute_multispec_blocking(on_error)
         if multispec is not None:
@@ -234,16 +234,16 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
                     "batch", self._namespace, self._set_name,
                     sum(len(s.keys) for s in self._specs), cmd_t0, self._client,
                 )
-            return SyncRecordStream.from_list(multispec)
+            return RecordStream.from_list(multispec)
 
         stream_kind = self._execute_blocking_stream(on_error)
         if stream_kind is not None:
             kind, payload = stream_kind
             if kind == "recordset":
-                return SyncRecordStream.from_pac_recordset(payload)
+                return RecordStream._from_pac_recordset(payload)
             if kind == "chunked":
                 recordset, reexecute = payload
-                return SyncRecordStream.from_chunked_pac_recordset(
+                return RecordStream._from_chunked_pac_recordset(
                     recordset, reexecute, limit=0,
                 )
 
@@ -253,7 +253,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
 
     def stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Execute lazily — results stream back as each node responds.
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
@@ -276,7 +276,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
                 enum collapses to inline errors (the stream default).
 
         Returns:
-            A lazy :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
+            A lazy :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
@@ -298,14 +298,14 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
         try:
             pac_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
-            return SyncRecordStream.from_list(
+            return RecordStream.from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))
-        return SyncRecordStream.from_pac_batch_stream(pac_stream, on_error=handler)
+        return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
 
     @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
     def execute_stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Deprecated alias for :meth:`stream`.
 
         :meta private:
@@ -313,7 +313,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs):
         return self.stream(on_error)
 
 
-class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
+class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
     """Synchronous write-segment builder.
 
     Inherits state + chaining + ``_execute_blocking_fast_path`` from
@@ -380,7 +380,7 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
 
     def execute(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the configured write segment synchronously.
 
         Tries the inherited blocking fast path first; otherwise delegates
@@ -396,14 +396,14 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
                     self._qb._set_name, len(spec0.keys), cmd_t0,
                     self._qb._client,
                 )
-            return SyncRecordStream.from_list(fast)
+            return RecordStream.from_list(fast)
         # Fall back to the QB's full sync dispatch (Tier 1b / 2).
         assert isinstance(self._qb, QueryBuilder)
         return self._qb.execute(on_error)
 
     def stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         assert isinstance(self._qb, QueryBuilder)
         return self._qb.stream(on_error)
@@ -411,7 +411,7 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
     @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
     def execute_stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Deprecated alias for :meth:`stream`.
 
         :meta private:
@@ -457,7 +457,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
     def execute(  # type: ignore[override]
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the single-key fast path synchronously."""
         # Aggressive bypass: when the segment has accumulated put-style
         # ops on a single key with no durable-delete overrides and on_error
@@ -526,14 +526,14 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                             self._op_type_fast, self._key.namespace,
                             self._key.set_name, 1, cmd_t0, self._client_fast,
                         )
-                    return SyncRecordStream.from_list([])
+                    return RecordStream.from_list([])
                 raise psdk_exc from e
             if cmd_t0:
                 _cmd_done(
                     self._op_type_fast, self._key.namespace,
                     self._key.set_name, 1, cmd_t0, self._client_fast,
                 )
-            return SyncRecordStream.from_list([RecordResult(
+            return RecordStream.from_list([RecordResult(
                 key=self._key, record=record, result_code=ResultCode.OK,
             )])
         # Slow path: promote then defer to the sync QueryBuilder's blocking fast path.
@@ -542,7 +542,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
     def stream(  # type: ignore[override]
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         if self._qb is not None:
             assert isinstance(self._qb, QueryBuilder)

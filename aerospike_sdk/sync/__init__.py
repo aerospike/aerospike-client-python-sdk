@@ -17,28 +17,35 @@
 
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
-from aerospike_sdk.sync.info import SyncInfoCommands
+from aerospike_sdk.sync.info import InfoCommands, SyncInfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder, SyncIndexBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder, SyncQueryBuilder
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.session import Session, SyncSession
 from aerospike_sdk.sync.tls_builder import TlsBuilder
-from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+from aerospike_sdk.sync.transactional_session import (
+    SyncTransactionalSession,
+    TransactionalSession,
+)
 
-# The bare builder names are the committed convention (path-differentiated
-# from the aio classes of the same name); the Sync*-prefixed aliases stay
-# importable for one release cycle.
+# The bare names are the committed convention (path-differentiated from the
+# aio classes of the same name — e.g. ``aerospike_sdk.sync.Session`` vs
+# ``aerospike_sdk.aio.Session``); the Sync*-prefixed aliases stay importable
+# for one deprecation cycle (removed at GA).
 __all__ = [
     "Cluster",
     "ClusterDefinition",
     "Host",
     "IndexBuilder",
+    "InfoCommands",
     "QueryBuilder",
+    "Session",
     "SyncInfoCommands",
     "SyncIndexBuilder",
     "SyncQueryBuilder",
     "SyncSession",
     "SyncTransactionalSession",
     "TlsBuilder",
+    "TransactionalSession",
 ]
 
 

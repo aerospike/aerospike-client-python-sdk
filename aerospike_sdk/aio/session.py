@@ -29,8 +29,6 @@ from typing import (
     Union,
 )
 
-from typing_extensions import deprecated
-
 if TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
@@ -51,7 +49,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-from aerospike_sdk.session_shared import NamespaceScStatus
+from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 
 
 def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
@@ -77,7 +75,7 @@ def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
     return exists, sc_opt
 
 
-class Session:
+class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Perform reads and writes against Aerospike with a fixed :class:`~aerospike_sdk.policy.behavior.Behavior`.
 
     A session binds a connected :class:`Client` to policy defaults (timeouts,
@@ -132,23 +130,6 @@ class Session:
         # builder spawned from the session auto-participates.
         self._txn: Optional[Txn] = None
 
-    def _refresh_cached_policies(self) -> None:
-        """(Re)build the cached base policies from the current behavior.
-
-        Called at construction and by config hot-reload when this session's
-        behavior changes. Each attribute swap is a single atomic assignment,
-        so in-flight operations use either the old or new policy snapshot.
-        """
-        behavior = self._behavior
-        self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
-        self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
-        self._cached_read_policy_sc = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
-        self._cached_write_policy_sc = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
-
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
         cache = self._client._namespace_mode_cache
@@ -193,47 +174,6 @@ class Session:
         mode = Mode.SC if is_sc else Mode.AP
         cache[namespace] = mode
         return mode
-
-    def _bind_txn(self, builder):
-        """Stamp the session's current txn onto a builder if one is active.
-
-        Fast-path helper used by every builder factory on :class:`Session`
-        so that operations started inside a
-        :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        auto-participate in the transaction. Returns the builder for fluent
-        use; no-op outside an MRT.
-        """
-        if self._txn is not None:
-            builder.with_txn(self._txn)
-        return builder
-
-    def get_current_transaction(self) -> Optional[Txn]:
-        """Return the active transaction for this session, or ``None``.
-
-        Regular :class:`Session` instances always return ``None``; only
-        :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        inside its ``async with`` block returns a live
-        :class:`~aerospike_async.Txn`. Builders created from this session
-        call this hook at construction and thread the result through every
-        policy they hand to the PAC.
-
-        Returns:
-            The active :class:`~aerospike_async.Txn`, or ``None`` outside a
-            transaction.
-
-        Example::
-
-            session = client.create_session()
-            session.get_current_transaction() is None
-            # True
-            async with session.transaction() as tx:
-                assert tx.get_current_transaction() is tx.txn
-
-        See Also:
-            :meth:`transaction`: Enter a multi-record transaction.
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        """
-        return self._txn
 
     # -- Fast-path single-key operations ------------------------------------
     # These bypass the QueryBuilder/OperationSpec/RecordStream chain for
@@ -330,16 +270,6 @@ class Session:
                 OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
         policy.txn = self._txn
         await self._pac_client.put(key, bins, policy=policy)
-
-    @property
-    def behavior(self) -> Behavior:
-        """Policy bundle applied to operations created from this session.
-
-        Returns:
-            The :class:`~aerospike_sdk.policy.behavior.Behavior` passed to
-            :meth:`Client.create_session`.
-        """
-        return self._behavior
 
     @property
     def client(self) -> Client:
@@ -526,255 +456,81 @@ class Session:
         return qb._start_write_verb(op_type, target)
 
     def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
-        """Single-key write shortcut: bypass QueryBuilder entirely."""
+        """Single-key write shortcut: bypass QueryBuilder entirely.
+
+        Bench-hot: every arg stays positional (matching the
+        ``_SingleKeyWriteSegmentBase.__init__`` order) so this call never
+        materializes a kwargs dict. All eight write verbs route their
+        single-key shape through here from the shared session base.
+        """
         return _SingleKeyWriteSegment(
-            client=self._client._async_client,
-            key=key,
-            op_type=op_type,
-            behavior=self._behavior,
-            write_policy=self._cached_write_policy,
-            read_policy=self._cached_read_policy,
-            write_policy_sc=self._cached_write_policy_sc,
-            read_policy_sc=self._cached_read_policy_sc,
-            txn=self._txn,
-            namespace_mode_resolver=self._resolve_namespace_mode,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            sdk_client=self._client,
+            self._client._async_client,
+            key,
+            op_type,
+            self._behavior,
+            self._cached_write_policy,
+            self._cached_read_policy,
+            self._txn,
+            self._resolve_namespace_mode,
+            self._resolve_namespace_mode_blocking,
+            self._cached_write_policy_sc,
+            self._cached_read_policy_sc,
+            self._client,
         )
 
     # -- Read entry point -----------------------------------------------------
+    # ``query`` itself is inherited from SessionBase (shared arg normalization);
+    # only the tree-specific builder construction lives here, behind the hooks
+    # the base routes to.
 
-    @typing.overload
-    def query(
-        self,
-        dataset: DataSet,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder from a DataSet."""
-        ...
+    def _fast_query_builder(self, key: Key, behavior: Behavior) -> QueryBuilder:
+        """Single-key query builder: skip ``Client.query()`` and per-op policy rebuilds.
 
-    @typing.overload
-    def query(
-        self,
-        key: Key,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for a single Key (point read)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        keys: List[Key],
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (batch read)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        *keys: Key,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (varargs)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        namespace: str,
-        set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder with explicit namespace/set."""
-        ...
-
-    def query(
-        self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        arg2: Optional[Union[str, Key]] = None,
-        *keys: Key,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys_list: Optional[List[Key]] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Start a read or secondary-index query for keys or a whole set.
-
-        This session's :attr:`behavior` is applied to the underlying
-        :class:`~aerospike_sdk.aio.operations.query.QueryBuilder`. Supported
-        shapes include a :class:`~aerospike_sdk.dataset.DataSet` (set-wide
-        query), a single :class:`~aerospike_async.Key`, multiple keys (list or
-        varargs), or explicit ``namespace`` / ``set_name`` for index scans.
-
-        Args:
-            arg1: Positional dataset, key, list of keys, or namespace string
-                (when paired with ``arg2`` as set name).
-            arg2: When ``arg1`` is a namespace, the set name; otherwise may be
-                a second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional argument is a key.
-            namespace: Keyword namespace (with ``set_name``) when not using a
-                dataset.
-            set_name: Keyword set name (with ``namespace``).
-            dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet`.
-            key: Keyword single key.
-            keys_list: Keyword list of keys when not using ``arg1`` or varargs;
-                forwarded to the client as ``keys``.
-            behavior: Optional override for this query; defaults to the session's
-                :attr:`behavior`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.QueryBuilder` to
-            chain ``where``, ``bins``, ``execute``, etc.
-
-        Raises:
-            TypeError: If positional types do not match the supported overloads.
-            ValueError: If a key list is empty or arguments are inconsistent.
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            rs = await session.query(users.id(1)).bins(["name"]).execute()
-            row = await rs.first_or_raise()
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            rs = await session.query(users.ids(1, 2, 3)).bins(["name"]).execute()
-            rows = await rs.collect()
-
-        See Also:
-            :meth:`Client.query`: Same shapes without session behavior.
-            :meth:`upsert`: Writes for the same keys.
+        Bench-hot: the common ``session.query(key)`` shape lands here directly
+        from the shared session base, bypassing the general key-resolution path.
+        Every arg stays positional (matching the ``_QueryBuilderBase.__init__``
+        order) so this call never materializes a kwargs dict — offsetting the
+        one added dispatch frame the shared-base ``query`` costs this path.
         """
-        # Ultra-fast entry for the most common shape: `session.query(key)`
-        # with no other positional or keyword args. Skip the entire
-        # isinstance chain (3 checks + wasted list alloc) and the kwarg
-        # routing — go straight to QueryBuilder construction. This is the
-        # bench / typical-app read pattern and now accounts for ~3.7 µs/op
-        # on async single-loop builder; this entry cuts it dramatically.
-        if (
-            arg1.__class__ is Key
-            and arg2 is None
-            and not keys
-            and namespace is None
-            and set_name is None
-            and dataset is None
-            and key is None
-            and keys_list is None
-            and behavior is None
-        ):
-            builder = QueryBuilder(
-                client=self._client._async_client,
-                namespace=arg1.namespace,
-                set_name=arg1.set_name,
-                behavior=self._behavior,
-                indexes_monitor=self._client._indexes_monitor,
-                cached_read_policy=self._cached_read_policy,
-                cached_write_policy=self._cached_write_policy,
-                cached_read_policy_sc=self._cached_read_policy_sc,
-                cached_write_policy_sc=self._cached_write_policy_sc,
-                txn=self._txn,
-                namespace_mode_resolver=self._resolve_namespace_mode,
-                namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                sdk_client=self._client,
-            )
-            builder._single_key = arg1
-            return builder
+        builder = QueryBuilder(
+            self._client._async_client,
+            key.namespace,
+            key.set_name,
+            behavior,
+            self._client._indexes_monitor,
+            self._cached_read_policy,
+            self._cached_write_policy,
+            self._cached_read_policy_sc,
+            self._cached_write_policy_sc,
+            self._txn,
+            self._resolve_namespace_mode,
+            self._resolve_namespace_mode_blocking,
+            self._client,
+        )
+        builder._single_key = key
+        return builder
 
-        b = self._behavior if behavior is None else behavior
-        # Handle positional arguments (SDK API)
-        if arg1 is not None:
-            if isinstance(arg1, DataSet):
-                return self._bind_txn(
-                    self._client._query(
-                        dataset=arg1, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, Key):
-                all_keys = [arg1]
-                if isinstance(arg2, Key):
-                    all_keys.append(arg2)
-                    all_keys.extend(keys)
-                elif keys:
-                    all_keys.extend(keys)
-                else:
-                    # Fast path for single-key queries: construct the
-                    # QueryBuilder directly with cached policies to skip
-                    # Client.query() overhead and per-op policy rebuilds.
-                    builder = QueryBuilder(
-                        client=self._client._async_client,
-                        namespace=arg1.namespace,
-                        set_name=arg1.set_name,
-                        behavior=b,
-                        indexes_monitor=self._client._indexes_monitor,
-                        cached_read_policy=self._cached_read_policy,
-                        cached_write_policy=self._cached_write_policy,
-                        cached_read_policy_sc=self._cached_read_policy_sc,
-                        cached_write_policy_sc=self._cached_write_policy_sc,
-                        txn=self._txn,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                        sdk_client=self._client,
-                    )
-                    builder._single_key = arg1
-                    return builder
-                return self._bind_txn(
-                    self._client._query(
-                        keys=all_keys, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, list):
-                if len(arg1) == 0:
-                    raise ValueError("keys list cannot be empty")
-                if not isinstance(arg1[0], Key):
-                    raise TypeError(f"Expected List[Key], but first element is {type(arg1[0])}")
-                return self._bind_txn(
-                    self._client._query(
-                        keys=arg1, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, str) and arg2 is not None:
-                return self._bind_txn(
-                    self._client._query(
-                        namespace=arg1, set_name=arg2, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-
-        if keys:
-            keys_list = list(keys)
-            if arg1 is not None and isinstance(arg1, Key):
-                keys_list.insert(0, arg1)
-            if arg2 is not None and isinstance(arg2, Key):
-                keys_list.insert(1 if arg1 is not None and isinstance(arg1, Key) else 0, arg2)
-            return self._bind_txn(
-                self._client._query(
-                    keys=keys_list, behavior=b,
-                    namespace_mode_resolver=self._resolve_namespace_mode,
-                    namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                ))
-
-        return self._bind_txn(self._client._query(  # type: ignore[call-overload]
+    def _build_query_builder(
+        self,
+        *,
+        dataset: Optional[DataSet],
+        key: Optional[Key],
+        keys: Optional[List[Key]],
+        namespace: Optional[str],
+        set_name: Optional[str],
+        behavior: Behavior,
+    ) -> QueryBuilder:
+        """Dataset / multi-key / namespace query builder (non-single-key shapes)."""
+        return self._client._query(  # type: ignore[call-overload]
             namespace=namespace,
             set_name=set_name,
             dataset=dataset,
             key=key,
-            keys=keys_list,
-            behavior=b,
+            keys=keys,
+            behavior=behavior,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-        ))
+        )
 
     @typing.overload
     def index(
@@ -845,39 +601,10 @@ class Session:
                 "  - index(namespace=..., set_name=...)"
             )
 
-    def transaction(self) -> "TransactionalSession":
-        """Start a multi-record transaction (MRT) using this session's behavior.
-
-        Returns an async context manager that allocates a fresh
-        :class:`~aerospike_async.Txn`. Every operation run on the returned
-        session auto-participates in the transaction — builders stamp
-        ``policy.txn = tx.txn`` under the hood, so user code never touches a
-        policy object. On clean exit the transaction is committed; if an
-        exception propagates out of the ``async with`` block the transaction
-        is aborted.
-
-        Example::
-
-            async with session.transaction() as tx:
-                await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-                await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
-
-        Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-            bound to this session's client and behavior.
-
-        See Also:
-            :meth:`do_in_transaction`: Run a callable inside a retrying MRT.
-        """
-        return self._client.transaction(behavior=self._behavior)
-
-    @deprecated("Renamed to transaction(); begin_transaction() will be removed after preview.")
-    def begin_transaction(self) -> "TransactionalSession":
-        """Deprecated alias for :meth:`transaction` (preview back-compat).
-
-        :meta private:
-        """
-        return self.transaction()
+    def _txn_session_cls(self) -> "type[TransactionalSession]":
+        """Return the async transactional-session class (late import breaks the cycle)."""
+        from aerospike_sdk.aio.transactional_session import TransactionalSession
+        return TransactionalSession
 
     async def register_udf(
         self,
@@ -1275,368 +1002,10 @@ class Session:
         assert last_exc is not None
         raise last_exc
 
-    # -- Write entry points ---------------------------------------------------
-
-    def upsert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a create-or-replace write for one or more keys.
-
-        If the record exists, bins are merged according to the chained operations;
-        if it does not exist, it is created. Use :meth:`insert` when the record
-        must not already exist.
-
-        Args:
-            arg1: A single :class:`~aerospike_async.Key`, a list of keys, or omit
-                and pass ``key`` / ``dataset`` + ``key_value`` / ``namespace`` +
-                ``set_name`` + ``key_value``.
-            arg2: Optional second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional is a key.
-            key: Single key (keyword form).
-            dataset: Dataset used with ``key_value`` to build a key.
-            namespace: Namespace used with ``set_name`` and ``key_value``.
-            set_name: Set name used with ``namespace`` and ``key_value``.
-            key_value: User key value with ``dataset`` or ``namespace``/``set_name``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`
-            for ``put``, ``bin``, ``where``, ``execute``, etc.
-
-        Raises:
-            ValueError: If no keys are resolved or lists are empty.
-            TypeError: If positional arguments are not keys or lists of keys.
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            await session.upsert(users.id(1)).put({"name": "Tim", "age": 30}).execute()
-
-        See Also:
-            :meth:`insert`: Fails if the record already exists.
-            :meth:`update`: Fails if the record does not exist.
-            :meth:`replace`: Replace-entire-record semantics when configured.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            # Inline _fast_write_segment + use positional args to skip the
-            # extra function call and kwargs-dict construction. Bench-hot:
-            # every arg (including sdk_client, last) must stay positional —
-            # one keyword here forces slot_tp_init to materialize a kwargs
-            # dict for the whole call.
-            return _SingleKeyWriteSegment(
-                self._client._async_client,
-                arg1,
-                "upsert",
-                self._behavior,
-                self._cached_write_policy,
-                self._cached_read_policy,
-                self._txn,
-                self._resolve_namespace_mode,
-                self._resolve_namespace_mode_blocking,
-                self._cached_write_policy_sc,
-                self._cached_read_policy_sc,
-                self._client,
-            )
-        return self._build_write_segment(
-            "upsert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def insert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a create-only write; fails on execute if the record already exists.
-
-        Key resolution matches :meth:`upsert`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            await session.insert(users.id(99)).put({"name": "new"}).execute()
-
-        See Also:
-            :meth:`upsert`: Create or update.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("insert", arg1)
-        return self._build_write_segment(
-            "insert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def update(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start an update-only write; fails on execute if the record is missing.
-
-        Key resolution matches :meth:`upsert`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`upsert`: Create if missing.
-            :meth:`replace_if_exists`: Replace semantics when the record exists.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("update", arg1)
-        return self._build_write_segment(
-            "update", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a full-record replace write (bins replaced per builder rules).
-
-        Key resolution matches :meth:`upsert`. Prefer :meth:`replace_if_exists`
-        when the record must already exist.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`replace_if_exists`: Replace only when the record exists.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("replace", arg1)
-        return self._build_write_segment(
-            "replace", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace_if_exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a replace write that requires an existing record.
-
-        Key resolution matches :meth:`upsert`. On execute, missing keys surface
-        as errors according to error strategy (default may raise).
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`replace`: Unconditional replace semantics.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("replace_if_exists", arg1)
-        return self._build_write_segment(
-            "replace_if_exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def delete(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a delete for one or more keys.
-
-        Key resolution matches :meth:`upsert`. Chain filters or durable-delete
-        options on the builder, then ``await ...execute()``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            await session.delete(users.id(1)).execute()
-            await session.delete(users.ids(10, 11)).execute()
-
-        See Also:
-            :meth:`background_task`: Delete many records via a server job.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("delete", arg1)
-        return self._build_write_segment(
-            "delete", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def touch(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a touch to refresh TTL without changing bins.
-
-        Key resolution matches :meth:`upsert`. Use the builder to set TTL or
-        related policy, then ``await ...execute()``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`upsert`: Writes that can also set expiration via the builder.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("touch", arg1)
-        return self._build_write_segment(
-            "touch", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start an existence check for one or more keys.
-
-        Key resolution matches :meth:`upsert`. After ``execute``, use
-        :meth:`~aerospike_sdk.record_result.RecordResult.as_bool` on each
-        :class:`~aerospike_sdk.record_result.RecordResult` or inspect
-        ``result_code``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example::
-
-            users = DataSet.of("test", "users")
-            rs = await session.exists(users.id(1)).execute()
-            exists = (await rs.first()).as_bool()
-
-        See Also:
-            :meth:`query`: Read record data when the key is known to exist.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("exists", arg1)
-        return self._build_write_segment(
-            "exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+    # The eight public write-verb factories (upsert/insert/update/replace/
+    # replace_if_exists/delete/touch/exists) live on `SessionBase`; they route
+    # the single-key shape through `_fast_write_segment` and everything else
+    # through `_build_write_segment` (both defined above on this leaf).
 
     async def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
         """

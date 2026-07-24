@@ -173,13 +173,16 @@ On regular Python it's a wash — pick AsyncPool if it fits your code shape (you
 Both modes share the same `Session` API surface (chained builders + fast-path shortcuts), the same `Behavior` policy model, and the same error semantics.
 
 :::{note}
-When you connect via the sync entry path without tuning connection settings,
-PSDK sets `conn_pools_per_node = 8` (PAC's default is 4). The async-tuned PAC
-default works well for single-loop or per-Client-runtime workloads where the
-event loop serializes pool access naturally, but sync wrappers drive PAC from
-many caller threads and see real connection-pool mutex contention at 4 — the
-p99 tail roughly doubles. Pass your own `ClientPolicy` if you need a different
-value (e.g. lower for memory-constrained deployments).
+Both modes leave `conn_pools_per_node` at the underlying default of 4. Sync
+drives the client from many caller threads, so the per-node connection-pool
+mutex sees contention that a single event loop does not — but raising the pool
+count did not pay for it: a 32-thread sync benchmark against a 3-node cluster
+measured 4 and 8 as indistinguishable on both throughput and p99.
+
+Treat it as a knob to measure rather than one to raise on principle. If you do
+want to try it, supply
+`with_system_settings(SystemSettings(conn_pools_per_node=8))` on the
+`ClusterDefinition` and compare against your own workload.
 :::
 
 ## Performance summary table
@@ -201,27 +204,21 @@ Numbers from the [Benchmarking Guide](benchmarking.md) — 8-vCPU isolated clien
 :::{admonition} Experimental: `current_thread_runtime` (ct_runtime)
 :class: warning
 
-`SyncClient` accepts a `current_thread_runtime=True` flag that gives each Python thread its own PAC `_LocalClient` (per-thread Tokio current-thread runtime). **It boosts measured TPS to ~265K (sync fp) / ~187K (sync builder)** on free-threaded Python — but it comes with non-trivial operational baggage:
+Giving each Python thread its own client on a thread-pinned runtime removes the cross-thread hop that every sync operation otherwise pays, and **measured TPS rises to ~265K (sync fp) / ~187K (sync builder)** on free-threaded Python. It is not available on `ClusterDefinition`, and is **not recommended for application use** — the mode only implements part of the operation surface:
 
-- **N× cluster-tend threads.** Each per-thread runtime owns its own `Cluster` and runs its own cluster-tend loop. At 32 worker threads that's 32 tend loops polling the cluster every second.
-- **N× connection pools.** Each thread's runtime maintains its own pool. PSDK auto-defaults `conn_pools_per_node=1` when you opt in (so total per-node connections stay around `N threads × 1 pool` ≈ the non-ct_runtime default of 8), but if you pass your own `ClientPolicy` you take responsibility for the connection count.
-- **Incomplete `_with_overrides` surface.** Not every PAC method routes through the ct_runtime path; some operations still hit the shared multi-thread runtime even when ct_runtime is on.
+| Works | Raises |
+|---|---|
+| Single-key reads and writes (`get`, `put`, `delete`, `touch`, `exists`, `operate`) | Dataset queries and scans — `session.query(dataset)` |
+| Single-key and multi-key builder chains — `session.query(key)`, `session.query([keys])` | Cluster-wide info fan-out — index and UDF listing |
+| Single-node `info` | Connection health checks, so `ClusterDefinition.connect()` cannot validate the cluster |
 
-Usage (opt-in):
+Operational costs on top of that:
 
-```python
-from aerospike_sdk import Behavior, SyncClient
+- **N× cluster-tend loops.** Each per-thread client tends the cluster independently. At 32 worker threads that is 32 tend loops polling every second, which multiplies info load on the cluster.
+- **N× connection pools.** Each thread maintains its own, so total per-node connections scale with thread count. Set `conn_pools_per_node = 1` to keep the total in the same range as a shared client's.
+- **Thread-lifetime coupling.** A thread's client lives until the thread exits, so this suits a long-lived pool and penalizes short-lived threads.
 
-# Auto-default `conn_pools_per_node = 1` applies because we didn't pass a policy.
-# Cluster-tend multiplication is NOT mitigated by the default — each
-# worker thread that calls session.get/put will lazily create its own
-# _LocalClient, each with its own tend loop.
-with SyncClient("localhost:3000", current_thread_runtime=True) as client:
-    session = client.create_session(Behavior.DEFAULT)
-    # ... worker threads each call session.get / session.put as normal ...
-```
-
-Treat ct_runtime as an experimental performance lever for benchmarking and tightly-controlled deployments. The default sync path (one shared Tokio multi-thread runtime + one shared connection pool) is the recommended production setup.
+Because the gaps above make it unsafe as a general-purpose setting, the mode is reachable only through the deprecated `SyncClient` and is intentionally not exposed on the `ClusterDefinition` builder. Treat the numbers above as a benchmark data point rather than a tuning recommendation; the default sync path (one shared multi-threaded runtime and one shared connection pool) is the supported production setup.
 :::
 
 ### With batching (`--batch-size > 1`, free-threaded)

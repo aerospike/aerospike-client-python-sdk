@@ -37,7 +37,7 @@ __all__ = [
 ]
 
 
-class UdfFunctionBuilder(_UdfFunctionBuilderBase):
+class UdfFunctionBuilder(_UdfFunctionBuilderBase[QueryBuilder]):
     """First step of foreground UDF chaining: choose package and Lua function name.
 
     Produced by :meth:`~aerospike_sdk.aio.session.Session.execute_udf` or
@@ -57,7 +57,7 @@ class UdfFunctionBuilder(_UdfFunctionBuilderBase):
     __slots__ = ()
 
 
-class UdfBuilder(_UdfBuilderBase):
+class UdfBuilder(_UdfBuilderBase[QueryBuilder]):
     """Supply UDF arguments, optional filter, then execute or chain another operation.
 
     After :meth:`UdfFunctionBuilder.function`, call :meth:`passing` with values

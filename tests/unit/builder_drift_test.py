@@ -34,13 +34,29 @@ shared-base consolidation:
    drifted keyword (``keys_list=`` vs ``keys=``) or arity is caught even when
    both sides still expose the same method name. Annotations are ignored on
    purpose: return types and per-tree parameter types legitimately differ
-   (``RecordStream`` vs ``SyncRecordStream``).
+   (``Client`` vs ``SyncClient`` on the ``client`` property, for instance).
+
+A third, related check guards the *positional* constructor contract the
+session hot paths depend on — see ``_POSITIONAL_CTOR_ORDER`` below.
 """
 
 import inspect
 
 import pytest
 
+from aerospike_sdk.aio.cluster import Cluster as AsyncCluster
+from aerospike_sdk.aio.cluster_definition import (
+    ClusterDefinition as AsyncClusterDefinition,
+    Host as AsyncHost,
+)
+from aerospike_sdk.aio.info import InfoCommands as AsyncInfoCommands
+from aerospike_sdk.aio.background import (
+    BackgroundOperationBuilder as AsyncBackgroundOperationBuilder,
+    BackgroundTaskSession as AsyncBackgroundTaskSession,
+    BackgroundUdfBuilder as AsyncBackgroundUdfBuilder,
+    BackgroundUdfFunctionBuilder as AsyncBackgroundUdfFunctionBuilder,
+    BackgroundWriteBinBuilder as AsyncBackgroundWriteBinBuilder,
+)
 from aerospike_sdk.aio.operations.index import IndexBuilder as AsyncIndexBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder as AsyncQueryBuilder,
@@ -51,7 +67,26 @@ from aerospike_sdk.aio.operations.udf import (
     UdfBuilder as AsyncUdfBuilder,
     UdfFunctionBuilder as AsyncUdfFunctionBuilder,
 )
+from aerospike_sdk.aio.session import Session as AsyncSession
+from aerospike_sdk.aio.transactional_session import (
+    TransactionalSession as AsyncTransactionalSession,
+)
+from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
+from aerospike_sdk.query_shared import _QueryBuilderBase
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.sync.background import (
+    SyncBackgroundOperationBuilder,
+    SyncBackgroundTaskSession,
+    SyncBackgroundUdfBuilder,
+    SyncBackgroundUdfFunctionBuilder,
+    SyncBackgroundWriteBinBuilder,
+)
+from aerospike_sdk.sync.cluster import Cluster as SyncCluster
+from aerospike_sdk.sync.cluster_definition import (
+    ClusterDefinition as SyncClusterDefinition,
+    Host as SyncHost,
+)
+from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIndexBuilder
 from aerospike_sdk.sync.operations.query import (
     QueryBuilder as SyncQueryBuilder,
@@ -62,24 +97,19 @@ from aerospike_sdk.sync.operations.udf import (
     UdfBuilder as SyncUdfBuilder,
     UdfFunctionBuilder as SyncUdfFunctionBuilder,
 )
-from aerospike_sdk.sync.record_stream import SyncRecordStream
-
-# The stream pair legitimately differs on its runtime-bound *source adapters* —
-# the classmethods that wrap a per-runtime producer. Async wraps a PAC async
-# recordset (``from_pac_recordset`` / ``from_chunked_pac_recordset``); sync
-# wraps a blocking recordset (``from_recordset`` / ``from_chunked_recordset``).
-# Like the iterator/context-manager dunders, these are runtime-bound by nature,
-# so they're sanctioned rather than treated as drift.
-_STREAM_SOURCE_ADAPTERS = {
-    "from_pac_recordset",
-    "from_chunked_pac_recordset",
-    "from_recordset",
-    "from_chunked_recordset",
-}
+from aerospike_sdk.sync.record_stream import RecordStream as SyncRecordStream
+from aerospike_sdk.sync.session import Session as SyncSession
+from aerospike_sdk.sync.transactional_session import (
+    TransactionalSession as SyncTransactionalSession,
+)
 
 # (async_leaf, sync_leaf, label, allowed_diff). Every pair must have an
 # identical public surface apart from ``allowed_diff``; the stream pair's
-# runtime dunders are private and excluded automatically.
+# runtime dunders are private and excluded automatically. The stream pair's
+# producer *source adapters* (``_from_pac_recordset`` /
+# ``_from_chunked_pac_recordset`` / ``_from_pac_batch_stream``) are private
+# plumbing on both trees, so they drop out of the public-surface comparison —
+# no allowlist needed.
 _PAIRS = [
     (AsyncQueryBuilder, SyncQueryBuilder, "QueryBuilder", set()),
     (AsyncWriteSegmentBuilder, SyncWriteSegmentBuilder, "WriteSegmentBuilder", set()),
@@ -87,7 +117,41 @@ _PAIRS = [
     (AsyncIndexBuilder, SyncIndexBuilder, "IndexBuilder", set()),
     (AsyncUdfFunctionBuilder, SyncUdfFunctionBuilder, "UdfFunctionBuilder", set()),
     (AsyncUdfBuilder, SyncUdfBuilder, "UdfBuilder", set()),
-    (RecordStream, SyncRecordStream, "RecordStream", _STREAM_SOURCE_ADAPTERS),
+    (RecordStream, SyncRecordStream, "RecordStream", set()),
+    # Top-layer pairs (Phase 3). These are still standalone duplicates today; the
+    # guard locks their surface *before* the shared-base hoist so every later step
+    # is a mechanical, verifiable move. Same-name-across-trees classes (Cluster,
+    # ClusterDefinition, Host) are aliased Async*/Sync* at import.
+    (AsyncSession, SyncSession, "Session", set()),
+    (AsyncCluster, SyncCluster, "Cluster", set()),
+    (AsyncClusterDefinition, SyncClusterDefinition, "ClusterDefinition", set()),
+    (AsyncHost, SyncHost, "Host", set()),
+    (AsyncTransactionalSession, SyncTransactionalSession, "TransactionalSession", set()),
+    (AsyncInfoCommands, SyncInfoCommands, "InfoCommands", set()),
+    # Background-task family. The sync side is a wrapper over the async builders
+    # rather than a shared-base leaf, which is exactly why it drifted unnoticed:
+    # the four durable-delete verbs existed only on the async tree until these
+    # pairs were guarded.
+    (
+        AsyncBackgroundTaskSession, SyncBackgroundTaskSession,
+        "BackgroundTaskSession", set(),
+    ),
+    (
+        AsyncBackgroundOperationBuilder, SyncBackgroundOperationBuilder,
+        "BackgroundOperationBuilder", set(),
+    ),
+    (
+        AsyncBackgroundUdfFunctionBuilder, SyncBackgroundUdfFunctionBuilder,
+        "BackgroundUdfFunctionBuilder", set(),
+    ),
+    (
+        AsyncBackgroundUdfBuilder, SyncBackgroundUdfBuilder,
+        "BackgroundUdfBuilder", set(),
+    ),
+    (
+        AsyncBackgroundWriteBinBuilder, SyncBackgroundWriteBinBuilder,
+        "BackgroundWriteBinBuilder", set(),
+    ),
 ]
 
 _PAIR_IDS = [label for _, _, label, _ in _PAIRS]
@@ -145,4 +209,48 @@ def test_pair_shared_method_signatures_match(async_cls, sync_cls, label, allowed
     assert not skew, (
         f"{label}: shared methods have divergent parameter shapes "
         f"(async vs sync): {skew}"
+    )
+
+
+# The session hot paths construct these two bases **positionally** to avoid
+# materializing a kwargs dict per operation, so their parameter order is a
+# load-bearing contract rather than an implementation detail. Reordering a base
+# ``__init__`` would silently mis-wire every argument after the change point
+# (a ``txn`` landing in ``cached_read_policy_sc``, say) with no type error and
+# no import failure. Pin the order here so that refactor fails loudly instead.
+_POSITIONAL_CTOR_ORDER = {
+    _QueryBuilderBase: (
+        "aerospike_sdk.aio.session.Session._fast_query_builder",
+        (
+            "client", "namespace", "set_name", "behavior", "indexes_monitor",
+            "cached_read_policy", "cached_write_policy",
+            "cached_read_policy_sc", "cached_write_policy_sc",
+            "txn", "namespace_mode_resolver",
+            "namespace_mode_resolver_blocking", "sdk_client",
+        ),
+    ),
+    _SingleKeyWriteSegmentBase: (
+        "aerospike_sdk.aio.session.Session._fast_write_segment",
+        (
+            "client", "key", "op_type", "behavior",
+            "write_policy", "read_policy", "txn",
+            "namespace_mode_resolver", "namespace_mode_resolver_blocking",
+            "write_policy_sc", "read_policy_sc", "sdk_client",
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "base_cls", list(_POSITIONAL_CTOR_ORDER), ids=lambda c: c.__name__,
+)
+def test_positional_ctor_order_is_pinned(base_cls):
+    """Bases built positionally on the hot path keep their parameter order."""
+    call_site, expected = _POSITIONAL_CTOR_ORDER[base_cls]
+    actual = tuple(inspect.signature(base_cls.__init__).parameters)[1:]
+    assert actual == expected, (
+        f"{base_cls.__name__}.__init__ parameter order changed. "
+        f"{call_site} passes these positionally — update that call site (and "
+        f"any sibling fast path) to match before updating this expectation.\n"
+        f"  expected: {expected}\n  actual:   {actual}"
     )

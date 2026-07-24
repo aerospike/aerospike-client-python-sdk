@@ -23,12 +23,13 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
 
+from aerospike_sdk.info_shared import InfoCommandsBase
 from aerospike_sdk.loggers import SdkLoggers
 
 log = logging.getLogger(SdkLoggers.INFO)
 
 
-class InfoCommands:
+class InfoCommands(InfoCommandsBase):
     """
     Provides high-level methods to execute common Aerospike info commands.
 
@@ -65,18 +66,8 @@ class InfoCommands:
         Returns:
             A set of build strings from all nodes.
         """
-        # Get info from all nodes and merge the results
         all_responses = await self._session._client._client.info_on_all_nodes("build")
-
-        # Extract build strings from all node responses
-        build_set: Set[str] = set()
-        for node_response in all_responses.values():
-            # Response format is typically {"build": "8.1.0.1"}
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    build_set.add(value.strip())
-
-        return build_set
+        return self._merge_scalar_set(all_responses)
 
     async def namespaces(self) -> Set[str]:
         """
@@ -85,19 +76,8 @@ class InfoCommands:
         Returns:
             A set of namespace names from all nodes.
         """
-        # Get info from all nodes and merge the results
         all_responses = await self._session._client._client.info_on_all_nodes("namespaces")
-
-        # Extract namespace names from all node responses
-        namespace_set: Set[str] = set()
-        for node_response in all_responses.values():
-            # Response format is typically {"namespaces": "ns1;ns2;ns3"}
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    # Split semicolon-separated namespace list (info protocol)
-                    namespace_set.update([ns.strip() for ns in value.split(";") if ns.strip()])
-
-        return namespace_set
+        return self._merge_delimited_set(all_responses, ";")
 
     async def namespace_details(self, namespace: str) -> Optional[Dict[str, str]]:
         """
@@ -111,17 +91,10 @@ class InfoCommands:
         """
         try:
             response = await self._session._client._client.info(f"namespace/{namespace}")
-            if not response:
-                return None
-            # Check if response indicates namespace doesn't exist
-            # Response format for non-existent: {'namespace/name': 'type=unknown'}
-            expected_key = f"namespace/{namespace}"
-            if expected_key in response and str(response[expected_key]).strip() == "type=unknown":
-                return None
-            return response
         except Exception:
             log.debug("namespace_details(%s) failed", namespace, exc_info=True)
             return None
+        return self._interpret_namespace_details(response, namespace)
 
     async def sets(self, namespace: str) -> List[str]:
         """
@@ -133,19 +106,8 @@ class InfoCommands:
         Returns:
             A list of set names in the namespace.
         """
-        # Get info from all nodes and merge the results
         all_responses = await self._session._client._client.info_on_all_nodes(f"sets/{namespace}")
-
-        # Extract set names from all node responses
-        set_set: Set[str] = set()
-        for node_response in all_responses.values():
-            # Response format is typically {"sets": "set1,set2,set3"}
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    # Split comma-separated set list
-                    set_set.update([s.strip() for s in value.split(",") if s.strip()])
-
-        return sorted(list(set_set))
+        return sorted(self._merge_delimited_set(all_responses, ","))
 
     async def secondary_indexes(self, namespace: Optional[str] = None) -> List[Dict[str, str]]:
         """
@@ -159,44 +121,7 @@ class InfoCommands:
             A list of dictionaries containing secondary index information.
         """
         all_responses = await self._session._client._client.info_on_all_nodes("sindex-list")
-
-        index_map: Dict[str, Dict[str, str]] = {}
-
-        for node_response in all_responses.values():
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    for entry in value.split(";"):
-                        entry = entry.strip()
-                        if not entry:
-                            continue
-
-                        fields: Dict[str, str] = {}
-                        for token in entry.split(":"):
-                            if "=" in token:
-                                k, v = token.split("=", 1)
-                                fields[k] = v
-
-                        index_name = fields.get("indexname", "")
-                        ns = fields.get("ns", "")
-                        if not index_name or not ns:
-                            continue
-
-                        if namespace and ns != namespace:
-                            continue
-
-                        if index_name not in index_map:
-                            index_map[index_name] = {
-                                "namespace": ns,
-                                "set": fields.get("set", ""),
-                                "bin": fields.get("bin", ""),
-                                "name": index_name,
-                            }
-                            if "type" in fields:
-                                index_map[index_name]["type"] = fields["type"]
-                            if "state" in fields:
-                                index_map[index_name]["state"] = fields["state"]
-
-        return list(index_map.values())
+        return self._parse_sindex_list(all_responses, namespace)
 
     async def secondary_index_details(
         self, namespace: str, index_name: str
@@ -213,20 +138,13 @@ class InfoCommands:
         """
         try:
             response = await self._session._client._client.info(f"sindex/{namespace}/{index_name}")
-            if not response:
-                return None
-            # Check if response indicates index doesn't exist
-            # Response format for non-existent: {'sindex/ns/name': 'ERROR:201:no index'}
-            expected_key = f"sindex/{namespace}/{index_name}"
-            if expected_key in response and "ERROR:201:no index" in str(response[expected_key]):
-                return None
-            return response
         except Exception:
             log.debug(
                 "secondary_index_details(%s, %s) failed",
                 namespace, index_name, exc_info=True,
             )
             return None
+        return self._interpret_sindex_details(response, namespace, index_name)
 
     async def is_cluster_stable(self) -> bool:
         """
@@ -235,21 +153,8 @@ class InfoCommands:
         Returns:
             True if the cluster is stable, False otherwise.
         """
-        # Get cluster state from all nodes
         all_responses = await self._session._client._client.info_on_all_nodes("cluster-stable")
-
-        if not all_responses:
-            return False
-
-        # Check if all nodes report "true" for cluster-stable
-        for node_response in all_responses.values():
-            for value in node_response.values():
-                if isinstance(value, str):
-                    # cluster-stable returns "true" or "false"
-                    if value.lower() != "true":
-                        return False
-
-        return True
+        return self._all_nodes_stable(all_responses)
 
     async def get_cluster_size(self) -> int:
         """

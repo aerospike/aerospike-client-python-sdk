@@ -353,8 +353,13 @@ class _BackgroundOperationBuilderBase:
             return RecordExistsAction.UPDATE_ONLY
         return None
 
-    def execute_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``."""
+    def _execute_blocking(self) -> ExecuteTask:
+        """Blocking counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``.
+
+        Internal: the sync tree's background builder is a wrapper over this
+        class, and this is the terminal it drives. Async callers use
+        :meth:`execute`.
+        """
         ops = self._final_operations()
         reject_unsupported_background_write_ops(ops)
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
@@ -610,8 +615,13 @@ class _BackgroundUdfBuilderBase:
             raise RuntimeError("Client is not connected")
         return fc._client
 
-    def execute_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``."""
+    def _execute_blocking(self) -> ExecuteTask:
+        """Blocking counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``.
+
+        Internal: the sync tree's background UDF builder is a wrapper over
+        this class, and this is the terminal it drives. Async callers use
+        :meth:`execute`.
+        """
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         wp = make_background_write_policy(
             self._session.behavior,

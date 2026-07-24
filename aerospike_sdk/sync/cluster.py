@@ -23,24 +23,27 @@ from typing import Optional
 
 from aerospike_async import ClientPolicy, UDFLang
 
+from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
-from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 from aerospike_sdk.sync.client import SyncClient
 
 if typing.TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
-    from aerospike_sdk.sync.session import SyncSession
-    from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+    from aerospike_sdk.sync.session import Session
+    from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 
-class Cluster:
+class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Synchronous cluster handle from ``sync.cluster_definition.ClusterDefinition.connect``.
 
     Mirrors :class:`~aerospike_sdk.aio.cluster.Cluster` but uses
     :class:`~aerospike_sdk.sync.client.SyncClient` and
-    :class:`~aerospike_sdk.sync.session.SyncSession`.
+    :class:`~aerospike_sdk.sync.session.Session`. The
+    :meth:`create_session` / :meth:`transaction` / :meth:`is_connected`
+    factories are inherited from
+    :class:`~aerospike_sdk.cluster_shared.ClusterBase`.
 
     Example::
 
@@ -124,61 +127,6 @@ class Cluster:
     def _client(self) -> SyncClient:
         """Get the underlying SyncClient."""
         return self._sdk_client
-    
-    def create_session(self, behavior: Optional[Behavior] = None) -> SyncSession:
-        """Return a :class:`~aerospike_sdk.sync.session.SyncSession` for this cluster.
-
-        A session represents a logical connection to the cluster with specific
-        behavior settings that control how operations are performed (timeouts,
-        retry policies, consistency levels, etc.).
-        Args:
-            behavior: Defaults to :attr:`~aerospike_sdk.policy.behavior.Behavior.DEFAULT`.
-
-        Returns:
-            A new sync session bound to this cluster's client.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.cluster.Cluster.create_session`
-        """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.create_session(behavior)
-    
-    def transaction(
-        self,
-        behavior: Optional[Behavior] = None,
-    ) -> "SyncTransactionalSession":
-        """Return a :class:`SyncTransactionalSession` for a multi-record transaction.
-
-        Equivalent to ``create_session(behavior).transaction()`` — the
-        returned context manager allocates a fresh
-        :class:`~aerospike_async.Txn` on entry and commits/aborts on exit.
-
-        Multi-record transactions require an Aerospike server running in
-        strong-consistency (SC) mode on the target namespace.
-
-        Args:
-            behavior: Optional :class:`~aerospike_sdk.policy.behavior.Behavior`
-                for operations inside the transaction. Defaults to
-                :attr:`Behavior.DEFAULT` when omitted.
-
-        Returns:
-            A :class:`~aerospike_sdk.sync.transactional_session.SyncTransactionalSession`
-            bound to this cluster's client and behavior.
-
-        Example::
-
-            with cluster.transaction() as tx:
-                tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-                tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
-
-        See Also:
-            :meth:`create_session`: Non-transactional session.
-            :meth:`~aerospike_sdk.aio.cluster.Cluster.transaction`: Async equivalent.
-        """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.transaction(behavior)
 
     def register_udf(
         self,
@@ -281,15 +229,6 @@ class Cluster:
         """
         return self._sdk_client._list_indexes()
 
-    def is_connected(self) -> bool:
-        """
-        Checks if the cluster connection is currently active.
-        
-        Returns:
-            True if the connection is active, False otherwise
-        """
-        return self._sdk_client.is_connected
-    
     def close(self) -> None:
         """
         Closes the cluster connection and releases all associated resources.

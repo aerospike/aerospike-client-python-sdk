@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 
 import pytest
@@ -326,3 +327,90 @@ def test_sync_write_chain_then_udf(cluster_with_udf):
     r2 = session.query(k2).bins(["wu"]).execute().first_or_raise()
     assert r2.record is not None
     assert r2.record.bins.get("wu") == "via_udf"
+
+
+# -- Phase-3 hoist gates: sync coverage the async tree already had ------------
+# These pin the sync register-UDF-from-{resource,file} paths on both the
+# Session and Cluster surfaces before those methods are hoisted onto shared
+# bases. The async tree covers these in integration; the sync tree did not.
+
+
+def test_sync_session_register_udf_from_resource(
+    aerospike_host, make_cluster_definition, tmp_path, monkeypatch,
+):
+    """Sync ``Session.register_udf_from_resource`` loads a module from a
+    Python package resource."""
+    pkg = tmp_path / "psdk_udf_resource_pkg_sync"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "probe.lua").write_bytes(b"function noop(rec) return 1 end\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        session = cluster.create_session()
+        server_path = "psdk_resource_probe_sync.lua"
+        try:
+            rm = session.remove_udf(server_path)
+            _wait_task(cluster, rm)
+        except Exception:
+            pass
+
+        task = session.register_udf_from_resource(
+            "psdk_udf_resource_pkg_sync", "probe.lua", server_path)
+        assert _wait_task(cluster, task)
+        assert any(m["name"] == server_path for m in session.list_udf())
+
+        rm = session.remove_udf(server_path)
+        _wait_task(cluster, rm)
+        assert not any(m["name"] == server_path for m in session.list_udf())
+
+
+def test_sync_cluster_register_udf_from_file(aerospike_host, make_cluster_definition):
+    """Sync ``Cluster.register_udf_from_file`` registers a module on the
+    cluster admin path."""
+    server_path = "psdk_cluster_from_file_sync.lua"
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        try:
+            rm = cluster.remove_udf(server_path)
+            _wait_task(cluster, rm)
+        except Exception:
+            pass
+
+        task = cluster.register_udf_from_file(LUA_FILE, server_path, UDFLang.LUA)
+        assert _wait_task(cluster, task)
+        assert any(m["name"] == server_path for m in cluster.list_udf())
+
+        rm = cluster.remove_udf(server_path)
+        _wait_task(cluster, rm)
+        assert not any(m["name"] == server_path for m in cluster.list_udf())
+
+
+def test_sync_cluster_register_udf_from_resource(
+    aerospike_host, make_cluster_definition, tmp_path, monkeypatch,
+):
+    """Sync ``Cluster.register_udf_from_resource`` loads a module from a
+    Python package resource via the cluster admin path."""
+    pkg = tmp_path / "psdk_udf_cluster_resource_pkg_sync"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "probe.lua").write_bytes(b"function noop(rec) return 1 end\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    server_path = "psdk_cluster_resource_probe_sync.lua"
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        try:
+            rm = cluster.remove_udf(server_path)
+            _wait_task(cluster, rm)
+        except Exception:
+            pass
+
+        task = cluster.register_udf_from_resource(
+            "psdk_udf_cluster_resource_pkg_sync", "probe.lua", server_path)
+        assert _wait_task(cluster, task)
+        assert any(m["name"] == server_path for m in cluster.list_udf())
+
+        rm = cluster.remove_udf(server_path)
+        _wait_task(cluster, rm)
+        assert not any(m["name"] == server_path for m in cluster.list_udf())

@@ -24,8 +24,8 @@ from typing import Optional
 from aerospike_async import ClientPolicy, UDFLang
 
 from aerospike_sdk.aio.client import Client
+from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
-from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 
@@ -35,11 +35,12 @@ if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
 
-class Cluster:
+class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Live connection to a cluster, obtained from :meth:`ClusterDefinition.connect`.
 
     Owns a connected :class:`~aerospike_sdk.aio.client.Client` and exposes
-    :meth:`create_session` / :meth:`transaction`. Prefer
+    :meth:`create_session` / :meth:`transaction` (both inherited from
+    :class:`~aerospike_sdk.cluster_shared.ClusterBase`). Prefer
     ``async with await ClusterDefinition(...).connect() as cluster`` so
     :meth:`close` runs on exit.
 
@@ -139,50 +140,6 @@ class Cluster:
     def _client(self) -> Client:
         """Get the underlying Client."""
         return self._sdk_client
-    
-    def create_session(self, behavior: Optional[Behavior] = None) -> Session:
-        """Open a :class:`~aerospike_sdk.aio.session.Session` with optional behavior.
-
-        A session represents a logical connection to the cluster with specific
-        behavior settings that control how operations are performed (timeouts,
-        retry policies, consistency levels, etc.).
-
-        Args:
-            behavior: Defaults to :attr:`~aerospike_sdk.policy.behavior.Behavior.DEFAULT`.
-
-        Returns:
-            Session bound to this cluster's SDK client.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.client.Client.create_session`
-        """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.create_session(behavior)
-    
-    def transaction(
-        self,
-        behavior: Optional[Behavior] = None,
-    ) -> TransactionalSession:
-        """Return a :class:`TransactionalSession` for a multi-record transaction.
-
-        Operations run inside the returned context manager use *behavior* (or
-        :attr:`Behavior.DEFAULT` when omitted) and auto-participate in a fresh
-        :class:`~aerospike_async.Txn`, committed on clean exit and aborted if an
-        exception propagates. Requires a strong-consistency (SC) namespace.
-
-        Args:
-            behavior: :class:`~aerospike_sdk.policy.behavior.Behavior` for
-                operations inside the transaction; defaults to
-                :attr:`Behavior.DEFAULT`.
-
-        Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.client.Client.transaction`
-        """
-        return self._sdk_client.transaction(behavior)
 
     async def register_udf(
         self,
@@ -285,10 +242,6 @@ class Cluster:
         """
         return await self._sdk_client._list_indexes()
 
-    def is_connected(self) -> bool:
-        """Mirror :attr:`~aerospike_sdk.aio.client.Client.is_connected`."""
-        return self._sdk_client.is_connected
-    
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.
 

@@ -13,16 +13,18 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""SyncRecordStream — pure-sync iterator of :class:`RecordResult` rows.
+"""RecordStream — pure-sync iterator of :class:`RecordResult` rows.
 
-Does not wrap an async :class:`RecordStream`. Sources are sync iterables —
+Does not wrap an async :class:`aerospike_sdk.record_stream.RecordStream`. Sources are sync iterables —
 typically a PAC :class:`Recordset`, a list of ``BatchRecord``, or a
 materialized list of :class:`RecordResult`.
 
 Factory classmethods mirror :class:`aerospike_sdk.record_stream.RecordStream`
 so callers that already use ``from_list`` / ``from_batch_records`` /
-``from_recordset`` / ``from_single`` / ``from_error`` / ``chain`` keep
-the same shape.
+``from_single`` / ``from_error`` / ``chain`` keep the same shape. The
+producer adapters that wrap a live PAC recordset / batch stream are private
+plumbing (``_from_pac_recordset`` / ``_from_chunked_pac_recordset`` /
+``_from_pac_batch_stream``), driven by the query/batch dispatch code.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
     from aerospike_sdk.exceptions import AerospikeError
 
 
-class SyncRecordStream:
+class RecordStream:
     """Synchronous iterator of :class:`~aerospike_sdk.record_result.RecordResult`.
 
     Produced by sync builder terminals (``execute()``). Iterate with a
@@ -68,7 +70,7 @@ class SyncRecordStream:
         # forwards to it for deterministic release. See the async
         # RecordStream for the full rationale.
         "_closeable",
-        # Chunked-recordset state (set by from_chunked_pac_recordset; left
+        # Chunked-recordset state (set by _from_chunked_pac_recordset; left
         # unset for non-chunked streams). Slotted to allow assignment.
         "_chunked", "_chunk_recordset", "_chunk_reexecute",
         "_chunk_limit", "_chunk_count", "_chunk_first", "_counter_ref",
@@ -83,22 +85,22 @@ class SyncRecordStream:
     # -- factory constructors ------------------------------------------------
 
     @classmethod
-    def from_list(cls, results: Sequence[RecordResult]) -> "SyncRecordStream":
+    def from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
         """Wrap an already-materialized list of results."""
         return cls(iter(results))
 
     @classmethod
-    def from_batch_records(cls, batch_records: Sequence) -> "SyncRecordStream":
+    def from_batch_records(cls, batch_records: Sequence) -> "RecordStream":
         """Wrap a list of PAC ``BatchRecord`` objects."""
         return cls.from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
-    def from_pac_batch_stream(
+    def _from_pac_batch_stream(
         cls, pac_stream: Any, on_error: "ErrorHandler | None" = None,
-    ) -> "SyncRecordStream":
-        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (sync iter).
+    ) -> "RecordStream":
+        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (sync iter) — internal plumbing.
 
-        See :meth:`aerospike_sdk.record_stream.RecordStream.from_pac_batch_stream`
+        See :meth:`aerospike_sdk.record_stream.RecordStream._from_pac_batch_stream`
         for the contract. This sync variant pulls ``(idx, BatchRecord)``
         tuples via PAC's blocking ``__iter__``/``__next__`` and maps each
         to a :class:`RecordResult` with ``index=idx`` (NOT enumeration —
@@ -139,8 +141,8 @@ class SyncRecordStream:
         return inst
 
     @classmethod
-    def from_pac_recordset(cls, recordset: Any) -> "SyncRecordStream":
-        """Wrap a PAC ``Recordset`` (sync ``__iter__`` / ``__next__``).
+    def _from_pac_recordset(cls, recordset: Any) -> "RecordStream":
+        """Wrap a PAC ``Recordset`` (sync ``__iter__`` / ``__next__``) — internal plumbing.
 
         Each yielded ``Record`` becomes an OK :class:`RecordResult` with
         ``index=-1`` (queries have no positional index).
@@ -163,13 +165,13 @@ class SyncRecordStream:
         return inst
 
     @classmethod
-    def from_chunked_pac_recordset(
+    def _from_chunked_pac_recordset(
         cls,
         recordset: Any,
         reexecute: Callable[[Any], Any],
         limit: int = 0,
-    ) -> "SyncRecordStream":
-        """Wrap a PAC ``Recordset`` for chunked iteration.
+    ) -> "RecordStream":
+        """Wrap a PAC ``Recordset`` for chunked iteration — internal plumbing.
 
         ``reexecute`` is a *sync* callable that takes the current
         :class:`PartitionFilter` and returns the next ``Recordset`` (or
@@ -193,7 +195,7 @@ class SyncRecordStream:
     @classmethod
     def from_single(
         cls, key: Key, record: Optional["Record"],
-    ) -> "SyncRecordStream":
+    ) -> "RecordStream":
         """Wrap a single-key result.
 
         Sets ``result_code = OK`` when ``record is not None``; otherwise
@@ -212,7 +214,7 @@ class SyncRecordStream:
         result_code: ResultCode,
         in_doubt: bool = False,
         exception: "Optional[AerospikeError]" = None,
-    ) -> "SyncRecordStream":
+    ) -> "RecordStream":
         """Wrap a single-key error as a one-element stream."""
         return cls.from_list([RecordResult(
             key=key,
@@ -224,7 +226,7 @@ class SyncRecordStream:
         )])
 
     @classmethod
-    def chain(cls, streams: Sequence["SyncRecordStream"]) -> "SyncRecordStream":
+    def chain(cls, streams: Sequence["RecordStream"]) -> "RecordStream":
         """Yield all results from each stream in order."""
         def _gen() -> Iterator[RecordResult]:
             for st in streams:
@@ -233,7 +235,7 @@ class SyncRecordStream:
 
     # -- sync iteration ------------------------------------------------------
 
-    def __iter__(self) -> "SyncRecordStream":
+    def __iter__(self) -> "RecordStream":
         return self
 
     def __next__(self) -> RecordResult:
@@ -267,7 +269,7 @@ class SyncRecordStream:
         """
         result = self.pop()
         if result is None:
-            raise StopIteration("SyncRecordStream is empty")
+            raise StopIteration("RecordStream is empty")
         return result.or_raise()
 
     def first(self) -> Optional[RecordResult]:
@@ -288,7 +290,7 @@ class SyncRecordStream:
         """
         result = self.first()
         if result is None:
-            raise StopIteration("SyncRecordStream is empty")
+            raise StopIteration("RecordStream is empty")
         return result.or_raise()
 
     def first_udf_result(self) -> Any | None:
@@ -308,7 +310,7 @@ class SyncRecordStream:
 
     # -- context manager -----------------------------------------------------
 
-    def __enter__(self) -> "SyncRecordStream":
+    def __enter__(self) -> "RecordStream":
         """Enter a ``with`` block, returning the stream itself.
 
         Pairs with :meth:`__exit__` so the stream is always :meth:`close`\\ d
@@ -413,3 +415,9 @@ def _chunked_iter(
         yield RecordResult(
             key=key, record=record, result_code=ResultCode.OK,
         )
+
+
+# Path-differentiated bare name is the committed convention (same as the aio
+# class); the ``Sync``-prefixed alias stays importable for one deprecation
+# cycle (removed at GA).
+SyncRecordStream = RecordStream
