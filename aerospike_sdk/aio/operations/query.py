@@ -97,7 +97,7 @@ from aerospike_sdk.query_shared import (  # noqa: F401
     _resolve_hll_flags,
 )
 
-class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
+class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
     Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
@@ -430,7 +430,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             return self._handle_batch_error(all_keys, e, disp, handler)
         # The lazy path only honors the callback form of on_error; an
         # ErrorStrategy enum collapses to inline errors (the stream default).
-        return RecordStream.from_pac_batch_stream(pac_stream, on_error=handler)
+        return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
 
     @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
     async def execute_stream(
@@ -1015,16 +1015,16 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs):
             async def _reexecute(pf: PartitionFilter) -> Any:
                 return await client.query(statement, pf, policy=policy)
 
-            return RecordStream.from_chunked_recordset(
+            return RecordStream._from_chunked_pac_recordset(
                 recordset,
                 reexecute=_reexecute,
                 limit=0,
             )
 
-        return RecordStream.from_recordset(recordset)
+        return RecordStream._from_pac_recordset(recordset)
 
 
-class WriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
+class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
     """Accumulate scalar and CDT writes for the current operation's key(s).
 
     Obtained from :class:`QueryBuilder` after a write verb or from

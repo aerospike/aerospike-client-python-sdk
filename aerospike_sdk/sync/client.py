@@ -20,7 +20,7 @@ Owns a PAC ``aerospike_async.Client`` and a daemon-thread
 IO entry calls PAC's ``_blocking`` methods; no asyncio event loop is
 constructed. Builder and session factories return synchronous wrappers
 (:class:`~aerospike_sdk.sync.operations.query.QueryBuilder`,
-:class:`~aerospike_sdk.sync.session.SyncSession`).
+:class:`~aerospike_sdk.sync.session.Session`).
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonit
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.sync.operations.index import IndexBuilder
-    from aerospike_sdk.sync.session import SyncSession
-    from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+    from aerospike_sdk.sync.session import Session
+    from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 
@@ -66,7 +66,7 @@ class SyncClient:
     :class:`~aerospike_sdk.sync.cluster_definition.ClusterDefinition`
     (``ClusterDefinition(...).connect()``) rather than instantiating
     ``SyncClient`` directly. Reads and writes go through a
-    :class:`~aerospike_sdk.sync.session.SyncSession` from :meth:`create_session`.
+    :class:`~aerospike_sdk.sync.session.Session` from :meth:`create_session`.
 
     Example::
 
@@ -100,11 +100,9 @@ class SyncClient:
         Args:
             seeds: Aerospike cluster seed addresses (e.g., "localhost:3000").
             policy: Optional client policy. When not supplied, defaults to a
-                fresh ``ClientPolicy`` with ``conn_pools_per_node = 8`` (PAC's
-                default of 4 is tuned for async; sync workloads driven from
-                many caller threads see real connection-pool mutex contention
-                at 4). Pass an explicit ``ClientPolicy`` to override either
-                this default or any other client-level setting.
+                fresh ``ClientPolicy`` left at PAC's own defaults. Pass an
+                explicit ``ClientPolicy`` to override any client-level
+                setting.
             index_refresh_interval: Seconds between secondary index cache
                 refreshes (default 5.0). The monitor is a daemon thread that
                 starts lazily on the first AEL ``where()`` query — clients
@@ -127,7 +125,7 @@ class SyncClient:
                 cluster at high thread counts. Recommended pairing when
                 opted in: set
                 ``policy.conn_pools_per_node = 1`` so total connections
-                per node stay modest (N threads × 1 ≈ shared client's 8).
+                per node stay modest (N threads × 1 ≈ a shared client's 4).
         """
         self._seeds = seeds
         if policy is None:
@@ -136,15 +134,6 @@ class SyncClient:
                 # Per-thread Client = per-thread pool; one connection per
                 # thread is enough for the per-thread blocking pattern.
                 policy.conn_pools_per_node = 1
-            else:
-                # SyncClient drives PAC from many caller threads, so the
-                # per-node connection-pool mutex sees real contention that
-                # async (single- or per-Client-loop) workloads do not.
-                # py-spy traces at conn_pools_per_node=4 showed ~65% of
-                # lock-contended samples in put_back/get on a 32-thread
-                # builder cell; 8 cuts the p99 tail roughly in half with no
-                # TPS cost. User-supplied policies are respected as-is.
-                policy.conn_pools_per_node = 8
         if max_error_rate is not None:
             policy.max_error_rate = max_error_rate
         if error_rate_window is not None:
@@ -444,18 +433,18 @@ class SyncClient:
         raw = self.underlying_client.info_on_all_nodes_blocking("sindex-list")
         return parse_index_list(raw)
 
-    def create_session(self, behavior: Optional[Behavior] = None) -> SyncSession:
+    def create_session(self, behavior: Optional[Behavior] = None) -> Session:
         """Create a synchronous session with the specified behavior."""
-        from aerospike_sdk.sync.session import SyncSession
+        from aerospike_sdk.sync.session import Session
 
         self._ensure_connected()
-        return SyncSession(client=self, behavior=behavior or Behavior.DEFAULT)
+        return Session(client=self, behavior=behavior or Behavior.DEFAULT)
 
     def transaction(
         self, behavior: Optional[Behavior] = None,
-    ) -> SyncTransactionalSession:
+    ) -> TransactionalSession:
         """Create a synchronous multi-record transaction session."""
-        from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+        from aerospike_sdk.sync.transactional_session import TransactionalSession
 
         self._ensure_connected()
-        return SyncTransactionalSession(client=self, behavior=behavior or Behavior.DEFAULT)
+        return TransactionalSession(client=self, behavior=behavior or Behavior.DEFAULT)

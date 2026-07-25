@@ -354,11 +354,11 @@ class _QueryBuilderBase:
         - :class:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder`:
           sync ``execute()`` dispatching through the inherited blocking
           methods and returning
-          :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
+          :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
 
     End users never construct this base directly; they get a concrete
     subclass via :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.sync.session.SyncSession.query`.
+    :meth:`~aerospike_sdk.sync.session.Session.query`.
     """
 
     # Op types whose single-key/batch writes require the record to exist
@@ -2090,7 +2090,7 @@ class _QueryBuilderBase:
             bwp.durable_delete = eff
         return bwp
 
-class WriteBinBuilder(_WriteVerbs):
+class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     """Per-bin write builder inside a :class:`WriteSegmentBuilder`.
 
     Start with :meth:`WriteSegmentBuilder.bin`. Scalar methods delegate to the
@@ -4548,7 +4548,7 @@ class WriteBinBuilder(_WriteVerbs):
 _WriteSegmentBuilderBase._bin_builder_cls = WriteBinBuilder
 
 
-class QueryBinBuilder(_WriteVerbs, Generic[_T]):
+class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     """Per-bin reads and CDT navigation for :class:`QueryBuilder` (and sync twin).
 
     The type parameter is the parent builder type; the parent must implement

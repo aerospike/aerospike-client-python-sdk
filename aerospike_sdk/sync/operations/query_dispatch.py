@@ -263,7 +263,7 @@ class _BlockingQueryDispatch:
 
         Returns:
             A list of zero or one :class:`RecordResult`. Caller wraps with
-            ``SyncRecordStream.from_list``. ``None`` when the spec shape
+            ``RecordStream.from_list``. ``None`` when the spec shape
             isn't handled (caller falls back to the async path).
         """
         key = spec.keys[0]
@@ -584,7 +584,7 @@ class _BlockingQueryDispatch:
         ``session.query(namespace, set_name)``), build the policy +
         statement synchronously and call PAC ``query_blocking``. Returns
         the raw :class:`Recordset` (Python iterator that blocks per
-        record) so the caller can wrap it in :class:`SyncRecordStream`
+        record) so the caller can wrap it in :class:`RecordStream`
         without materializing — memory stays bounded for arbitrarily large
         result sets.
 
@@ -622,7 +622,7 @@ class _BlockingQueryDispatch:
         Same policy construction and disposition handling, but the dispatch
         is PAC ``batch_read_blocking`` — zero asyncio. Returns a list of
         :class:`RecordResult` that the caller (the sync builder) wraps with
-        :class:`SyncRecordStream.from_list`.
+        :class:`RecordStream.from_list`.
         """
         batch_read_policy = None
         if self._behavior is not None:
@@ -722,7 +722,7 @@ class _BlockingQueryDispatch:
         ``query_blocking`` which returns a :class:`Recordset` with the
         Python-iterator protocol (blocking ``__next__`` that releases the
         GIL while waiting on the underlying Tokio stream). The caller wraps
-        the returned recordset in :class:`SyncRecordStream`.
+        the returned recordset in :class:`RecordStream`.
 
         Returns:
             The PAC ``Recordset`` (raw). For chunked queries the second
@@ -799,7 +799,7 @@ class _BlockingQueryDispatch:
         """Mirror :meth:`_handle_error` for the blocking single-key path.
 
         Returns a list of zero or one :class:`RecordResult` — caller wraps
-        with ``SyncRecordStream.from_list``. THROW raises the converted
+        with ``RecordStream.from_list``. THROW raises the converted
         exception on actionable codes; HANDLER dispatches to the callback
         and returns ``[]``; IN_STREAM embeds the error as a
         :class:`RecordResult`.

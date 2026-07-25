@@ -1,7 +1,7 @@
 # Sync Query Builders
 
 ```{eval-rst}
-.. automodule:: aerospike_sdk.sync.operations.query
+.. autoclass:: aerospike_sdk.sync.operations.query.QueryBuilder
    :members:
    :inherited-members:
    :show-inheritance:

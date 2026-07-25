@@ -67,6 +67,26 @@ class SyncBackgroundOperationBuilder:
     def __init__(self, inner: AsyncBackgroundOperationBuilder) -> None:
         self._inner = inner
 
+    def default_with_durable_delete(self) -> SyncBackgroundOperationBuilder:
+        """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
+        self._inner.default_with_durable_delete()
+        return self
+
+    def default_without_durable_delete(self) -> SyncBackgroundOperationBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._inner.default_without_durable_delete()
+        return self
+
+    def with_durable_delete(self) -> SyncBackgroundOperationBuilder:
+        """Force durable delete on this background job."""
+        self._inner.with_durable_delete()
+        return self
+
+    def without_durable_delete(self) -> SyncBackgroundOperationBuilder:
+        """Force non-durable deletes (may be rejected on SC)."""
+        self._inner.without_durable_delete()
+        return self
+
     @overload
     def where(self, expression: str) -> SyncBackgroundOperationBuilder: ...
 
@@ -133,7 +153,7 @@ class SyncBackgroundOperationBuilder:
         See Also:
             :meth:`~aerospike_sdk.aio.background.BackgroundOperationBuilder.execute`
         """
-        return self._inner.execute_blocking()
+        return self._inner._execute_blocking()
 
 
 class SyncBackgroundUdfFunctionBuilder:
@@ -169,6 +189,26 @@ class SyncBackgroundUdfBuilder:
 
     def __init__(self, inner: AsyncBackgroundUdfBuilder) -> None:
         self._inner = inner
+
+    def default_with_durable_delete(self) -> SyncBackgroundUdfBuilder:
+        """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
+        self._inner.default_with_durable_delete()
+        return self
+
+    def default_without_durable_delete(self) -> SyncBackgroundUdfBuilder:
+        """Prefer non-durable deletes when resolving policy defaults."""
+        self._inner.default_without_durable_delete()
+        return self
+
+    def with_durable_delete(self) -> SyncBackgroundUdfBuilder:
+        """Force durable delete on this background job."""
+        self._inner.with_durable_delete()
+        return self
+
+    def without_durable_delete(self) -> SyncBackgroundUdfBuilder:
+        """Force non-durable deletes (may be rejected on SC)."""
+        self._inner.without_durable_delete()
+        return self
 
     def passing(self, *args: Any) -> SyncBackgroundUdfBuilder:
         self._inner.passing(*args)
@@ -212,13 +252,13 @@ class SyncBackgroundUdfBuilder:
         See Also:
             :meth:`~aerospike_sdk.aio.background.BackgroundUdfBuilder.execute`
         """
-        return self._inner.execute_blocking()
+        return self._inner._execute_blocking()
 
 
 class SyncBackgroundTaskSession:
     """Sync entry for server-side dataset background operations.
 
-    Obtained from :meth:`~aerospike_sdk.sync.session.SyncSession.background_task`.
+    Obtained from :meth:`~aerospike_sdk.sync.session.Session.background_task`.
     Each method returns a sync builder that mirrors
     :class:`~aerospike_sdk.aio.background.BackgroundTaskSession`.
 

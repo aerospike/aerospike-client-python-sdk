@@ -178,9 +178,13 @@ class TestDurableDeleteBatchReset:
         keys = ds_sc.ids(list(range(first_key, first_key + 10)))
         _delete_keys_durable(session, keys)
 
+        # Deleting already-tombstoned keys inside a multi-record transaction
+        # fails commit verification, so this cleanup delete opts out of the
+        # implicit batch-write transaction via with_txn(None). Without it the
+        # test only passes against a freshly truncated set.
         del_rows = (
             session.delete(*keys).with_durable_delete().include_missing_keys()
-            .execute(on_error=ErrorStrategy.IN_STREAM)
+            .with_txn(None).execute(on_error=ErrorStrategy.IN_STREAM)
         ).collect()
         _assert_batch_delete_stream_ok(del_rows, len(keys))
 

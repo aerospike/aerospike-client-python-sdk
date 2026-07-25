@@ -106,6 +106,11 @@ class WorkloadConfig:
     and summary percentiles. Default is the lean path that runs straight to
     ``--duration`` and prints only a final TPS / errors / timeouts summary."""
     prebuilt_keys: int = 0
+    conn_pools_per_node: int = 0
+    """When >0, override ``ClientPolicy.conn_pools_per_node``. Otherwise the
+    underlying default (4) applies. Sync workloads drive the client from many
+    caller threads and can contend on the per-node pool mutex, so this is the
+    knob for measuring whether a higher count earns its keep."""
     current_thread_runtime: bool = False
     """When True (sync mode only), SyncClient installs a thread-local proxy:
     each bench worker thread gets its own PAC `LocalClient` backed by a
@@ -424,6 +429,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "TPS / errors / timeouts summary.",
     )
     p.add_argument(
+        "--conn-pools-per-node",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Override ClientPolicy.conn_pools_per_node (0 = leave at the "
+        "underlying default of 4). Higher counts reduce per-node pool mutex "
+        "contention for many-threaded sync workloads, but lengthen connection "
+        "setup at connect time.",
+    )
+    p.add_argument(
         "--current-thread-runtime",
         action="store_true",
         default=False,
@@ -507,5 +522,6 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
             or getattr(ns, "latency_style", "columns") != "columns"
         ),
         prebuilt_keys=max(0, int(getattr(ns, "prebuilt_keys", 0))),
+        conn_pools_per_node=int(getattr(ns, "conn_pools_per_node", 0) or 0),
         current_thread_runtime=bool(getattr(ns, "current_thread_runtime", False)),
     )

@@ -216,6 +216,28 @@ async def test_explicit_behavior_honored(
     assert tx.behavior is custom
 
 
+async def test_session_transaction_forwards_behavior(
+    sdk_client: _FakeSdkClient,
+) -> None:
+    """``session.transaction()`` must carry the session's own behavior through
+    to the returned :class:`TransactionalSession`.
+
+    The tests above construct ``TransactionalSession`` directly; this pins the
+    ``session.transaction()`` *forwarding* path — the exact surface a
+    dropped-behavior regression would slip through. Gates the Phase-3 hoist of
+    ``transaction()`` onto a shared session base.
+    """
+    custom = Behavior.DEFAULT.derive_with_changes(name="sess_fwd_mrt")
+    session = Session(client=sdk_client, behavior=custom)  # type: ignore[arg-type]
+    tx = session.transaction()
+    assert isinstance(tx, TransactionalSession)
+    # The shared-base transaction() threads the session's own behavior straight
+    # into the constructed TransactionalSession (no client.transaction() hop),
+    # so a dropped-behavior regression cannot slip through this path.
+    assert tx.behavior is session.behavior
+    assert tx.behavior is custom
+
+
 # -- PAC Txn surface guards ---------------------------------------------------
 # These lock in the PAC Txn shape that the MRT integration tests
 # depend on. If PAC later adds ``set_state`` / ``set_timeout`` setters,

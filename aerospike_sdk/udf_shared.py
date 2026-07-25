@@ -25,15 +25,22 @@ runtime-bound and live on the leaves:
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, List, TYPE_CHECKING, Union, overload
+from typing import Any, ClassVar, Generic, List, TYPE_CHECKING, TypeVar, Union, overload
+
+from typing_extensions import Self
 
 from aerospike_async import FilterExpression, Key
 
 from aerospike_sdk.ael.parser import parse_ael
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
-    from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
+    from aerospike_sdk.aio.operations.query import WriteSegmentBuilder
     from aerospike_sdk.aio.operations.udf import UdfBuilder, UdfFunctionBuilder
+    from aerospike_sdk.query_shared import _QueryBuilderBase
+
+# Each UDF-builder leaf binds this to its tree's concrete ``QueryBuilder`` so the
+# wrapped ``_qb`` keeps its runtime-appropriate type instead of a hard-coded tree's.
+_QB = TypeVar("_QB", bound="_QueryBuilderBase")
 
 
 def parse_udf_list(raw: str) -> list[dict[str, str]]:
@@ -65,7 +72,7 @@ def parse_udf_list(raw: str) -> list[dict[str, str]]:
     return modules
 
 
-class _UdfFunctionBuilderBase:
+class _UdfFunctionBuilderBase(Generic[_QB]):
     """State + chaining shared by the async and sync UdfFunctionBuilder.
 
     Subclasses inject their tier-appropriate ``UdfBuilder`` class via
@@ -78,8 +85,8 @@ class _UdfFunctionBuilderBase:
     # Leaf modules bind this after their concrete UdfBuilder is defined.
     _udf_builder_cls: ClassVar[type]
 
-    def __init__(self, qb: QueryBuilder) -> None:
-        self._qb = qb
+    def __init__(self, qb: _QB) -> None:
+        self._qb: _QB = qb
 
     def function(self, package: str, function_name: str) -> UdfBuilder:
         """Select the registered module and function to invoke.
@@ -105,7 +112,7 @@ class _UdfFunctionBuilderBase:
         return type(self)._udf_builder_cls(self._qb)
 
 
-class _UdfBuilderBase:
+class _UdfBuilderBase(Generic[_QB]):
     """State + chaining shared by the async and sync UdfBuilder.
 
     Subclasses inject their tier-appropriate ``UdfFunctionBuilder`` class
@@ -120,10 +127,10 @@ class _UdfBuilderBase:
     # Leaf modules bind this after their concrete UdfFunctionBuilder is defined.
     _udf_function_builder_cls: ClassVar[type]
 
-    def __init__(self, qb: QueryBuilder) -> None:
-        self._qb = qb
+    def __init__(self, qb: _QB) -> None:
+        self._qb: _QB = qb
 
-    def passing(self, *args: Any) -> UdfBuilder:
+    def passing(self, *args: Any) -> Self:
         """Set positional arguments forwarded to the Lua function.
 
         The Aerospike server automatically passes the record as the first
@@ -142,15 +149,15 @@ class _UdfBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> UdfBuilder: ...
+    def where(self, expression: str) -> Self: ...
 
     @overload
-    def where(self, expression: FilterExpression) -> UdfBuilder: ...
+    def where(self, expression: FilterExpression) -> Self: ...
 
     def where(
         self,
         expression: Union[str, FilterExpression],
-    ) -> UdfBuilder:
+    ) -> Self:
         """Apply a filter expression so the UDF runs only when the predicate matches.
 
         Args:
@@ -168,27 +175,27 @@ class _UdfBuilderBase:
             self._qb._filter_expression = expression
         return self
 
-    def default_with_durable_delete(self) -> UdfBuilder:
+    def default_with_durable_delete(self) -> Self:
         """Prefer durable deletes when resolving policy defaults."""
         self._qb._durable_delete_command_default = True
         return self
 
-    def default_without_durable_delete(self) -> UdfBuilder:
+    def default_without_durable_delete(self) -> Self:
         """Prefer non-durable deletes when resolving policy defaults."""
         self._qb._durable_delete_command_default = False
         return self
 
-    def with_durable_delete(self) -> UdfBuilder:
+    def with_durable_delete(self) -> Self:
         """Force durable delete for this UDF invocation."""
         self._qb._durable_delete = True
         return self
 
-    def without_durable_delete(self) -> UdfBuilder:
+    def without_durable_delete(self) -> Self:
         """Force non-durable delete for this UDF invocation."""
         self._qb._durable_delete = False
         return self
 
-    def include_missing_keys(self) -> UdfBuilder:
+    def include_missing_keys(self) -> Self:
         """For batch UDF, emit a row per requested key (including not-found).
 
         Returns:
@@ -201,7 +208,7 @@ class _UdfBuilderBase:
         self._qb._respond_all_keys = True
         return self
 
-    def respond_all_keys(self) -> UdfBuilder:
+    def respond_all_keys(self) -> Self:
         """Alias for :meth:`include_missing_keys` (underlying client's ``respondAllKeys`` name)."""
         return self.include_missing_keys()
 
@@ -227,7 +234,7 @@ class _UdfBuilderBase:
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
-    ) -> QueryBuilder:
+    ) -> _QB:
         """Close the UDF operation and begin a read query segment.
 
         Args:

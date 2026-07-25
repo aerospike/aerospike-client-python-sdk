@@ -19,7 +19,7 @@ Chain state and chaining methods live on the shared, runtime-agnostic bases
 in :mod:`aerospike_sdk.udf_shared`; this module adds the blocking
 ``execute()`` terminal. The wrapped query builder is the sync
 :class:`~aerospike_sdk.sync.operations.query.QueryBuilder` (constructed by
-:meth:`SyncSession.execute_udf`), so verb transitions inherited from the
+:meth:`~aerospike_sdk.sync.session.Session.execute_udf`), so verb transitions inherited from the
 base already return sync segment types.
 """
 
@@ -31,7 +31,7 @@ from aerospike_async import Key
 
 from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.sync.operations.query import QueryBuilder
-from aerospike_sdk.sync.record_stream import SyncRecordStream
+from aerospike_sdk.sync.record_stream import RecordStream
 from aerospike_sdk.udf_shared import _UdfBuilderBase, _UdfFunctionBuilderBase
 
 __all__ = [
@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 
-class UdfFunctionBuilder(_UdfFunctionBuilderBase):
+class UdfFunctionBuilder(_UdfFunctionBuilderBase[QueryBuilder]):
     """First step after ``execute_udf``: select package and function name.
 
     See Also:
@@ -53,7 +53,7 @@ class UdfFunctionBuilder(_UdfFunctionBuilderBase):
     __slots__ = ()
 
 
-class UdfBuilder(_UdfBuilderBase):
+class UdfBuilder(_UdfBuilderBase[QueryBuilder]):
     """Chain UDF arguments, optional filter, and execution (sync).
 
     See Also:
@@ -74,13 +74,13 @@ class UdfBuilder(_UdfBuilderBase):
         """Close the UDF operation and begin a sync read query segment."""
         qb = super().query(arg1, *more_keys)
         # The wrapped query builder is a sync QueryBuilder per
-        # SyncSession.execute_udf's construction contract; assert so the
+        # Session.execute_udf's construction contract; assert so the
         # sync type flows to callers.
         assert isinstance(qb, QueryBuilder)
         return qb
 
-    def execute(self, on_error: OnError | None = None) -> SyncRecordStream:
-        """Run the UDF and return a :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
+    def execute(self, on_error: OnError | None = None) -> RecordStream:
+        """Run the UDF and return a :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
 
         Args:
             on_error: Same semantics as query/write
@@ -100,12 +100,12 @@ class UdfBuilder(_UdfBuilderBase):
         # land here via "udf" op_type → execute_udf_blocking / batch_apply_blocking).
         fast = qb._execute_blocking_fast_path(on_error)
         if fast is not None:
-            return SyncRecordStream.from_list(fast)
+            return RecordStream.from_list(fast)
 
         # Tier 1b: multi-spec blocking dispatch.
         multispec = qb._execute_multispec_blocking(on_error)
         if multispec is not None:
-            return SyncRecordStream.from_list(multispec)
+            return RecordStream.from_list(multispec)
 
         # Every reachable shape is handled by Tier 1 or 1b. If we land here
         # a new code path slipped through without a blocking dispatcher —

@@ -75,8 +75,8 @@ with ClusterDefinition("localhost", 3100).connect() as cluster:
         tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
 ```
 
-`do_in_transaction` is available on
-[`SyncSession`](../api/sync/session.md) as well, with a
+`do_in_transaction` is available on the
+[sync `Session`](../api/sync/session.md) as well, with a
 `time.sleep`-based retry loop.
 
 ## Reads Inside a Transaction
@@ -158,5 +158,5 @@ cleanup-style deletes that do not need atomicity.
 
 See Also:
 - [`TransactionalSession`](../api/transactional-session.md) — async API reference
-- [`SyncTransactionalSession`](../api/sync/transactional-session.md) — sync API reference
+- [`TransactionalSession`](../api/sync/transactional-session.md) — sync API reference
 - [`Session.transaction`](../api/session.md) / [`Session.do_in_transaction`](../api/session.md)

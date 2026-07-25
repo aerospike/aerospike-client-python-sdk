@@ -22,13 +22,14 @@ from typing import Any, Optional, TYPE_CHECKING
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
     from aerospike_sdk.policy.behavior import Behavior
 
 
-class TransactionalSession(Session):
+class TransactionalSession(TransactionalSessionBase, Session):
     """Async context manager that groups operations into a multi-record transaction.
 
     Subclasses :class:`~aerospike_sdk.aio.session.Session`, so every session
@@ -81,33 +82,8 @@ class TransactionalSession(Session):
             behavior = _Behavior.DEFAULT
         super().__init__(client, behavior)
         # _txn is inherited from Session (initially None); __aenter__ sets it.
+        # txn / active come from TransactionalSessionBase.
         self._finalized = False
-
-    @property
-    def txn(self) -> Txn:
-        """Return the underlying :class:`~aerospike_async.Txn`.
-
-        Raises:
-            RuntimeError: If the session has not been entered (no active txn).
-
-        Returns:
-            The active :class:`~aerospike_async.Txn`.
-        """
-        if self._txn is None:
-            raise RuntimeError(
-                "TransactionalSession is not active; enter the 'async with' "
-                "block before accessing .txn."
-            )
-        return self._txn
-
-    @property
-    def active(self) -> bool:
-        """``True`` when a transaction has been started and not yet finalized.
-
-        Returns:
-            Whether a transaction is currently active on this session.
-        """
-        return self._txn is not None and not self._finalized
 
     async def commit(self) -> CommitStatus:
         """Commit the transaction and return the server-reported status.

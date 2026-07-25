@@ -50,7 +50,7 @@ class IndexBuilder(_IndexBuilderBase):
         namespace: str,
         set_name: str,
     ) -> None:
-        """Pair with ``namespace``/``set`` from the parent SyncSession."""
+        """Pair with ``namespace``/``set`` from the parent Session."""
         super().__init__(namespace, set_name)
         self._async_client = async_client
 

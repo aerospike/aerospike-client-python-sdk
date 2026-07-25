@@ -98,7 +98,7 @@ class TestSyncCloseReleasesProducer:
 
     def test_close_forwards_to_batch_stream(self):
         fake = _FakeBatchStream([(0, _br(0)), (1, _br(1))])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         first = next(stream)
         assert first.key == _key(0)
         stream.close()
@@ -106,13 +106,13 @@ class TestSyncCloseReleasesProducer:
 
     def test_close_stops_iteration(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(5)])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         stream.close()
         assert list(stream) == []
 
     def test_close_is_idempotent(self):
         fake = _FakeBatchStream([])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         stream.close()
         stream.close()
         stream.close()
@@ -123,7 +123,7 @@ class TestSyncCloseReleasesProducer:
             SimpleNamespace(bins={"a": 1}, key=_key(1)),
             SimpleNamespace(bins={"b": 2}, key=_key(2)),
         ])
-        stream = SyncRecordStream.from_pac_recordset(fake)
+        stream = SyncRecordStream._from_pac_recordset(fake)
         rows = list(stream)
         assert len(rows) == 2
         assert fake.close_calls >= 1
@@ -146,7 +146,7 @@ class TestSyncContextManager:
     def test_normal_exit_closes(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(3)])
         rows = []
-        with SyncRecordStream.from_pac_batch_stream(fake) as stream:
+        with SyncRecordStream._from_pac_batch_stream(fake) as stream:
             for r in stream:
                 rows.append(r)
         assert len(rows) == 3
@@ -154,7 +154,7 @@ class TestSyncContextManager:
 
     def test_early_break_closes(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(10)])
-        with SyncRecordStream.from_pac_batch_stream(fake) as stream:
+        with SyncRecordStream._from_pac_batch_stream(fake) as stream:
             for _ in stream:
                 break
         assert fake.close_calls >= 1
@@ -162,7 +162,7 @@ class TestSyncContextManager:
     def test_exception_closes_and_propagates(self):
         fake = _FakeBatchStream([(0, _br(0))])
         with pytest.raises(RuntimeError, match="boom"):
-            with SyncRecordStream.from_pac_batch_stream(fake) as stream:
+            with SyncRecordStream._from_pac_batch_stream(fake) as stream:
                 for _ in stream:
                     raise RuntimeError("boom")
         assert fake.close_calls >= 1
@@ -204,7 +204,7 @@ class TestSyncPopKeepsOpen:
 
     def test_pop_does_not_close_producer(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(3)])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         stream.pop()
         assert fake.close_calls == 0
         assert len(stream.collect()) == 2
@@ -217,26 +217,26 @@ class TestSyncFirstIsTerminal:
 
     def test_first_closes_producer(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(5)])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         assert stream.first().index == 0
         assert fake.close_calls >= 1
         assert stream.collect() == []
 
     def test_first_or_raise_closes_producer(self):
         fake = _FakeBatchStream([(0, _br(0)), (1, _br(1))])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         assert stream.first_or_raise().is_ok
         assert fake.close_calls >= 1
 
     def test_first_or_raise_error_still_closes(self):
         fake = _FakeBatchStream([(0, _br(0, ok=False))])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         with pytest.raises(AerospikeError):
             stream.first_or_raise()
         assert fake.close_calls >= 1
 
     def test_first_empty_closes(self):
         fake = _FakeBatchStream([])
-        stream = SyncRecordStream.from_pac_batch_stream(fake)
+        stream = SyncRecordStream._from_pac_batch_stream(fake)
         assert stream.first() is None
         assert fake.close_calls >= 1

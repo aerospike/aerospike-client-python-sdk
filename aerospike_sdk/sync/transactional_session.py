@@ -22,14 +22,15 @@ from typing import Optional, TYPE_CHECKING
 
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.session import Session
+from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
 if TYPE_CHECKING:
     from aerospike_sdk.policy.behavior import Behavior
     from aerospike_sdk.sync.client import SyncClient
 
 
-class SyncTransactionalSession(SyncSession):
+class TransactionalSession(TransactionalSessionBase, Session):
     """Sync context manager grouping operations into a multi-record transaction.
 
     Every session API (``query``, ``upsert``, ``insert``, ``batch``, ...)
@@ -47,30 +48,15 @@ class SyncTransactionalSession(SyncSession):
             tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
     See Also:
-        :meth:`SyncSession.transaction`:
+        :meth:`~aerospike_sdk.sync.session.Session.transaction`:
             Preferred construction entry.
     """
 
     def __init__(self, client: SyncClient, behavior: Behavior) -> None:
-        """Construct via :meth:`SyncSession.transaction` rather than directly."""
+        """Construct via :meth:`~aerospike_sdk.sync.session.Session.transaction` rather than directly."""
         super().__init__(client, behavior)
+        # txn / active come from TransactionalSessionBase.
         self._finalized = False
-
-    @property
-    def txn(self) -> Txn:
-        """Return the active :class:`~aerospike_async.Txn`.
-
-        Raises:
-            RuntimeError: If the session has not been entered (no active txn).
-        """
-        if self._txn is None:
-            raise RuntimeError("TransactionalSession is not active.")
-        return self._txn
-
-    @property
-    def active(self) -> bool:
-        """``True`` when a transaction has been started and not yet finalized."""
-        return self._txn is not None and not self._finalized
 
     def commit(self) -> CommitStatus:
         """Commit the transaction and return the server-reported status."""
@@ -94,7 +80,7 @@ class SyncTransactionalSession(SyncSession):
         """Alias for :meth:`abort`."""
         return self.abort()
 
-    def __enter__(self) -> SyncTransactionalSession:
+    def __enter__(self) -> TransactionalSession:
         if self._txn is not None:
             raise RuntimeError("TransactionalSession is already active.")
         self._txn = Txn()
@@ -117,3 +103,9 @@ class SyncTransactionalSession(SyncSession):
         finally:
             self._finalized = True
             self._txn = None
+
+
+# Path-differentiated bare name is the committed convention (same as the aio
+# class); the ``Sync``-prefixed alias stays importable for one deprecation
+# cycle (removed at GA).
+SyncTransactionalSession = TransactionalSession

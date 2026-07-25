@@ -35,8 +35,9 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_sdk import DataSet, ResultCode
+from aerospike_sdk import Behavior, DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.sync import TransactionalSession
 
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
@@ -224,6 +225,23 @@ def test_txn_batch(session, mrt_set):
     session.do_in_transaction(op)
     for k in keys:
         assert _fetch_bin(session, k) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase-3 hoist gate: sync ``Cluster.transaction()`` forwarding.
+# The SC tests above drive ``session.transaction()``; the cluster-level entry
+# point had no sync coverage. Construction-only, so it runs without an SC
+# namespace — it pins that Cluster forwards its behavior to the right leaf
+# before that path is hoisted onto a shared cluster base.
+# ---------------------------------------------------------------------------
+def test_cluster_transaction_forwards_behavior(aerospike_host, make_cluster_definition):
+    custom = Behavior.DEFAULT.derive_with_changes(name="sync_cluster_mrt")
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        tx = cluster.transaction(custom)
+        assert isinstance(tx, TransactionalSession)
+        assert tx.behavior is custom
+        default_tx = cluster.transaction()
+        assert default_tx.behavior is Behavior.DEFAULT
 
 
 # ---------------------------------------------------------------------------

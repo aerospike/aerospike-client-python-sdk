@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""SyncInfoCommands — synchronous info-command helpers using PAC ``_blocking``.
+"""InfoCommands — synchronous info-command helpers using PAC ``_blocking``.
 
 Never touches asyncio. Each call routes through PAC's ``info_blocking`` /
 ``info_on_all_nodes_blocking`` and parses the responses the same way the async
@@ -25,25 +25,16 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+from aerospike_sdk.info_shared import InfoCommandsBase
 from aerospike_sdk.loggers import SdkLoggers
 
 log = logging.getLogger(SdkLoggers.INFO)
 
 
-def _merge_set_values(responses: Dict[str, Dict[str, str]]) -> Set[str]:
-    """Flatten ``{node: {key: 'a;b;c'}}`` responses into a set of items."""
-    out: Set[str] = set()
-    for node_response in responses.values():
-        for value in node_response.values():
-            if isinstance(value, str) and value:
-                out.update(s.strip() for s in value.split(";") if s.strip())
-    return out
-
-
-class SyncInfoCommands:
+class InfoCommands(InfoCommandsBase):
     """Synchronous high-level info-command helpers.
 
-    Constructed by :meth:`SyncSession.info` (no args). Calls PAC's
+    Constructed by :meth:`~aerospike_sdk.sync.session.Session.info` (no args). Calls PAC's
     ``info_blocking`` / ``info_on_all_nodes_blocking`` directly — no
     asyncio loop is involved.
     """
@@ -55,17 +46,12 @@ class SyncInfoCommands:
     def build(self) -> Set[str]:
         """Build strings from every node."""
         responses = self._pac.info_on_all_nodes_blocking("build")
-        out: Set[str] = set()
-        for node_response in responses.values():
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    out.add(value.strip())
-        return out
+        return self._merge_scalar_set(responses)
 
     def namespaces(self) -> Set[str]:
         """Namespace names across the cluster."""
         responses = self._pac.info_on_all_nodes_blocking("namespaces")
-        return _merge_set_values(responses)
+        return self._merge_delimited_set(responses, ";")
 
     def namespace_details(self, namespace: str) -> Optional[Dict[str, str]]:
         """Per-namespace info; ``None`` when the namespace is unknown."""
@@ -74,59 +60,17 @@ class SyncInfoCommands:
         except Exception:
             log.debug("namespace_details(%s) failed", namespace, exc_info=True)
             return None
-        if not response:
-            return None
-        expected_key = f"namespace/{namespace}"
-        if expected_key in response and str(response[expected_key]).strip() == "type=unknown":
-            return None
-        return response
+        return self._interpret_namespace_details(response, namespace)
 
     def sets(self, namespace: str) -> List[str]:
         """Set names in ``namespace``."""
         responses = self._pac.info_on_all_nodes_blocking(f"sets/{namespace}")
-        out: Set[str] = set()
-        for node_response in responses.values():
-            for value in node_response.values():
-                if isinstance(value, str) and value:
-                    out.update(s.strip() for s in value.split(",") if s.strip())
-        return sorted(out)
+        return sorted(self._merge_delimited_set(responses, ","))
 
     def secondary_indexes(self, namespace: Optional[str] = None) -> List[Dict[str, str]]:
         """All secondary indexes (optionally filtered by namespace)."""
         responses = self._pac.info_on_all_nodes_blocking("sindex-list")
-        index_map: Dict[str, Dict[str, str]] = {}
-        for node_response in responses.values():
-            for value in node_response.values():
-                if not isinstance(value, str) or not value:
-                    continue
-                for entry in value.split(";"):
-                    entry = entry.strip()
-                    if not entry:
-                        continue
-                    fields: Dict[str, str] = {}
-                    for token in entry.split(":"):
-                        if "=" in token:
-                            k, v = token.split("=", 1)
-                            fields[k] = v
-                    index_name = fields.get("indexname", "")
-                    ns = fields.get("ns", "")
-                    if not index_name or not ns:
-                        continue
-                    if namespace and ns != namespace:
-                        continue
-                    if index_name not in index_map:
-                        entry_map = {
-                            "namespace": ns,
-                            "set": fields.get("set", ""),
-                            "bin": fields.get("bin", ""),
-                            "name": index_name,
-                        }
-                        if "type" in fields:
-                            entry_map["type"] = fields["type"]
-                        if "state" in fields:
-                            entry_map["state"] = fields["state"]
-                        index_map[index_name] = entry_map
-        return list(index_map.values())
+        return self._parse_sindex_list(responses, namespace)
 
     def secondary_index_details(self, namespace: str, index_name: str) -> Optional[Dict[str, str]]:
         """Details for one secondary index; ``None`` when missing."""
@@ -138,23 +82,12 @@ class SyncInfoCommands:
                 namespace, index_name, exc_info=True,
             )
             return None
-        if not response:
-            return None
-        expected_key = f"sindex/{namespace}/{index_name}"
-        if expected_key in response and "ERROR:201:no index" in str(response[expected_key]):
-            return None
-        return response
+        return self._interpret_sindex_details(response, namespace, index_name)
 
     def is_cluster_stable(self) -> bool:
         """``True`` when every node reports ``cluster-stable=true``."""
         responses = self._pac.info_on_all_nodes_blocking("cluster-stable")
-        if not responses:
-            return False
-        for node_response in responses.values():
-            for value in node_response.values():
-                if isinstance(value, str) and value.lower() != "true":
-                    return False
-        return True
+        return self._all_nodes_stable(responses)
 
     def get_cluster_size(self) -> int:
         """Number of cluster nodes."""
@@ -167,3 +100,9 @@ class SyncInfoCommands:
     def info_on_all_nodes(self, command: str) -> Dict[str, Dict[str, str]]:
         """Raw info command against every node."""
         return self._pac.info_on_all_nodes_blocking(command)
+
+
+# Path-differentiated bare name is the committed convention (same as the aio
+# class); the ``Sync``-prefixed alias stays importable for one deprecation
+# cycle (removed at GA).
+SyncInfoCommands = InfoCommands

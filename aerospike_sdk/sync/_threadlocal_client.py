@@ -22,12 +22,19 @@ cross-thread worker hop that the shared multi-thread runtime imposes on
 the standard ``Client.*_blocking`` methods.
 
 The proxy duck-types as a PAC ``Client`` for the ``*_blocking`` surface
-PSDK's sync hot path uses, so :class:`SyncSession` and its builder /
+PSDK's sync hot path uses, so :class:`~aerospike_sdk.sync.session.Session` and its builder /
 segment children can use either the shared client or this thread-local
 proxy without code changes.
 
 Documented caveats:
 
+- **Partial surface**: the per-thread client implements single-key ops and
+  single-node ``info`` only. Dataset queries/scans, cluster-wide info
+  fan-out (index and UDF listing), and connection health checks are absent
+  and raise ``AttributeError`` through the fallback below. This is why the
+  mode is not offered on the public ``ClusterDefinition`` builder — see
+  ``tests/integration/sync/current_thread_runtime_test.py``, which pins the
+  boundary.
 - **Lifetime**: per-thread Clients live until the thread exits. Use a
   long-lived thread pool, not short-lived threads, to avoid construction
   cost / connection-pool churn.
@@ -111,7 +118,8 @@ class _ThreadLocalLocalClient:
 
     def __getattr__(self, name: str) -> Any:
         # Only fires for attrs missing on this proxy; explicit methods above
-        # are preferred.  This catches `truncate_blocking`,
-        # `register_udf_blocking`, etc. that the standard SyncClient
-        # delegates through `underlying_client`.
+        # are preferred. The per-thread client's surface is narrower than the
+        # shared client's, so anything outside it (queries, cluster-wide info,
+        # UDF/index admin) surfaces here as AttributeError rather than
+        # silently falling back to the shared runtime.
         return getattr(self._get(), name)
