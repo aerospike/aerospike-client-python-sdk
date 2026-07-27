@@ -20,7 +20,7 @@ The underlying PAC client is mocked so these tests don't need an SC cluster.
 
 import pytest
 
-from aerospike_async import ResultCode
+from aerospike_sdk import ResultCode
 
 from aerospike_sdk import (
     AbortStatus,
@@ -201,6 +201,27 @@ def test_explicit_behavior_honored(
         client=sync_client, behavior=custom,
     )  # type: ignore[arg-type]
     assert sync_tx.behavior is custom
+
+
+def test_session_transaction_forwards_behavior(
+    sync_client: _FakeSyncClient,
+) -> None:
+    """``SyncSession.transaction()`` must carry the session's own behavior
+    through to the returned :class:`SyncTransactionalSession`.
+
+    Mirrors the async forwarding guard: pins the ``transaction()`` forwarding
+    path (the behavior-drop regression surface) so the Phase-3 hoist of
+    ``transaction()`` onto a shared session base lands against green coverage
+    on both trees.
+    """
+    custom = Behavior.DEFAULT.derive_with_changes(name="sync_sess_fwd_mrt")
+    sync_session = SyncSession(
+        client=sync_client, behavior=custom,
+    )  # type: ignore[arg-type]
+    tx = sync_session.transaction()
+    assert isinstance(tx, SyncTransactionalSession)
+    assert tx.behavior is sync_session.behavior
+    assert tx.behavior is custom
 
 
 # -- do_in_transaction retry logic -------------------------------------------

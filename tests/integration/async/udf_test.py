@@ -17,13 +17,13 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 
 import pytest
-from aerospike_async import UDFLang
-from aerospike_async.exceptions import ResultCode
-from aerospike_sdk import DataSet, Client
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import UDFLang
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk import ClusterDefinition, DataSet
 
 NS = "test"
 SET = "test"
@@ -36,32 +36,32 @@ MODULE = "record_example"
 
 
 @pytest.fixture
-async def client_with_udf(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+async def cluster_with_udf(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        udf_session = c.create_session()
         try:
-            rm = await client.remove_udf(SERVER_PATH)
+            rm = await udf_session.remove_udf(SERVER_PATH)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
-        reg = await client.register_udf_from_file(
-            LUA_FILE, SERVER_PATH, UDFLang.LUA)
+        reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
         assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
-        yield client
+        yield c
         try:
-            rm = await client.remove_udf(SERVER_PATH)
+            rm = await udf_session.remove_udf(SERVER_PATH)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
 
-async def test_write_using_udf(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_write_using_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_write_1")
     await session.delete(k).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("udfbin1", "string value")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("udfbin1", "string value")
+        .execute()
     )
     rr = await stream.first_or_raise()
     assert rr.is_ok
@@ -71,41 +71,41 @@ async def test_write_using_udf(client_with_udf):
     assert rec.record is not None
     assert rec.record.bins.get("udfbin1") == "string value"
 
-async def test_first_udf_result_read_bin(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_first_udf_result_read_bin(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_read_1")
     await session.upsert(k).put({"udfbin2": "stored"}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("udfbin2")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("udfbin2")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert val == "stored"
 
-async def test_write_read_blob_via_udf(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_write_read_blob_via_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_blob_rtt")
     await session.delete(k).execute()
     payload = b"\x00\x01\xfe\x2a"
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("bbin", payload)
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("bbin", payload)
+        .execute()
     )
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("bbin")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("bbin")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert bytes(val) == payload
 
-async def test_nested_list_map_round_trip_via_udf_read_bin(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_nested_list_map_round_trip_via_udf_read_bin(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_list_map_rtt")
     await session.delete(k).execute()
     expected = [
@@ -114,29 +114,29 @@ async def test_nested_list_map_round_trip_via_udf_read_bin(client_with_udf):
     ]
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeBin")
-            .passing("complex", expected)
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("complex", expected)
+        .execute()
     )
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "readBin")
-            .passing("complex")
-            .execute()
+        .function(MODULE, "readBin")
+        .passing("complex")
+        .execute()
     )
     val = await stream.first_udf_result()
     assert val == expected
 
-async def test_batch_udf(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_batch_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_1")
     k2 = DS.id("batch_udf_2")
     await session.delete(k1, k2).execute()
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("B5", "value5")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("B5", "value5")
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -148,16 +148,16 @@ async def test_batch_udf(client_with_udf):
         assert rr.record is not None
         assert rr.record.bins.get("B5") == "value5"
 
-async def test_batch_udf_validation_error_in_stream(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_err_1")
     k2 = DS.id("batch_udf_err_2")
     await session.delete(k1, k2).execute()
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeWithValidation")
-            .passing("B5", 999)
-            .execute()
+        .function(MODULE, "writeWithValidation")
+        .passing("B5", 999)
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -167,8 +167,8 @@ async def test_batch_udf_validation_error_in_stream(client_with_udf):
         assert r.result_code == ResultCode.UDF_BAD_RESPONSE
         assert r.record is not None
 
-async def test_batch_udf_include_missing_keys_includes_filtered_out(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_rak_1")
     k2 = DS.id("batch_udf_rak_2")
     await session.delete(k1, k2).execute()
@@ -178,10 +178,10 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(client_with_
     # Without include_missing_keys: filtered-out key is omitted
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit")
-            .where("$.v < 10")
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit")
+        .where("$.v < 10")
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 1
@@ -191,11 +191,11 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(client_with_
     # With include_missing_keys: filtered-out key appears in stream
     stream = await (
         session.execute_udf(k1, k2)
-            .function(MODULE, "writeBin")
-            .passing("tag", "hit2")
-            .where("$.v < 10")
-            .include_missing_keys()
-            .execute()
+        .function(MODULE, "writeBin")
+        .passing("tag", "hit2")
+        .where("$.v < 10")
+        .include_missing_keys()
+        .execute()
     )
     results = await stream.collect()
     assert len(results) == 2
@@ -204,36 +204,36 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(client_with_
     assert r1.is_ok
     assert r2.result_code == ResultCode.FILTERED_OUT
 
-async def test_get_generation_udf_result(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_get_generation_udf_result(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_gen_read")
     await session.upsert(k).put({"gprobe": 1}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "getGeneration")
-            .execute()
+        .function(MODULE, "getGeneration")
+        .execute()
     )
     gen = await stream.first_udf_result()
     assert isinstance(gen, int)
     assert gen >= 1
 
-async def test_write_if_generation_not_changed(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_write_if_generation_not_changed(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_gen_guard")
     await session.delete(k).execute()
     await session.upsert(k).put({"gcol": "a"}).execute()
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "getGeneration")
-            .execute()
+        .function(MODULE, "getGeneration")
+        .execute()
     )
     gen = await stream.first_udf_result()
     assert isinstance(gen, int)
     stream = await (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "b", gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "b", gen)
+        .execute()
     )
     assert await stream.first_udf_result() is None
     rr = await (
@@ -244,9 +244,9 @@ async def test_write_if_generation_not_changed(client_with_udf):
     stale_gen = gen
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeIfGenerationNotChanged")
-            .passing("gcol", "should_not_apply", stale_gen)
-            .execute()
+        .function(MODULE, "writeIfGenerationNotChanged")
+        .passing("gcol", "should_not_apply", stale_gen)
+        .execute()
     )
     rr2 = await (
         await session.query(k).bins(["gcol"]).execute()
@@ -254,21 +254,21 @@ async def test_write_if_generation_not_changed(client_with_udf):
     assert rr2.record is not None
     assert rr2.record.bins.get("gcol") == "b"
 
-async def test_write_unique_idempotent(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_write_unique_idempotent(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_write_unique")
     await session.delete(k).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "first")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "first")
+        .execute()
     )
     await (
         session.execute_udf(k)
-            .function(MODULE, "writeUnique")
-            .passing("ub", "second")
-            .execute()
+        .function(MODULE, "writeUnique")
+        .passing("ub", "second")
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["ub"]).execute()
@@ -276,17 +276,17 @@ async def test_write_unique_idempotent(client_with_udf):
     assert rr.record is not None
     assert rr.record.bins.get("ub") == "first"
 
-async def test_append_list_bin_via_udf(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_append_list_bin_via_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_list_append")
     await session.delete(k).execute()
     await session.insert(k).put({"lb": []}).execute()
     for v in (10, 20, 30):
         await (
             session.execute_udf(k)
-                .function(MODULE, "appendListBin")
-                .passing("lb", v)
-                .execute()
+            .function(MODULE, "appendListBin")
+            .passing("lb", v)
+            .execute()
         )
     rr = await (
         await session.query(k).bins(["lb"]).execute()
@@ -296,16 +296,16 @@ async def test_append_list_bin_via_udf(client_with_udf):
     assert lst is not None
     assert list(lst) == [10, 20, 30]
 
-async def test_process_record_even_adds_to_bin(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_process_record_even_adds_to_bin(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_proc_even")
     await session.delete(k).execute()
     await session.insert(k).put({"n1": 4, "n2": 1}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 3)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 3)
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["n1", "n2"]).execute()
@@ -314,16 +314,16 @@ async def test_process_record_even_adds_to_bin(client_with_udf):
     assert rr.record.bins.get("n1") == 7
     assert rr.record.bins.get("n2") == 1
 
-async def test_process_record_multiple_of_five_clears_second_bin(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_process_record_multiple_of_five_clears_second_bin(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_proc_five")
     await session.delete(k).execute()
     await session.insert(k).put({"n1": 10, "n2": 99}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 1)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 1)
+        .execute()
     )
     rr = await (
         await session.query(k).bins(["n1", "n2"]).execute()
@@ -332,16 +332,16 @@ async def test_process_record_multiple_of_five_clears_second_bin(client_with_udf
     assert rr.record.bins.get("n1") == 10
     assert rr.record.bins.get("n2") is None
 
-async def test_process_record_multiple_of_nine_removes_record(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_process_record_multiple_of_nine_removes_record(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_proc_nine")
     await session.delete(k).execute()
     await session.insert(k).put({"n1": 9, "n2": 1}).execute()
     await (
         session.execute_udf(k)
-            .function(MODULE, "processRecord")
-            .passing("n1", "n2", 1)
-            .execute()
+        .function(MODULE, "processRecord")
+        .passing("n1", "n2", 1)
+        .execute()
     )
     rs = await session.query(k).execute()
     first = await rs.first()
@@ -349,19 +349,19 @@ async def test_process_record_multiple_of_nine_removes_record(client_with_udf):
     if first is not None:
         assert first.record is None
 
-async def test_chained_udf(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_chained_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k1 = DS.id("chain_udf_1")
     k2 = DS.id("chain_udf_2")
     await session.delete(k1, k2).execute()
     stream = await (
         session
-            .execute_udf(k1)
-                .function(MODULE, "writeBin")
-                .passing("B5", "value1")
-            .execute_udf(k2)
-                .function(MODULE, "writeWithValidation")
-                .passing("B5", 5)
+        .execute_udf(k1)
+        .function(MODULE, "writeBin")
+        .passing("B5", "value1")
+        .execute_udf(k2)
+        .function(MODULE, "writeWithValidation")
+        .passing("B5", 5)
         .execute()
     )
     rows = await stream.collect()
@@ -374,25 +374,25 @@ async def test_chained_udf(client_with_udf):
         assert "B5" in rr.record.bins
 
 async def test_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
-    client_with_udf,
+    cluster_with_udf,
 ):
     """Chained UDF specs: first two succeed, third returns UDF_BAD_RESPONSE."""
-    session = client_with_udf.create_session()
+    session = cluster_with_udf.create_session()
     k1 = DS.id("chain_udf_complex_1")
     k2 = DS.id("chain_udf_complex_2")
     k3 = DS.id("chain_udf_complex_3")
     await session.delete(k1, k2, k3).execute()
     stream = await (
         session
-            .execute_udf(k1)
-                .function(MODULE, "writeBin")
-                .passing("cx", "ok1")
-            .execute_udf(k2)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 7)
-            .execute_udf(k3)
-                .function(MODULE, "writeWithValidation")
-                .passing("cx", 999)
+        .execute_udf(k1)
+        .function(MODULE, "writeBin")
+        .passing("cx", "ok1")
+        .execute_udf(k2)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 7)
+        .execute_udf(k3)
+        .function(MODULE, "writeWithValidation")
+        .passing("cx", 999)
         .execute()
     )
     rows = await stream.collect()
@@ -416,30 +416,183 @@ async def test_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     assert r2.record is not None
     assert r2.record.bins.get("cx") == 7
 
-async def test_single_key_validation_raises(client_with_udf):
-    session = client_with_udf.create_session()
+async def test_single_key_validation_raises(cluster_with_udf):
+    session = cluster_with_udf.create_session()
     k = DS.id("udf_val_fail")
     await session.delete(k).execute()
     with pytest.raises(AerospikeError):
         await (
             session.execute_udf(k)
-                .function(MODULE, "writeWithValidation")
-                .passing("bx", 99)
-                .execute()
+            .function(MODULE, "writeWithValidation")
+            .passing("bx", 99)
+            .execute()
         )
 
-async def test_register_udf_from_bytes(aerospike_host, client_policy):
-    """Round-trip: register UDF from bytes, invoke it, then clean up."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
+async def test_list_udf(aerospike_host, make_cluster_definition):
+    """``list_udf`` reports name/hash/type and reflects register + remove."""
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
+        path = "psdk_list_udf_probe.lua"
         with open(LUA_FILE, "rb") as f:
             body = f.read()
-        path = "record_example_bytes_async.lua"
         try:
-            rm = await client.remove_udf(path)
+            rm = await session.remove_udf(path)
             await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
         except Exception:
             pass
-        task = await client.register_udf(body, path, UDFLang.LUA)
+        assert not any(m["name"] == path for m in await session.list_udf())
+
+        task = await session.register_udf(body, path, UDFLang.LUA)
         assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
-        rm = await client.remove_udf(path)
+
+        mine = [m for m in await session.list_udf() if m["name"] == path]
+        assert mine, "module not listed after register"
+        (entry,) = mine
+        assert entry["type"] == "LUA"
+        assert entry["hash"]
+        assert set(entry) == {"name", "hash", "type"}
+
+        rm = await session.remove_udf(path)
         await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        assert not any(m["name"] == path for m in await session.list_udf())
+
+
+async def test_register_udf_from_resource(aerospike_host, make_cluster_definition, tmp_path, monkeypatch):
+    """``register_udf_from_resource`` loads a module from a Python package resource."""
+    pkg = tmp_path / "psdk_udf_resource_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "probe.lua").write_bytes(b"function noop(rec) return 1 end\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
+        server_path = "psdk_resource_probe.lua"
+        try:
+            rm = await session.remove_udf(server_path)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+        task = await session.register_udf_from_resource(
+            "psdk_udf_resource_pkg", "probe.lua", server_path)
+        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert any(m["name"] == server_path for m in await session.list_udf())
+
+        rm = await session.remove_udf(server_path)
+        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        assert not any(m["name"] == server_path for m in await session.list_udf())
+
+
+async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
+    """UDF admin works through the ClusterDefinition -> Cluster -> Session path.
+       Registers via the Cluster, lists/removes via a Session obtained from it
+    """
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname, port = aerospike_host, 3000
+    path = "psdk_udf_via_cluster.lua"
+    with open(LUA_FILE, "rb") as f:
+        body = f.read()
+
+    cluster = await ClusterDefinition(hostname, port).connect()
+    try:
+        try:
+            rm = await cluster.remove_udf(path)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+        reg = await cluster.register_udf(body, path, UDFLang.LUA)
+        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+
+        session = cluster.create_session()
+        assert any(m["name"] == path for m in await session.list_udf())
+
+        rm = await session.remove_udf(path)
+        assert await rm.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert not any(m["name"] == path for m in await cluster.list_udf())
+    finally:
+        await cluster.close()
+
+
+async def test_write_chain_then_udf(cluster_with_udf):
+    """A write segment chained into a UDF segment executes as one batch."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_w2u_1")
+    k2 = DS.id("chain_w2u_2")
+    await session.delete(k1, k2).execute()
+    stream = await (
+        session.upsert(k1).put({"wu": "written"})
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("wu", "via_udf")
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 2
+    assert all(r.is_ok for r in rows)
+    r1 = await (
+        await session.query(k1).bins(["wu"]).execute()
+    ).first_or_raise()
+    assert r1.record is not None
+    assert r1.record.bins.get("wu") == "written"
+    r2 = await (
+        await session.query(k2).bins(["wu"]).execute()
+    ).first_or_raise()
+    assert r2.record is not None
+    assert r2.record.bins.get("wu") == "via_udf"
+
+
+async def test_query_chain_then_udf(cluster_with_udf):
+    """A read segment chained into a UDF segment returns both results in order."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_q2u_1")
+    k2 = DS.id("chain_q2u_2")
+    await session.upsert(k1).put({"qa": 1}).execute()
+    await session.delete(k2).execute()
+    stream = await (
+        session.query(k1).bins(["qa"])
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("qa", 2)
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 2
+    assert rows[0].is_ok
+    assert rows[0].record is not None
+    assert rows[0].record.bins.get("qa") == 1
+    assert rows[1].is_ok
+    r2 = await (
+        await session.query(k2).bins(["qa"]).execute()
+    ).first_or_raise()
+    assert r2.record is not None
+    assert r2.record.bins.get("qa") == 2
+
+
+async def test_write_chain_udf_then_read_chain(cluster_with_udf):
+    """Write -> UDF -> read: the forward transition composes with the existing
+    UDF-to-read transition in a single three-segment batch."""
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("chain_w2u2q_1")
+    k2 = DS.id("chain_w2u2q_2")
+    await session.delete(k1, k2).execute()
+    await session.upsert(k2).put({"seed": "old"}).execute()
+    stream = await (
+        session.upsert(k1).put({"seed": "new"})
+        .execute_udf(k2)
+        .function(MODULE, "writeBin")
+        .passing("seed", "udf")
+        .query(k1)
+        .bins(["seed"])
+        .execute()
+    )
+    rows = await stream.collect()
+    assert len(rows) == 3
+    assert all(r.is_ok for r in rows)
+    assert rows[2].record is not None
+    assert rows[2].record.bins.get("seed") == "new"

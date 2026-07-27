@@ -1,8 +1,9 @@
 # Aerospike Python SDK
 
-High-performance, developer-friendly interface for Aerospike. Async-first,
-Pythonic API with a chainable session model, fluent query builder, and AEL
-string filters layered over the [Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
+Ultra-High-performance, developer-friendly interface for Aerospike. A dual first-class
+sync/async, Pythonic API — both high-performance — with a chainable session model,
+fluent query builder, and AEL string filters layered over the
+[Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
 (PAC) — with first-class free-threaded Python (`cp314t`) support for parallel-
 thread throughput well past what GIL-bound clients can sustain.
 
@@ -38,12 +39,12 @@ use — pre-built wheels are available for Linux, macOS, and Windows on Python
 
 ```python
 import asyncio
-from aerospike_sdk import Behavior, Client, DataSet
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 
 async def main():
-    async with Client("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
         # High-level key-value writes
@@ -70,16 +71,18 @@ asyncio.run(main())
 
 ### Sync
 
-The same surface is available without asyncio via `SyncClient`. No `async`/`await`,
-no event loop — useful for sync codebases or when a dependency forbids asyncio.
+The same surface is available without asyncio — no `async`/`await`, no event
+loop — useful for sync codebases or when a dependency forbids asyncio. Connect
+through the sync `ClusterDefinition`.
 
 ```python
-from aerospike_sdk import Behavior, DataSet, SyncClient
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.sync import ClusterDefinition
 
 
 def main():
-    with SyncClient("localhost:3000") as client:
-        session = client.create_session(Behavior.DEFAULT)
+    with ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
         # High-level key-value writes
@@ -213,18 +216,49 @@ pip install -e ".[dev]"    # install with dev extras
 
 `make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
+On the `dev` branch, the pinned `aerospike-async` (PAC) version is a
+pre-release build published to Aerospike's internal package index rather
+than public PyPI, so the plain install above needs one extra step that
+depends on who you are:
+
+**External contributors:** the internal index requires Aerospike
+credentials, but PAC's source is public — build it locally per
+[Local PAC checkout](#local-pac-checkout) below (requires a Rust
+toolchain), then install this SDK with `--no-deps`. Released versions of
+`aerospike-sdk` on public PyPI depend only on public PyPI packages and
+need none of this.
+
+**Aerospike engineers:** configure the internal index once. Generate an
+identity token in the JFrog UI (avatar → *Edit Profile* → *Identity
+Tokens*), then point pip at the index — your username is your **email
+address**:
+
+```bash
+export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
+pip install -e ".[dev]"
+```
+
+(Or persist the same URL in `~/.config/pip/pip.conf` under
+`[global] extra-index-url`, or credentials in `~/.netrc` for
+`artifact.aerospike.io`. Note the `%40` — the `@` in the email must be
+URL-encoded.) CI does the equivalent with short-lived OIDC credentials;
+ReadTheDocs builds need `PIP_EXTRA_INDEX_URL` set as an environment
+variable in the RTD project dashboard.
+
 ### Local PAC checkout
 
-To test against a sibling Aerospike Python Async Client working tree (e.g. for
-a feature not yet on PyPI), install it editable first and pass `--no-deps` to
-this SDK so pip doesn't try to re-resolve PAC from PyPI:
+To build against a local Aerospike Python Async Client working tree —
+whether because you're changing PAC itself or because you don't have
+access to the internal index — install it editable first and pass
+`--no-deps` to this SDK so pip doesn't try to resolve the exact PAC pin
+from an index:
 
 ```bash
 pip install -e /path/to/aerospike-client-python-async
 pip install -e ".[dev]" --no-deps
 ```
 
-Or use `requirements-local.txt` (gitignored path example).
+Or use `requirements-local.txt` (edit the `file:` path for your machine).
 
 ### Configuration
 

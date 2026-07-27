@@ -16,7 +16,6 @@
 """Tests for numeric add (increment) operations."""
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 
 
@@ -29,9 +28,9 @@ def test_set():
 class TestAdd:
     """Test numeric add (increment) operations."""
 
-    async def test_add(self, client: Client, test_set: DataSet):
+    async def test_add(self, cluster, test_set: DataSet):
         """Test adding integers to a bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("addkey")
         bin_name = "addbin"
 
@@ -55,9 +54,9 @@ class TestAdd:
 
         await session.delete(key).execute()
 
-    async def test_add_negative(self, client: Client, test_set: DataSet):
+    async def test_add_negative(self, cluster, test_set: DataSet):
         """Test adding negative values (decrement)."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("add_negative")
         bin_name = "counter"
 
@@ -76,9 +75,9 @@ class TestAdd:
 
         await session.delete(key).execute()
 
-    async def test_increment_by_alias(self, client: Client, test_set: DataSet):
+    async def test_increment_by_alias(self, cluster, test_set: DataSet):
         """Test that increment_by is an alias for add."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("increment_alias")
         bin_name = "counter"
 
@@ -97,9 +96,9 @@ class TestAdd:
 
         await session.delete(key).execute()
 
-    async def test_add_batch(self, client: Client, test_set: DataSet):
+    async def test_add_batch(self, cluster, test_set: DataSet):
         """Test adding to multiple keys via batch operations."""
-        session = client.create_session()
+        session = cluster.create_session()
         bin_name = "addbin"
         keys = [test_set.id(i) for i in range(10, 20)]
 
@@ -117,9 +116,9 @@ class TestAdd:
         # Combined add + get in a single operate (direct segment style)
         rs = await (
             session.upsert(keys)
-                .add(bin_name, 30)
-                .get(bin_name)
-                .execute()
+            .add(bin_name, 30)
+            .get(bin_name)
+            .execute()
         )
         records = await rs.collect()
         assert len(records) == 10

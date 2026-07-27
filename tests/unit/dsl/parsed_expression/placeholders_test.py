@@ -19,8 +19,12 @@
 
 import pytest
 
-from aerospike_async import CTX, ExpType, Filter, ListReturnType, MapReturnType
 from aerospike_sdk import (
+    CTX,
+    ExpType,
+    Filter,
+    ListReturnType,
+    MapReturnType,
     AelParseException,
     Exp,
     Index,
@@ -74,10 +78,7 @@ class TestPlaceholders:
         assert parse_ael("$.intBin1 > ?0 and $.intBin2 > ?1", 100, 200) == expected
 
     def test_placeholder_in_arithmetic(self):
-        expected = Exp.gt(
-            Exp.num_add([Exp.int_bin("apples"), Exp.int_val(5)]),
-            Exp.int_val(10)
-        )
+        expected = Exp.gt(Exp.num_add([Exp.int_bin("apples"), Exp.int_val(5)]), Exp.int_val(10))
         assert parse_ael("($.apples + ?0) > ?1", 5, 10) == expected
 
     def test_placeholder_with_metadata(self):

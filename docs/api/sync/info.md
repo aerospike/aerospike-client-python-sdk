@@ -1,7 +1,7 @@
-# SyncInfoCommands
+# InfoCommands (sync)
 
 ```{eval-rst}
-.. autoclass:: aerospike_sdk.sync.info.SyncInfoCommands
+.. autoclass:: aerospike_sdk.sync.info.InfoCommands
    :members:
    :show-inheritance:
 ```

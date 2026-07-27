@@ -38,9 +38,7 @@ TICKET_RE = re.compile(r"\[([A-Z][A-Z0-9]*-[0-9]+)\]")
 COLON_TICKET_PREFIX_RE = re.compile(
     r"^([A-Z][A-Z0-9]*-[0-9]+)\s*:\s*",
 )
-PR_SUFFIX_RE = re.compile(
-    r"\s+by\s+@[\w-]+\s+in\s+(https?://\S+)", re.IGNORECASE
-)
+PR_SUFFIX_RE = re.compile(r"\s+by\s+@[\w-]+\s+in\s+(https?://\S+)", re.IGNORECASE)
 
 # Longer phrases first where relevant; word-boundary case-insensitive replacement.
 _CONTRACTION_PAIRS: tuple[tuple[str, str], ...] = (
@@ -140,9 +138,7 @@ def is_new_feature(desc: str) -> bool:
 _BREAKING_PREFIX_RE = re.compile(
     r"^(?:breaking\s*(?:change\s*)?[:=-]+\s*|breaking\s+)", re.IGNORECASE
 )
-_SECURITY_PREFIX_RE = re.compile(
-    r"^(?:security\s*[:=-]+\s*)", re.IGNORECASE
-)
+_SECURITY_PREFIX_RE = re.compile(r"^(?:security\s*[:=-]+\s*)", re.IGNORECASE)
 
 
 def strip_section_prefix(desc: str, section: str) -> str:

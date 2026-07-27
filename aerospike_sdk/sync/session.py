@@ -16,8 +16,7 @@
 """Synchronous SDK session.
 
 IO methods call PAC's ``_blocking`` entries; builder factories return
-synchronous wrappers (:class:`SyncQueryBuilder`,
-:class:`SyncBatchOperationBuilder`, etc.).
+the synchronous builders (:class:`QueryBuilder`, etc.).
 """
 
 from __future__ import annotations
@@ -26,28 +25,28 @@ import time
 import typing
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
-from aerospike_async import Key, Record, Txn
+from aerospike_async import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.session_shared import NamespaceScStatus
+from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
 from aerospike_sdk.sync.background import SyncBackgroundTaskSession
-from aerospike_sdk.sync.info import SyncInfoCommands
-from aerospike_sdk.sync.operations.batch import SyncBatchOperationBuilder
-from aerospike_sdk.sync.operations.index import SyncIndexBuilder
+from aerospike_sdk.sync.info import InfoCommands
+from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import (
-    SyncQueryBuilder, SyncWriteSegmentBuilder,
+    QueryBuilder, WriteSegmentBuilder,
 )
-from aerospike_sdk.sync.operations.udf import SyncUdfFunctionBuilder
+from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
 if TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.sync.client import SyncClient
-    from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+    from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 
-class SyncSession:
+class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Run session-scoped reads and writes without ``async``/``await``.
 
     Construct via :meth:`SyncClient.create_session
@@ -68,26 +67,17 @@ class SyncSession:
         # no-override case. Cache both AP and SC variants so bypass paths
         # can pick the right policy per resolved namespace mode without
         # rebuilding. `_cached_*_policy` stays as the AP alias.
-        self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
-        self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
-        self._cached_read_policy_sc = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
-        self._cached_write_policy_sc = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
+        self._refresh_cached_policies()
+        # Config hot-reload pushes rebuilt policies into live sessions
+        # (weak registration; no per-operation check).
+        behavior._register_session(self)
         # Cache the PAC client for fast-path methods.
         self._pac_client = client.underlying_client
         # Non-transactional sessions always return None;
-        # SyncTransactionalSession overrides this to yield its active Txn.
+        # TransactionalSession overrides this to yield its active Txn.
         self._txn: Optional[Txn] = None
 
     # -- State accessors ------------------------------------------------------
-
-    @property
-    def behavior(self) -> Behavior:
-        """The behavior configuration for this session."""
-        return self._behavior
 
     @property
     def client(self) -> SyncClient:
@@ -98,25 +88,43 @@ class SyncSession:
         """Resolve AP vs SC for ``namespace`` synchronously (delegates to client)."""
         return self._client._resolve_namespace_mode_blocking(namespace)
 
-    def _bind_txn(self, builder):
-        """Stamp the session's current txn onto a builder if one is active."""
-        if self._txn is not None:
-            builder.with_txn(self._txn)
-        return builder
-
-    def get_current_transaction(self) -> Optional[Txn]:
-        """Return the active transaction for this session, or ``None``."""
-        return self._txn
-
     # -- Direct single-key fast paths -----------------------------------------
 
     def get(
-        self, key: Key, *, bins: Optional[List[str]] = None,
-    ) -> Optional[Record]:
-        """Direct single-key read — no builder, no stream — synchronous.
+        self, key: Key, bins: Optional[List[str]] = None,
+    ) -> Record:
+        """Direct single-key point read — returns ``Record`` or raises.
 
-        Passes the AP + SC cached policies; PAC picks the right one based
-        on the key's namespace mode (from the in-memory partition map).
+        Bypasses the builder chain (``session.query(key).execute()``) and
+        the :class:`~aerospike_sdk.sync.record_stream.RecordStream` wrapper:
+        one blocking call reaches the underlying client and the resulting
+        :class:`~aerospike_async.Record` is returned unwrapped. Passes the
+        AP + SC cached policies; PAC picks the right one based on the key's
+        namespace mode (from the in-memory partition map).
+
+        Args:
+            key: Target :class:`~aerospike_async.Key`.
+            bins: Optional bin-name projection. ``None`` (default) reads
+                all bins.
+
+        Returns:
+            The :class:`~aerospike_async.Record` for ``key``.
+
+        Raises:
+            AerospikeError: Server or client errors (including
+                ``KEY_NOT_FOUND_ERROR``) are raised from the underlying
+                client without being wrapped in a
+                :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            rec = session.get(users.id(1))
+            name = rec.bins["name"]
+
+        See Also:
+            :meth:`query`: Builder-based reads for projections, streams, and secondary-index queries.
+            :meth:`put`: Direct single-key upsert.
         """
         if self._txn is None:
             return self._pac_client.get_blocking(
@@ -126,8 +134,7 @@ class SyncSession:
             )
         # Under MRT the cached policies are skipped (txn not stamped);
         # rebuild a per-call policy from behavior.
-        policy = to_read_policy(
-            self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
         return self._pac_client.get_blocking(key, bins, policy=policy)
 
@@ -195,8 +202,7 @@ class SyncSession:
             )
         return NamespaceScStatus(
             False,
-            f"Namespace {namespace!r} info did not report strong-consistency; "
-            "treating as non-SC.",
+            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
         )
 
     def is_namespace_sc(self, namespace: str) -> bool:
@@ -204,75 +210,47 @@ class SyncSession:
         return self.namespace_sc_status(namespace).is_sc
 
     @overload
-    def info(self) -> SyncInfoCommands: ...
+    def info(self) -> InfoCommands: ...
     @overload
     def info(self, command: str) -> Dict[str, str]: ...
 
     def info(
         self, command: Optional[str] = None,
-    ) -> Union[SyncInfoCommands, Dict[str, str]]:
-        """Sync info: return :class:`SyncInfoCommands` or raw blocking result."""
+    ) -> Union[InfoCommands, Dict[str, str]]:
+        """Sync info: return :class:`~aerospike_sdk.sync.info.InfoCommands` or raw blocking result."""
         if command is not None:
             return self._pac_client.info_blocking(command)
-        return SyncInfoCommands(self._pac_client)
+        return InfoCommands(self._pac_client)
 
     # -- Builder factories ----------------------------------------------------
 
-    def query(
-        self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        arg2: Optional[Union[str, Key]] = None,
-        *keys: Key,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys_list: Optional[List[Key]] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> SyncQueryBuilder:
-        """Start a synchronous read or secondary-index query.
+    # ``query`` is inherited from SessionBase (shared arg normalization); only
+    # the tree-specific builder construction lives here, behind the hooks the
+    # base routes to. Both delegate to :meth:`_build_sync_query_builder`, which
+    # is also reused by :meth:`execute_udf`.
 
-        Same shapes as :meth:`Session.query
-        <aerospike_sdk.aio.session.Session.query>`. Always returns
-        :class:`SyncQueryBuilder` whose ``execute()`` runs synchronously.
-        """
-        b = self._behavior if behavior is None else behavior
-
-        # Normalize positional/kw args.
-        if arg1 is not None:
-            if isinstance(arg1, DataSet):
-                dataset = arg1
-            elif isinstance(arg1, Key):
-                all_keys = [arg1]
-                if isinstance(arg2, Key):
-                    all_keys.append(arg2)
-                    all_keys.extend(keys)
-                elif keys:
-                    all_keys.extend(keys)
-                if len(all_keys) == 1:
-                    key = arg1
-                else:
-                    keys_list = all_keys
-            elif isinstance(arg1, list):
-                if not arg1:
-                    raise ValueError("keys list cannot be empty")
-                if not isinstance(arg1[0], Key):
-                    raise TypeError(
-                        f"Expected List[Key], got first element {type(arg1[0])}",
-                    )
-                keys_list = arg1
-            elif isinstance(arg1, str) and arg2 is not None and isinstance(arg2, str):
-                namespace = arg1
-                set_name = arg2
-            else:
-                raise TypeError(f"Unsupported arg1 type: {type(arg1)}")
-
-        sync_builder = self._build_sync_query_builder(
-            dataset=dataset, key=key, keys=keys_list,
-            namespace=namespace, set_name=set_name, behavior=b,
+    def _fast_query_builder(self, key: Key, behavior: Behavior) -> QueryBuilder:
+        """Single-key query builder (bench-hot ``session.query(key)`` shape)."""
+        return self._build_sync_query_builder(
+            dataset=None, key=key, keys=None,
+            namespace=None, set_name=None, behavior=behavior,
         )
-        self._bind_txn(sync_builder)
-        return sync_builder
+
+    def _build_query_builder(
+        self,
+        *,
+        dataset: Optional[DataSet],
+        key: Optional[Key],
+        keys: Optional[List[Key]],
+        namespace: Optional[str],
+        set_name: Optional[str],
+        behavior: Behavior,
+    ) -> QueryBuilder:
+        """Dataset / multi-key / namespace query builder (non-single-key shapes)."""
+        return self._build_sync_query_builder(
+            dataset=dataset, key=key, keys=keys,
+            namespace=namespace, set_name=set_name, behavior=behavior,
+        )
 
     def _build_sync_query_builder(
         self,
@@ -283,14 +261,14 @@ class SyncSession:
         namespace: Optional[str],
         set_name: Optional[str],
         behavior: Behavior,
-    ) -> SyncQueryBuilder:
-        """Construct a :class:`SyncQueryBuilder` with full session context.
+    ) -> QueryBuilder:
+        """Construct a :class:`QueryBuilder` with full session context.
 
         Returns the builder pre-populated with behavior, indexes monitor,
         cached policies, txn, and namespace-mode resolver.
         """
         if key is not None:
-            builder = SyncQueryBuilder(
+            builder = QueryBuilder(
                 client=self._pac_client,
                 namespace=key.namespace,
                 set_name=key.set_name,
@@ -303,7 +281,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+                sdk_client=self._client,
             )
             builder._single_key = key
             return builder
@@ -311,7 +289,7 @@ class SyncSession:
         if keys is not None:
             ns = keys[0].namespace
             sn = keys[0].set_name
-            builder = SyncQueryBuilder(
+            builder = QueryBuilder(
                 client=self._pac_client,
                 namespace=ns,
                 set_name=sn,
@@ -324,7 +302,7 @@ class SyncSession:
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+                sdk_client=self._client,
             )
             builder._keys = keys
             return builder
@@ -337,7 +315,7 @@ class SyncSession:
                 "Invalid arguments. Use one of: query(dataset=...), query(key=...), "
                 "query(keys=[...]), or query(namespace=..., set_name=...).",
             )
-        return SyncQueryBuilder(
+        return QueryBuilder(
             client=self._pac_client,
             namespace=namespace,
             set_name=set_name,
@@ -350,25 +328,8 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            sdk_client=self._client,
         )
-
-    def batch(self) -> SyncBatchOperationBuilder:
-        """Start a multi-key batch of mixed write operations (synchronous).
-
-        Write-focused convenience (write verbs + ``select_from`` expression
-        reads). To mix plain reads, ``touch``, or ``exists`` with writes in one
-        batch, use the :meth:`query` chain — a superset of this builder.
-        """
-        from aerospike_sdk.aio.operations.batch import BatchOperationBuilder as _Batch
-
-        inner = _Batch(
-            client=self._pac_client,
-            behavior=self._behavior,
-            txn=self._txn,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-        )
-        return SyncBatchOperationBuilder(inner)
 
     def background_task(self) -> SyncBackgroundTaskSession:
         """Start a background dataset task chain (synchronous)."""
@@ -380,10 +341,8 @@ class SyncSession:
         inner = _BTS(self)  # type: ignore[arg-type]
         return SyncBackgroundTaskSession(inner)
 
-    def execute_udf(self, *keys: Key) -> SyncUdfFunctionBuilder:
+    def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
         """Begin a foreground UDF invocation (synchronous)."""
-        from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder as _UFB
-
         if not keys:
             raise ValueError("execute_udf requires at least one key")
         builder = self._build_sync_query_builder(
@@ -393,8 +352,7 @@ class SyncSession:
         )
         self._bind_txn(builder)
         builder._op_type = "execute_udf"
-        inner = _UFB(builder)
-        return SyncUdfFunctionBuilder(inner, self._client)
+        return UdfFunctionBuilder(builder)
 
     def index(
         self,
@@ -403,7 +361,7 @@ class SyncSession:
         *,
         dataset: Optional[DataSet] = None,
         behavior: Optional[Behavior] = None,
-    ) -> SyncIndexBuilder:
+    ) -> IndexBuilder:
         """Synchronous secondary-index builder."""
         _ = behavior
         if dataset is not None:
@@ -411,25 +369,124 @@ class SyncSession:
             set_name = dataset.set_name
         if not namespace or not set_name:
             raise ValueError("namespace and set_name are required (or provide dataset)")
-        return SyncIndexBuilder(
+        return IndexBuilder(
             async_client=self._client,
             namespace=namespace,
             set_name=set_name,
         )
 
-    def transaction_session(self) -> SyncTransactionalSession:
-        """Alias for :meth:`begin_transaction`."""
-        return self.begin_transaction()
+    def _txn_session_cls(self) -> "type[TransactionalSession]":
+        """Return the sync transactional-session class (late import breaks the cycle)."""
+        from aerospike_sdk.sync.transactional_session import TransactionalSession
+        return TransactionalSession
 
-    def begin_transaction(self) -> SyncTransactionalSession:
-        """Start a multi-record transaction (synchronous)."""
-        from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+    def register_udf(
+        self,
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from bytes (synchronous).
 
-        return SyncTransactionalSession(client=self._client, behavior=self._behavior)
+        Exposed here so the ``ClusterDefinition`` ➜ ``Cluster`` ➜ ``Session``
+        path is self-sufficient.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf`
+        """
+        return self._client._register_udf(body, server_path, language, policy=policy)
+
+    def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from a local file (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
+        """
+        return self._client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
+        """
+        return self._client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a UDF module from the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.remove_udf`
+        """
+        return self._client._remove_udf(server_path, policy=policy)
+
+    def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_udf`
+        """
+        return self._client._list_udf()
+
+    def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_indexes`
+        """
+        return self._client._list_indexes()
 
     def do_in_transaction(
         self,
-        operation: "typing.Callable[[SyncTransactionalSession], typing.Any]",
+        operation: "typing.Callable[[TransactionalSession], typing.Any]",
         *,
         max_attempts: int = 5,
         sleep_between_retries: float = 0.0,
@@ -452,7 +509,7 @@ class SyncSession:
         last_exc: Optional[BaseException] = None
         for attempt in range(max_attempts):
             try:
-                with self.begin_transaction() as tx_session:
+                with self.transaction() as tx_session:
                     return operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
@@ -466,21 +523,16 @@ class SyncSession:
         raise last_exc
 
     # -- Write-verb factories -------------------------------------------------
+    # The eight public write verbs (upsert/insert/.../exists) and the
+    # single-key predicate live on `SessionBase`; these two helpers stay
+    # per-leaf because they construct the sync builders and wire the sync
+    # namespace-mode resolver.
 
-    def _is_single_key(
-        self, arg1, arg2, keys, key, dataset, namespace, key_value,
-    ) -> bool:
-        return (
-            isinstance(arg1, Key) and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        )
-
-    def _fast_write_segment(self, op_type: str, key: Key) -> SyncWriteSegmentBuilder:
+    def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
         """Single-key fast-path write segment (sync)."""
-        from aerospike_sdk.sync.operations.query import SyncSingleKeyWriteSegment
+        from aerospike_sdk.sync.operations.query import _SingleKeyWriteSegment
 
-        return SyncSingleKeyWriteSegment(
+        return _SingleKeyWriteSegment(
             client=self._pac_client,
             key=key,
             op_type=op_type,
@@ -492,7 +544,7 @@ class SyncSession:
             txn=self._txn,
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            sdk_client=self._client,
         )
 
     def _build_write_segment(
@@ -506,7 +558,7 @@ class SyncSession:
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
+    ) -> WriteSegmentBuilder:
         """Build a multi-key / dataset write segment via aio QueryBuilder."""
         # Reduce overload args to either a single key, a list of keys, or a dataset.
         single_key: Optional[Key] = None
@@ -539,164 +591,10 @@ class SyncSession:
         )
         self._bind_txn(qb)
         qb._op_type = op_type
-        return SyncWriteSegmentBuilder(qb)
+        return WriteSegmentBuilder(qb)
 
-    def upsert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create an upsert write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("upsert", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "upsert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
 
-    def insert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create an insert write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("insert", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "insert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def update(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create an update write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("update", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "update", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create a replace write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("replace", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "replace", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace_if_exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create a replace-if-exists write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("replace_if_exists", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "replace_if_exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def delete(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create a delete write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("delete", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "delete", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def touch(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create a touch write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("touch", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "touch", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> SyncWriteSegmentBuilder:
-        """Create an exists-check write segment (synchronous)."""
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
-            return self._fast_write_segment("exists", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+# Path-differentiated bare name is the committed convention (same as the aio
+# class); the ``Sync``-prefixed alias stays importable for one deprecation
+# cycle (removed at GA).
+SyncSession = Session

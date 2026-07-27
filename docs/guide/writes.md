@@ -1,8 +1,8 @@
 # Writing Data
 
 All writes go through session entry points that return a
-[`WriteSegmentBuilder`](../api/write-segment.md). Chain bin operations, then
-call `.execute()`.
+[`WriteSegmentBuilder`](../api/write-segment.md). Assign bin values via dict
+(or chained bin operations), then call `.execute()`.
 
 ## Write Verbs
 
@@ -16,30 +16,31 @@ call `.execute()`.
 | `touch()` | Reset TTL | Yes |
 | `exists()` | Check existence | No |
 
-## Bin Chaining
+## Dict Pattern
 
-Set individual bins with the chainable `.bin().set_to()` pattern:
+Set bins by passing a dict to `.put()` — the common case:
 
 ```python
 users = DataSet.of("test", "users")
 
 await (
     session.upsert(users.id(1))
-    .bin("name").set_to("Alice")
-    .bin("age").set_to(30)
-    .bin("active").set_to(True)
+    .put({"name": "Alice", "age": 30, "active": True})
     .execute()
 )
 ```
 
-## Dict Pattern
+## Bin Chaining
 
-Set multiple bins at once with `.put()`:
+Set bins individually with the chainable `.bin().set_to()` pattern — useful when
+building bins conditionally or mixing in per-bin operations:
 
 ```python
 await (
     session.upsert(users.id(1))
-    .put({"name": "Alice", "age": 30, "active": True})
+    .bin("name").set_to("Alice")
+    .bin("age").set_to(30)
+    .bin("active").set_to(True)
     .execute()
 )
 ```
@@ -276,13 +277,13 @@ await (
 Mixed operations across different keys are handled automatically when you chain
 multiple write segments.
 
-(execute-vs-execute_stream)=
-### `execute()` vs `execute_stream()`
+(execute-vs-stream)=
+### `execute()` vs `stream()`
 
-Every query-path builder — `session.batch()`, the `session.query()` chain, and
-the chained write segments — exposes two terminal methods with different
+Every query-path builder — the `session.query()` chain and the chained write
+segments — exposes two terminal methods with different
 result-delivery semantics. **`execute()` is the default;** reach for
-`execute_stream()` only when buffering a large result set is expensive.
+`stream()` only when buffering a large result set is expensive.
 
 - **`execute()`** — buffered. Awaits every per-key result, then returns a
   `RecordStream` backed by a fully-materialized list. Writes are guaranteed to
@@ -290,14 +291,14 @@ result-delivery semantics. **`execute()` is the default;** reach for
   observe the new state without races. Safe for "fire-and-forget" use (await
   the call and discard the returned stream). Use this for most workloads.
 
-- **`execute_stream()`** — lazy. Returns a `RecordStream` that yields one
+- **`stream()`** — lazy. Returns a `RecordStream` that yields one
   `RecordResult` per `__anext__` (`__next__` on sync) as each node responds.
   The first results are available as soon as the first node responds, without
   waiting for the rest. Peak memory stays bounded to the in-flight node
   responses — useful for large batches where buffering the full result list
   would be expensive.
 
-  **Caveats** for `execute_stream()`:
+  **Caveats** for `stream()`:
 
   - **Yields completion order, not input order.** Each `RecordResult` carries
     its originating op's input position in `.index`. Sort after collecting if
@@ -315,20 +316,19 @@ result-delivery semantics. **`execute()` is the default;** reach for
 # Lazy streaming — process records as they arrive.
 # `async with` releases the stream on every exit path.
 async with await (
-    session.batch()
-        .upsert(key1).bin("v").set_to(1)
-        .upsert(key2).bin("v").set_to(2)
-        .execute_stream()
+    session.upsert(key1).bin("v").set_to(1)
+    .upsert(key2).bin("v").set_to(2)
+    .stream()
 ) as stream:
     async for result in stream:
         print(result.index, result.is_ok, result.key.value)
 
 # When positional ordering is needed, collect + sort
-async with await (...).execute_stream() as stream:
+async with await (...).stream() as stream:
     results = await stream.collect()
 results.sort(key=lambda r: r.index)
 ```
 
-Sync siblings: `SyncBatchOperationBuilder.execute()` and `.execute_stream()`
+Sync siblings: the sync chained builders' `execute()` and `.stream()`
 have the same contract; iterate the latter with `for result in stream` (rather
 than `async for`) and use a plain `with` block to auto-close.

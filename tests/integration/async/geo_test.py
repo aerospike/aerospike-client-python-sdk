@@ -25,7 +25,7 @@ import asyncio
 
 import pytest
 
-from aerospike_sdk import Client, Exp
+from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
 from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
@@ -63,10 +63,10 @@ def _aero_circle(lng: float, lat: float, radius_m: float = 3000.0) -> str:
 
 
 @pytest.fixture
-async def geo_seeded_client(aerospike_host, client_policy, enterprise):
+async def geo_seeded_cluster(aerospike_host, make_cluster_definition, enterprise):
     """Set up a GEO2DSPHERE index plus 15 AeroCircle regions. Tear down on exit."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
         regions = DataSet.of(NAMESPACE, REGION_SET)
 
         # Clean any leftover data from a previous run.
@@ -76,14 +76,14 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
             except Exception:
                 pass
         try:
-            await client.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
         except Exception:
             pass
 
         # Create the GEO2DSPHERE index.
         try:
             await (
-                client.index(NAMESPACE, REGION_SET)
+                session.index(NAMESPACE, REGION_SET)
                 .named(INDEX_NAME)
                 .on_bin(BIN_NAME)
                 .geo2dsphere()
@@ -103,7 +103,7 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
         # Give the secondary index a moment to populate on community edition.
         await asyncio.sleep(0.5 if not enterprise else 0.05)
 
-        yield client
+        yield cluster
 
         for i in range(len(STARBUCKS)):
             try:
@@ -111,18 +111,23 @@ async def geo_seeded_client(aerospike_host, client_policy, enterprise):
             except Exception:
                 pass
         try:
-            await client.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
         except Exception:
             pass
+
+
+@pytest.fixture
+async def session(geo_seeded_cluster):
+    return geo_seeded_cluster.create_session()
 
 
 class TestGeoQuery:
     """``geoCompare(...)`` over a GEO2DSPHERE index returns the expected hits."""
 
-    async def test_ael_geo_compare_returns_5_intersecting_regions(self, geo_seeded_client):
+    async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}, geoJson('{QUERY_POINT}'))")
             .execute()
         )
@@ -132,11 +137,11 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    async def test_ael_with_explicit_get_type_geo(self, geo_seeded_client):
+    async def test_ael_with_explicit_get_type_geo(self, session):
         """Same query expressed with explicit ``.get(type: GEO)`` cast on the bin."""
-        xfail_if_server_compiled_ael_wire_active(geo_seeded_client)
+        xfail_if_server_compiled_ael_wire_active(session.client)
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}.get(type: GEO), geoJson('{QUERY_POINT}'))")
             .execute()
         )
@@ -146,7 +151,7 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    async def test_programmatic_exp_geo_compare_returns_5(self, geo_seeded_client):
+    async def test_programmatic_exp_geo_compare_returns_5(self, session):
         """Programmatic ``Exp.geo_compare(...)`` via ``.where(FilterExpression)``.
 
         Bypasses the AEL parser so the underlying FilterExpression path is
@@ -158,7 +163,7 @@ class TestGeoQuery:
             Exp.geo_val(QUERY_POINT),
         )
         stream = await (
-            geo_seeded_client.query(NAMESPACE, REGION_SET)
+            session.query(NAMESPACE, REGION_SET)
             .where(filter_exp)
             .execute()
         )

@@ -35,10 +35,9 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_async import ResultCode
-from aerospike_sdk import DataSet
+from aerospike_sdk import Behavior, DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
-from aerospike_sdk.sync import SyncClient
+from aerospike_sdk.sync import TransactionalSession
 
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
@@ -63,14 +62,13 @@ def _namespaces_on_cluster_hint_sync(session) -> str:
 
 
 @pytest.fixture(scope="module")
-def sc_namespace(aerospike_host_sc, client_policy_sc):
-    client = SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc)
+def sc_namespace(aerospike_host_sc, make_cluster_definition):
     try:
-        client.connect()
+        cluster = make_cluster_definition(aerospike_host_sc, sync=True, auth=True).connect()
     except Exception as exc:
         pytest.skip(f"cluster unreachable at {aerospike_host_sc!r}: {exc}")
-    try:
-        sess = client.create_session()
+    with cluster:
+        sess = cluster.create_session()
         try:
             return resolve_sc_namespace_sync(sess)
         except MultipleScNamespacesError as e:
@@ -80,30 +78,25 @@ def sc_namespace(aerospike_host_sc, client_policy_sc):
             )
         except NoStrongConsistencyNamespace as e:
             pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
-    finally:
-        client.close()
 
 
 @pytest.fixture
-def sync_client(aerospike_host_sc, client_policy_sc):
-    """SyncClient against the SC test seed (``AEROSPIKE_HOST_SC`` or ``AEROSPIKE_HOST``)."""
-    client = SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc)
+def cluster_sc(aerospike_host_sc, make_cluster_definition):
+    """Sync Cluster against the SC test seed (``AEROSPIKE_HOST_SC`` or ``AEROSPIKE_HOST``)."""
     try:
-        client.connect()
+        cluster = make_cluster_definition(aerospike_host_sc, sync=True, auth=True).connect()
     except Exception as exc:
         pytest.skip(f"SC cluster unreachable at {aerospike_host_sc!r}: {exc}")
-    try:
-        yield client
-    finally:
-        client.close()
+    with cluster:
+        yield cluster
 
 
 @pytest.fixture
-def session(sync_client, sc_namespace):
+def session(cluster_sc, sc_namespace):
     """Top-level (non-transactional) session; skips if the target namespace
     isn't strong-consistency — matches the async suite's ``assumeTrue`` gate.
     """
-    sess = sync_client.create_session()
+    sess = cluster_sc.create_session()
     try:
         status = sess.namespace_sc_status(sc_namespace)
     except Exception as exc:
@@ -166,7 +159,7 @@ def test_txn_abort_rolls_back(session, mrt_set):
     _reset(session, key)
     session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-    with session.begin_transaction() as tx:
+    with session.transaction() as tx:
         tx.upsert(key).put({BIN_NAME: "val2"}).execute()
         tx.abort()
 
@@ -183,7 +176,7 @@ def test_txn_write_conflict(session, mrt_set):
     def outer(tx1):
         tx1.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-        with session.begin_transaction() as tx2:
+        with session.transaction() as tx2:
             with pytest.raises(AerospikeError) as excinfo:
                 tx2.upsert(key).put({BIN_NAME: "val2"}).execute()
             assert excinfo.value.result_code == ResultCode.MRT_BLOCKED
@@ -235,6 +228,23 @@ def test_txn_batch(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
+# Phase-3 hoist gate: sync ``Cluster.transaction()`` forwarding.
+# The SC tests above drive ``session.transaction()``; the cluster-level entry
+# point had no sync coverage. Construction-only, so it runs without an SC
+# namespace — it pins that Cluster forwards its behavior to the right leaf
+# before that path is hoisted onto a shared cluster base.
+# ---------------------------------------------------------------------------
+def test_cluster_transaction_forwards_behavior(aerospike_host, make_cluster_definition):
+    custom = Behavior.DEFAULT.derive_with_changes(name="sync_cluster_mrt")
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        tx = cluster.transaction(custom)
+        assert isinstance(tx, TransactionalSession)
+        assert tx.behavior is custom
+        default_tx = cluster.transaction()
+        assert default_tx.behavior is Behavior.DEFAULT
+
+
+# ---------------------------------------------------------------------------
 # 6. txnBatchAbort: 10-key batch upsert rolled back.
 # ---------------------------------------------------------------------------
 def test_txn_batch_abort(session, mrt_set):
@@ -243,7 +253,7 @@ def test_txn_batch_abort(session, mrt_set):
         _reset(session, k)
         session.upsert(k).put({BIN_NAME: 1}).execute()
 
-    with session.begin_transaction() as tx:
+    with session.transaction() as tx:
         stream = tx.upsert(keys).set_to(BIN_NAME, 2).execute()
         for result in stream:
             result.record_or_raise()

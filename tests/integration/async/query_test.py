@@ -20,13 +20,15 @@ import time
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, Key, PartitionFilter, QueryPolicy
-from aerospike_sdk import DataSet, Exp, Client, val
+from aerospike_sdk import Filter, Key
+from aerospike_async import PartitionFilter, QueryPolicy
+from aerospike_sdk import DataSet, Exp, val
+from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 async def _wait_for_set_count(
-    client: Client, ns: str, set_name: str, expected: int,
+    cluster: Cluster, ns: str, set_name: str, expected: int,
     *, timeout: float = 5.0, interval: float = 0.05,
 ) -> None:
     """Poll a set scan until it returns ``expected`` records.
@@ -40,8 +42,9 @@ async def _wait_for_set_count(
     """
     deadline = time.monotonic() + timeout
     last_count = -1
+    session = cluster.create_session()
     while time.monotonic() < deadline:
-        stream = await client.query(ns, set_name).execute()
+        stream = await session.query(ns, set_name).execute()
         count = 0
         async for _ in stream:
             count += 1
@@ -56,12 +59,12 @@ async def _wait_for_set_count(
     )
 
 
-def _namespace_query(client: Client, namespace: str) -> QueryBuilder:
+def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
     return QueryBuilder(
-        client=client.underlying_client,
+        client=cluster._client.underlying_client,
         namespace=namespace,
         set_name=None,
-        indexes_monitor=client._indexes_monitor,
+        indexes_monitor=cluster._client._indexes_monitor,
     )
 
 
@@ -89,16 +92,15 @@ async def _wait_for_query_kinds(
             return
         await asyncio.sleep(interval)
     raise AssertionError(
-        f"query never returned {expected!r} within {timeout}s "
-        f"(last observed: {last_kinds!r})"
+        f"query never returned {expected!r} within {timeout}s (last observed: {last_kinds!r})"
     )
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    """Setup SDK client and test data for query tests."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+async def cluster(aerospike_host, make_cluster_definition):
+    """Connect a Cluster and seed test data for query tests."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        session = c.create_session()
         ds = DataSet.of("test", "query_test")
 
         for i in range(10):
@@ -113,13 +115,19 @@ async def client(aerospike_host, client_policy):
         # Poll until all 10 writes are visible to a set scan. Fixes the
         # intermittent "count == 0 (expected 5)" failures we saw under CI
         # load when a fixed 100 ms sleep wasn't enough.
-        await _wait_for_set_count(client, "test", "query_test", 10)
+        await _wait_for_set_count(c, "test", "query_test", 10)
 
-        yield client
+        yield c
 
-async def test_query_basic(client):
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(cluster):
+    return cluster.create_session()
+
+
+async def test_query_basic(session):
     """Test basic query operation without filters."""
-    stream = await client.query("test", "query_test").execute()
+    stream = await session.query("test", "query_test").execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -131,9 +139,9 @@ async def test_query_basic(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_bins(client):
+async def test_query_with_bins(session):
     """Test query with specific bin selection."""
-    stream = await client.query("test", "query_test").bins(["name", "age"]).execute()
+    stream = await session.query("test", "query_test").bins(["name", "age"]).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -145,10 +153,10 @@ async def test_query_with_bins(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_policy(client):
+async def test_query_with_policy(session):
     """Test query with custom policy."""
     policy = QueryPolicy()
-    stream = await client.query("test", "query_test").with_policy(policy).execute()
+    stream = await session.query("test", "query_test").with_policy(policy).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -159,10 +167,10 @@ async def test_query_with_policy(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_partition_filter(client):
+async def test_query_with_partition_filter(session):
     """Test query with partition filter."""
     partition_filter = PartitionFilter.all()
-    stream = await client.query("test", "query_test").partition(partition_filter).execute()
+    stream = await session.query("test", "query_test").partition(partition_filter).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -173,13 +181,13 @@ async def test_query_with_partition_filter(client):
     stream.close()
     assert count > 0
 
-async def test_query_builder_chaining(client):
+async def test_query_builder_chaining(session):
     """Test method chaining on query builder."""
     policy = QueryPolicy()
     partition_filter = PartitionFilter.all()
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .bins(["name", "age"])
         .with_policy(policy)
         .partition(partition_filter)
@@ -196,17 +204,17 @@ async def test_query_builder_chaining(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_range_filter(client, enterprise, wait_for_index):
+async def test_query_with_range_filter(cluster, session, enterprise, wait_for_index):
     """Test query with range filter (requires index)."""
     try:
-        await client.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
+        await session.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
     except Exception:
         pass
-    await wait_for_index(client, "test", "query_test", Filter.range("age", 22, 26))
+    await wait_for_index(cluster, "test", "query_test", Filter.range("age", 22, 26))
 
     try:
         stream = await (
-            client.query("test", "query_test")
+            session.query("test", "query_test")
             .filter(Filter.range("age", 22, 26))
             .execute()
         )
@@ -222,13 +230,13 @@ async def test_query_with_range_filter(client, enterprise, wait_for_index):
         stream.close()
     finally:
         try:
-            await client.index("test", "query_test").named("age_idx").drop()
+            await session.index("test", "query_test").named("age_idx").drop()
         except Exception:
             pass
 
-async def test_query_empty_result(client):
+async def test_query_empty_result(session):
     """Test query that returns no results."""
-    stream = await client.query("test", "non_existent_set").execute()
+    stream = await session.query("test", "non_existent_set").execute()
     count = 0
     async for result in stream:
         count += 1
@@ -236,9 +244,9 @@ async def test_query_empty_result(client):
     stream.close()
     assert count == 0
 
-async def test_query_iteration(client):
+async def test_query_iteration(session):
     """Test that query builder can execute and return a RecordStream."""
-    query_builder = client.query("test", "query_test")
+    query_builder = session.query("test", "query_test")
     assert hasattr(query_builder, "execute")
 
     stream = await query_builder.execute()
@@ -252,15 +260,12 @@ async def test_query_iteration(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_expression(client):
+async def test_query_with_filter_expression(session):
     """Test query with Exp (FilterExpression) for server-side filtering."""
-    filter_exp = Exp.ge(
-        Exp.int_bin("age"),
-        Exp.int_val(25)
-    )
+    filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -276,22 +281,19 @@ async def test_query_with_filter_expression(client):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_and_filter_expression(client, enterprise, wait_for_index):
+async def test_query_with_filter_and_filter_expression(cluster, session, enterprise, wait_for_index):
     """Test query with both Filter (secondary index) and Exp (FilterExpression)."""
     try:
-        await client.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
+        await session.index("test", "query_test").on_bin("age").named("age_idx").numeric().create()
     except Exception:
         pass
-    await wait_for_index(client, "test", "query_test", Filter.range("age", 20, 30))
+    await wait_for_index(cluster, "test", "query_test", Filter.range("age", 20, 30))
 
-    filter_exp = Exp.eq(
-        Exp.string_bin("name"),
-        Exp.string_val("User5")
-    )
+    filter_exp = Exp.eq(Exp.string_bin("name"), Exp.string_val("User5"))
 
     try:
         stream = await (
-            client.query("test", "query_test")
+            session.query("test", "query_test")
             .filter(Filter.range("age", 20, 30))
             .filter_expression(filter_exp)
             .execute()
@@ -309,19 +311,18 @@ async def test_query_with_filter_and_filter_expression(client, enterprise, wait_
         stream.close()
     finally:
         try:
-            await client.index("test", "query_test").named("age_idx").drop()
+            await session.index("test", "query_test").named("age_idx").drop()
         except Exception:
             pass
 
-async def test_query_with_filter_expression_and(client):
+async def test_query_with_filter_expression_and(session):
     """Test query with Exp (FilterExpression) using AND for multiple conditions."""
-    filter_exp = Exp.and_([
-        Exp.ge(Exp.int_bin("age"), Exp.int_val(25)),
-        Exp.le(Exp.int_bin("age"), Exp.int_val(27))
-    ])
+    filter_exp = Exp.and_(
+        [Exp.ge(Exp.int_bin("age"), Exp.int_val(25)), Exp.le(Exp.int_bin("age"), Exp.int_val(27))]
+    )
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -342,10 +343,10 @@ async def test_query_with_filter_expression_and(client):
 # Metadata-based query tests 
 # ============================================================================
 
-async def test_query_with_ael_where(client):
+async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where("$.age >= 25")
         .execute()
     )
@@ -359,10 +360,10 @@ async def test_query_with_ael_where(client):
     assert count == 5
 
 
-async def test_query_ael_and_or(client):
+async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where('$.age >= 22 and $.age <= 26')
         .execute()
     )
@@ -376,10 +377,10 @@ async def test_query_ael_and_or(client):
     assert count == 5
 
 
-async def test_query_ael_not(client):
+async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .where('not ($.age >= 25)')
         .execute()
     )
@@ -393,12 +394,12 @@ async def test_query_ael_not(client):
     assert count == 5
 
 
-async def test_query_digest_modulo(client):
+async def test_query_digest_modulo(session):
     """Test query with digestModulo metadata expression filter."""
     filter_exp = Exp.eq(Exp.digest_modulo(3), Exp.int_val(1))
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -411,12 +412,12 @@ async def test_query_digest_modulo(client):
     assert count >= 1
 
 
-async def test_query_bin_exists(client):
+async def test_query_bin_exists(session):
     """Test query filtering by bin existence."""
     filter_exp = Exp.bin_exists("age")
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -430,12 +431,12 @@ async def test_query_bin_exists(client):
     assert count == 10
 
 
-async def test_query_record_size(client):
+async def test_query_record_size(session):
     """Test query filtering by record size metadata."""
     filter_exp = Exp.ge(Exp.device_size(), Exp.int_val(0))
 
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -448,14 +449,14 @@ async def test_query_record_size(client):
     assert count == 10
 
 
-async def test_query_ael_set_name_matches_no_set_records(client):
+async def test_query_ael_set_name_matches_no_set_records(cluster):
     """Test AEL filtering for records written without a set name."""
     namespace = "test"
     named_set = "query_set_name_no_set"
     probe = "query-set-name-no-set-probe"
     no_set_key = Key(namespace, "", "query-set-name-no-set-empty")
     named_key = Key(namespace, named_set, "query-set-name-no-set-named")
-    session = client.create_session()
+    session = cluster.create_session()
 
     try:
         for key in (no_set_key, named_key):
@@ -468,11 +469,11 @@ async def test_query_ael_set_name_matches_no_set_records(client):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(client, namespace).where(f"$.probe == '{probe}'"),
+            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
             {"no-set", "named-set"},
         )
         await _wait_for_query_kinds(
-            lambda: _namespace_query(client, namespace).where(
+            lambda: _namespace_query(cluster, namespace).where(
                 f"$.probe == '{probe}' and $.setName() == ''",
             ),
             {"no-set"},
@@ -485,14 +486,14 @@ async def test_query_ael_set_name_matches_no_set_records(client):
                 pass
 
 
-async def test_query_exp_set_name_filters_out_no_set_records(client):
+async def test_query_exp_set_name_filters_out_no_set_records(cluster):
     """Test Exp filtering for named-set-only records."""
     namespace = "test"
     named_set = "query_set_name_named_only"
     probe = "query-set-name-named-only-probe"
     no_set_key = Key(namespace, "", "query-set-name-named-only-empty")
     named_key = Key(namespace, named_set, "query-set-name-named-only-named")
-    session = client.create_session()
+    session = cluster.create_session()
 
     try:
         for key in (no_set_key, named_key):
@@ -505,7 +506,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(client):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(client, namespace).where(f"$.probe == '{probe}'"),
+            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
             {"no-set", "named-set"},
         )
 
@@ -514,7 +515,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(client):
             Exp.ne(Exp.set_name(), val("")),
         ])
         await _wait_for_query_kinds(
-            lambda: _namespace_query(client, namespace).filter_expression(named_set_only),
+            lambda: _namespace_query(cluster, namespace).filter_expression(named_set_only),
             {"named-set"},
         )
     finally:
@@ -525,10 +526,10 @@ async def test_query_exp_set_name_filters_out_no_set_records(client):
                 pass
 
 
-async def test_query_chunked_iteration(client):
+async def test_query_chunked_iteration(session):
     """Server-side chunked iteration via chunk_size + has_more_chunks."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .chunk_size(3)
         .execute()
     )
@@ -545,10 +546,10 @@ async def test_query_chunked_iteration(client):
     assert chunks >= 2
 
 
-async def test_query_chunked_single_chunk(client):
+async def test_query_chunked_single_chunk(session):
     """chunk_size larger than dataset returns everything in one chunk."""
     stream = await (
-        client.query("test", "query_test")
+        session.query("test", "query_test")
         .chunk_size(100)
         .execute()
     )
@@ -564,9 +565,9 @@ async def test_query_chunked_single_chunk(client):
     assert chunks == 1
 
 
-async def test_has_more_chunks_on_non_chunked_stream(client):
+async def test_has_more_chunks_on_non_chunked_stream(session):
     """has_more_chunks on a regular stream returns True once then False."""
-    stream = await client.query("test", "query_test").execute()
+    stream = await session.query("test", "query_test").execute()
     assert await stream.has_more_chunks() is True
     count = 0
     async for _ in stream:
@@ -576,31 +577,31 @@ async def test_has_more_chunks_on_non_chunked_stream(client):
     assert count == 10
 
 
-class TestExecuteStreamAcrossBuilders:
-    """`execute_stream()` (lazy) is exposed consistently across the
+class TestStreamAcrossBuilders:
+    """`stream()` (lazy) is exposed consistently across the
     query-path builders and yields the same rows as buffered `execute()`,
     which stays the default. Streaming yields in completion order, so
     every comparison is by :attr:`RecordResult.index`."""
 
-    async def test_batch_read_stream_matches_execute(self, client):
-        """QueryBuilder.execute_stream on a multi-key read yields the same
+    async def test_batch_read_stream_matches_execute(self, cluster):
+        """QueryBuilder.stream on a multi-key read yields the same
         rows (by index) as buffered execute()."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(0, 1, 2)
 
         buffered = await (await session.query(keys).execute()).collect()
-        lazy = await (await session.query(keys).execute_stream()).collect()
+        lazy = await (await session.query(keys).stream()).collect()
 
         assert {r.index for r in lazy} == {r.index for r in buffered} == {0, 1, 2}
         assert all(r.is_ok for r in lazy)
         assert {r.index: r.record.bins["id"] for r in lazy} == \
             {r.index: r.record.bins["id"] for r in buffered}
 
-    async def test_mixed_write_chain_stream(self, client):
+    async def test_mixed_write_chain_stream(self, cluster):
         """A query→write→delete chain (terminates on WriteSegmentBuilder)
-        exposes execute_stream and yields one row per op."""
-        session = client.create_session()
+        exposes stream and yields one row per op."""
+        session = cluster.create_session()
         ds = DataSet.of("test", "estream_qmix")
         keys = [ds.id(i) for i in range(4)]
         try:
@@ -609,9 +610,9 @@ class TestExecuteStreamAcrossBuilders:
 
             stream = await (
                 session.query(ds.ids(0, 1))
-                    .upsert(keys[2]).bin("status").set_to("active")
-                    .delete(keys[3])
-                    .execute_stream()
+                .upsert(keys[2]).bin("status").set_to("active")
+                .delete(keys[3])
+                .stream()
             )
             results = await stream.collect()
             assert {r.index for r in results} == {0, 1, 2, 3}
@@ -628,13 +629,13 @@ class TestExecuteStreamAcrossBuilders:
                 except Exception:
                     pass
 
-    async def test_single_key_write_segment_stream(self, client):
-        """A single-key write segment exposes execute_stream (one record)."""
-        session = client.create_session()
+    async def test_single_key_write_segment_stream(self, cluster):
+        """A single-key write segment exposes stream (one record)."""
+        session = cluster.create_session()
         ds = DataSet.of("test", "estream_qsingle")
         k = ds.id(0)
         try:
-            stream = await session.upsert(k).put({"v": 1}).execute_stream()
+            stream = await session.upsert(k).put({"v": 1}).stream()
             results = await stream.collect()
             assert len(results) == 1
             assert results[0].is_ok
@@ -644,10 +645,10 @@ class TestExecuteStreamAcrossBuilders:
             except Exception:
                 pass
 
-    async def test_dataset_query_stream_delegates_to_scan(self, client):
-        """execute_stream on a keyless dataset query streams the scan
+    async def test_dataset_query_stream_delegates_to_scan(self, session):
+        """stream on a keyless dataset query streams the scan
         lazily (delegates to execute())."""
-        stream = await client.query("test", "query_test").execute_stream()
+        stream = await session.query("test", "query_test").stream()
         count = 0
         async for r in stream:
             assert r.is_ok
@@ -660,56 +661,56 @@ class TestPopVsFirst:
     """`pop()` takes one row and keeps the stream open; `first()` takes one row
     and closes it. Both come in an ``_or_raise`` variant."""
 
-    async def test_pop_keeps_stream_open(self, client):
-        session = client.create_session()
+    async def test_pop_keeps_stream_open(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
-        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        stream = await session.query(ds.ids(0, 1, 2)).stream()
         head = await stream.pop()
         assert head is not None
         rest = await stream.collect()
         assert {head.index} | {r.index for r in rest} == {0, 1, 2}
 
-    async def test_first_closes_stream(self, client):
-        session = client.create_session()
+    async def test_first_closes_stream(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
-        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        stream = await session.query(ds.ids(0, 1, 2)).stream()
         head = await stream.first()
         assert head is not None
         # first() closed the stream: nothing remains.
         assert await stream.collect() == []
 
-    async def test_pop_or_raise_and_first_or_raise(self, client):
-        session = client.create_session()
+    async def test_pop_or_raise_and_first_or_raise(self, cluster):
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
 
-        open_stream = await session.query(ds.ids(0, 1)).execute_stream()
+        open_stream = await session.query(ds.ids(0, 1)).stream()
         head = await open_stream.pop_or_raise()
         assert head.is_ok
         assert len(await open_stream.collect()) == 1   # still open
 
-        closed_stream = await session.query(ds.ids(0, 1)).execute_stream()
+        closed_stream = await session.query(ds.ids(0, 1)).stream()
         rec = await closed_stream.first_or_raise()
         assert rec.is_ok
         assert await closed_stream.collect() == []     # closed
 
 
-class TestExecuteStreamClose:
+class TestStreamClose:
     """Closing a lazy stream releases the producer and stops iteration.
 
     Covers the same ground as a Closeable/try-with-resources stream — early
     abandon, idempotent close, close-on-exception via ``async with`` — plus
     cases a bare Closeable contract typically leaves untested: re-iterating a
-    closed stream, and proving the client is still usable afterward.
+    closed stream, and proving the cluster is still usable afterward.
     """
 
-    async def test_close_mid_stream_stops_iteration(self, client):
+    async def test_close_mid_stream_stops_iteration(self, cluster):
         """After close(), no further rows are delivered even if the batch had
         more buffered/in-flight."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(*range(10))
 
-        stream = await session.query(keys).execute_stream()
+        stream = await session.query(keys).stream()
         seen = 0
         async for _ in stream:
             seen += 1
@@ -722,63 +723,63 @@ class TestExecuteStreamClose:
             remaining += 1
         assert remaining == 0
 
-    async def test_close_is_idempotent(self, client):
+    async def test_close_is_idempotent(self, cluster):
         """Repeated close() calls are safe and keep the stream drained."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
-        stream = await session.query(ds.ids(0, 1, 2)).execute_stream()
+        stream = await session.query(ds.ids(0, 1, 2)).stream()
         stream.close()
         stream.close()
         stream.close()
         assert await stream.collect() == []
 
-    async def test_reiterate_after_close_yields_nothing(self, client):
+    async def test_reiterate_after_close_yields_nothing(self, cluster):
         """Re-entering ``async for`` on a closed stream terminates immediately
         (a scenario Closeable contracts commonly leave unspecified)."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
-        stream = await session.query(ds.ids(0, 1, 2, 3)).execute_stream()
+        stream = await session.query(ds.ids(0, 1, 2, 3)).stream()
         stream.close()
         first_pass = [r async for r in stream]
         second_pass = [r async for r in stream]
         assert first_pass == [] and second_pass == []
 
-    async def test_client_usable_after_early_close(self, client):
-        """Abandoning a stream early must not wedge the client — a subsequent
+    async def test_client_usable_after_early_close(self, cluster):
+        """Abandoning a stream early must not wedge the cluster — a subsequent
         operation on the same session still succeeds."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
 
-        stream = await session.query(ds.ids(*range(10))).execute_stream()
+        stream = await session.query(ds.ids(*range(10))).stream()
         async for _ in stream:
             stream.close()
             break
 
-        # The client keeps working after the partial-then-closed stream.
+        # The cluster keeps working after the partial-then-closed stream.
         rec = await (await session.query(ds.id(0)).execute()).first_or_raise()
         assert rec.record.bins["id"] == 0
 
-    async def test_async_with_closes_on_normal_exit(self, client):
+    async def test_async_with_closes_on_normal_exit(self, cluster):
         """``async with`` drains and releases the stream on normal exit."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(0, 1, 2)
 
         seen = []
-        async with (await session.query(keys).execute_stream()) as stream:
+        async with (await session.query(keys).stream()) as stream:
             async for r in stream:
                 seen.append(r.index)
         assert set(seen) == {0, 1, 2}
         # Post-context, the stream is closed: no further rows.
         assert await stream.collect() == []
 
-    async def test_async_with_closes_on_early_break(self, client):
+    async def test_async_with_closes_on_early_break(self, cluster):
         """Breaking out of ``async with`` still closes the stream."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(*range(10))
 
-        async with (await session.query(keys).execute_stream()) as stream:
+        async with (await session.query(keys).stream()) as stream:
             async for _ in stream:
                 break
         assert await stream.collect() == []
@@ -786,20 +787,20 @@ class TestExecuteStreamClose:
         rec = await (await session.query(ds.id(1)).execute()).first_or_raise()
         assert rec.record.bins["id"] == 1
 
-    async def test_async_with_closes_on_exception(self, client):
+    async def test_async_with_closes_on_exception(self, cluster):
         """An exception inside ``async with`` closes the stream and propagates."""
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of("test", "query_test")
         keys = ds.ids(*range(10))
 
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
-            async with (await session.query(keys).execute_stream()) as stream:
+            async with (await session.query(keys).stream()) as stream:
                 stream_ref["s"] = stream
                 async for _ in stream:
                     raise RuntimeError("boom")
         # The stream was closed by __aexit__ despite the exception.
         assert await stream_ref["s"].collect() == []
-        # And the client survives it.
+        # And the cluster survives it.
         rec = await (await session.query(ds.id(2)).execute()).first_or_raise()
         assert rec.record.bins["id"] == 2

@@ -16,7 +16,6 @@
 """Tests for append and prepend operations."""
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 
 
@@ -29,9 +28,9 @@ def test_set():
 class TestAppend:
     """Test string append operations."""
 
-    async def test_append(self, client: Client, test_set: DataSet):
+    async def test_append(self, cluster, test_set: DataSet):
         """Test appending strings to a bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("append")
         bin_name = "appendbin"
 
@@ -55,9 +54,9 @@ class TestAppend:
 
         await session.delete(key).execute()
 
-    async def test_prepend(self, client: Client, test_set: DataSet):
+    async def test_prepend(self, cluster, test_set: DataSet):
         """Test prepending strings to a bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("prepend")
         bin_name = "prependbin"
 
@@ -81,9 +80,9 @@ class TestAppend:
 
         await session.delete(key).execute()
 
-    async def test_append_to_multiple_keys(self, client: Client, test_set: DataSet):
+    async def test_append_to_multiple_keys(self, cluster, test_set: DataSet):
         """Test appending to multiple keys."""
-        session = client.create_session()
+        session = cluster.create_session()
         bin_name = "appendbin"
 
         key1 = test_set.id("append_multi_1")

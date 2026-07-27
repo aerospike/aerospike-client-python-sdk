@@ -15,7 +15,6 @@
 
 """Async client and operations for the Aerospike SDK API."""
 
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.aio.info import InfoCommands
@@ -29,7 +28,6 @@ __all__ = [
     "AsyncPool",
     "Cluster",
     "ClusterDefinition",
-    "Client",
     "Host",
     "InfoCommands",
     "NamespaceScStatus",
@@ -38,4 +36,21 @@ __all__ = [
     "Session",
     "TransactionalSession",
 ]
+
+
+def __getattr__(name: str):
+    # Deprecated connection primitive, importable for one deprecation cycle.
+    if name == "Client":
+        import warnings
+
+        warnings.warn(
+            "aerospike_sdk.aio.Client is deprecated; connect with "
+            "aerospike_sdk.ClusterDefinition(...).connect() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from aerospike_sdk.aio.client import Client
+
+        return Client
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

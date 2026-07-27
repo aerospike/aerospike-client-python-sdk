@@ -22,7 +22,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
-log = logging.getLogger("aerospike_sdk.background")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.BACKGROUND)
 
 from aerospike_async import (
     Client,
@@ -65,7 +67,8 @@ class BackgroundTaskSession:
     method returns a builder to add filters, bin operations or UDF arguments,
     then ``await ...execute()`` for a server :class:`~aerospike_async.ExecuteTask`.
 
-    Example:
+    Example::
+
         Background update with a filter::
 
             task = await (
@@ -353,15 +356,17 @@ class _BackgroundOperationBuilderBase:
             return RecordExistsAction.UPDATE_ONLY
         return None
 
-    def execute_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``."""
+    def _execute_blocking(self) -> ExecuteTask:
+        """Blocking counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``.
+
+        Internal: the sync tree's background builder is a wrapper over this
+        class, and this is the terminal it drives. Async callers use
+        :meth:`execute`.
+        """
         ops = self._final_operations()
         reject_unsupported_background_write_ops(ops)
-        mode = self._session._resolve_namespace_mode_blocking(
-            self._dataset.namespace)
-        policy_filter = (
-            None if self._index_filters else self._filter_expression
-        )
+        mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
+        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
             policy_filter,
@@ -455,9 +460,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             self._dataset.namespace, self._dataset.set_name, len(ops),
         )
         mode = await self._session._resolve_namespace_mode(self._dataset.namespace)
-        policy_filter = (
-            None if self._index_filters else self._filter_expression
-        )
+        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
             policy_filter,
@@ -618,10 +621,14 @@ class _BackgroundUdfBuilderBase:
             raise RuntimeError("Client is not connected")
         return fc._client
 
-    def execute_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``."""
-        mode = self._session._resolve_namespace_mode_blocking(
-            self._dataset.namespace)
+    def _execute_blocking(self) -> ExecuteTask:
+        """Blocking counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``.
+
+        Internal: the sync tree's background UDF builder is a wrapper over
+        this class, and this is the terminal it drives. Async callers use
+        :meth:`execute`.
+        """
+        mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         wp = make_background_write_policy(
             self._session.behavior,
             self._filter_expression,
@@ -636,9 +643,7 @@ class _BackgroundUdfBuilderBase:
             self._dataset.set_name,
         )
         client = self._pac_client()
-        py_args: Optional[List[Any]] = (
-            list(self._args) if self._args is not None else None
-        )
+        py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return client.query_execute_udf_blocking(
                 statement,
@@ -719,9 +724,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             self._dataset.set_name,
         )
         client = self._pac_client()
-        py_args: Optional[List[Any]] = (
-            list(self._args) if self._args is not None else None
-        )
+        py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return await client.query_execute_udf(
                 statement,

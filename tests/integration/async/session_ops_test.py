@@ -17,21 +17,14 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 
 
 _SHARED_KEYS = (1, 2, "user1")
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    """Setup SDK client for testing."""
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
-
-
 @pytest_asyncio.fixture(autouse=True)
-async def _clean_shared_keys(client):
+async def _clean_shared_keys(cluster):
     """Wipe the keys these tests share so each one starts from a clean slate.
 
     The whole file deliberately reuses ``DataSet.of("test", "test").id(...)``
@@ -39,7 +32,7 @@ async def _clean_shared_keys(client):
     ``upsert({"name": ..., "age": ...})`` leaves bins behind that pollute
     later assertions on the same key.
     """
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     for key in _SHARED_KEYS:
         try:
@@ -49,9 +42,9 @@ async def _clean_shared_keys(client):
     yield
 
 
-async def test_session_put_get(client):
+async def test_session_put_get(cluster):
     """Test session put and get operations."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John", "age": 30}).execute()
@@ -62,9 +55,9 @@ async def test_session_put_get(client):
     assert record.bins == {"name": "John", "age": 30}
 
 
-async def test_session_multiple_operations(client):
+async def test_session_multiple_operations(cluster):
     """Test multiple operations using the same session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     await session.upsert(ds.id(1)).put({"name": "John"}).execute()
     await session.upsert(ds.id(2)).put({"name": "Jane"}).execute()
@@ -80,9 +73,9 @@ async def test_session_multiple_operations(client):
     assert record2.bins == {"name": "Jane"}
 
 
-async def test_session_get_with_bins(client):
+async def test_session_get_with_bins(cluster):
     """Test getting specific bins with session query."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John", "age": 30, "city": "NYC"}).execute()
@@ -94,9 +87,9 @@ async def test_session_get_with_bins(client):
     assert "city" not in record.bins
 
 
-async def test_session_delete(client):
+async def test_session_delete(cluster):
     """Test delete operation with session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John"}).execute()
@@ -109,9 +102,9 @@ async def test_session_delete(client):
     assert exists is False
 
 
-async def test_session_exists(client):
+async def test_session_exists(cluster):
     """Test exists operation with session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
 
@@ -128,9 +121,9 @@ async def test_session_exists(client):
     assert exists is True
 
 
-async def test_session_increment(client):
+async def test_session_increment(cluster):
     """Test increment operation with session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     await session.upsert(key).put({"counter": 10}).execute()
@@ -143,9 +136,9 @@ async def test_session_increment(client):
     assert record.bins["counter"] == 15
 
 
-async def test_session_append_prepend(client):
+async def test_session_append_prepend(cluster):
     """Test append and prepend operations with session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John"}).execute()
@@ -159,9 +152,9 @@ async def test_session_append_prepend(client):
     assert record.bins["name"] == "Mr. John Doe"
 
 
-async def test_session_string_keys(client):
+async def test_session_string_keys(cluster):
     """Test using string keys with session."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id("user1")
     await session.upsert(key).put({"name": "John"}).execute()
@@ -172,9 +165,9 @@ async def test_session_string_keys(client):
     assert record.bins["name"] == "John"
 
 
-async def test_transactional_session_basic(client):
+async def test_transactional_session_basic(cluster):
     """Test basic TransactionalSession usage."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     await session.upsert(ds.id(1)).put({"name": "John"}).execute()
     await session.upsert(ds.id(2)).put({"name": "Jane"}).execute()
@@ -188,13 +181,13 @@ async def test_transactional_session_basic(client):
     assert record2 is not None
 
 
-async def test_transactional_session_context_manager(client):
+async def test_transactional_session_context_manager(cluster):
     """Test TransactionalSession context manager behavior.
 
     NOTE: requires a namespace in strong-consistency (SC) mode to commit.
     Marked xfail when running against an AP-only cluster.
     """
-    tx_session = client.transaction_session()
+    tx_session = cluster.transaction()
     assert tx_session.active is False
 
     try:

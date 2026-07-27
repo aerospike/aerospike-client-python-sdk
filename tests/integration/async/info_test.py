@@ -16,13 +16,13 @@
 """Tests for InfoCommands."""
 
 import pytest
-from aerospike_sdk import Behavior, Client
+from aerospike_sdk import Behavior
 
 
 @pytest.fixture
-async def session(client):
+async def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
 async def test_info_creation(session):
@@ -140,9 +140,7 @@ async def test_secondary_index_details(session):
 
     # Test getting details for the first index
     test_index = indexes[0]
-    details = await info.secondary_index_details(
-        test_index["namespace"], test_index["name"]
-    )
+    details = await info.secondary_index_details(test_index["namespace"], test_index["name"])
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:

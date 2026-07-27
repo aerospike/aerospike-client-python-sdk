@@ -16,27 +16,26 @@
 """Integration tests for synchronous put/get and core SDK operations."""
 
 import pytest
-from aerospike_async.exceptions import ResultCode
-from aerospike_sdk import DataSet, SyncClient
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk import DataSet
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    """Setup sync SDK client for testing."""
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+def cluster(aerospike_host, make_cluster_definition):
+    """Setup sync SDK cluster for testing."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        session = cluster.create_session()
         ds = DataSet.of("test", "test")
         try:
             session.delete(ds.id(1)).execute()
         except Exception:
             pass
-        yield client
+        yield cluster
 
 
-def test_put_get_basic(client):
+def test_put_get_basic(cluster):
     """Test basic put and get operations."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John", "age": 30}).execute()
@@ -48,9 +47,9 @@ def test_put_get_basic(client):
     assert record.bins["age"] == 30
 
 
-def test_put_get_with_dataset(client):
+def test_put_get_with_dataset(cluster):
     """Test put and get using DataSet."""
-    session = client.create_session()
+    session = cluster.create_session()
     users = DataSet.of("test", "test")
     key = users.id(2)
     session.upsert(key).put({"name": "Jane", "age": 28}).execute()
@@ -61,9 +60,9 @@ def test_put_get_with_dataset(client):
     assert record.bins["name"] == "Jane"
 
 
-def test_put_get_with_key_object(client):
+def test_put_get_with_key_object(cluster):
     """Test put and get using Key object."""
-    session = client.create_session()
+    session = cluster.create_session()
     users = DataSet.of("test", "test")
     key = users.id(3)
     session.upsert(key).put({"name": "Bob", "age": 35}).execute()
@@ -74,9 +73,9 @@ def test_put_get_with_key_object(client):
     assert record.bins["name"] == "Bob"
 
 
-def test_exists(client):
+def test_exists(cluster):
     """Test exists operation."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
 
@@ -86,9 +85,9 @@ def test_exists(client):
     assert not exists
 
 
-def test_delete(client):
+def test_delete(cluster):
     """Test delete operation."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John"}).execute()
@@ -101,9 +100,9 @@ def test_delete(client):
     assert not exists
 
 
-def test_get_with_bins(client):
+def test_get_with_bins(cluster):
     """Test get with specific bin selection."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John", "age": 30, "city": "NYC"}).execute()
@@ -116,7 +115,7 @@ def test_get_with_bins(client):
     assert "city" not in record.bins
 
 
-def test_truncate(client):
+def test_truncate(cluster):
     """Test that truncate succeeds and new writes after it are readable.
 
     Truncate is an async server-side operation that may not propagate
@@ -124,7 +123,7 @@ def test_truncate(client):
     records written *after* the truncate (whose timestamps exceed the
     cutoff) are immediately readable.
     """
-    session = client.create_session()
+    session = cluster.create_session()
     users = DataSet.of("test", "trunc_test_sync")
 
     key1 = users.id("trunc_old1")
@@ -133,7 +132,7 @@ def test_truncate(client):
     session.upsert(key1).put({"v": 1}).execute()
     session.upsert(key2).put({"v": 2}).execute()
 
-    client.truncate(users)
+    session.truncate(users)
 
     key_new = users.id("trunc_new1")
     session.upsert(key_new).put({"v": 42}).execute()
@@ -143,9 +142,9 @@ def test_truncate(client):
     assert result.record.bins["v"] == 42
 
 
-def test_bin_chaining_set_to(client):
+def test_bin_chaining_set_to(cluster):
     """Test bin chaining API with set_to."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).bin("name").set_to("Tim").bin("age").set_to(1).bin("gender").set_to("male").execute()
@@ -156,9 +155,9 @@ def test_bin_chaining_set_to(client):
     assert record.bins == {"name": "Tim", "age": 1, "gender": "male"}
 
 
-def test_bin_chaining_add(client):
+def test_bin_chaining_add(cluster):
     """Test bin chaining API with add."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"age": 30}).execute()
@@ -171,9 +170,9 @@ def test_bin_chaining_add(client):
     assert record.bins["age"] == 31
 
 
-def test_bin_chaining_mixed_operations(client):
+def test_bin_chaining_mixed_operations(cluster):
     """Test bin chaining with both set_to and add."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim", "age": 1}).execute()
@@ -186,9 +185,9 @@ def test_bin_chaining_mixed_operations(client):
     assert record.bins == {"name": "Tim Updated", "age": 2}
 
 
-def test_and_remove_other_bins(client):
+def test_and_remove_other_bins(cluster):
     """Test replace removes other bins (equivalent to and_remove_other_bins)."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim", "age": 30, "gender": "male", "city": "NYC"}).execute()
@@ -201,9 +200,9 @@ def test_and_remove_other_bins(client):
     assert record.bins == {"name": "Tim Updated", "age": 26}
 
 
-def test_set_bins_execute(client):
+def test_set_bins_execute(cluster):
     """Test set_bins with execute method."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).set_bins({"name": "Tim", "age": 1, "gender": "male"}).execute()
@@ -214,9 +213,9 @@ def test_set_bins_execute(client):
     assert record.bins == {"name": "Tim", "age": 1, "gender": "male"}
 
 
-def test_with_durable_delete(client):
+def test_with_durable_delete(cluster):
     """Test delete operations."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim"}).execute()
@@ -229,9 +228,9 @@ def test_with_durable_delete(client):
     assert record is None
 
 
-def test_insert_creates_new_record(client):
+def test_insert_creates_new_record(cluster):
     """Test that insert() creates a new record successfully."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.insert(key).put({"name": "Alice", "age": 25}).execute()
@@ -242,9 +241,9 @@ def test_insert_creates_new_record(client):
     assert record.bins == {"name": "Alice", "age": 25}
 
 
-def test_insert_fails_if_record_exists(client):
+def test_insert_fails_if_record_exists(cluster):
     """Test that insert() fails if record already exists."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.insert(key).put({"name": "Alice"}).execute()
@@ -253,9 +252,9 @@ def test_insert_fails_if_record_exists(client):
         session.insert(key).put({"name": "Bob"}).execute()
 
 
-def test_update_succeeds_if_record_exists(client):
+def test_update_succeeds_if_record_exists(cluster):
     """Test that update() succeeds if record exists."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Alice", "age": 25}).execute()
@@ -267,9 +266,9 @@ def test_update_succeeds_if_record_exists(client):
     assert record.bins == {"name": "Alice", "age": 26}
 
 
-def test_update_fails_if_record_not_exists(client):
+def test_update_fails_if_record_not_exists(cluster):
     """Test that update() raises KEY_NOT_FOUND_ERROR if record does not exist."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(88888)
     try:
@@ -281,9 +280,9 @@ def test_update_fails_if_record_not_exists(client):
     assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
 
-def test_replace_succeeds_if_record_exists(client):
+def test_replace_succeeds_if_record_exists(cluster):
     """Test that replace() succeeds if record exists and replaces all bins."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Alice", "age": 25, "city": "NYC"}).execute()
@@ -297,9 +296,9 @@ def test_replace_succeeds_if_record_exists(client):
     assert "city" not in record.bins
 
 
-def test_replace_if_exists_fails_if_record_not_exists(client):
+def test_replace_if_exists_fails_if_record_not_exists(cluster):
     """Test that replace_if_exists() raises KEY_NOT_FOUND_ERROR if record does not exist."""
-    session = client.create_session()
+    session = cluster.create_session()
     ds = DataSet.of("test", "test")
     key = ds.id(88888)
     try:

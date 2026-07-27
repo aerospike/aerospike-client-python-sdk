@@ -489,9 +489,7 @@ class FilterGenerator:
         return None
 
     @staticmethod
-    def _ctx_matches(
-        index_ctx: Optional[List[CTX]], node_ctx: Optional[List[CTX]]
-    ) -> bool:
+    def _ctx_matches(index_ctx: Optional[List[CTX]], node_ctx: Optional[List[CTX]]) -> bool:
         """True if index context matches expression node context."""
         if node_ctx is None and index_ctx is None:
             return True

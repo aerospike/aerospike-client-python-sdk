@@ -27,8 +27,7 @@ A bin name containing the substring ``null`` (case-insensitive) is rejected.
 """
 
 import pytest
-from aerospike_async import ExpType, ListReturnType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import Exp, ExpType, ListReturnType, MapReturnType, parse_ael
 from aerospike_sdk.ael.exceptions import AelParseException
 
 

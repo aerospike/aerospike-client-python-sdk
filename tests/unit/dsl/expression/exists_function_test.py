@@ -21,8 +21,7 @@ shape produced by ``.get(return: EXISTS)``.
 """
 
 import pytest
-from aerospike_async import CTX, ExpType, ListReturnType, MapReturnType
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import CTX, Exp, ExpType, ListReturnType, MapReturnType, parse_ael
 from aerospike_sdk.ael.exceptions import AelParseException
 
 

@@ -17,7 +17,8 @@
 
 from unittest.mock import MagicMock
 
-from aerospike_async import Key, ListOperation, ListReturnType
+from aerospike_sdk import Key, ListReturnType
+from aerospike_async import ListOperation
 
 from aerospike_sdk.aio.operations.cdt_read import CdtReadBuilder
 from aerospike_sdk.aio.operations.cdt_write import CdtWriteBuilder

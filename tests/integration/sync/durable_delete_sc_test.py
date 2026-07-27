@@ -29,9 +29,9 @@ Requires an Enterprise SC cluster on ``AEROSPIKE_HOST_SC`` (or
 from typing import Any
 
 import pytest
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import ResultCode
 
-from aerospike_sdk import DataSet, ErrorStrategy, SyncClient
+from aerospike_sdk import DataSet, ErrorStrategy
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
 
@@ -106,14 +106,14 @@ def _delete_keys_durable(session, keys) -> None:
 
 
 @pytest.fixture(scope="module")
-def sc_client(aerospike_host_sc, client_policy_sc):
-    with SyncClient(seeds=aerospike_host_sc, policy=client_policy_sc) as c:
+def cluster_sc(aerospike_host_sc, make_cluster_definition):
+    with make_cluster_definition(aerospike_host_sc, sync=True, auth=True).connect() as c:
         yield c
 
 
 @pytest.fixture(scope="module")
-def sc_namespace(sc_client):
-    sess = sc_client.create_session()
+def sc_namespace(cluster_sc):
+    sess = cluster_sc.create_session()
     try:
         return resolve_sc_namespace_sync(sess)
     except MultipleScNamespacesError as e:
@@ -126,8 +126,8 @@ def sc_namespace(sc_client):
 
 
 @pytest.fixture
-def session_sc(sc_client, sc_namespace):
-    sess = sc_client.create_session()
+def session_sc(cluster_sc, sc_namespace):
+    sess = cluster_sc.create_session()
     try:
         status = sess.namespace_sc_status(sc_namespace)
     except Exception as exc:
@@ -178,9 +178,13 @@ class TestDurableDeleteBatchReset:
         keys = ds_sc.ids(list(range(first_key, first_key + 10)))
         _delete_keys_durable(session, keys)
 
+        # Deleting already-tombstoned keys inside a multi-record transaction
+        # fails commit verification, so this cleanup delete opts out of the
+        # implicit batch-write transaction via with_txn(None). Without it the
+        # test only passes against a freshly truncated set.
         del_rows = (
             session.delete(*keys).with_durable_delete().include_missing_keys()
-            .execute(on_error=ErrorStrategy.IN_STREAM)
+            .with_txn(None).execute(on_error=ErrorStrategy.IN_STREAM)
         ).collect()
         _assert_batch_delete_stream_ok(del_rows, len(keys))
 
@@ -220,8 +224,7 @@ class TestDurableDeleteBatchOperateMultiKey:
         session.upsert(keys).bin(bin_name).add(10).execute()
         session.upsert(keys).bin(bin_name).add(5).execute()
 
-        seg = _require_default_durable_delete(
-            session.upsert(keys), ctx="multi-key operate delete")
+        seg = _require_default_durable_delete(session.upsert(keys), ctx="multi-key operate delete")
         del_rows = (
             seg.bin(bin_name).get().delete_record()
             .execute(on_error=ErrorStrategy.IN_STREAM)

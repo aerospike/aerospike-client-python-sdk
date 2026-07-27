@@ -51,7 +51,8 @@ class RecordResult:
             when the client placed an error in-stream instead of raising.
         udf_result: Lua return value for successful foreground UDF calls.
 
-    Example:
+    Example::
+
         Inspect a row from a stream::
 
             row = await stream.first()
@@ -109,9 +110,7 @@ class RecordResult:
         if not self.is_ok:
             if self.exception is not None:
                 raise self.exception
-            raise _result_code_to_exception(
-                self.result_code, str(self.result_code), self.in_doubt
-            )
+            raise _result_code_to_exception(self.result_code, str(self.result_code), self.in_doubt)
         return self
 
     def record_or_raise(self) -> Record:
@@ -124,13 +123,43 @@ class RecordResult:
             Same as :meth:`or_raise`, plus ``ValueError`` if the result is OK
             but :attr:`record` is ``None`` (unexpected empty payload).
 
-        Example:
+        Example::
+
             rec = (await stream.first_or_raise()).record_or_raise()
         """
         self.or_raise()
         if self.record is None:
             raise ValueError("Record is None despite ResultCode.OK")
         return self.record
+
+    def operation_result(self, i: int) -> Any:
+        """Return the positional result for the *i*-th op in the originating request.
+
+        Slots are filled in op-arrival order. Ops that produced no value
+        (e.g. write-only modifies that don't return) carry Python ``None``;
+        an out-of-range *i* also returns ``None``. If :attr:`record` is
+        ``None`` (error rows), this also returns ``None``.
+
+        Use this when a single execute issues multiple ops and you need to
+        address each result by its op index. For by-name access, prefer
+        ``self.record.bins``.
+
+        Args:
+            i: Zero-based op index into the originating request.
+
+        Returns:
+            The Python value at that op position, or ``None``.
+
+        Example::
+
+            result = await (
+                session.upsert(key).bin("s").str_upper().bin("s").get().execute()
+            ).first_or_raise()
+            assert result.operation_result(1) == "AB"
+        """
+        if self.record is None:
+            return None
+        return self.record.operation_result(i)
 
     def get_hll_config(self, bin_name: str) -> HllConfig | None:
         """Return the HLL bin's :class:`~aerospike_sdk.HllConfig` from a ``hll_describe()`` result.
@@ -164,8 +193,7 @@ class RecordResult:
             return None
         if not isinstance(value, list) or len(value) != 2:
             raise TypeError(
-                f"Bin {bin_name!r} is not a 2-element list "
-                f"(got {type(value).__name__})",
+                f"Bin {bin_name!r} is not a 2-element list (got {type(value).__name__})",
             )
         return HllConfig(int(value[0]), int(value[1]))
 
@@ -179,7 +207,8 @@ class RecordResult:
         Raises:
             AerospikeError: For any other non-OK code (via :meth:`or_raise`).
 
-        Example:
+        Example::
+
             found = (await exists_stream.first_or_raise()).as_bool()
         """
         if self.is_ok:

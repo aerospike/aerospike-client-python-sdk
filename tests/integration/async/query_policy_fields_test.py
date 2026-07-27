@@ -16,16 +16,17 @@
 """Tests for QueryPolicy field exposure."""
 
 import pytest
-from aerospike_async import BasePolicy, QueryDuration, QueryPolicy, Replica
+from aerospike_sdk import QueryDuration
+from aerospike_async import BasePolicy, QueryPolicy, Replica
 
-from aerospike_sdk import DataSet, Client
+from aerospike_sdk import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 
 
 @pytest.fixture
-async def session(client):
+async def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
 async def test_records_per_second(session):
@@ -106,10 +107,10 @@ async def test_chaining_policy_fields(session):
     # Test chaining multiple policy methods
     query_builder = (
         session.query(users)
-            .records_per_second(1000)
-            .max_records(10000)
-            .expected_duration(QueryDuration.SHORT)
-            .replica(Replica.SEQUENCE)
+        .records_per_second(1000)
+        .max_records(10000)
+        .expected_duration(QueryDuration.SHORT)
+        .replica(Replica.SEQUENCE)
     )
     assert query_builder is not None
 

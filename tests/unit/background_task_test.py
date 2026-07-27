@@ -18,7 +18,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import Expiration, Filter, Key, MapOperation, MapPolicy, Operation
+from aerospike_sdk import Filter, Key
+from aerospike_async import Expiration, MapOperation, MapPolicy, Operation
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder,
@@ -32,6 +33,10 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.sync.background import (
+    SyncBackgroundOperationBuilder,
+    SyncBackgroundUdfBuilder,
+)
 
 
 def _session_mock() -> MagicMock:
@@ -243,3 +248,69 @@ async def test_execute_udf_background_task_rejects_key_chain():
     qb._set_current_keys(Key("test", "bgset", 1))
     with pytest.raises(ValueError, match="dataset queries"):
         await qb.execute_udf_background_task("pkg", "fn")
+
+
+class TestSyncDurableDeleteForwarding:
+    """The sync background wrappers forward the durable-delete quartet.
+
+    These four verbs existed only on the async builders until the background
+    pairs were added to the drift guard, so sync callers could not express
+    durable delete on a background job at all. The wrappers hold no state of
+    their own — each verb must land on the wrapped async builder and return
+    the sync builder so the chain stays sync-typed.
+    """
+
+    def _sync_op_builder(self) -> SyncBackgroundOperationBuilder:
+        s = _session_mock()
+        ds = DataSet.of("test", "bgset")
+        return SyncBackgroundOperationBuilder(
+            BackgroundOperationBuilder(s, ds, _OpType.DELETE))
+
+    def _sync_udf_builder(self) -> SyncBackgroundUdfBuilder:
+        s = _session_mock()
+        ds = DataSet.of("test", "bgset")
+        return SyncBackgroundUdfBuilder(
+            BackgroundUdfFunctionBuilder(s, ds).function("pkg", "fn"))
+
+    @pytest.mark.parametrize(
+        "verb, attr, expected",
+        [
+            ("with_durable_delete", "_durable_delete_override", True),
+            ("without_durable_delete", "_durable_delete_override", False),
+            ("default_with_durable_delete", "_durable_delete_command_default", True),
+            ("default_without_durable_delete", "_durable_delete_command_default", False),
+        ],
+    )
+    def test_operation_builder_forwards(self, verb, attr, expected):
+        b = self._sync_op_builder()
+        assert getattr(b._inner, attr) is None
+        assert getattr(b, verb)() is b
+        assert getattr(b._inner, attr) is expected
+
+    @pytest.mark.parametrize(
+        "verb, attr, expected",
+        [
+            ("with_durable_delete", "_durable_delete_override", True),
+            ("without_durable_delete", "_durable_delete_override", False),
+            ("default_with_durable_delete", "_durable_delete_command_default", True),
+            ("default_without_durable_delete", "_durable_delete_command_default", False),
+        ],
+    )
+    def test_udf_builder_forwards(self, verb, attr, expected):
+        b = self._sync_udf_builder()
+        assert getattr(b._inner, attr) is None
+        assert getattr(b, verb)() is b
+        assert getattr(b._inner, attr) is expected
+
+    def test_durable_delete_reaches_the_write_policy(self):
+        """The forwarded override survives into the policy the job submits."""
+        s = _session_mock()
+        s._resolve_namespace_mode_blocking = MagicMock(return_value=Mode.AP)
+        s.client._client.query_operate_blocking = MagicMock(return_value=MagicMock())
+        ds = DataSet.of("test", "bgset")
+        b = SyncBackgroundOperationBuilder(
+            BackgroundOperationBuilder(s, ds, _OpType.DELETE))
+        b.with_durable_delete().execute()
+        write_policy = (
+            s.client._client.query_operate_blocking.call_args.kwargs["write_policy"])
+        assert write_policy.durable_delete is True

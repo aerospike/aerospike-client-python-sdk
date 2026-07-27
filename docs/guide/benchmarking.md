@@ -223,7 +223,7 @@ The single-key cells above measure one record per `execute()`. Real applications
 
 ### PSDK sync builder
 
-`session.query([keys]).execute()` and `session.batch().upsert(k).put(b).execute()`. Routes through PAC's `batch_read_blocking` / `batch_operate_blocking` directly — no asyncio loop in the path.
+`session.query([keys]).execute()` and `session.upsert([keys]).put(b).execute()`. Routes through PAC's `batch_read_blocking` / `batch_operate_blocking` directly — no asyncio loop in the path.
 
 | Batch size | Total TPS | × b=1 |
 |---|---|---|
@@ -314,7 +314,7 @@ The PyO3 + per-op Python ↔ Tokio thread handoff costs ~15% over the equivalent
 - **PAC's drainer thread** moves all asyncio-loop wake-ups onto a single persistent waker thread, eliminating per-batch `Python::attach` churn on Tokio workers. This is what lifted async TPS substantially over earlier reference numbers (e.g., AsyncPool 4×64 went from 173K → 246K).
 - **uvloop is installed by default** under FT and non-FT Linux/macOS. It lifts single-loop async ~15% on top of the drainer; multi-loop (AsyncPool) sees ~0-3% extra because the per-loop work is already parallelized.
 - **The chained-builder API pays a per-op Python tax** on single-key calls (~30% vs fast-path on sync). On batch calls, that cost amortizes across keys: at batch=128 the sync builder reaches ~484K TPS — far above any single-key cell.
-- **For maximum throughput**: use the **sync builder with batches** (`session.batch()` or multi-key `session.query([keys])`) on free-threaded Python when the workload tolerates batching — ~484K TPS at batch=128. For single-key sync workloads, the **fast-path** (`session.get` / `session.put`) gives ~210K TPS. For async workloads, **AsyncPool 4-8 loops** delivers 246-273K TPS — above the sync fast-path ceiling. Reserve `--current-thread-runtime` (experimental — see the warning above) for tightly-controlled benchmarking, not production.
+- **For maximum throughput**: use the **sync builder with batches** (multi-key `session.query([keys])` / multi-key write chains) on free-threaded Python when the workload tolerates batching — ~484K TPS at batch=128. For single-key sync workloads, the **fast-path** (`session.get` / `session.put`) gives ~210K TPS. For async workloads, **AsyncPool 4-8 loops** delivers 246-273K TPS — above the sync fast-path ceiling. Reserve `--current-thread-runtime` (experimental — see the warning above) for tightly-controlled benchmarking, not production.
 
 ## Fast-path vs builder
 

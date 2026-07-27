@@ -68,9 +68,7 @@ class TestParseSindexList:
         assert names == {"age_idx", "name_idx"}
 
     def test_deduplicates_across_nodes(self):
-        entry = (
-            "ns=test:indexname=age_idx:set=users:bin=age:type=numeric:state=RW"
-        )
+        entry = "ns=test:indexname=age_idx:set=users:bin=age:type=numeric:state=RW"
         raw = {
             "node1": {"sindex-list": entry},
             "node2": {"sindex-list": entry},
@@ -127,9 +125,7 @@ class TestIndexesMonitorLifecycle:
                 )
             }
         }
-        client.info_blocking.return_value = {
-            "sindex-stat": "entries_per_bval=2.5"
-        }
+        client.info_blocking.return_value = {"sindex-stat": "entries_per_bval=2.5"}
         return client
 
     def test_start_populates_cache(self, mock_client):
@@ -170,9 +166,7 @@ class TestIndexesMonitorLifecycle:
         client = MagicMock()
         client.info_on_all_nodes_blocking.return_value = {
             "node1": {
-                "sindex-list": (
-                    "ns=test:indexname=cross_idx:set=:bin=val:type=numeric:state=RW"
-                )
+                "sindex-list": ("ns=test:indexname=cross_idx:set=:bin=val:type=numeric:state=RW")
             }
         }
         client.info_blocking.return_value = {"sindex-stat": "entries_per_bval=1.0"}
@@ -303,8 +297,7 @@ class TestIndexesMonitorLifecycle:
             return {
                 "node1": {
                     "sindex-list": (
-                        "ns=test:indexname=age_idx:set=users:bin=age:"
-                        "type=numeric:state=RW"
+                        "ns=test:indexname=age_idx:set=users:bin=age:type=numeric:state=RW"
                     )
                 }
             }

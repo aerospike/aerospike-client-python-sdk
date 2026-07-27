@@ -96,6 +96,7 @@ def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> 
     )
 
 
-# Integration tests: use with tests/integration/conftest.py autouse gate (resolves ``client``).
+# Integration tests: use with tests/integration/async/conftest.py autouse gate
+# (resolves ``cluster`` / ``session`` / ``session_with_*`` fixtures).
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
 requires_client_side_ael = pytest.mark.requires_client_side_ael

@@ -17,8 +17,7 @@
 
 import pytest
 
-from aerospike_async import CTX, CollectionIndexType, Filter
-from aerospike_sdk import Exp, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
+from aerospike_sdk import CollectionIndexType, CTX, Exp, Filter, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
 
 NAMESPACE = "test1"
 
@@ -69,9 +68,7 @@ def _assert_equal_filter(result, bin_name: str, value) -> None:
     assert str(result.filter) == str(expected), f"{result.filter!r} != {expected!r}"
 
 
-def _assert_equal_filter_with_ctx(
-    result, bin_name: str, value, ctx_list: list
-) -> None:
+def _assert_equal_filter_with_ctx(result, bin_name: str, value, ctx_list: list) -> None:
     """Assert result.filter equals Filter.equal(bin_name, value).context(ctx_list)."""
     expected = Filter.equal(bin_name, value).context(ctx_list)
     assert result.filter is not None
@@ -145,6 +142,4 @@ class TestListExpressionsFilters:
             '$.listBin1.[=5].[#10] == "stringVal"',
             INDEX_FILTER_INPUT,
         )
-        _assert_equal_filter_with_ctx(
-            result, "listBin1", "stringVal", expected_ctx_value_rank
-        )
+        _assert_equal_filter_with_ctx(result, "listBin1", "stringVal", expected_ctx_value_rank)

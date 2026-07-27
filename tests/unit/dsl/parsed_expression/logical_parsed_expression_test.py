@@ -70,9 +70,7 @@ class TestFilterGeneration:
 
     def test_and_and_no_indexes(self):
         """Test triple AND with no indexes returns only Exp."""
-        result = parse_ael_with_index(
-            "$.intBin1 > 100 and $.intBin2 > 100 and $.intBin3 > 100"
-        )
+        result = parse_ael_with_index("$.intBin1 > 100 and $.intBin2 > 100 and $.intBin3 > 100")
 
         assert result.filter is None
         expected = Exp.and_([
@@ -314,9 +312,7 @@ class TestFilterGeneration:
         ]
         ctx = IndexContext.of(self.NAMESPACE, indexes)
 
-        result = parse_ael_with_index(
-            "$.intBin1 > 100 and $.intBin2 > 100 or $.intBin3 > 100", ctx
-        )
+        result = parse_ael_with_index("$.intBin1 > 100 and $.intBin2 > 100 or $.intBin3 > 100", ctx)
 
         assert result.filter is None
         expected = Exp.or_([
@@ -497,9 +493,7 @@ class TestFilterGeneration:
         ]
         ctx = IndexContext.of(self.NAMESPACE, indexes)
 
-        result = parse_ael_with_index(
-            "$.intBin1 > 100 or $.intBin2 > 100 or $.intBin3 > 100", ctx
-        )
+        result = parse_ael_with_index("$.intBin1 > 100 or $.intBin2 > 100 or $.intBin3 > 100", ctx)
 
         assert result.filter is None
         expected = Exp.or_([
@@ -636,9 +630,7 @@ class TestFilterGeneration:
         ]
         ctx = IndexContext.of(self.NAMESPACE, indexes)
 
-        result = parse_ael_with_index(
-            "$.intBin1 > 100 or $.intBin2 > 100 or $.intBin3 > 100", ctx
-        )
+        result = parse_ael_with_index("$.intBin1 > 100 or $.intBin2 > 100 or $.intBin3 > 100", ctx)
 
         assert result.filter is None
         expected = Exp.or_([

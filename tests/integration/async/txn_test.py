@@ -34,8 +34,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from aerospike_async import ResultCode
-from aerospike_sdk import Client, DataSet
+from aerospike_sdk import DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
 from integration.sc_namespace_resolve import (
@@ -61,28 +60,27 @@ async def _namespaces_on_cluster_hint(session) -> str:
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def sc_namespace(aerospike_host_sc, client_policy_sc):
-    async with Client(seeds=aerospike_host_sc, policy=client_policy_sc) as client:
-        sess = client.create_session()
-        try:
-            return await resolve_sc_namespace(sess)
-        except MultipleScNamespacesError as e:
-            pytest.skip(
-                "Several namespaces have strong-consistency enabled; set "
-                f"AEROSPIKE_SC_NAMESPACE to one of: {', '.join(sorted(e.names))}",
-            )
-        except NoStrongConsistencyNamespace as e:
-            pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
+async def sc_namespace(cluster_sc):
+    sess = cluster_sc.create_session()
+    try:
+        return await resolve_sc_namespace(sess)
+    except MultipleScNamespacesError as e:
+        pytest.skip(
+            "Several namespaces have strong-consistency enabled; set "
+            f"AEROSPIKE_SC_NAMESPACE to one of: {', '.join(sorted(e.names))}",
+        )
+    except NoStrongConsistencyNamespace as e:
+        pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
 
 
 @pytest.fixture
-async def session(client_sc, sc_namespace):
+async def session(cluster_sc, sc_namespace):
     """Top-level (non-transactional) session used outside ``doInTransaction``.
 
     Skips the test if the configured SC namespace isn't available on the
     cluster.
     """
-    sess = client_sc.create_session()
+    sess = cluster_sc.create_session()
     try:
         status = await sess.namespace_sc_status(sc_namespace)
     except Exception as exc:
@@ -154,7 +152,7 @@ async def test_txn_write_twice(session, mrt_set):
 
 # ---------------------------------------------------------------------------
 # 3. txnWriteConflict: another txn trying to write the same key while a
-#    txn holds it gets MRT_BLOCKED. We use begin_transaction (rather than
+#    txn holds it gets MRT_BLOCKED. We use transaction (rather than
 #    do_in_transaction) for the inner txn so its retry loop doesn't mask
 #    the MRT_BLOCKED we're asserting on.
 # ---------------------------------------------------------------------------
@@ -165,7 +163,7 @@ async def test_txn_write_conflict(session, mrt_set):
     async def outer(tx1):
         await tx1.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-        async with session.begin_transaction() as tx2:
+        async with session.transaction() as tx2:
             with pytest.raises(AerospikeError) as excinfo:
                 await tx2.upsert(key).put({BIN_NAME: "val2"}).execute()
             assert excinfo.value.result_code == ResultCode.MRT_BLOCKED
@@ -181,10 +179,10 @@ async def test_txn_write_conflict(session, mrt_set):
 #    OPEN txn must raise client-side (reference test does the same via
 #    ``txn.setState(...)`` — PAC now exposes an equivalent setter).
 # ---------------------------------------------------------------------------
-async def test_txn_read_fails_for_all_states_except_open(session, client_sc, mrt_set):
+async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.
     del session
-    from aerospike_async import Txn, TxnState
+    from aerospike_sdk import Txn, TxnState
 
     key = mrt_set.id("txnReadFailsForAllStatesExceptOpen")
 
@@ -197,7 +195,7 @@ async def test_txn_read_fails_for_all_states_except_open(session, client_sc, mrt
         (TxnState.ABORTED, True),
         (TxnState.VERIFIED, True),
     ):
-        tx_session = client_sc.transaction_session()
+        tx_session = cluster_sc.transaction()
         # Allocate a txn without going through __aenter__, then force
         # the state to exercise the non-OPEN state-machine guard.
         tx_session._txn = Txn()
@@ -275,7 +273,7 @@ async def test_txn_write_abort(session, mrt_set):
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         await tx.upsert(key).put({BIN_NAME: "val2"}).execute()
         # Read-your-own-writes inside the txn:
         assert await _fetch_bin(tx, key) == "val2"
@@ -307,7 +305,7 @@ async def test_txn_delete_abort(session, mrt_set):
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         await tx.delete(key).with_durable_delete().execute()
         await tx.abort()
 
@@ -359,7 +357,7 @@ async def test_txn_touch_abort(session, mrt_set):
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         await tx.touch(key).execute()
         await tx.abort()
 
@@ -393,7 +391,7 @@ async def test_txn_operate_write_abort(session, mrt_set):
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1", "bin2": "bal1"}).execute()
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         stream = await (
             tx.upsert(key).set_to(BIN_NAME, "val2").get("bin2").execute()
         )
@@ -438,7 +436,7 @@ async def test_txn_batch_abort(session, mrt_set):
         await _reset(session, k)
         await session.upsert(k).put({BIN_NAME: 1}).execute()
 
-    async with session.begin_transaction() as tx:
+    async with session.transaction() as tx:
         stream = await tx.upsert(keys).set_to(BIN_NAME, 2).execute()
         async for result in stream:
             result.record_or_raise()

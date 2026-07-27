@@ -74,17 +74,14 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
     try:
         return ReadPolicy.from_fields(
             total_timeout=(
-                _ms(settings.total_timeout)
-                if settings.total_timeout is not None else None
+                _ms(settings.total_timeout) if settings.total_timeout is not None else None
             ),
             socket_timeout=(
-                _ms(settings.socket_timeout)
-                if settings.socket_timeout is not None else None
+                _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
             ),
             max_retries=settings.max_retries,
             sleep_between_retries=(
-                _ms(settings.retry_delay)
-                if settings.retry_delay is not None else None
+                _ms(settings.retry_delay) if settings.retry_delay is not None else None
             ),
             replica=settings.replica,
             read_mode_ap=settings.read_mode_ap,
@@ -92,6 +89,7 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
             read_touch_ttl=settings.read_touch_ttl_percent,
             use_compression=settings.use_compression,
             compression_threshold=settings.compression_threshold,
+            error_detail_verbosity=settings.error_detail_verbosity,
         )
     except _PacValueError as e:
         raise _to_value_error(e) from e
@@ -104,24 +102,20 @@ def to_write_policy(settings: Settings) -> WritePolicy:
     Rust boundary exactly once instead of once per field.
     """
     return WritePolicy.from_fields(
-        total_timeout=(
-            _ms(settings.total_timeout)
-            if settings.total_timeout is not None else None
-        ),
+        total_timeout=(_ms(settings.total_timeout) if settings.total_timeout is not None else None),
         socket_timeout=(
-            _ms(settings.socket_timeout)
-            if settings.socket_timeout is not None else None
+            _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
-            _ms(settings.retry_delay)
-            if settings.retry_delay is not None else None
+            _ms(settings.retry_delay) if settings.retry_delay is not None else None
         ),
         send_key=settings.send_key,
         durable_delete=settings.durable_delete,
         commit_level=settings.commit_level,
         use_compression=settings.use_compression,
         compression_threshold=settings.compression_threshold,
+        error_detail_verbosity=settings.error_detail_verbosity,
     )
 
 
@@ -154,6 +148,8 @@ def to_query_policy(settings: Settings) -> QueryPolicy:
         p.max_concurrent_nodes = settings.max_concurrent_nodes
     if settings.record_queue_size is not None:
         p.record_queue_size = settings.record_queue_size
+    if settings.error_detail_verbosity is not None:
+        p.error_detail_verbosity = settings.error_detail_verbosity
     return p
 
 
@@ -180,23 +176,19 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
     Rust boundary exactly once instead of once per field.
     """
     return BatchPolicy.from_fields(
-        total_timeout=(
-            _ms(settings.total_timeout)
-            if settings.total_timeout is not None else None
-        ),
+        total_timeout=(_ms(settings.total_timeout) if settings.total_timeout is not None else None),
         socket_timeout=(
-            _ms(settings.socket_timeout)
-            if settings.socket_timeout is not None else None
+            _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
-            _ms(settings.retry_delay)
-            if settings.retry_delay is not None else None
+            _ms(settings.retry_delay) if settings.retry_delay is not None else None
         ),
         allow_inline=settings.allow_inline,
         allow_inline_ssd=settings.allow_inline_ssd,
         use_compression=settings.use_compression,
         compression_threshold=settings.compression_threshold,
+        error_detail_verbosity=settings.error_detail_verbosity,
     )
 
 
@@ -229,6 +221,10 @@ def apply_to_read_policy(settings: Settings, policy: ReadPolicy) -> ReadPolicy:
         policy.use_compression = settings.use_compression
     if settings.compression_threshold is not None:
         policy.compression_threshold = settings.compression_threshold
+    # 0 (NONE) is the policy default; treat it as unset so behavior settings
+    # fill it without clobbering an explicit non-default verbosity.
+    if settings.error_detail_verbosity is not None and policy.error_detail_verbosity == 0:
+        policy.error_detail_verbosity = settings.error_detail_verbosity
     return policy
 
 
@@ -254,4 +250,8 @@ def apply_to_write_policy(settings: Settings, policy: WritePolicy) -> WritePolic
         policy.use_compression = settings.use_compression
     if settings.compression_threshold is not None:
         policy.compression_threshold = settings.compression_threshold
+    # 0 (NONE) is the policy default; treat it as unset so behavior settings
+    # fill it without clobbering an explicit non-default verbosity.
+    if settings.error_detail_verbosity is not None and policy.error_detail_verbosity == 0:
+        policy.error_detail_verbosity = settings.error_detail_verbosity
     return policy

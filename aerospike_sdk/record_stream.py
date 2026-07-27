@@ -29,7 +29,9 @@ if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotation
     from aerospike_sdk.error_strategy import ErrorHandler
     from aerospike_sdk.exceptions import AerospikeError
 
-log = logging.getLogger(__name__)
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.RECORD_STREAM)
 
 
 class _SingleResultIter:
@@ -59,7 +61,8 @@ class RecordStream:
     :meth:`first`. Do not call ``RecordStream(...)`` directly; use factories
     like :meth:`from_list` or :meth:`from_batch_records`.
 
-    Example:
+    Example::
+
         Typical consumption with ``async for``::
 
             stream = await session.query(key).bins(["name"]).execute()
@@ -78,7 +81,7 @@ class RecordStream:
         # sources. close() forwards to it so resources release
         # deterministically instead of at garbage-collection time.
         "_closeable",
-        # Chunked-iteration state (set lazily by from_chunked_recordset).
+        # Chunked-iteration state (set lazily by _from_chunked_pac_recordset).
         # Slots so set-after-init is allowed without per-instance dict.
         "_chunked", "_chunk_first", "_chunk_recordset",
         "_chunk_reexecute", "_chunk_limit", "_chunk_count", "_counter_ref",
@@ -91,7 +94,7 @@ class RecordStream:
         # Fast-path cache for single-result streams: avoids async
         # iteration overhead in first() / first_or_raise() / __anext__.
         self._single_result: RecordResult | None = None
-        # Chunked fields lazily initialized: from_chunked_recordset is the
+        # Chunked fields lazily initialized: _from_chunked_pac_recordset is the
         # only path that touches them. has_more_chunks() reads via getattr
         # so a freshly-constructed stream needs no extra writes here.
         self._chunked = False
@@ -135,10 +138,10 @@ class RecordStream:
         return cls.from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
-    def from_pac_batch_stream(
+    def _from_pac_batch_stream(
         cls, pac_stream: Any, on_error: ErrorHandler | None = None,
     ) -> RecordStream:
-        """Lazy-feed adapter over a PAC ``BatchRecordStream``.
+        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (internal plumbing).
 
         The PAC stream yields ``(idx, BatchRecord)`` tuples in completion
         order (the node that responds first yields first), not input order.
@@ -164,14 +167,9 @@ class RecordStream:
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
                 async for idx, br in pac_stream:
-                    rc = (
-                        br.result_code
-                        if br.result_code is not None
-                        else ResultCode.OK
-                    )
+                    rc = br.result_code if br.result_code is not None else ResultCode.OK
                     if on_error is not None and rc != ResultCode.OK:
-                        on_error(br.key, idx, _result_code_to_exception(
-                            rc, str(rc), br.in_doubt))
+                        on_error(br.key, idx, _result_code_to_exception(rc, str(rc), br.in_doubt))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -193,14 +191,11 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_recordset(cls, recordset) -> RecordStream:
-        """Wrap a ``Recordset`` (async iterable of ``Record``).
+    def _from_pac_recordset(cls, recordset) -> RecordStream:
+        """Wrap a PAC ``Recordset`` (async iterable of ``Record``) — internal plumbing.
 
         Each yielded ``Record`` is converted to a :class:`RecordResult` with
         ``result_code=OK`` and ``index=-1`` (queries have no positional index).
-
-        Example::
-            stream = RecordStream.from_recordset(recordset)
         """
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
@@ -218,13 +213,13 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_chunked_recordset(
+    def _from_chunked_pac_recordset(
         cls,
         recordset: Any,
         reexecute: Callable[[PartitionFilter], Awaitable[Any]],
         limit: int = 0,
     ) -> RecordStream:
-        """Wrap a ``Recordset`` for chunked iteration.
+        """Wrap a PAC ``Recordset`` for chunked iteration — internal plumbing.
 
         The stream yields records from the current chunk.  Call
         :meth:`has_more_chunks` to advance to the next server chunk.
@@ -354,7 +349,7 @@ class RecordStream:
         Returns ``False`` when:
         * the server cursor is done (all partitions scanned), or
         * the overall ``limit`` has been reached, or
-        * the stream was not created with :meth:`from_chunked_recordset`.
+        * the stream was not created with :meth:`_from_chunked_pac_recordset`.
 
         Example::
 
@@ -502,7 +497,8 @@ class RecordStream:
             StopAsyncIteration: If the stream yields no rows (empty).
             AerospikeError: If the first row is not OK (from :meth:`RecordResult.or_raise`).
 
-        Example:
+        Example::
+
             rec = (await stream.first_or_raise()).record_or_raise()
 
         See Also:
@@ -537,7 +533,8 @@ class RecordStream:
             All remaining :class:`~aerospike_sdk.record_result.RecordResult`
             instances.
 
-        Example:
+        Example::
+
             rows = await stream.collect()
             oks = [r for r in rows if r.is_ok]
         """
@@ -565,7 +562,7 @@ class RecordStream:
         Pairs with :meth:`__aexit__` so the stream is always :meth:`close`\\ d
         on block exit — the recommended way to consume a lazy stream::
 
-            async with await session.query(keys).execute_stream() as stream:
+            async with await session.query(keys).stream() as stream:
                 async for row in stream:
                     ...
             # close() runs here, even on early break or exception.
@@ -580,7 +577,7 @@ class RecordStream:
         """Stop iteration and release the underlying producer.
 
         Marks the stream closed so any further ``async for`` / :meth:`__anext__`
-        ends immediately, and — for lazily-fed streams (a batch ``execute_stream``
+        ends immediately, and — for lazily-fed streams (a batch ``stream``
         or a query recordset) — forwards to the underlying producer's ``close()``
         so its receiver and any buffered-but-unconsumed results are released now,
         rather than at garbage-collection time.

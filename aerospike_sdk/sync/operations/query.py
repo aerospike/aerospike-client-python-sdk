@@ -15,44 +15,54 @@
 
 """Synchronous query and write-segment builders.
 
-Each sync class inherits state, chaining methods, and the blocking-IO
-dispatchers from the corresponding ``_*Base`` in
-:mod:`aerospike_sdk.aio.operations.query`. Concrete sync subclasses add
-sync ``execute()`` (Tier 1 / 1b / 2 dispatch) and override factory
-overrides (``_start_write_verb``, ``_promote``) so chained types stay in
-the sync namespace.
+Each sync class inherits state and chaining methods from the
+runtime-agnostic bases in :mod:`aerospike_sdk.query_shared` /
+:mod:`aerospike_sdk.operations_shared`, and the blocking-IO dispatchers
+from :mod:`aerospike_sdk.sync.operations.query_dispatch`. Concrete sync
+subclasses add sync ``execute()`` (Tier 1 / 1b / 2 dispatch) and override
+factory hooks (``_start_write_verb``, ``_promote``) so chained types stay
+in the sync namespace.
 """
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, List, Optional, Sequence, Union
+
+from typing_extensions import deprecated
 
 from aerospike_async import ExecuteTask, Key
 
 from aerospike_async import ResultCode
 
-from aerospike_sdk.aio.operations.query import (
+from aerospike_sdk.query_shared import (
     QueryBinBuilder,
     WriteBinBuilder,
     _QueryBuilderBase,
 )
+from aerospike_sdk.sync.operations.query_dispatch import _BlockingQueryDispatch
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.operations_shared import (
     _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
     _WriteSegmentBuilderBase,
     _WriteVerbs,
+    _cmd_done,
+    _CMD_DEBUG,
+    _cmd_enabled,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError, _resolve_disposition
-from aerospike_sdk.sync.record_stream import SyncRecordStream
+from aerospike_sdk.sync.record_stream import RecordStream
 
-# Bin builders are parent-generic; the same class serves both async write
-# segments (:class:`WriteSegmentBuilder`) and :class:`SyncWriteSegmentBuilder`.
+# Bin builders are parent-generic; the same class serves both the async and
+# sync write segments.
 # Aliases preserve the import path callers used during the wrapper era.
 SyncQueryBinBuilder = QueryBinBuilder
 SyncWriteBinBuilder = WriteBinBuilder
+
+__all__ = ["QueryBuilder", "WriteSegmentBuilder"]
 
 
 def _describe_specs(qb) -> str:
@@ -77,11 +87,12 @@ def _describe_specs(qb) -> str:
     return f"specs={len(specs)}: " + ", ".join(parts)
 
 
-class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
+class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["WriteSegmentBuilder"]):
     """Synchronous query builder.
 
-    Inherits state + chaining + blocking-IO dispatchers from
-    :class:`_QueryBuilderBase`. Provides sync ``execute()`` that routes
+    Inherits state + chaining from :class:`_QueryBuilderBase` and the
+    blocking-IO dispatchers from :class:`_BlockingQueryDispatch`. Provides
+    sync ``execute()`` that routes
     through Tier 1 (fast path / multi-key list dispatch), Tier 1b
     (multi-spec blocking dispatch), or Tier 2 (dataset / SI / scan
     streaming) using PAC ``_blocking`` entries. No asyncio loop involved.
@@ -89,7 +100,7 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
 
     # -- Bin / op entry points (inherited base mutates ``self`` directly) -----
 
-    def bin(self, bin_name: str) -> QueryBinBuilder[SyncQueryBuilder]:
+    def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
         """Open a per-bin read builder targeting this query builder."""
         return QueryBinBuilder(self, bin_name)
 
@@ -97,11 +108,11 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
 
     def _start_write_verb(  # type: ignore[override]
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
+    ) -> WriteSegmentBuilder:
         """Open a sync write segment after a write verb on this query."""
         # Promote the current query into a write segment by recording the
-        # op_type and target keys on this builder, then wrap in
-        # :class:`SyncWriteSegmentBuilder`. Finalize the pending read/query
+        # op_type and target keys on this builder, then wrap in the sync
+        # :class:`WriteSegmentBuilder`. Finalize the pending read/query
         # spec first — otherwise a mixed chain such as
         # ``query(reads).upsert(...)`` would overwrite the read spec's
         # op_type/keys before it was captured, silently dropping the reads.
@@ -118,13 +129,13 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
             self._single_key = keys[0]
         else:
             self._keys = keys
-        return SyncWriteSegmentBuilder(self)
+        return WriteSegmentBuilder(self)
 
     # -- Execute --------------------------------------------------------------
 
     def execute_background_task(self) -> ExecuteTask:
         """Run a background write for this dataset query (synchronous)."""
-        return self.execute_background_task_blocking()
+        return self._execute_background_task_blocking()
 
     def execute_udf_background_task(
         self,
@@ -133,13 +144,13 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
         args: Optional[Sequence[Any]] = None,
     ) -> ExecuteTask:
         """Run a background UDF for this dataset query (synchronous)."""
-        return self.execute_udf_background_task_blocking(
+        return self._execute_udf_background_task_blocking(
             package_name, function_name, args,
         )
 
     def execute(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the configured query/write chain synchronously.
 
         Tier 1: single-key + multi-key + all op-types (returns list).
@@ -165,6 +176,7 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
             and self._base_read_policy is not None
             and self._read_policy is None
         ):
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client.get_blocking(
                     self._single_key,
@@ -183,44 +195,65 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 # RecordResult when respond_all_keys is set) instead of
                 # raising. Anything else propagates.
                 if rc == ResultCode.KEY_NOT_FOUND_ERROR:
+                    if cmd_t0:
+                        _cmd_done(
+                            None, self._single_key.namespace,
+                            self._single_key.set_name, 1, cmd_t0, self._client,
+                        )
                     if self._respond_all_keys:
-                        return SyncRecordStream.from_list([RecordResult(
+                        return RecordStream.from_list([RecordResult(
                             key=self._single_key, record=None,
                             result_code=rc, exception=psdk_exc, index=0,
                         )])
-                    return SyncRecordStream.from_list([])
+                    return RecordStream.from_list([])
                 raise psdk_exc from e
-            return SyncRecordStream.from_list([RecordResult(
+            if cmd_t0:
+                _cmd_done(
+                    None, self._single_key.namespace,
+                    self._single_key.set_name, 1, cmd_t0, self._client,
+                )
+            return RecordStream.from_list([RecordResult(
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
-        fast = self.execute_blocking_fast_path(on_error)
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+        fast = self._execute_blocking_fast_path(on_error)
         if fast is not None:
-            return SyncRecordStream.from_list(fast)
+            if cmd_t0:
+                spec0 = self._specs[0]
+                _cmd_done(
+                    spec0.op_type, self._namespace, self._set_name,
+                    len(spec0.keys), cmd_t0, self._client,
+                )
+            return RecordStream.from_list(fast)
 
-        multispec = self.execute_multispec_blocking(on_error)
+        multispec = self._execute_multispec_blocking(on_error)
         if multispec is not None:
-            return SyncRecordStream.from_list(multispec)
+            if cmd_t0:
+                _cmd_done(
+                    "batch", self._namespace, self._set_name,
+                    sum(len(s.keys) for s in self._specs), cmd_t0, self._client,
+                )
+            return RecordStream.from_list(multispec)
 
-        stream_kind = self.execute_blocking_stream(on_error)
+        stream_kind = self._execute_blocking_stream(on_error)
         if stream_kind is not None:
             kind, payload = stream_kind
             if kind == "recordset":
-                return SyncRecordStream.from_pac_recordset(payload)
+                return RecordStream._from_pac_recordset(payload)
             if kind == "chunked":
                 recordset, reexecute = payload
-                return SyncRecordStream.from_chunked_pac_recordset(
+                return RecordStream._from_chunked_pac_recordset(
                     recordset, reexecute, limit=0,
                 )
 
         raise NotImplementedError(
-            f"sync builder shape not yet covered by a blocking dispatcher: "
-            f"{_describe_specs(self)}",
+            f"sync builder shape not yet covered by a blocking dispatcher: {_describe_specs(self)}",
         )
 
-    def execute_stream(
+    def stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Execute lazily — results stream back as each node responds.
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
@@ -243,7 +276,7 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
                 enum collapses to inline errors (the stream default).
 
         Returns:
-            A lazy :class:`~aerospike_sdk.sync.record_stream.SyncRecordStream`.
+            A lazy :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
@@ -256,29 +289,37 @@ class SyncQueryBuilder(_QueryBuilderBase, _WriteVerbs):
 
         handler = on_error if callable(on_error) else None
         disp = _resolve_disposition(on_error, is_single_key=False)
-        batch_policy = self._batch_policy_for(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            pac_stream = self._client.batch_stream_blocking(
-                all_ops, batch_policy=batch_policy)
+            pac_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
-            return SyncRecordStream.from_list(
+            return RecordStream.from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))
-        return SyncRecordStream.from_pac_batch_stream(pac_stream, on_error=handler)
+        return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
+
+    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
+    def execute_stream(
+        self, on_error: Optional[OnError] = None,
+    ) -> RecordStream:
+        """Deprecated alias for :meth:`stream`.
+
+        :meta private:
+        """
+        return self.stream(on_error)
 
 
-class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
+class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
     """Synchronous write-segment builder.
 
-    Inherits state + chaining + ``execute_blocking_fast_path`` from
+    Inherits state + chaining + ``_execute_blocking_fast_path`` from
     :class:`_WriteSegmentBuilderBase`. Provides sync ``execute()`` and
-    overrides ``_start_write_verb`` so chained writes return
-    :class:`SyncWriteSegmentBuilder`.
+    overrides ``_start_write_verb`` so chained writes return the sync
+    :class:`WriteSegmentBuilder`.
     """
 
     # `bin()` is inherited from `_WriteSegmentBuilderBase`, which instantiates
@@ -290,7 +331,7 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
 
     def _start_write_verb(  # type: ignore[override]
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncWriteSegmentBuilder:
+    ) -> WriteSegmentBuilder:
         """Finalize this segment and open a fresh sync write segment."""
         # Finalize current segment into a spec on the inner QB.
         self._qb._finalize_current_spec()
@@ -313,7 +354,7 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
 
     def query(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> SyncQueryBuilder:
+    ) -> QueryBuilder:
         """Finalize this segment and open a fresh sync read query on new keys."""
         self._qb._finalize_current_spec()
         if isinstance(arg1, Key):
@@ -330,52 +371,71 @@ class SyncWriteSegmentBuilder(_WriteSegmentBuilderBase, _WriteVerbs):
         else:
             self._qb._keys = keys
             self._qb._single_key = None
-        # The QueryBuilder we wrap is a SyncQueryBuilder per our construction
-        # contract; assert and return it as the sync type.
-        assert isinstance(self._qb, SyncQueryBuilder)
+        # The query builder we wrap is a sync QueryBuilder per our
+        # construction contract; assert and return it as the sync type.
+        assert isinstance(self._qb, QueryBuilder)
         return self._qb
 
     # -- Execute --------------------------------------------------------------
 
     def execute(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the configured write segment synchronously.
 
         Tries the inherited blocking fast path first; otherwise delegates
         to the wrapped query builder's full dispatch.
         """
-        fast = self.execute_blocking_fast_path(on_error)
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+        fast = self._execute_blocking_fast_path(on_error)
         if fast is not None:
-            return SyncRecordStream.from_list(fast)
+            if cmd_t0:
+                spec0 = self._qb._specs[0]
+                _cmd_done(
+                    spec0.op_type, self._qb._namespace,
+                    self._qb._set_name, len(spec0.keys), cmd_t0,
+                    self._qb._client,
+                )
+            return RecordStream.from_list(fast)
         # Fall back to the QB's full sync dispatch (Tier 1b / 2).
-        assert isinstance(self._qb, SyncQueryBuilder)
+        assert isinstance(self._qb, QueryBuilder)
         return self._qb.execute(on_error)
 
+    def stream(
+        self, on_error: Optional[OnError] = None,
+    ) -> RecordStream:
+        """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
+        assert isinstance(self._qb, QueryBuilder)
+        return self._qb.stream(on_error)
+
+    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
     def execute_stream(
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
-        """Lazy streaming variant — see :meth:`SyncQueryBuilder.execute_stream`."""
-        assert isinstance(self._qb, SyncQueryBuilder)
-        return self._qb.execute_stream(on_error)
+    ) -> RecordStream:
+        """Deprecated alias for :meth:`stream`.
+
+        :meta private:
+        """
+        return self.stream(on_error)
 
 
-class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuilder):
+class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
     """Synchronous single-key write fast-path segment.
 
     Inherits fast-path slot state from :class:`_SingleKeyWriteSegmentBase`
-    and overrides ``_promote()`` to construct a :class:`SyncQueryBuilder`
+    and overrides ``_promote()`` to construct a sync :class:`QueryBuilder`
     when escalating to the full query path.
     """
 
     __slots__ = ()
 
     def _promote(self) -> None:  # type: ignore[override]
-        """Populate ``self._qb`` with a :class:`SyncQueryBuilder` (not aio)."""
+        """Populate ``self._qb`` with a sync :class:`QueryBuilder` (not aio)."""
         if self._qb is not None:
             return
-        qb = SyncQueryBuilder(
+        qb = QueryBuilder(
             client=self._client_fast,
+            sdk_client=self._sdk_client_fast,
             namespace=self._key.namespace,
             set_name=self._key.set_name,
             behavior=self._behavior_fast,
@@ -398,7 +458,7 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
 
     def execute(  # type: ignore[override]
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
+    ) -> RecordStream:
         """Run the single-key fast path synchronously."""
         # Aggressive bypass: when the segment has accumulated put-style
         # ops on a single key with no durable-delete overrides and on_error
@@ -438,7 +498,8 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                 if wp_ap is None:
                     # Neither AP nor SC available — fall through to slow path.
                     self._promote()
-                    return SyncWriteSegmentBuilder.execute(self, on_error)
+                    return WriteSegmentBuilder.execute(self, on_error)
+            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client_fast.operate_blocking(
                     self._key,
@@ -461,21 +522,37 @@ class SyncSingleKeyWriteSegment(_SingleKeyWriteSegmentBase, SyncWriteSegmentBuil
                     rc == ResultCode.KEY_NOT_FOUND_ERROR
                     and self._op_type_fast not in ("update", "replace_if_exists")
                 ):
-                    return SyncRecordStream.from_list([])
+                    if cmd_t0:
+                        _cmd_done(
+                            self._op_type_fast, self._key.namespace,
+                            self._key.set_name, 1, cmd_t0, self._client_fast,
+                        )
+                    return RecordStream.from_list([])
                 raise psdk_exc from e
-            return SyncRecordStream.from_list([RecordResult(
+            if cmd_t0:
+                _cmd_done(
+                    self._op_type_fast, self._key.namespace,
+                    self._key.set_name, 1, cmd_t0, self._client_fast,
+                )
+            return RecordStream.from_list([RecordResult(
                 key=self._key, record=record, result_code=ResultCode.OK,
             )])
-        # Slow path: promote then defer to the SyncQueryBuilder's blocking fast path.
+        # Slow path: promote then defer to the sync QueryBuilder's blocking fast path.
         self._promote()
-        return SyncWriteSegmentBuilder.execute(self, on_error)
+        return WriteSegmentBuilder.execute(self, on_error)
 
-    def execute_stream(  # type: ignore[override]
+    def stream(  # type: ignore[override]
         self, on_error: Optional[OnError] = None,
-    ) -> SyncRecordStream:
-        """Lazy streaming variant — see :meth:`SyncQueryBuilder.execute_stream`."""
+    ) -> RecordStream:
+        """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         if self._qb is not None:
-            assert isinstance(self._qb, SyncQueryBuilder)
-            return self._qb.execute_stream(on_error)
+            assert isinstance(self._qb, QueryBuilder)
+            return self._qb.stream(on_error)
         # Still a single-key segment: one record, so buffered == lazy.
         return self.execute(on_error)
+
+
+# Deprecated aliases, kept importable for one release cycle.
+SyncQueryBuilder = QueryBuilder
+SyncWriteSegmentBuilder = WriteSegmentBuilder
+SyncSingleKeyWriteSegment = _SingleKeyWriteSegment

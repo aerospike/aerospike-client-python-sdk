@@ -21,22 +21,26 @@ import types
 import typing
 from typing import Optional
 
-from aerospike_async import ClientPolicy
+from aerospike_async import ClientPolicy, UDFLang
 
 from aerospike_sdk.aio.client import Client
+from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
-from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 
 if typing.TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.session import Session
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
 
-class Cluster:
+class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Live connection to a cluster, obtained from :meth:`ClusterDefinition.connect`.
 
     Owns a connected :class:`~aerospike_sdk.aio.client.Client` and exposes
-    :meth:`create_session` / :meth:`create_transactional_session`. Prefer
+    :meth:`create_session` / :meth:`transaction` (both inherited from
+    :class:`~aerospike_sdk.cluster_shared.ClusterBase`). Prefer
     ``async with await ClusterDefinition(...).connect() as cluster`` so
     :meth:`close` runs on exit.
 
@@ -62,29 +66,61 @@ class Cluster:
         self._sdk_client = sdk_client
     
     @classmethod
-    async def _create(cls, policy: ClientPolicy, seeds: str) -> Cluster:
+    async def _create(
+        cls,
+        policy: ClientPolicy,
+        seeds: str,
+        index_refresh_interval: float = 5.0,
+        sdk_settings: Optional[SystemSettings] = None,
+        sdk_config_source: Optional[SdkConfigSource] = None,
+    ) -> Cluster:
         """
         Internal method to create a new Cluster instance.
-        
+
         Args:
             policy: The ClientPolicy configuration
             seeds: The seeds string (e.g., "localhost:3000")
-        
+            index_refresh_interval: Seconds between secondary-index cache refreshes
+            sdk_settings: Resolved SDK settings to store for runtime reads
+            sdk_config_source: When set, arms config hot-reload on the client
+
         Returns:
             A new Cluster instance
-        
+
         Raises:
             ConnectionError: If post-connect validation fails
         """
-        sdk_client = Client(seeds=seeds, policy=policy)
+        sdk_client = Client(
+            seeds=seeds,
+            policy=policy,
+            index_refresh_interval=index_refresh_interval,
+        )
+        if sdk_settings is not None:
+            sdk_client._sdk_settings = sdk_settings
+        cluster = await cls._connect_and_wrap(sdk_client)
+
+        if sdk_config_source is not None:
+            sdk_client._start_sdk_config_monitor(sdk_config_source)
+        return cluster
+
+    @classmethod
+    async def _connect_and_wrap(cls, sdk_client: Client) -> Cluster:
+        """Connect *sdk_client* on the current loop, validate, and wrap it.
+
+        Shared by :meth:`_create` and :class:`~aerospike_sdk.aio.pool.AsyncPool`
+        (which connects one pre-built member per pool loop), so
+        connect-then-validate is defined once.
+
+        Raises:
+            ConnectionError: If post-connect validation fails.
+        """
         await sdk_client.connect()
 
         if not await sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
-                f"Connected to seeds '{seeds}' but cluster reports not connected"
+                f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected"
             )
-
         return cls(sdk_client)
     
     async def __aenter__(self) -> Cluster:
@@ -104,51 +140,108 @@ class Cluster:
     def _client(self) -> Client:
         """Get the underlying Client."""
         return self._sdk_client
-    
-    def create_session(self, behavior: Optional[Behavior] = None) -> Session:
-        """Open a :class:`~aerospike_sdk.aio.session.Session` with optional behavior.
 
-        A session represents a logical connection to the cluster with specific
-        behavior settings that control how operations are performed (timeouts,
-        retry policies, consistency levels, etc.).
-
-        Args:
-            behavior: Defaults to :attr:`~aerospike_sdk.policy.behavior.Behavior.DEFAULT`.
-
-        Returns:
-            Session bound to this cluster's SDK client.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.client.Client.create_session`
-        """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.create_session(behavior)
-    
-    def create_transactional_session(
+    async def register_udf(
         self,
-        behavior: Optional[Behavior] = None,
-    ) -> TransactionalSession:
-        """Return a transactional session facade (behavior reserved for API parity).
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF package from in-memory bytes on the cluster.
 
-        Args:
-            behavior: Accepted for symmetry with :meth:`create_session`; the
-                underlying client may not apply it yet.
-
-        Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`.
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
 
         See Also:
-            :meth:`~aerospike_sdk.aio.client.Client.transaction_session`
+            :meth:`aerospike_sdk.aio.session.Session.register_udf`
         """
-        # Note: Client.transaction_session() doesn't take behavior parameter yet
-        # but we include it in the signature for API consistency
-        return self._sdk_client.transaction_session()
-    
-    def is_connected(self) -> bool:
-        """Mirror :attr:`~aerospike_sdk.aio.client.Client.is_connected`."""
-        return self._sdk_client.is_connected
-    
+        return await self._sdk_client._register_udf(body, server_path, language, policy=policy)
+
+    async def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF by reading module bytes from a local file.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
+        """
+        return await self._sdk_client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    async def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
+        """
+        return await self._sdk_client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    async def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a registered UDF package from the cluster.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.remove_udf`
+        """
+        return await self._sdk_client._remove_udf(server_path, policy=policy)
+
+    async def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_udf`
+        """
+        return await self._sdk_client._list_udf()
+
+    async def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster.
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_indexes`
+        """
+        return await self._sdk_client._list_indexes()
+
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PSDK-only matrix runner — subset of run_matrix.sh.
 #
-# Runs the PSDK cells only: sync (fast-path + builder × 32t/1t × FT/non-FT),
+# Runs the PSDK cells only: sync (fast-path + builder × 32t × FT/non-FT),
 # async single-loop, AsyncPool, and (optionally) the three batch sweeps.
 # Skips PAC, Rust core, and legacy cells.
 #
@@ -88,9 +88,11 @@ run() {
 export AEROSPIKE_HOST="$HOST"
 export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 
-# --- PSDK sync (fast-path + builder × 32t/1t × FT/non-FT) ------------------
+# --- PSDK sync (fast-path + builder × 32t × FT/non-FT) ---------------------
+# 1t dropped: networked-cluster single-thread is RTT-bound (~86µs → ~11K for
+# every client); use the loopback co-located procedure for true 1t/client-cost.
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     for fp in --fast-path --no-fast-path; do
       sfx=${fp//-/_}
       tag="psdk_sync${sfx}_t${threads}_gil${gil}"

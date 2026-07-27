@@ -39,7 +39,9 @@ from aerospike_sdk.ael.filter_gen import Index, IndexContext, IndexTypeEnum
 if TYPE_CHECKING:  # avoids circular import; used in type annotations only.
     from aerospike_async import Client as PacClient
 
-log = logging.getLogger("aerospike_sdk.index_monitor")
+from aerospike_sdk.loggers import SdkLoggers
+
+log = logging.getLogger(SdkLoggers.INDEX_MONITOR)
 
 _DEFAULT_REFRESH_INTERVAL: float = 5.0
 _DEFAULT_READY_TIMEOUT: float = 30.0
@@ -100,6 +102,32 @@ def _parse_sindex_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[st
     return list(index_map.values())
 
 
+def parse_index_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+    """Parse a raw ``sindex-list`` response into public index descriptors.
+
+    Wraps :func:`_parse_sindex_list` and normalizes the server's field names
+    to the public shape returned by ``list_indexes``: ``namespace``, ``set``,
+    ``bin``, ``name``, plus ``type`` / ``index_type`` / ``context`` when the
+    server reports them.
+    """
+    indexes: List[Dict[str, str]] = []
+    for entry in _parse_sindex_list(raw_responses):
+        rec: Dict[str, str] = {
+            "namespace": entry.get("ns", ""),
+            "set": entry.get("set", ""),
+            "bin": entry.get("bin", ""),
+            "name": entry.get("indexname", ""),
+        }
+        if "type" in entry:
+            rec["type"] = entry["type"]
+        if "indextype" in entry:
+            rec["index_type"] = entry["indextype"]
+        if "context" in entry:
+            rec["context"] = entry["context"]
+        indexes.append(rec)
+    return indexes
+
+
 def _parse_entries_per_bval(raw_response: Dict[str, str]) -> Optional[float]:
     """Extract ``entries_per_bval`` from an ``sindex-stat`` info response."""
     for value in raw_response.values():
@@ -153,15 +181,13 @@ def _fetch_indexes_blocking(pac_client: "PacClient") -> Dict[str, IndexContext]:
         )
         indexes_by_ns.setdefault(ns, []).append(index)
 
-    return {
-        ns: IndexContext.of(ns, idxs) for ns, idxs in indexes_by_ns.items()
-    }
+    return {ns: IndexContext.of(ns, idxs) for ns, idxs in indexes_by_ns.items()}
 
 
 class IndexesMonitor:
     """Daemon-thread background monitor that caches secondary index metadata.
 
-    Matches the JSDK ``IndexesMonitor`` design: a single daemon thread polls
+    Cannonical SDK ``IndexesMonitor`` design: a single daemon thread polls
     the cluster's info APIs at a fixed interval and refreshes an in-memory
     cache. Readers (sync or async builders) consult the cache through
     :meth:`get_index_context`, which is non-blocking.

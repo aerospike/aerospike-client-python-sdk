@@ -20,20 +20,44 @@ from __future__ import annotations
 import pytest
 
 from tests.pac_compat import (
+    SupportsServerCompiledAel,
     skip_if_lacks_server_compiled_ael,
     skip_if_server_compiled_ael_available,
 )
 
 
-@pytest.fixture(autouse=True)
-def _honor_ael_path_markers(request: pytest.FixtureRequest) -> None:
-    """Honor AEL path markers using the real ``client`` fixture (see ``tests/pac_compat``)."""
-    need_server = request.node.get_closest_marker("requires_server_compiled_ael") is not None
-    need_client = request.node.get_closest_marker("requires_client_side_ael") is not None
+def pytest_runtest_call(item: pytest.Item) -> None:
+    """Honor AEL path markers once the test's fixtures are materialized."""
+    need_server = item.get_closest_marker("requires_server_compiled_ael") is not None
+    need_client = item.get_closest_marker("requires_client_side_ael") is not None
     if not (need_server or need_client):
         return
-    client = request.getfixturevalue("client")
+    client = resolve_ael_client_from_funcargs(item.funcargs)
+    if client is None:
+        pytest.skip(
+            "AEL path marker present but no client/cluster/session fixture found"
+        )
     if need_server:
         skip_if_lacks_server_compiled_ael(client)
     if need_client:
         skip_if_server_compiled_ael_available(client)
+
+
+def resolve_ael_client_from_funcargs(
+    funcargs: dict[str, object],
+) -> SupportsServerCompiledAel | None:
+    """Return a connected SDK client from a test's resolved fixture dict."""
+    if "client" in funcargs:
+        return funcargs["client"]  # type: ignore[return-value]
+
+    for name, value in funcargs.items():
+        if name == "cluster" or name.startswith("cluster_"):
+            sdk_client = getattr(value, "_sdk_client", None)
+            if sdk_client is not None:
+                return sdk_client  # type: ignore[return-value]
+
+    for name, value in funcargs.items():
+        if name == "session" or name.startswith("session_with_"):
+            return value.client  # type: ignore[return-value]
+
+    return None

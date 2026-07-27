@@ -15,11 +15,19 @@
 
 """Unit tests for ClusterDefinition auth mode support."""
 
+from typing import Any
+
 import pytest
-from aerospike_async import AuthMode
+from aerospike_sdk import AuthMode
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
-from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sync.client import SyncClient
+from aerospike_sdk.sync.cluster import Cluster as SyncCluster
+from aerospike_sdk.sync.cluster_definition import (
+    ClusterDefinition as SyncClusterDefinition,
+    Host as SyncHost,
+)
 
 
 class TestAuthMode:
@@ -73,7 +81,7 @@ class TestAuthMode:
 
     def test_certificate_credentials_preserves_existing_tls(self):
         cd = ClusterDefinition("localhost", 3000)
-        tls = cd.with_tls_config_of().tls_name("myTls").done()
+        cd.with_tls_config_of().tls_name("myTls").done()
         original_builder = cd._tls_builder
         cd.with_certificate_credentials()
         assert cd._tls_builder is original_builder
@@ -130,7 +138,7 @@ class TestPkiValidation:
         cd = (
             ClusterDefinition("localhost", 3000)
             .with_tls_config_of()
-                .tls_name("myTls")
+            .tls_name("myTls")
             .done()
             .with_certificate_credentials()
         )
@@ -264,3 +272,99 @@ class TestClientId:
     def test_sync_overrides_client_id(self):
         policy = SyncClusterDefinition("localhost", 3000)._get_policy()
         assert policy.custom_client_id.startswith("python-sdk-")
+
+
+class TestSyncBuilderSmoke:
+    """Sync builder-chain + Host smoke, mirroring the async coverage above.
+
+    The async ``ClusterDefinition`` builders are exercised throughout this file;
+    the sync equivalents had no unit coverage. Since Phase 3 hoists these pure
+    state-mutation builders onto a shared base wholesale, this smoke pins the
+    sync side first so the hoist lands against green coverage on both trees.
+    """
+
+    def test_sync_full_builder_chain(self):
+        cd = (
+            SyncClusterDefinition("localhost", 3000)
+            .with_external_credentials("ldap_user", "ldap_pass")
+            .using_services_alternate()
+            .preferring_racks(1, 2)
+            .validate_cluster_name_is("my-cluster")
+            .fail_if_not_connected(False)
+            .with_index_refresh_interval(2.0)
+        )
+        assert cd.auth_mode == AuthMode.EXTERNAL
+        assert cd._user_name == "ldap_user"
+        assert cd._use_services_alternate is True
+        assert cd._preferred_racks == [1, 2]
+        assert cd._cluster_name == "my-cluster"
+        assert cd._fail_if_not_connected is False
+        assert cd._index_refresh_interval == 2.0
+
+    def test_sync_with_tls_config_of(self):
+        cd = (
+            SyncClusterDefinition("localhost", 3000)
+            .with_tls_config_of()
+            .tls_name("myTls")
+            .done()
+        )
+        assert cd._tls_builder is not None
+        assert cd._tls_builder.is_tls_enabled()
+
+    def test_sync_host_of_and_parse_hosts(self):
+        h = SyncHost.of("node-a", 3000)
+        assert (h.name, h.port) == ("node-a", 3000)
+
+        hosts = SyncHost.parse_hosts("node-a:3001,node-b", 3000)
+        assert [(x.name, x.port) for x in hosts] == [("node-a", 3001), ("node-b", 3000)]
+
+
+@pytest.fixture
+def captured_connect(monkeypatch):
+    """Run the real sync ``connect()``, capturing rather than opening a connection.
+
+    Returns a callable that connects the given definition and hands back what
+    reached ``Cluster._create`` — the assembled ``ClientPolicy`` plus the
+    keyword arguments — so the policy assembly is exercised rather than
+    re-implemented in the test.
+    """
+    seen: dict[str, Any] = {}
+
+    def _fake_create(policy, seeds, **kwargs):
+        seen.clear()
+        seen.update(kwargs)
+        seen["policy"] = policy
+        seen["seeds"] = seeds
+        return "cluster"
+
+    monkeypatch.setattr(SyncCluster, "_create", staticmethod(_fake_create))
+
+    def _connect(cd: SyncClusterDefinition) -> dict[str, Any]:
+        cd.connect()
+        return seen
+
+    return _connect
+
+
+class TestSyncConnectionPoolDefaults:
+    """Every sync entry point leaves ``conn_pools_per_node`` at 4.
+
+    A 32-thread sync A/B on a 3-node cluster measured 4 and 8 as
+    indistinguishable on both throughput and p99, so the sync surface holds
+    the underlying default rather than diverging from it. Pinned so the value
+    stays a deliberate choice rather than an accident.
+    """
+
+    def test_defaults_to_the_underlying_value(self, captured_connect):
+        seen = captured_connect(SyncClusterDefinition("localhost", 3000))
+        assert seen["policy"].conn_pools_per_node == 4
+
+    def test_direct_client_construction_does_not_diverge(self):
+        assert SyncClient("localhost:3000")._policy.conn_pools_per_node == 4
+
+    def test_explicit_system_setting_wins(self, captured_connect):
+        seen = captured_connect(
+            SyncClusterDefinition("localhost", 3000)
+            .with_system_settings(SystemSettings(conn_pools_per_node=3))
+        )
+        assert seen["policy"].conn_pools_per_node == 3

@@ -16,17 +16,6 @@
 """Tests for the SDK exception hierarchy, factory, and dependency converter."""
 
 import pytest
-from aerospike_async.exceptions import (
-    AerospikeError as PacAerospikeError,
-    ConnectionError as PacConnectionError,
-    InvalidNodeError as PacInvalidNodeError,
-    ServerError as PacServerError,
-    TimeoutError as PacTimeoutError,
-    UDFBadResponse as PacUDFBadResponse,
-)
-from aerospike_async.exceptions import ResultCode
-
-from aerospike_sdk.ael.exceptions import NoApplicableFilterError
 from aerospike_sdk.exceptions import (
     AerospikeError,
     AuthenticationError,
@@ -40,6 +29,7 @@ from aerospike_sdk.exceptions import (
     CapacityError,
     CommitError,
     ConnectionError,
+    _convert_pac_exception,
     ElementError,
     ElementExistsError,
     ElementNotFoundError,
@@ -55,14 +45,27 @@ from aerospike_sdk.exceptions import (
     RecordExistsError,
     RecordNotFoundError,
     RecordTooBigError,
+    _result_code_to_exception,
+    ResultCode,
     SecondaryIndexError,
     SecurityError,
     SerializationError,
     TimeoutError,
     TransactionError,
-    _convert_pac_exception,
-    _result_code_to_exception,
 )
+# The dependency-converter tests construct real PAC exceptions. PSDK's own
+# AerospikeError/ConnectionError/TimeoutError shadow the PAC names, so pull
+# the PAC types via the Pac* aliases the exceptions module already binds.
+from aerospike_sdk.exceptions import (
+    PacAerospikeError,
+    PacConnectionError,
+    PacInvalidNodeError,
+    PacServerError,
+    PacTimeoutError,
+    PacUDFBadResponse,
+)
+
+from aerospike_sdk.ael.exceptions import NoApplicableFilterError
 
 
 class TestExceptionHierarchy:

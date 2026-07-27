@@ -33,7 +33,7 @@ class TlsBuilder:
     
     Simple example usage::
 
-            cluster = ClusterDefinition("localhost", 3100)\
+            cluster_def = ClusterDefinition("localhost", 3100)\
                 .with_tls_config_of()\
                     .tls_name("myTlsName")\
                     .ca_file("myCaFile")\

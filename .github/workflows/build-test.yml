@@ -11,40 +11,40 @@ on:
 
 permissions:
   contents: read
+  # OIDC token exchange with Artifactory (PAC wheel download).
+  id-token: write
+
+env:
+  JF_URL: https://artifact.aerospike.io
 
 jobs:
-  # Advisory only (never fails the build): flag when the pinned PAC commit has
-  # fallen behind PAC's dev branch, so a stale pin surfaces as a clear warning
-  # instead of a cryptic downstream test failure. Bumping the pin stays manual.
+  # Advisory only (never fails the build): confirm the pinned PAC dev version
+  # actually exists in the internal dev repo, so a bad pin surfaces as a clear
+  # warning instead of a cryptic install failure in every matrix job.
   pac-pin-check:
-    name: PAC pin freshness (advisory)
+    name: PAC pin availability (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Warn if the PAC pin is behind PAC dev
+
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
         env:
-          GH_TOKEN: ${{ github.token }}
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Check the pinned PAC version exists in the dev repo
         run: |
-          ref=$(grep -oE 'aerospike-client-python-async\.git@[0-9a-f]+' pyproject.toml | head -1 | cut -d@ -f2)
-          echo "Pinned PAC commit: $ref"
-          if ! gh api "repos/aerospike/aerospike-client-python-async/compare/${ref}...dev" > cmp.json; then
-            echo "::warning title=PAC pin check skipped::Could not compare pin to PAC dev (auth/network)."; exit 0
-          fi
-          # compare base=pin, head=dev: ahead_by = commits dev has that the pin
-          # lacks (= how far the pin is BEHIND dev); behind_by = commits the pin
-          # has that dev lacks (= pin is AHEAD of dev, e.g. an unmerged commit).
-          behind=$(jq -r '.ahead_by' cmp.json)
-          ahead=$(jq -r '.behind_by' cmp.json)
-          newest=$(jq -r '(.commits[-1].sha // "")[0:9]' cmp.json)
-          echo "PAC pin is $behind behind / $ahead ahead of dev (dev tip $newest)"
-          if [ "$behind" = 0 ] && [ "$ahead" = 0 ]; then
-            echo "PAC pin is at dev tip."
-          elif [ "$ahead" = 0 ]; then
-            echo "::warning title=PAC pin is behind dev::Pinned PAC is $behind commit(s) behind origin/dev (dev tip $newest). Bump the pin in pyproject.toml if you need newer PAC changes."
-          elif [ "$behind" = 0 ]; then
-            echo "::notice title=PAC pin ahead of dev::Pinned PAC is $ahead commit(s) ahead of origin/dev — likely an unmerged feature-branch commit. Fine for co-dev; land it on PAC dev before merging."
-          else
-            echo "::warning title=PAC pin diverged from dev::Pinned PAC has diverged from origin/dev ($ahead ahead, $behind behind). Confirm the pin is intentional."
+          set -euo pipefail
+          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
+          echo "Pinned PAC version: $version"
+          count=$(jf rt search "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*.whl" --count || echo 0)
+          echo "Wheels found for $version: $count"
+          if [ "$count" = "0" ]; then
+            echo "::warning title=PAC pin not found in dev repo::aerospike-async==${version} has no wheels in ${{ vars.JFROG_PROJECT }}-pypi-dev-local. Fix the pin in pyproject.toml or publish the version from PAC."
           fi
 
   unit:
@@ -56,49 +56,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pre-release alpha window: PSDK pins to a PAC version that hasn't
-      # been published to PyPI yet. Build PAC from source as a sibling so
-      # `pip install .` for the SDK finds the dependency already satisfied
-      # and doesn't go to PyPI. Switch back to a plain PyPI install once
-      # the matching PAC release lands on PyPI.
-      - name: Read PAC ref from pyproject.toml
-        run: |
-          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
-          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
-      - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: aerospike/aerospike-client-python-async
-          ref: ${{ env.PAC_REF }}
-          path: aerospike-client-python-async
-
-      - name: Setup Rust toolchain (for PAC build)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: 1.93.0
-          components: rustfmt, clippy
-
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Build & install PAC from source
-        working-directory: aerospike-client-python-async
-        run: |
-          # `maturin develop` requires an active virtualenv; GitHub-hosted
-          # runners use the system Python without one. Build a wheel and
-          # `pip install` it instead — same end state, no venv required.
-          pip install maturin
-          maturin build --release --out dist
-          pip install dist/aerospike_async-*.whl
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
       - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
-          pip install -r requirements-dev.txt
-          # PAC was installed from the source checkout above. Avoid resolving
-          # the temporary direct git dependency during this pre-release window.
-          pip install . --no-deps
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
@@ -114,28 +98,6 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-
-      # Pre-release alpha window: PSDK pins to a PAC version that hasn't
-      # been published to PyPI yet. Build PAC from source as a sibling so
-      # `pip install .` for the SDK finds the dependency already satisfied
-      # and doesn't go to PyPI. Switch back to a plain PyPI install once
-      # the matching PAC release lands on PyPI.
-      - name: Read PAC ref from pyproject.toml
-        run: |
-          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
-          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
-      - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: aerospike/aerospike-client-python-async
-          ref: ${{ env.PAC_REF }}
-          path: aerospike-client-python-async
-
-      - name: Setup Rust toolchain (for PAC build)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: 1.93.0
-          components: rustfmt, clippy
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v6
@@ -169,22 +131,28 @@ jobs:
           echo "=== Server Build ==="
           docker exec aerospike-server asinfo -v "build"
 
-      - name: Build & install PAC from source
-        working-directory: aerospike-client-python-async
-        run: |
-          # `maturin develop` requires an active virtualenv; GitHub-hosted
-          # runners use the system Python without one. Build a wheel and
-          # `pip install` it instead — same end state, no venv required.
-          pip install maturin
-          maturin build --release --out dist
-          pip install dist/aerospike_async-*.whl
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
       - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
-          pip install -r requirements-dev.txt
-          # PAC was installed from the source checkout above. Avoid resolving
-          # the temporary direct git dependency during this pre-release window.
-          pip install . --no-deps
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
@@ -215,43 +183,42 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-      - name: Read PAC ref from pyproject.toml
-        run: |
-          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
-          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
-      - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: aerospike/aerospike-client-python-async
-          ref: ${{ env.PAC_REF }}
-          path: aerospike-client-python-async
-      - name: Setup Rust toolchain (for PAC build)
-        # `actions-rs/toolchain` is archived; use the maintained replacement
-        # for new jobs.  Existing jobs in this file still use the old action
-        # and should be migrated in a separate cleanup pass.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.93.0
-          components: rustfmt, clippy
+
       - name: Setup free-threaded Python ${{ matrix.python }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - name: Build & install PAC from source
-        working-directory: aerospike-client-python-async
-        run: |
-          pip install maturin
-          maturin build --release --out dist
-          pip install dist/aerospike_async-*.whl
+
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
       - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
-          pip install -r requirements-dev.txt
-          pip install . --no-deps
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
+
       - name: Generate ANTLR parser
         run: make generate-ael
+
       - name: Verify GIL stays disabled after import
         run: |
           python -c "import sys; before = sys._is_gil_enabled(); import aerospike_sdk; after = sys._is_gil_enabled(); print(f'GIL before={before} after={after}'); assert before is False and after is False, 'gil_used = false flag is not being honored'"
+
       - name: Run unit tests
         run: python -m pytest tests/unit -v
 
@@ -263,28 +230,12 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-      - name: Read PAC ref from pyproject.toml
-        run: |
-          ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
-          echo "PAC_REF=$ref" >> "$GITHUB_ENV"
-      - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: aerospike/aerospike-client-python-async
-          ref: ${{ env.PAC_REF }}
-          path: aerospike-client-python-async
-      - name: Setup Rust toolchain (for PAC build)
-        # `actions-rs/toolchain` is archived; use the maintained replacement
-        # for new jobs.  Existing jobs in this file still use the old action
-        # and should be migrated in a separate cleanup pass.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.93.0
-          components: rustfmt, clippy
+
       - name: Setup free-threaded Python ${{ matrix.python }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+
       - name: Start Aerospike server
         run: |
           docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
@@ -306,21 +257,37 @@ jobs:
           docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
           echo "=== Server Build ==="
           docker exec aerospike-server asinfo -v "build"
-      - name: Build & install PAC from source
-        working-directory: aerospike-client-python-async
-        run: |
-          pip install maturin
-          maturin build --release --out dist
-          pip install dist/aerospike_async-*.whl
+
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      # The pinned aerospike-async dev version resolves from the internal
+      # PyPI index (OIDC-minted credentials); everything else comes from
+      # public PyPI. --only-binary keeps a missing wheel from degrading
+      # into a confusing source build of the Rust extension.
       - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
         run: |
-          pip install -r requirements-dev.txt
-          pip install . --no-deps
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-async \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
+
       - name: Generate ANTLR parser
         run: make generate-ael
+
       - name: Verify GIL stays disabled after import
         run: |
           python -c "import sys; before = sys._is_gil_enabled(); import aerospike_sdk; after = sys._is_gil_enabled(); print(f'GIL before={before} after={after}'); assert before is False and after is False, 'gil_used = false flag is not being honored'"
+
       - name: Run integration tests (smoke)
         env:
           AEROSPIKE_HOST: localhost:3000

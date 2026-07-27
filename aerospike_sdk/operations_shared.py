@@ -15,26 +15,27 @@
 
 """Neutral helpers for write operations — shared by async + sync, single-key + batch.
 
-No asyncio anywhere. Holds the verb model (:class:`BatchOpType` enum,
-:data:`_OP_TYPE_TO_REA` mapping) used by both the single-key write path
-(:mod:`aerospike_sdk.aio.operations.query`) and the batch path
-(:mod:`aerospike_sdk.aio.operations.batch` /
-:mod:`aerospike_sdk.sync.operations.batch`), plus the PAC op-list builder
-used by the batch dispatchers.
+No asyncio anywhere. Holds the verb model (:data:`_OP_TYPE_TO_REA`
+mapping) used by both the single-key write path
+(:mod:`aerospike_sdk.aio.operations.query`) and the multi-key batch path
+of the verb chain (:mod:`aerospike_sdk.query_shared`).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
-from enum import Enum
+from time import perf_counter
 from typing import (
     TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
     ClassVar,
+    Generic,
     List,
     Optional,
+    TypeVar,
     Union,
     overload,
 )
@@ -42,11 +43,6 @@ from typing import (
 from typing_extensions import Self
 
 from aerospike_async import (
-    BatchDeleteOp,
-    BatchDeletePolicy,
-    BatchReadOp,
-    BatchWriteOp,
-    BatchWritePolicy,
     Client,
     ExpOperation,
     ExpReadFlags,
@@ -59,42 +55,98 @@ from aerospike_async import (
     RecordExistsAction,
     Txn,
     WritePolicy,
-    has_any_write_op,
 )
 from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.operations.query.
-    from aerospike_sdk.aio.operations.query import (
-        QueryBuilder,
-        WriteBinBuilder,
-        WriteSegmentBuilder,
-    )
+    from aerospike_sdk.aio.operations.query import WriteBinBuilder
+    from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
     from aerospike_sdk.error_strategy import OnError
+    from aerospike_sdk.query_shared import _QueryBuilderBase
     from aerospike_sdk.record_result import RecordResult
 
 
 NamespaceModeResolver = Optional[Callable[[str], Awaitable[Mode]]]
 
+# Each write-segment leaf binds this to its tree's concrete ``QueryBuilder`` so
+# the wrapped ``_qb`` — and the ``QueryBuilder`` returned by :meth:`query` — keep
+# their runtime-appropriate type instead of a single hard-coded tree's.
+_QB = TypeVar("_QB", bound="_QueryBuilderBase")
 
-class BatchOpType(Enum):
-    """Type of batch operation."""
-    INSERT = "insert"
-    UPDATE = "update"
-    UPSERT = "upsert"
-    REPLACE = "replace"
-    REPLACE_IF_EXISTS = "replace_if_exists"
-    DELETE = "delete"
+# Each ``_WriteVerbs`` mixer binds this to the ``WriteSegmentBuilder`` its write
+# verbs open: tier-specific builders (async/sync ``QueryBuilder`` /
+# ``WriteSegmentBuilder``) bind their concrete class; the tier-neutral bin
+# builders bind the shared ``_WriteSegmentBuilderBase``.
+_WSB = TypeVar("_WSB", bound="_WriteSegmentBuilderBase")
+
+_cmd_log = logging.getLogger(SdkLoggers.COMMAND)
+
+# Hot-path guard for command summaries. Callers start a timer with
+#   cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+# and treat a falsy value as "summaries off". The pre-bound method + constant
+# keep the disabled cost to one cached level check (~25 ns) per operation;
+# level changes still apply live because isEnabledFor consults the logging
+# manager on every call.
+_cmd_enabled = _cmd_log.isEnabledFor
+_CMD_DEBUG = logging.DEBUG
 
 
-# Verb → record_exists_action enforcement on the wire. Same mapping is used
-# by the single-key write path (string verbs from ``Session.insert/update/...``)
-# and the batch path (:attr:`BatchOpType` values are the string verbs).
+def _cmd_cluster(client: Any) -> Optional[str]:
+    """Configured cluster name for summary tagging, or ``None``.
+
+    Read lazily at emit time (only when summaries are enabled), so there is
+    no cost on the disabled hot path and no per-operation plumbing. ``client``
+    is the PAC client held by the builder; it exposes ``cluster_name`` when the
+    app configured cluster-name validation, else ``None``. ``getattr`` keeps
+    this a no-op on client surfaces that predate the attribute.
+    """
+    return getattr(client, "cluster_name", None)
+
+
+def _cmd_done(
+    op_type: Optional[str], namespace: Optional[str], set_name: Optional[str],
+    key_count: int, t0: float, client: Any = None,
+) -> None:
+    """Emit one DEBUG command summary. Only call when ``t0`` is truthy.
+
+    Operational fields only — never keys, bin names, or values. The cluster
+    name (when configured) rides along as an ``aerospike.cluster`` structured
+    field for JSON log pipelines.
+    """
+    _cmd_log.debug(
+        "%s %s.%s keys=%d latency_ms=%.3f",
+        op_type or "read", namespace, set_name, key_count,
+        (perf_counter() - t0) * 1000.0,
+        extra={"aerospike.cluster": _cmd_cluster(client)},
+    )
+
+
+def _cmd_failed(
+    op_type: Optional[str], rc: int, exc: Exception, client: Any = None,
+) -> None:
+    """Emit one DEBUG line for a command routed through an error funnel.
+
+    Logs the exception type and result code, not the message — error text
+    can echo user data.
+    """
+    if _cmd_log.isEnabledFor(logging.DEBUG):
+        _cmd_log.debug(
+            "%s failed rc=%s exc=%s",
+            op_type or "read", rc, type(exc).__name__,
+            extra={"aerospike.cluster": _cmd_cluster(client)},
+        )
+
+
+# Verb → record_exists_action enforcement on the wire. Used by the
+# single-key and multi-key batch write paths alike (string verbs from
+# ``Session.insert/update/...``).
 # `UPSERT` is the server default (no enforcement) and `DELETE` uses a
 # different policy type, hence both are absent.
 _OP_TYPE_TO_REA: dict[str, RecordExistsAction] = {
@@ -103,19 +155,6 @@ _OP_TYPE_TO_REA: dict[str, RecordExistsAction] = {
     "replace": RecordExistsAction.REPLACE,
     "replace_if_exists": RecordExistsAction.REPLACE_ONLY,
 }
-
-
-def _write_policy_for_op_type(op_type: BatchOpType) -> Optional[BatchWritePolicy]:
-    """Build a per-key :class:`BatchWritePolicy` enforcing the verb's existence
-    semantics, or ``None`` for ``UPSERT`` / ``DELETE`` (server default already
-    matches / delete uses a different policy).
-    """
-    rea = _OP_TYPE_TO_REA.get(op_type.value)
-    if rea is None:
-        return None
-    wp = BatchWritePolicy()
-    wp.record_exists_action = rea
-    return wp
 
 
 # TTL sentinels — match the signed-int convention the server uses on the wire.
@@ -163,22 +202,26 @@ def _to_expiration(ttl: int) -> Expiration:
     return Expiration.seconds(ttl)
 
 
-class _WriteVerbs:
+class _WriteVerbs(Generic[_WSB]):
     """Mixin exposing write verbs that open a :class:`WriteSegmentBuilder`.
 
     Implemented on :class:`QueryBuilder` (chain from a read query) and
     :class:`WriteBinBuilder` (chain from a bin-scoped write). Each method
     finalizes the prior segment when applicable and targets new key(s).
+
+    Generic over the ``WriteSegmentBuilder`` type each mixer opens so a
+    sync mixer's verbs return the sync builder (and vice versa) rather than a
+    single hard-coded tree's.
     """
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         raise NotImplementedError
 
     def upsert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a create-or-update segment for the given key(s).
 
         Example::
@@ -194,7 +237,7 @@ class _WriteVerbs:
 
     def insert(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a create-only segment (fails if the record exists).
 
         Example::
@@ -207,7 +250,7 @@ class _WriteVerbs:
 
     def update(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open an update-only segment (fails if the record is missing).
 
         Example::
@@ -220,7 +263,7 @@ class _WriteVerbs:
 
     def replace(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a full replace segment (removes bins not written in this segment).
 
         Example::
@@ -233,7 +276,7 @@ class _WriteVerbs:
 
     def replace_if_exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open replace-if-exists semantics (like replace, but only if the record exists).
 
         Example::
@@ -246,7 +289,7 @@ class _WriteVerbs:
 
     def delete(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a delete segment.
 
         Example::
@@ -259,7 +302,7 @@ class _WriteVerbs:
 
     def touch(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open a touch segment (TTL refresh).
 
         Example::
@@ -272,7 +315,7 @@ class _WriteVerbs:
 
     def exists(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
-    ) -> "WriteSegmentBuilder":
+    ) -> _WSB:
         """Open an exists-check segment.
 
         Example::
@@ -283,41 +326,6 @@ class _WriteVerbs:
             :class:`WriteSegmentBuilder`.
         """
         return self._start_write_verb("exists", arg1, *more_keys)
-
-
-def _build_pac_batch_ops(
-    key_operations: List[Any],
-    delete_policy: Optional[BatchDeletePolicy],
-) -> List[Any]:
-    """Translate the builder's accumulated per-key ops into PAC's pre-wrapped
-    op list (:class:`BatchWriteOp` / :class:`BatchReadOp` /
-    :class:`BatchDeleteOp`), one entry per key in input order.
-
-    Each write carries a per-key :class:`BatchWritePolicy` derived from its
-    verb (:func:`_write_policy_for_op_type`). Read-only op lists land as
-    :class:`BatchReadOp` so PAC routes them via the read wire path —
-    wrapping a read-only op list in :class:`BatchWriteOp` would force write
-    semantics on the wire and the per-node batch group would error out.
-    """
-    ops: List[Any] = []
-    for key_op in key_operations:
-        if key_op._op_type == BatchOpType.DELETE:
-            ops.append(BatchDeleteOp(key_op._key, policy=delete_policy))
-            continue
-        key_ops = key_op._operations.copy()
-        if not key_ops and key_op._bins:
-            for bin_name, value in key_op._bins.items():
-                key_ops.append(Operation.put(bin_name, value))
-        if not key_ops:
-            key_ops.append(Operation.touch())
-        if has_any_write_op(key_ops):
-            ops.append(BatchWriteOp(
-                key_op._key, key_ops,
-                policy=_write_policy_for_op_type(key_op._op_type),
-            ))
-        else:
-            ops.append(BatchReadOp(key_op._key, operations=key_ops))
-    return ops
 
 
 def _build_exp_write_flags(
@@ -337,13 +345,13 @@ def _build_exp_write_flags(
     return flags
 
 
-class _WriteSegmentBuilderBase:
+class _WriteSegmentBuilderBase(Generic[_QB]):
     """State + chaining shared by async and sync write-segment builders.
 
     Holds the wrapped query-builder reference (``_qb``) and the chaining
     methods that mutate state on it. Concrete subclasses
     (:class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder` for
-    async, :class:`~aerospike_sdk.sync.operations.query.SyncWriteSegmentBuilder`
+    async, :class:`~aerospike_sdk.sync.operations.query.WriteSegmentBuilder`
     for sync) add their respective ``execute()`` paths.
 
     Subclasses inject their tier-appropriate :class:`WriteBinBuilder` class
@@ -357,13 +365,13 @@ class _WriteSegmentBuilderBase:
     # cross-tier reverse import).
     _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
 
-    def __init__(self, qb: "QueryBuilder") -> None:
-        self._qb = qb
+    def __init__(self, qb: _QB) -> None:
+        self._qb: _QB = qb
 
     def _expression_from_ael_string_for_ops(
         self, expression: Union[str, FilterExpression],
     ) -> FilterExpression:
-        """Resolve AEL for bin expression writes using the same path as :meth:`where`."""
+        """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
         if not isinstance(expression, str):
             return expression
         if self._qb is not None:
@@ -391,10 +399,10 @@ class _WriteSegmentBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> "WriteSegmentBuilder": ...
+    def where(self, expression: str) -> Self: ...
 
     @overload
-    def where(self, expression: FilterExpression) -> "WriteSegmentBuilder": ...
+    def where(self, expression: FilterExpression) -> Self: ...
 
     def where(
         self,
@@ -543,7 +551,7 @@ class _WriteSegmentBuilderBase:
         self._qb._op_type = "replace_if_exists"
         return self
 
-    def execute_blocking_fast_path(
+    def _execute_blocking_fast_path(
         self,
         on_error: Optional[Any] = None,
     ) -> Optional[List[Any]]:
@@ -554,7 +562,7 @@ class _WriteSegmentBuilderBase:
         ``None`` when the spec shape isn't yet handled by the blocking
         dispatch. Raises a converted PAC exception on failure.
         """
-        return self._qb.execute_blocking_fast_path(on_error)
+        return self._qb._execute_blocking_fast_path(on_error)
 
     def bin(self, bin_name: str) -> "WriteBinBuilder":
         """Start a bin-level write operation.
@@ -591,9 +599,10 @@ class _WriteSegmentBuilderBase:
         self._qb._operations.append(op)
         return self
 
-    def add_operation(self, op: Any) -> None:
-        """Append an operation (used by CDT action builders)."""
+    def add_operation(self, op: Any) -> Self:
+        """Append an operation. Returns ``self`` so calls can chain."""
         self._qb._operations.append(op)
+        return self
 
     def set_to(self, bin_name: str, value: Any) -> Self:
         """Set a bin to *value*."""
@@ -733,7 +742,7 @@ class _WriteSegmentBuilderBase:
         self,
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
-    ) -> "QueryBuilder":
+    ) -> _QB:
         """Finalize current write segment and start a read segment.
 
         Args:
@@ -747,6 +756,33 @@ class _WriteSegmentBuilderBase:
         self._qb._op_type = None
         self._qb._set_current_keys(arg1, *more_keys)
         return self._qb
+
+    def execute_udf(self, *keys: Key) -> "UdfFunctionBuilder":
+        """Finalize the current write segment and chain a UDF execution.
+
+        The write segment is packaged as-is; the returned builder targets
+        the new key(s), and the whole chain still executes as one batch.
+        Call ``function(package, name)`` next.
+
+        Args:
+            *keys: One or more keys for the UDF segment.
+
+        Returns:
+            A ``UdfFunctionBuilder`` — call ``function`` next.
+
+        Raises:
+            ValueError: If no keys are provided.
+
+        Example::
+
+            rs = await (
+                session.upsert(order_key).put({"status": "paid"})
+                .execute_udf(stats_key)
+                .function("order_stats", "record_payment")
+                .execute()
+            )
+        """
+        return self._qb.execute_udf(*keys)
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
@@ -770,15 +806,14 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     ``_op_type_fast``, ``_ops``, durable-delete overrides, MRT plumbing) and
     the methods that toggle between fast-path mutation and promoted
     delegation. The concrete ``_promote()`` implementation differs per
-    subclass: the async :class:`_SingleKeyWriteSegment` constructs a
-    :class:`QueryBuilder`; ``SyncSingleKeyWriteSegment`` constructs a
-    ``SyncQueryBuilder``.
+    subclass: each tier's ``_SingleKeyWriteSegment`` constructs its own
+    tier's ``QueryBuilder``.
 
     Subclasses:
         - :class:`~aerospike_sdk.aio.operations.query._SingleKeyWriteSegment`:
-          ``_promote()`` constructs a :class:`QueryBuilder`; async ``execute()``.
-        - :class:`~aerospike_sdk.sync.operations.query.SyncSingleKeyWriteSegment`:
-          ``_promote()`` constructs a ``SyncQueryBuilder``; sync ``execute()``.
+          ``_promote()`` constructs the async ``QueryBuilder``; async ``execute()``.
+        - :class:`~aerospike_sdk.sync.operations.query._SingleKeyWriteSegment`:
+          ``_promote()`` constructs the sync ``QueryBuilder``; sync ``execute()``.
 
     Private class — never seen by end users; constructed by the session
     when a single-key write verb is invoked.
@@ -797,9 +832,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def _promote(self) -> None:
         """Lift the fast-path state into a full builder. Subclasses override.
 
-        The base implementation raises — concrete subclasses
-        (:class:`~aerospike_sdk.aio.operations.query._SingleKeyWriteSegment`
-        and ``SyncSingleKeyWriteSegment``) override.
+        The base implementation raises — the concrete per-tier
+        ``_SingleKeyWriteSegment`` subclasses override.
         """
         raise NotImplementedError("subclass must implement _promote")
 
@@ -816,11 +850,14 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
         write_policy_sc: Optional[WritePolicy] = None,
         read_policy_sc: Optional[ReadPolicy] = None,
-        *,
-        supports_server_compiled_ael: bool = False,
+        sdk_client: Optional[Any] = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
+        # Owning SDK client, forwarded on promotion so implicit batch-write
+        # transactions still gate correctly for chains grown from this
+        # fast segment. One attribute store on the fast ctor.
+        self._sdk_client_fast = sdk_client
         self._key = key
         self._op_type_fast = op_type
         self._ops: list[Any] = []
@@ -841,7 +878,12 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
-        self._supports_server_compiled_ael = supports_server_compiled_ael
+        if sdk_client is not None:
+            self._supports_server_compiled_ael = getattr(
+                sdk_client, "supports_server_compiled_ael", False,
+            )
+        else:
+            self._supports_server_compiled_ael = False
         # _dd_command_default, _dd_override, _record_delete_in_fast_ops
         # are class-level defaults; reads fall through, chained-method
         # writes shadow.
@@ -876,11 +918,13 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._ops.append(op)
         return self
 
-    def add_operation(self, op: Any) -> None:
+    def add_operation(self, op: Any) -> Self:
+        """Append an operation. Returns ``self`` so calls can chain."""
         if self._qb is not None:
             self._qb._operations.append(op)
         else:
             self._ops.append(op)
+        return self
 
     def replace_only(self) -> Self:
         if self._qb is not None:
@@ -962,6 +1006,10 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().query(arg1, *more_keys)
 
+    def execute_udf(self, *keys):
+        self._promote()
+        return super().execute_udf(*keys)
+
     def _start_write_verb(self, op_type, arg1, *more_keys):
         self._promote()
         return super()._start_write_verb(op_type, arg1, *more_keys)
@@ -972,6 +1020,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     ) -> RecordStream:
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
+        _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:
             if op_type in _FAST_WRITES_REQUIRING_KEY:
                 raise pfc_exc from exc
@@ -988,12 +1037,12 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._write_policy = wp
         return self._apply_txn(wp or WritePolicy())
 
-    def execute_blocking_fast_path(
+    def _execute_blocking_fast_path(
         self,
         on_error: "Optional[OnError]" = None,
     ) -> "Optional[List[RecordResult]]":
         """Blocking fast path. Promotes to a full builder first, then defers
-        to the inherited :meth:`QueryBuilder.execute_blocking_fast_path`.
+        to the inherited :meth:`QueryBuilder._execute_blocking_fast_path`.
 
         Returns a list of :class:`RecordResult` on success; ``None`` when
         the spec shape isn't eligible (caller falls back to runner-driven).
@@ -1002,4 +1051,4 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             # Fast path requires THROW disposition; bail.
             return None
         self._promote()
-        return self._qb.execute_blocking_fast_path(on_error)  # type: ignore[union-attr]
+        return self._qb._execute_blocking_fast_path(on_error)  # type: ignore[union-attr]

@@ -16,7 +16,6 @@
 """Tests for delete bin operations."""
 
 import pytest
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet
 
 
@@ -29,9 +28,9 @@ def test_set():
 class TestDeleteBin:
     """Test deleting individual bins from records."""
 
-    async def test_delete_bin(self, client: Client, test_set: DataSet):
+    async def test_delete_bin(self, cluster, test_set: DataSet):
         """Test deleting a single bin from a record."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteBin")
         bin_name1 = "bin1"
         bin_name2 = "bin2"
@@ -39,9 +38,9 @@ class TestDeleteBin:
         # Create record with two bins
         await (
             session.upsert(key)
-                .bin(bin_name1).set_to("value1")
-                .bin(bin_name2).set_to("value2")
-                .execute()
+            .bin(bin_name1).set_to("value1")
+            .bin(bin_name2).set_to("value2")
+            .execute()
         )
 
         # Verify both bins exist
@@ -62,26 +61,26 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_multiple_bins(self, client: Client, test_set: DataSet):
+    async def test_delete_multiple_bins(self, cluster, test_set: DataSet):
         """Test deleting multiple bins from a record."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteMultipleBins")
 
         # Create record with three bins
         await (
             session.upsert(key)
-                .bin("bin1").set_to("value1")
-                .bin("bin2").set_to("value2")
-                .bin("bin3").set_to("value3")
-                .execute()
+            .bin("bin1").set_to("value1")
+            .bin("bin2").set_to("value2")
+            .bin("bin3").set_to("value3")
+            .execute()
         )
 
         # Remove bin1 and bin2
         await (
             session.upsert(key)
-                .bin("bin1").remove()
-                .bin("bin2").remove()
-                .execute()
+            .bin("bin1").remove()
+            .bin("bin2").remove()
+            .execute()
         )
 
         # Verify only bin3 remains
@@ -94,9 +93,9 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_bin_nonexistent(self, client: Client, test_set: DataSet):
+    async def test_delete_bin_nonexistent(self, cluster, test_set: DataSet):
         """Test removing a bin that doesn't exist (should not error)."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteNonexistentBin")
 
         # Create record with one bin
@@ -113,25 +112,25 @@ class TestDeleteBin:
         # Cleanup
         await session.delete(key).execute()
 
-    async def test_delete_and_set_bin(self, client: Client, test_set: DataSet):
+    async def test_delete_and_set_bin(self, cluster, test_set: DataSet):
         """Test deleting one bin while setting another in same operation."""
-        session = client.create_session()
+        session = cluster.create_session()
         key = test_set.id("deleteAndSetBin")
 
         # Create record with two bins
         await (
             session.upsert(key)
-                .bin("bin1").set_to("value1")
-                .bin("bin2").set_to("value2")
-                .execute()
+            .bin("bin1").set_to("value1")
+            .bin("bin2").set_to("value2")
+            .execute()
         )
 
         # Remove bin1 and update bin2 in same operation
         await (
             session.upsert(key)
-                .bin("bin1").remove()
-                .bin("bin2").set_to("new_value2")
-                .execute()
+            .bin("bin1").remove()
+            .bin("bin2").set_to("new_value2")
+            .execute()
         )
 
         # Verify

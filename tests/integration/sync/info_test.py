@@ -16,20 +16,20 @@
 """Tests for SyncInfoCommands."""
 
 import pytest
-from aerospike_sdk import Behavior, SyncClient
+from aerospike_sdk import Behavior
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    """Setup sync SDK client for testing."""
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
+def cluster(aerospike_host, make_cluster_definition):
+    """Setup sync SDK cluster for testing."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        yield cluster
 
 
 @pytest.fixture
-def session(client):
+def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
 def test_info_creation(session):
@@ -38,6 +38,31 @@ def test_info_creation(session):
     assert info is not None
     # SyncInfoCommands holds a PAC client directly.
     assert info._pac is not None
+
+
+def test_namespace_sc_status_and_is_namespace_sc(session):
+    """Exercise the sync ``namespace_sc_status`` / ``is_namespace_sc`` info path.
+
+    Gates the Phase-3 hoist of these methods onto a shared session base: the
+    async tree already exercises this path in integration, the sync tree had no
+    coverage, so a one-sided hoist could silently break the blocking info
+    dispatch. Namespace-agnostic (no SC cluster required).
+    """
+    namespaces = session.info().namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    ns = next(iter(namespaces))
+
+    status = session.namespace_sc_status(ns)
+    is_sc = session.is_namespace_sc(ns)
+    assert isinstance(is_sc, bool)
+    assert is_sc == status.is_sc
+
+    # A namespace that does not exist is reported as non-SC, with a detail.
+    missing = session.namespace_sc_status("nonexistent_namespace_xyz")
+    assert missing.is_sc is False
+    assert missing.detail
+    assert session.is_namespace_sc("nonexistent_namespace_xyz") is False
 
 
 def test_build(session):
@@ -148,9 +173,7 @@ def test_secondary_index_details(session):
 
     # Test getting details for the first index
     test_index = indexes[0]
-    details = info.secondary_index_details(
-        test_index["namespace"], test_index["name"]
-    )
+    details = info.secondary_index_details(test_index["namespace"], test_index["name"])
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:

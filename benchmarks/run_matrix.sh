@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # Cross-client TPS+latency matrix runner.
 #
-# Runs the canonical 30-cell matrix (PSDK / PAC / Rust core / legacy
-# across {sync, async, AsyncPool} × {32t/1t} × {FT, non-FT}) plus a
+# Runs the canonical matrix (PSDK / PAC / Rust core
+# across {sync, async, AsyncPool} × 32t × {FT, non-FT}) plus a
 # batch-size sweep for the async builder paths.
+#
+# NOTE: single-thread (1t/z1) cells are intentionally NOT run here. Against a
+# networked cluster the 1t number is dominated by the ~86µs RTT (every client
+# converges to ~11K regardless of client cost), so it measures the network, not
+# the client. For true single-thread throughput / client-cost isolation, run
+# client+server co-located on one VM (loopback, ~20µs RTT) — see the loopback
+# procedure, not this matrix.
 #
 # Output: per-cell text files under $OUT (default /tmp/matrix-runs),
 # plus a short summary line on stdout per cell.
@@ -114,9 +121,9 @@ run() {
 export AEROSPIKE_HOST="$HOST"
 export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 
-# --- PSDK sync (fast-path + builder × 32t/1t × FT/non-FT) ------------------
+# --- PSDK sync (fast-path + builder × 32t × FT/non-FT) ---------------------
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     for fp in --fast-path --no-fast-path; do
       sfx=${fp//-/_}
       tag="psdk_sync${sfx}_t${threads}_gil${gil}"
@@ -132,7 +139,7 @@ done
 # Dormant by default — only fires when the bench passes the explicit flag.
 # Kept in-matrix so each lever lands with both default + ct_runtime numbers.
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     for fp in --fast-path --no-fast-path; do
       sfx=${fp//-/_}
       tag="psdk_sync${sfx}_t${threads}_ctrt_gil${gil}"
@@ -167,7 +174,7 @@ done
 
 # --- PAC sync direct (pac-blocking) ----------------------------------------
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     tag="pac_sync_t${threads}_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
@@ -182,7 +189,7 @@ done
 # compare against psdk_sync_*_ctrt_gil* cells to isolate PSDK overhead
 # under ct_runtime.
 for gil in 0 1; do
-  for threads in 32 1; do
+  for threads in 32; do
     tag="pac_sync_t${threads}_ctrt_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
@@ -192,7 +199,7 @@ done
 
 # --- PAC async direct (pac-async) ------------------------------------------
 for gil in 0 1; do
-  for tasks in 32 1; do
+  for tasks in 32; do
     tag="pac_async_z${tasks}_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
@@ -200,18 +207,15 @@ for gil in 0 1; do
   done
 done
 
-# --- Legacy aerospike C client (single-threaded; importing it forces GIL on)
-for gil in 0 1; do
-  tag="legacy_sync_t1_gil${gil}"
-  PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
-    run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
-      --mode legacy-sync --threads 1
-done
+# --- Legacy aerospike C client -------------------------------------------
+# Not run in the networked matrix: legacy is single-thread-only, so its only
+# number is a 1t number, which is RTT-bound here (~11K, same as every client).
+# Compare legacy vs PSDK/PAC in the loopback co-located procedure instead.
 
 # --- Rust core binary (no Python, no GIL) ----------------------------------
 if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
   for mode in async sync; do
-    for tasks in 32 1; do
+    for tasks in 32; do
       tag="rust_${mode}_t${tasks}"
       echo "[run] $tag"
       MODE=$mode TASKS=$tasks DURATION="$DURATION" WARMUP="$WARMUP" \

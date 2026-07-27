@@ -30,27 +30,17 @@ applies transparently. Native ``ExpOperation`` / ``CdtOperation`` are
 imported from ``aerospike_async`` directly.
 """
 
-import asyncio
 
 import pytest
 import pytest_asyncio
-from aerospike_async import (
-    CTX,
-    CdtOperation,
-    ExpOperation,
-    ExpReadFlags,
-    ExpType,
-    ExpWriteFlags,
-    Filter,
-    FilterExpression as Exp,
-    LoopVarPart,
-    MapReturnType,
-    Operation,
-    SelectFlags,
-)
-from aerospike_sdk import Client, DataSet
+from aerospike_sdk import CdtOperation, CTX, Filter
+from aerospike_async import ExpOperation, ExpReadFlags, ExpWriteFlags, FilterExpression as Exp, Operation
+from aerospike_sdk import DataSet
+# The rejects tests catch both the PSDK error type and the raw PAC error
+# (streams can propagate the PAC type unconverted); PacAerospikeError is
+# the PAC alias the exceptions module binds.
 from aerospike_sdk.exceptions import AerospikeError as SdkAerospikeError
-from aerospike_async.exceptions import AerospikeError as PacAerospikeError
+from aerospike_sdk.exceptions import PacAerospikeError
 
 # Errors raised by the core's wire encoder during stream iteration surface as
 # raw PAC ``AerospikeError`` (not yet wrapped by the SDK command pipeline).
@@ -69,7 +59,7 @@ _SIZE = 20
 
 
 async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
-    """Seed the 20-record dataset and SI used by both ``client`` fixtures."""
+    """Seed the 20-record dataset and SI used by both ``cluster`` fixtures."""
     session = c.create_session()
     ds = DataSet.of(_NS, _SET)
 
@@ -94,7 +84,7 @@ async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
     await wait_for_set_visible(session, _NS, _SET, _SIZE)
 
     try:
-        await c.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
+        await session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
     except Exception:
         pass
     await wait_for_index(c, _NS, _SET, Filter.range(_BIN1, 1, _SIZE))
@@ -102,38 +92,49 @@ async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
 
 async def _drop_qopproj_index(c):
     try:
-        await c.index(_NS, _SET).named("qopproj_idx_b1").drop()
+        await c.create_session().index(_NS, _SET).named("qopproj_idx_b1").drop()
     except Exception:
         pass
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy, wait_for_index, wait_for_set_visible):
-    """SDK client + 20-record dataset on the broad-surface seed.
+async def cluster(aerospike_host, make_cluster_definition, wait_for_index, wait_for_set_visible):
+    """Cluster + 20-record dataset on the broad-surface seed.
 
     Tests that exercise server-8.1.2-only ops projection should consume
-    ``client_812`` instead so they auto-route to the 8.1.2+ cluster when
-    one is available and skip cleanly otherwise.
+    ``cluster_812`` instead, which uses the default ``AEROSPIKE_HOST`` and
+    skips cleanly unless that cluster is 8.1.2+.
     """
-    async with Client(seeds=aerospike_host, policy=client_policy) as c:
+    async with await make_cluster_definition(aerospike_host).connect() as c:
         await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
 
 
 @pytest.fixture
-async def client_812(
-    aerospike_host_812_required, client_policy, wait_for_index, wait_for_set_visible,
+async def cluster_812(
+    aerospike_host_812_required, make_cluster_definition, wait_for_index, wait_for_set_visible,
 ):
-    """SDK client + 20-record dataset on the 8.1.2+ seed (function-scoped: pairs with skip fixture).
+    """Cluster + 20-record dataset on the default 8.1.2+ seed (function-scoped).
 
-    The dependent ``aerospike_host_812_required`` fixture skips the dependent test
-    cleanly when ``AEROSPIKE_HOST_8_1_2`` is unset.
+    The dependent ``aerospike_host_812_required`` fixture connects to the
+    default ``AEROSPIKE_HOST`` and skips the dependent test cleanly unless it
+    is 8.1.2+.
     """
-    async with Client(seeds=aerospike_host_812_required, policy=client_policy) as c:
+    async with await make_cluster_definition(aerospike_host_812_required).connect() as c:
         await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(cluster):
+    return cluster.create_session()
+
+
+@pytest.fixture
+async def session_812(cluster_812):
+    return cluster_812.create_session()
 
 
 async def _drain(stream):
@@ -150,10 +151,10 @@ async def _drain(stream):
 
 class TestSdkOpsProjBackwardCompat:
 
-    async def test_get_bin_projection(self, client):
+    async def test_get_bin_projection(self, session):
         """``with_op_projection(Operation.get_bin)`` over a SI range."""
         stream = await (
-            client.query(_NS, _SET)
+            session.query(_NS, _SET)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(Operation.get_bin(_BIN1))
             .execute()
@@ -173,10 +174,10 @@ class TestSdkOpsProjBackwardCompat:
 
 class TestSdkOpsProjExt812:
 
-    async def test_exp_read_projection(self, client_812):
+    async def test_exp_read_projection(self, session_812):
         """Projecting via ``ExpOperation.read`` requires 8.1.2+."""
         stream = await (
-            client_812.query(_NS, _SET)
+            session_812.query(_NS, _SET)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(
                 Operation.get_bin(_BIN1),
@@ -193,10 +194,10 @@ class TestSdkOpsProjExt812:
         for rec in records:
             assert rec.bins["doubled"] == rec.bins[_BIN1] * 2
 
-    async def test_cdt_select_values_projection(self, client_812):
+    async def test_cdt_select_values_projection(self, session_812):
         """Path-form CDT read alongside a basic projection."""
         stream = await (
-            client_812.query(_NS, _SET)
+            session_812.query(_NS, _SET)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(
                 Operation.get_bin(_BIN1),
@@ -222,11 +223,11 @@ class TestSdkOpsProjExt812:
 
 class TestSdkOpsProjRejects:
 
-    async def test_write_op_in_foreground_rejected(self, client):
+    async def test_write_op_in_foreground_rejected(self, session):
         """``Operation.put`` in a foreground query is rejected."""
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                client.query(_NS, _SET)
+                session.query(_NS, _SET)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(Operation.put("foo", "bar"))
                 .execute()
@@ -235,16 +236,14 @@ class TestSdkOpsProjRejects:
         msg = str(excinfo.value).lower()
         assert "read-only" in msg or "parameter" in msg
 
-    async def test_exp_write_in_foreground_rejected(self, client):
+    async def test_exp_write_in_foreground_rejected(self, session):
         """``ExpOperation.write`` in a foreground query is rejected."""
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                client.query(_NS, _SET)
+                session.query(_NS, _SET)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
-                    ExpOperation.write(
-                        "foo", Exp.string_val("bar"), ExpWriteFlags.DEFAULT
-                    )
+                    ExpOperation.write("foo", Exp.string_val("bar"), ExpWriteFlags.DEFAULT)
                 )
                 .execute()
             )
@@ -261,25 +260,22 @@ class TestSdkOpsProjRejects:
 class TestSdkOpsProjPre812Gate:
 
     async def test_extended_read_rejected_on_pre_812(
-        self, client, server_version, supports_query_ops_projection_ext
+        self, session, server_version, supports_query_ops_projection_ext
     ):
         """The core's wire encoder rejects extended reads on pre-8.1.2."""
         if server_version is None:
             pytest.skip("Could not detect server version")
         if supports_query_ops_projection_ext:
             pytest.skip(
-                "Server >= 8.1.2 accepts extended reads; "
-                "this test exercises the pre-8.1.2 gate"
+                "Server >= 8.1.2 accepts extended reads; this test exercises the pre-8.1.2 gate"
             )
 
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                client.query(_NS, _SET)
+                session.query(_NS, _SET)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
-                    ExpOperation.read(
-                        "computed", Exp.int_bin(_BIN1), ExpReadFlags.DEFAULT
-                    )
+                    ExpOperation.read("computed", Exp.int_bin(_BIN1), ExpReadFlags.DEFAULT)
                 )
                 .execute()
             )

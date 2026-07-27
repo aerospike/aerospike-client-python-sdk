@@ -18,9 +18,9 @@
 import asyncio
 
 import pytest
-from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
 
@@ -33,8 +33,8 @@ def ds():
 
 
 @pytest.fixture
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 async def _cleanup(session, *keys):
@@ -57,9 +57,9 @@ class TestMixedReadWrite:
 
         rs = await (
             session
-                .query(k1)
-                .upsert(k2).bin("status").set_to("active")
-                .execute()
+            .query(k1)
+            .upsert(k2).bin("status").set_to("active")
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -82,9 +82,9 @@ class TestMixedReadWrite:
 
         rs = await (
             session
-                .upsert(k1).bin("label").set_to("new")
-                .query(k2).bins(["x"])
-                .execute()
+            .upsert(k1).bin("label").set_to("new")
+            .query(k2).bins(["x"])
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -107,9 +107,9 @@ class TestMixedReadWrite:
 
         rs = await (
             session
-                .query(k1).bin("doubled").select_from("$.score * 2")
-                .upsert(k2).bin("tag").set_to("written")
-                .execute()
+            .query(k1).bin("doubled").select_from("$.score * 2")
+            .upsert(k2).bin("tag").set_to("written")
+            .execute()
         )
         results = await rs.collect()
 
@@ -136,11 +136,11 @@ class TestMixedOpTypes:
 
         rs = await (
             session
-                .query(k_upsert)
-                .upsert(k_upsert).bin("type").set_to("upsert")
-                .insert(k_insert).bin("type").set_to("insert")
-                .replace_if_exists(k_replace).bin("type").set_to("replaced")
-                .execute()
+            .query(k_upsert)
+            .upsert(k_upsert).bin("type").set_to("upsert")
+            .insert(k_insert).bin("type").set_to("insert")
+            .replace_if_exists(k_replace).bin("type").set_to("replaced")
+            .execute()
         )
         results = await rs.collect()
         ok_count = sum(1 for r in results if r.result_code == ResultCode.OK)
@@ -169,9 +169,9 @@ class TestMixedOpTypes:
 
         rs = await (
             session
-                .query(k)
-                .insert(k).bin("x").set_to(999)
-                .execute()
+            .query(k)
+            .insert(k).bin("x").set_to(999)
+            .execute()
         )
         results = await rs.collect()
 
@@ -197,9 +197,9 @@ class TestWriteWithExpressions:
 
         rs = await (
             session
-                .query(k)
-                .upsert(k).bin("computed").upsert_from("$.value + 1000")
-                .execute()
+            .query(k)
+            .upsert(k).bin("computed").upsert_from("$.value + 1000")
+            .execute()
         )
         await rs.collect()
 
@@ -221,11 +221,11 @@ class TestWriteWithExpressions:
 
         rs = await (
             session
-                .query(k)
-                .upsert(k)
-                    .bin("derived").upsert_from("$.base * 3")
-                    .bin("label").set_to("combo")
-                .execute()
+            .query(k)
+            .upsert(k)
+            .bin("derived").upsert_from("$.base * 3")
+            .bin("label").set_to("combo")
+            .execute()
         )
         await rs.collect()
 
@@ -249,10 +249,10 @@ class TestDeleteInChain:
 
         rs = await (
             session
-                .query(k1)
-                .upsert(k1).bin("score").set_to(100)
-                .delete(k2)
-                .execute()
+            .query(k1)
+            .upsert(k1).bin("score").set_to(100)
+            .delete(k2)
+            .execute()
         )
         results = await rs.collect()
         assert len(results) >= 2
@@ -278,10 +278,10 @@ class TestDeleteInChain:
 
         rs = await (
             session
-                .query(k1)
-                .upsert(k2).bin("created").set_to(True)
-                .delete(k3)
-                .execute()
+            .query(k1)
+            .upsert(k2).bin("created").set_to(True)
+            .delete(k3)
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 3
@@ -308,11 +308,11 @@ class TestPerSpecSettings:
 
         rs = await (
             session
-                .query(k)
-                .upsert(k)
-                    .bin("data").set_to("expiring")
-                    .expire_record_after_seconds(86400)
-                .execute()
+            .query(k)
+            .upsert(k)
+            .bin("data").set_to("expiring")
+            .expire_record_after_seconds(86400)
+            .execute()
         )
         await rs.collect()
 
@@ -335,11 +335,11 @@ class TestPerSpecSettings:
 
         rs = await (
             session
-                .query(k)
-                .update(k)
-                    .bin("v").set_to(2)
-                    .ensure_generation_is(gen)
-                .execute()
+            .query(k)
+            .update(k)
+            .bin("v").set_to(2)
+            .ensure_generation_is(gen)
+            .execute()
         )
         results = await rs.collect()
         # results[0] = read (OK), results[1] = write (OK)
@@ -360,11 +360,11 @@ class TestPerSpecSettings:
 
         rs = await (
             session
-                .query(k)
-                .update(k)
-                    .bin("v").set_to(2)
-                    .ensure_generation_is(999)
-                .execute()
+            .query(k)
+            .update(k)
+            .bin("v").set_to(2)
+            .ensure_generation_is(999)
+            .execute()
         )
         results = await rs.collect()
         # results[0] = read (OK), results[1] = write (generation error)
@@ -389,11 +389,11 @@ class TestChainLevelDefaults:
 
         rs = await (
             session
-                .query(k1)
-                .default_expire_record_after_seconds(3600)
-                .upsert(k1).bin("a").set_to(1)
-                .upsert(k2).bin("b").set_to(2)
-                .execute()
+            .query(k1)
+            .default_expire_record_after_seconds(3600)
+            .upsert(k1).bin("a").set_to(1)
+            .upsert(k2).bin("b").set_to(2)
+            .execute()
         )
         await rs.collect()
 
@@ -416,13 +416,13 @@ class TestChainLevelDefaults:
 
         rs = await (
             session
-                .query(k1)
-                .default_expire_record_after_seconds(3600)
-                .upsert(k1)
-                    .bin("a").set_to(1)
-                    .expire_record_after_seconds(86400)
-                .upsert(k2).bin("b").set_to(2)
-                .execute()
+            .query(k1)
+            .default_expire_record_after_seconds(3600)
+            .upsert(k1)
+            .bin("a").set_to(1)
+            .expire_record_after_seconds(86400)
+            .upsert(k2).bin("b").set_to(2)
+            .execute()
         )
         await rs.collect()
 
@@ -493,8 +493,8 @@ class TestBatchReads:
 
         rs = await (
             session
-                .query(keys).bins([BIN_NAME])
-                .execute()
+            .query(keys).bins([BIN_NAME])
+            .execute()
         )
         results = await rs.collect()
 
@@ -514,8 +514,8 @@ class TestBatchReadHeaders:
 
         rs = await (
             session
-                .query(keys).with_no_bins()
-                .execute()
+            .query(keys).with_no_bins()
+            .execute()
         )
         results = await rs.collect()
 
@@ -536,14 +536,14 @@ class TestBatchReadComplex:
 
         rs = await (
             session
-                .query(k1).bins([BIN_NAME])
-                .query(k2)
-                .query(k3).with_no_bins()
-                .query(k4)
-                .query(k6).bin(BIN_NAME).select_from(f"$.{BIN_NAME} * 8")
-                .query(k7).bins(["binnotfound"])
-                .query(k_missing).bins([BIN_NAME])
-                .execute()
+            .query(k1).bins([BIN_NAME])
+            .query(k2)
+            .query(k3).with_no_bins()
+            .query(k4)
+            .query(k6).bin(BIN_NAME).select_from(f"$.{BIN_NAME} * 8")
+            .query(k7).bins(["binnotfound"])
+            .query(k_missing).bins([BIN_NAME])
+            .execute()
         )
         results = await rs.collect()
 
@@ -571,10 +571,10 @@ class TestBatchReadComplex:
 
         rs = await (
             session
-                .query(k1).bins([BIN_NAME])
-                .query(k_missing).bins([BIN_NAME])
-                .include_missing_keys()
-                .execute()
+            .query(k1).bins([BIN_NAME])
+            .query(k_missing).bins([BIN_NAME])
+            .include_missing_keys()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -652,11 +652,11 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-                .upsert(key=k1).bin(BIN_NAME2).set_to(100)
-                .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
-                .upsert(k6).bin(BIN_NAME3).upsert_from(f"$.{BIN_NAME} + 1000")
-                .delete(k_del)
-                .execute()
+            .upsert(key=k1).bin(BIN_NAME2).set_to(100)
+            .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
+            .upsert(k6).bin(BIN_NAME3).upsert_from(f"$.{BIN_NAME} + 1000")
+            .delete(k_del)
+            .execute()
         )
         results = await rs.collect()
 
@@ -667,11 +667,11 @@ class TestBatchWriteComplex:
         # Verify by reading back
         rs2 = await (
             session
-                .query(k1).bins([BIN_NAME2])
-                .query(k6).bins([BIN_NAME3])
-                .query(k_del)
-                .include_missing_keys()
-                .execute()
+            .query(k1).bins([BIN_NAME2])
+            .query(k6).bins([BIN_NAME3])
+            .query(k_del)
+            .include_missing_keys()
+            .execute()
         )
         verify = await rs2.collect()
 
@@ -695,9 +695,9 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-                .upsert(key=k1).bin(BIN_NAME2).set_to(100)
-                .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
-                .execute()
+            .upsert(key=k1).bin(BIN_NAME2).set_to(100)
+            .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -711,9 +711,9 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-                .upsert(key=k_good).bin(BIN_NAME2).set_to(200)
-                .delete(k_gone)
-                .execute()
+            .upsert(key=k_good).bin(BIN_NAME2).set_to(200)
+            .delete(k_gone)
+            .execute()
         )
         results = await rs.collect()
 
@@ -734,9 +734,9 @@ class TestMultiKeyBatchWrite:
 
         rs = await (
             session
-                .query(k1)
-                .upsert([k1, k2, k3]).bin("status").set_to("batch_written")
-                .execute()
+            .query(k1)
+            .upsert([k1, k2, k3]).bin("status").set_to("batch_written")
+            .execute()
         )
         results = await rs.collect()
 
@@ -757,9 +757,9 @@ class TestMultiKeyBatchWrite:
 
         rs = await (
             session
-                .query(k1)
-                .delete(k1, k2)
-                .execute()
+            .query(k1)
+            .delete(k1, k2)
+            .execute()
         )
         await rs.collect()
 
@@ -777,7 +777,7 @@ class TestBatchReadTTL:
     TTL_SECS = 5
     SLEEP_SECS = 3
 
-    async def test_batch_read_ttl(self, client, session, ds):
+    async def test_batch_read_ttl(self, cluster, session, ds):
         k1 = ds.id(88888)
         k2 = ds.id(88889)
         keys = [k1, k2]
@@ -787,11 +787,11 @@ class TestBatchReadTTL:
             # Seed both keys with a short TTL.
             await (
                 session
-                    .query(k1)
-                    .upsert(keys)
-                        .bin("a").set_to(1)
-                        .expire_record_after_seconds(self.TTL_SECS)
-                    .execute()
+                .query(k1)
+                .upsert(keys)
+                .bin("a").set_to(1)
+                .expire_record_after_seconds(self.TTL_SECS)
+                .execute()
             )
 
             await asyncio.sleep(self.SLEEP_SECS)
@@ -801,12 +801,12 @@ class TestBatchReadTTL:
                 "read_touch_80",
                 reads=Settings(read_touch_ttl_percent=80),
             )
-            session_reset = client.create_session(reset_behavior)
+            session_reset = cluster.create_session(reset_behavior)
 
             rs = await (
                 session_reset
-                    .query(k1).bins(["a"])
-                    .execute()
+                .query(k1).bins(["a"])
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 1
@@ -817,12 +817,12 @@ class TestBatchReadTTL:
                 "read_touch_off",
                 reads=Settings(read_touch_ttl_percent=-1),
             )
-            session_no_reset = client.create_session(no_reset_behavior)
+            session_no_reset = cluster.create_session(no_reset_behavior)
 
             rs = await (
                 session_no_reset
-                    .query(k2).bins(["a"])
-                    .execute()
+                .query(k2).bins(["a"])
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 1
@@ -833,8 +833,8 @@ class TestBatchReadTTL:
             # key1 should still be alive (TTL was reset); key2 expired.
             rs = await (
                 session_no_reset
-                    .query(keys).bins(["a"])
-                    .execute()
+                .query(keys).bins(["a"])
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 1
@@ -845,8 +845,8 @@ class TestBatchReadTTL:
             # Both keys should now be expired.
             rs = await (
                 session_no_reset
-                    .query(keys).bins(["a"])
-                    .execute()
+                .query(keys).bins(["a"])
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 0
@@ -868,9 +868,9 @@ class TestBatchTouch:
 
             rs = await (
                 session
-                    .query(k1).bins(["a"])
-                    .touch(k2)
-                    .execute()
+                .query(k1).bins(["a"])
+                .touch(k2)
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 2
@@ -891,9 +891,9 @@ class TestBatchTouch:
 
             rs = await (
                 session
-                    .upsert(k2).bin("a").set_to(99)
-                    .touch(k1)
-                    .execute()
+                .upsert(k2).bin("a").set_to(99)
+                .touch(k1)
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 2
@@ -914,9 +914,9 @@ class TestBatchTouch:
 
             rs = await (
                 session
-                    .query(k_exists).bins(["a"])
-                    .touch(k_missing).include_missing_keys()
-                    .execute()
+                .query(k_exists).bins(["a"])
+                .touch(k_missing).include_missing_keys()
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 2
@@ -942,9 +942,9 @@ class TestChainedExists:
 
             rs = await (
                 session
-                    .query(k1).bins(["a"])
-                    .exists(k2).include_missing_keys()
-                    .execute()
+                .query(k1).bins(["a"])
+                .exists(k2).include_missing_keys()
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 2
@@ -965,9 +965,9 @@ class TestChainedExists:
 
             rs = await (
                 session
-                    .query(k_exists).bins(["a"])
-                    .exists(k_missing).include_missing_keys()
-                    .execute()
+                .query(k_exists).bins(["a"])
+                .exists(k_missing).include_missing_keys()
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 2
@@ -990,10 +990,10 @@ class TestChainedExists:
 
             rs = await (
                 session
-                    .query(k1).bins(["a"])
-                    .touch(k2)
-                    .exists(k3).include_missing_keys()
-                    .execute()
+                .query(k1).bins(["a"])
+                .touch(k2)
+                .exists(k3).include_missing_keys()
+                .execute()
             )
             results = await rs.collect()
             assert len(results) == 3

@@ -17,30 +17,48 @@
 
 from aerospike_async import (
     AbortStatus,
+    AdminPolicy,
     AuthMode,
     BitPolicy,
     BitwiseOverflowActions,
     BitwiseResizeFlags,
     BitWriteFlags,
     CdtOperation,
+    CollectionIndexType,
     CommitStatus,
     CTX,
+    ErrorDetailVerbosity,
+    ExpressionTrace,
     ExpType,
+    Filter,
     HLLWriteFlags,
+    Key,
+    ListOrderType,
     ListReturnType,
+    ListSortFlags,
     ListWriteFlags,
     LoopVarPart,
+    MapOrder,
     MapReturnType,
     MapWriteFlags,
     ModifyFlags,
+    QueryDuration,
     RegexFlag,
+    RegisterTask,
+    ResultCode,
     SelectFlags,
     SpecialValue,
+    StringNumericType,
+    StringOperation,
+    StringRegexFlags,
+    StringWriteFlags,
+    SubCode,
     Txn,
     TxnState,
+    UDFLang,
 )
 
-from aerospike_sdk.aio import AsyncPool, Client, Session, TransactionalSession, ClusterDefinition, Host
+from aerospike_sdk.aio import AsyncPool, Session, TransactionalSession, ClusterDefinition, Host
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.ael.exceptions import AelParseException
@@ -84,13 +102,43 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
-from aerospike_sdk.sync import SyncClient, SyncTransactionalSession
+from aerospike_sdk.sync import SyncTransactionalSession
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 from aerospike_sdk.sync.session import SyncSession
+
+# Deprecated connection primitives, kept importable for one deprecation
+# cycle behind the module __getattr__ below. ClusterDefinition -> Cluster ->
+# Session is the supported entry.
+_DEPRECATED_ENTRY_POINTS = {
+    "Client": (
+        "aerospike_sdk.Client is deprecated; connect with "
+        "aerospike_sdk.ClusterDefinition(...).connect() instead"
+    ),
+    "SyncClient": (
+        "aerospike_sdk.SyncClient is deprecated; connect with "
+        "aerospike_sdk.sync.ClusterDefinition(...).connect() instead"
+    ),
+}
+
+
+def __getattr__(name: str):
+    if name in _DEPRECATED_ENTRY_POINTS:
+        import warnings
+
+        warnings.warn(_DEPRECATED_ENTRY_POINTS[name], DeprecationWarning, stacklevel=2)
+        if name == "Client":
+            from aerospike_sdk.aio.client import Client
+
+            return Client
+        from aerospike_sdk.sync.client import SyncClient
+
+        return SyncClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 try:
     from importlib.metadata import version as _meta_version
@@ -100,6 +148,7 @@ except Exception:
 
 __all__ = [
     "AbortStatus",
+    "AdminPolicy",
     "AerospikeError",
     "AsyncPool",
     "AuthenticationError",
@@ -119,6 +168,7 @@ __all__ = [
     "CdtOperation",
     "CapacityError",
     "ClusterDefinition",
+    "CollectionIndexType",
     "CommitError",
     "CommitStatus",
     "ConnectionError",
@@ -127,13 +177,15 @@ __all__ = [
     "ElementError",
     "ElementExistsError",
     "ElementNotFoundError",
+    "Filter",
     "FilteredOutError",
     "AelParseException",
     "ErrorHandler",
+    "ErrorDetailVerbosity",
     "ErrorStrategy",
     "Exp",
+    "ExpressionTrace",
     "ExpType",
-    "Client",
     "in_list",
     "GenerationError",
     "Host",
@@ -146,10 +198,14 @@ __all__ = [
     "IndexNotFoundError",
     "InvalidNamespaceError",
     "InvalidNodeError",
+    "Key",
     "KeyBusyError",
+    "ListOrderType",
     "ListReturnType",
+    "ListSortFlags",
     "ListWriteFlags",
     "LoopVarPart",
+    "MapOrder",
     "MapReturnType",
     "MapWriteFlags",
     "MaxErrorRate",
@@ -160,6 +216,7 @@ __all__ = [
     "parse_ael",
     "parse_ael_with_index",
     "ParseResult",
+    "QueryDuration",
     "QueryHint",
     "QueryTerminatedError",
     "QuotaError",
@@ -169,13 +226,20 @@ __all__ = [
     "RecordStream",
     "RecordTooBigError",
     "RegexFlag",
+    "RegisterTask",
+    "ResultCode",
+    "SdkLoggers",
     "SecondaryIndexError",
     "SecurityError",
     "SelectFlags",
     "SerializationError",
     "Session",
     "SpecialValue",
-    "SyncClient",
+    "StringNumericType",
+    "StringOperation",
+    "StringRegexFlags",
+    "StringWriteFlags",
+    "SubCode",
     "SyncRecordStream",
     "SyncSession",
     "SyncTransactionalSession",
@@ -184,8 +248,10 @@ __all__ = [
     "TransactionalSession",
     "Txn",
     "TxnState",
+    "UDFLang",
     "map_keys",
     "map_values",
+    "refresh_log_levels",
     "val",
 ]
 

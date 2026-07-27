@@ -70,7 +70,8 @@ class CdtReadBuilder(Generic[T]):
     Navigation fields (``bin_name``, ``ctx``, ``to_ctx``) are optional;
     when not provided, further navigation is not available (terminal-only).
 
-    Example:
+    Example::
+
         Read values from a map key within a query::
 
             stream = await (
@@ -609,7 +610,8 @@ class CdtReadInvertableBuilder(CdtReadBuilder[T]):
     ``to_ctx`` set (e.g. after a singular value selector on a nested path),
     singular navigation methods continue the CDT path.
 
-    Example:
+    Example::
+
         Get all map values *except* those in a key range::
 
             .bin("m").on_map_key_range("a", "d").get_all_other_values()
