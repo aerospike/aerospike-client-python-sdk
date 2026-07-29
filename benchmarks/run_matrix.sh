@@ -161,6 +161,21 @@ for gil in 0 1; do
   done
 done
 
+# --- PSDK async-many window API (get_many/put_many, K-sweep) ----------------
+# Explicit window API: N independent point ops fused into one FFI crossing +
+# one completion (NOT a server batch). z=32 matches the async single-loop cell
+# so the read is "same concurrent tasks, K ops per call". K sweep per the
+# Phase-0 sweet spot (8/16/32; uncapped collapses). Fast-path is implicit
+# (get_many/put_many are the direct point-op surface — no builder variant).
+for gil in 0 1; do
+  for k in 8 16 32; do
+    tag="psdk_async_many_k${k}_z32_gil${gil}"
+    PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
+      run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
+        --mode async-many --many-size $k -z 32
+  done
+done
+
 # --- PSDK AsyncPool (4 loops × 64 tasks) -----------------------------------
 for gil in 0 1; do
   for fp in --fast-path --no-fast-path; do

@@ -122,11 +122,17 @@ _PAIRS = [
     # guard locks their surface *before* the shared-base hoist so every later step
     # is a mechanical, verifiable move. Same-name-across-trees classes (Cluster,
     # ClusterDefinition, Host) are aliased Async*/Sync* at import.
-    (AsyncSession, SyncSession, "Session", set()),
+    # `get_many`/`put_many` are an async-only alternate high-speed window API:
+    # they fuse N independent point ops into one FFI crossing to amortize the
+    # per-op event-loop submission + wakeup/resume cost. Sync has no event loop
+    # and already pays minimal per-op overhead on the blocking path, so there is
+    # nothing to coalesce — the window path is intentionally async-only.
+    (AsyncSession, SyncSession, "Session", {"get_many", "put_many"}),
     (AsyncCluster, SyncCluster, "Cluster", set()),
     (AsyncClusterDefinition, SyncClusterDefinition, "ClusterDefinition", set()),
     (AsyncHost, SyncHost, "Host", set()),
-    (AsyncTransactionalSession, SyncTransactionalSession, "TransactionalSession", set()),
+    # Async-only window API, inherited from Session — see the Session note above.
+    (AsyncTransactionalSession, SyncTransactionalSession, "TransactionalSession", {"get_many", "put_many"}),
     (AsyncInfoCommands, SyncInfoCommands, "InfoCommands", set()),
     # Background-task family. The sync side is a wrapper over the async builders
     # rather than a shared-base leaf, which is exactly why it drifted unnoticed:

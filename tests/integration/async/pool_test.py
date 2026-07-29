@@ -156,10 +156,11 @@ class TestAsyncPoolLoopType:
     uvloop 0.22.x has a libuv free-threading race on ``loop._ready_len``
     (MagicStack/uvloop issues #720, #721) that stalls a multi-loop pool when
     the GIL is disabled — the per-loop race fires across all loops at once and
-    wedges (a hard hang on the fast-path pool path). PAC's drainer thread tames
-    the single-loop case but not N concurrent loops, so ``AsyncPool`` defaults
-    to the stdlib selector loop under free-threading (auto-decide tracks the
-    GIL) and exposes ``use_uvloop`` to force either way.
+    wedges (a hard hang on the fast-path pool path). ``AsyncPool`` therefore
+    uses uvloop under free-threading only when the race is mitigated (PAC's
+    pipe-wake transport active — the default — or a fixed uvloop release);
+    otherwise it falls back to the stdlib selector loop. Under GIL-on the race
+    can't fire, so uvloop is always the default. ``use_uvloop`` forces either.
 
     These guard the contract so a regression in loop selection fails loudly.
     """
@@ -168,22 +169,32 @@ class TestAsyncPoolLoopType:
     def _is_uvloop(loop: asyncio.AbstractEventLoop) -> bool:
         return "uvloop" in type(loop).__module__.lower()
 
-    async def test_default_avoids_uvloop_under_free_threading(
+    async def test_default_uses_uvloop_under_free_threading_when_mitigated(
         self, aerospike_host, make_cluster_definition
     ):
-        """Default (``use_uvloop=None``): under free-threading the pool loops
-        must NOT be uvloop — that's the multi-loop stall condition. Under
-        GIL-on the uvloop default is safe, so the guard only bites under FT."""
-        from aerospike_sdk.aio.pool import _gil_is_enabled
+        """Default (``use_uvloop=None``): under free-threading with the #720
+        mitigation active (pipe-wake, the default), the pool uses uvloop — the
+        unlock that lets a multi-loop pool run uvloop safely, no longer forcing
+        the selector loop."""
+        from aerospike_sdk.aio.pool import _gil_is_enabled, _uvloop_safe_under_ft
 
         if _gil_is_enabled():
-            pytest.skip("GIL enabled: uvloop default is safe (FT race can't fire)")
+            pytest.skip("GIL enabled: uvloop is the default regardless of the FT gate")
+        if not _uvloop_safe_under_ft():
+            pytest.skip("no #720 mitigation (pipe-wake off, uvloop lacks #721); gate keeps selector")
+        # The pool relies on a process-wide uvloop policy; if none is installed,
+        # new_event_loop() yields the stdlib loop no matter the gate.
+        probe = asyncio.new_event_loop()
+        uvloop_policy_installed = self._is_uvloop(probe)
+        probe.close()
+        if not uvloop_policy_installed:
+            pytest.skip("no uvloop event-loop policy installed process-wide")
         async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=2) as pool:
             for i, loop in enumerate(pool._loops):
                 assert loop is not None, f"loop {i} is None"
-                assert not self._is_uvloop(loop), (
-                    f"loop {i} is uvloop ({type(loop).__module__}) under "
-                    f"free-threading — exposes the multi-loop libuv stall"
+                assert self._is_uvloop(loop), (
+                    f"loop {i} is {type(loop).__module__}; under free-threading with "
+                    f"the #720 mitigation the pool must use uvloop, not force selector"
                 )
 
     async def test_use_uvloop_false_forces_selector(self, aerospike_host, make_cluster_definition):

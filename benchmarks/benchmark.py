@@ -34,6 +34,7 @@ from benchmarks.config import WorkloadKind, build_arg_parser, config_from_args  
 from benchmarks.stats import StatsCollector, latency_column_labels  # noqa: E402
 from benchmarks.workers import (  # noqa: E402
     run_async,
+    run_async_many,
     run_async_pool,
     run_legacy_sync,
     run_pac_async,
@@ -235,6 +236,8 @@ async def async_main() -> int:
     if cfg.mode == "async":
         runner = run_async_pool if cfg.pool_loops > 0 else None
         stats = await _run_async_mode(cfg, runner=runner)
+    elif cfg.mode == "async-many":
+        stats = await _run_async_mode(cfg, runner=run_async_many)
     elif cfg.mode == "pac-async":
         stats = await _run_async_mode(cfg, runner=run_pac_async)
     elif cfg.mode == "pac-blocking":
