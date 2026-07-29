@@ -237,7 +237,11 @@ async def async_main() -> int:
         runner = run_async_pool if cfg.pool_loops > 0 else None
         stats = await _run_async_mode(cfg, runner=runner)
     elif cfg.mode == "async-many":
-        stats = await _run_async_mode(cfg, runner=run_async_many)
+        # pool_loops>0 drives the window API across each AsyncPool loop
+        # (run_async_pool → _build_op_async's async-many branch); otherwise the
+        # single-loop window worker.
+        runner = run_async_pool if cfg.pool_loops > 0 else run_async_many
+        stats = await _run_async_mode(cfg, runner=runner)
     elif cfg.mode == "pac-async":
         stats = await _run_async_mode(cfg, runner=run_pac_async)
     elif cfg.mode == "pac-blocking":

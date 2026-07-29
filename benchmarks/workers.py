@@ -659,6 +659,37 @@ def _build_op_async(
             kid = rng.randint(1, kc)
             return (key_from_int(ns_str, set_str, kid), kid)
 
+    # Window API (--mode async-many) — usable on any loop the caller drives,
+    # including each AsyncPool loop. One op issues a get_many/put_many window of
+    # cfg.many_size keys and returns (n_ok, n_err) for the pool worker's
+    # bulk_record path. Mirrors run_async_many's counting exactly: a not-found
+    # read slot counts as ok (success-with-no-record), only real errors/timeouts
+    # count as errors — so pooled-window TPS is comparable to the single-loop
+    # async-many cells.
+    if cfg.mode == "async-many":
+        K = max(1, cfg.many_size)
+        w_bins = {b0_name: 1} if single_bin else full_bins(fields_t)
+        async def op(rng):
+            is_read = rng.randint(1, 100) <= read_pct
+            decision[0] = is_read
+            keys = [
+                key_from_int(ns_str, set_str, rng.randint(1, kc))
+                for _ in range(K)
+            ]
+            if is_read:
+                results = await session.get_many(keys)
+            else:
+                results = await session.put_many(keys, w_bins)
+            n_ok = 0
+            n_err = 0
+            for r in results:
+                if isinstance(r, BaseException) and not _is_not_found(r):
+                    n_err += 1
+                else:
+                    n_ok += 1
+            return n_ok, n_err
+        return op
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             async def op(rng):
