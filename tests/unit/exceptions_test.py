@@ -288,11 +288,27 @@ class TestConvertPacException:
         pac = PacTimeoutError("timed out")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is TimeoutError
+        assert pfc.in_doubt is False
+
+    def test_pac_timeout_in_doubt_propagated(self):
+        pac = PacTimeoutError("timed out")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TimeoutError
+        assert pfc.in_doubt is True
 
     def test_pac_connection(self):
         pac = PacConnectionError("conn refused")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is ConnectionError
+        assert pfc.in_doubt is False
+
+    def test_pac_connection_in_doubt_propagated(self):
+        pac = PacConnectionError("conn reset mid-write")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is ConnectionError
+        assert pfc.in_doubt is True
 
     def test_pac_invalid_node(self):
         pac = PacInvalidNodeError("node gone")
@@ -309,6 +325,14 @@ class TestConvertPacException:
         pac = PacAerospikeError("something broke")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is AerospikeError
+        assert pfc.in_doubt is False
+
+    def test_pac_generic_in_doubt_propagated(self):
+        pac = PacAerospikeError("batch failed over an in-doubt write")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is AerospikeError
+        assert pfc.in_doubt is True
 
     def test_unknown_exception_wrapped(self):
         pfc = _convert_pac_exception(RuntimeError("wat"))
