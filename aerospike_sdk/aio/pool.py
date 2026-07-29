@@ -71,6 +71,45 @@ def _gil_is_enabled() -> bool:
     return getattr(sys, "_is_gil_enabled", lambda: True)()
 
 
+def _uvloop_has_721_fix() -> bool:
+    """True if the installed uvloop carries PR #721.
+
+    #721 (the fix for the libuv free-threading ``loop._ready_len`` race,
+    MagicStack/uvloop #720) merged after the 0.22.1 release, so any version
+    above 0.22.1 has it. A source build of uvloop@master still self-reports
+    ``0.22.1`` and so reads as *not* fixed here — those users rely on the
+    pipe-wake transport instead.
+    """
+    try:
+        # uvloop is an optional/platform-specific dependency (absent on Windows);
+        # import lazily so pool import never hard-fails on its absence.
+        import uvloop
+
+        parts = tuple(int(p) for p in uvloop.__version__.split(".")[:3])
+        return parts > (0, 22, 1)
+    except Exception:
+        return False
+
+
+def _uvloop_safe_under_ft() -> bool:
+    """True when uvloop's #720 free-threading race is mitigated for a pool.
+
+    Two mitigations qualify: PAC's pipe-wake transport is active, which routes
+    cross-thread wakes through a self-pipe the racy ready-queue API never
+    touches — or the installed uvloop already contains the #721 fix.
+
+    The pipe-wake check MUST mirror PAC's ``should_use_pipe`` exactly: PAC
+    enables the transport only for ``1`` (force) or ``auto``/unset (auto on
+    uvloop + FT). Any other value — including ``0``, empty, or a typo — leaves
+    PAC on the racy ``call_soon_threadsafe`` path, so the pool must NOT enable
+    uvloop for those (a looser check here would pair uvloop with no pipe and
+    wedge).
+    """
+    if os.environ.get("AEROSPIKE_PIPE_WAKE", "auto") in ("1", "auto"):
+        return True
+    return _uvloop_has_721_fix()
+
+
 class AsyncPool:
     """Pool of event loops, each with its own :class:`Cluster` handle, for
     parallel async work.
@@ -108,12 +147,14 @@ class AsyncPool:
     collapse beyond 4 loops. Controlled via the ``per_client_runtime``
     kwarg; see its docstring for the threshold rationale and override.
 
-    **Event loop policy.**  Pool loops default to the stdlib selector loop
-    on free-threaded (GIL-off) builds.  uvloop's libuv free-threading race
-    on ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) stalls a
-    multi-loop pool when the GIL is disabled — the per-loop race fires
-    across all loops at once and wedges.  Override with the ``use_uvloop``
-    kwarg.
+    **Event loop policy.**  uvloop's libuv free-threading race on
+    ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) would stall a
+    multi-loop pool under a free-threaded (GIL-off) build — the per-loop race
+    fires across all loops at once and wedges.  Pool loops therefore use
+    uvloop under FT only when the race is mitigated: PAC's pipe-wake transport
+    active (the default) or a fixed uvloop release; otherwise they fall back to
+    the stdlib selector loop.  Under GIL-on Python the race can't fire, so
+    uvloop is always used.  Override with the ``use_uvloop`` kwarg.
 
     **Tuning notes** (8-core remote-cluster measurement, FT 3.14t):
 
@@ -217,16 +258,16 @@ class AsyncPool:
             use_uvloop: Whether the pool's event loops may use uvloop (when a
                 uvloop policy is installed process-wide).
 
-                * ``None`` (default): auto — **disabled** on free-threaded
-                  (GIL-off) builds, enabled otherwise. uvloop's libuv
-                  free-threading race (MagicStack/uvloop #720, #721) stalls a
-                  multi-loop pool when the GIL is off, so the stdlib selector
-                  loop is used instead. Under GIL-on Python the race can't
-                  fire, so uvloop is left on (preserving prior behavior).
+                * ``None`` (default): auto. Under GIL-on Python, enabled. Under
+                  free-threading, enabled when uvloop's libuv race
+                  (MagicStack/uvloop #720, #721) is mitigated — PAC's pipe-wake
+                  transport active (``AEROSPIKE_PIPE_WAKE`` != ``0``, the
+                  default) or a fixed uvloop release — otherwise the stdlib
+                  selector loop is used.
                 * ``True``: force uvloop on the pool loops (only takes effect
-                  if a uvloop policy is installed). Known to stall fast-path
-                  pools under free-threading — opt in only after validating
-                  your workload.
+                  if a uvloop policy is installed). Under free-threading without
+                  the pipe-wake transport or a fixed uvloop this can stall the
+                  fast-path pool — opt in only after validating your workload.
                 * ``False``: force the stdlib ``SelectorEventLoop`` on every
                   pool loop regardless of the global event-loop policy.
 
@@ -308,12 +349,14 @@ class AsyncPool:
         # `loop._ready_len` (MagicStack/uvloop #720/#721) stalls a multi-loop
         # pool when the GIL is disabled: the per-loop (waker-thread vs
         # loop-thread) race fires across all N loops and wedges (a hard hang on
-        # the fast-path pool path). PAC's drainer thread tames the single-loop
-        # case but not N concurrent loops. Default uvloop OFF under FT; leave it
-        # on under GIL-on (race can't fire, and the pool gives no scaling there
-        # anyway, so this just preserves prior behavior).
+        # the fast-path pool path). It is mitigated two ways (see
+        # `_uvloop_safe_under_ft`): PAC's pipe-wake transport (default `auto`)
+        # routes cross-thread wakes through a self-pipe the racy API never
+        # touches, or a fixed uvloop release (#721). So under FT enable uvloop
+        # only when the race is mitigated; under GIL-on it can't fire, so uvloop
+        # is always allowed.
         if use_uvloop is None:
-            use_uvloop = _gil_is_enabled()
+            use_uvloop = _gil_is_enabled() or _uvloop_safe_under_ft()
         self._use_uvloop = use_uvloop
         self._loops: List[Optional[asyncio.AbstractEventLoop]] = [None] * self._n
         self._threads: List[threading.Thread] = []
@@ -671,11 +714,11 @@ class AsyncPool:
         When enabled, ``asyncio.new_event_loop()`` picks up any globally
         installed uvloop policy; when disabled, a stdlib
         ``asyncio.SelectorEventLoop`` is constructed directly, bypassing the
-        global policy.  uvloop is disabled by default on free-threaded builds:
-        its libuv ``loop._ready_len`` race (MagicStack/uvloop #720, #721)
-        stalls multi-loop pools when the GIL is off — the per-loop race fires
-        across all loops at once and wedges (a hard hang on the fast-path
-        pool path).
+        global policy.  Under free-threading, uvloop is used only when its
+        libuv ``loop._ready_len`` race (MagicStack/uvloop #720, #721) is
+        mitigated — PAC's pipe-wake transport active (the default) or a fixed
+        uvloop release; otherwise the stdlib loop is used, since the unmitigated
+        race stalls multi-loop pools (a hard hang on the fast-path pool path).
         """
         loop = asyncio.new_event_loop() if self._use_uvloop else asyncio.SelectorEventLoop()
         asyncio.set_event_loop(loop)

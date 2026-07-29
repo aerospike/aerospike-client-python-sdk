@@ -222,6 +222,39 @@ class TestIpMap:
         assert cd._use_services_alternate is True
 
 
+class TestServicesAlternate:
+    """The setting defaults from the environment, so both directions must be
+    expressible on the builder — otherwise a caller running with
+    ``AEROSPIKE_USE_SERVICES_ALTERNATE`` set cannot turn it back off, and
+    discovery routes through alternate addresses the cluster may not publish.
+    """
+
+    def test_no_arg_enables(self):
+        cd = ClusterDefinition("localhost", 3000).using_services_alternate()
+        assert cd._use_services_alternate is True
+        assert cd._get_policy().use_services_alternate is True
+
+    def test_explicit_false_disables(self):
+        cd = ClusterDefinition("localhost", 3000).using_services_alternate(False)
+        assert cd._use_services_alternate is False
+        assert cd._get_policy().use_services_alternate is False
+
+    def test_explicit_false_overrides_env_default(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AEROSPIKE_USE_SERVICES_ALTERNATE", "true")
+        cd = ClusterDefinition("localhost", 3000)
+        assert cd._use_services_alternate is True, "env var should seed the default"
+        assert cd.using_services_alternate(False)._get_policy().use_services_alternate is False
+
+    def test_env_default_reaches_policy(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AEROSPIKE_USE_SERVICES_ALTERNATE", "true")
+        assert ClusterDefinition("localhost", 3000)._get_policy().use_services_alternate is True
+
+    def test_sync_tree_disables_too(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AEROSPIKE_USE_SERVICES_ALTERNATE", "true")
+        cd = SyncClusterDefinition("localhost", 3000).using_services_alternate(False)
+        assert cd._get_policy().use_services_alternate is False
+
+
 class TestFailIfNotConnected:
     def test_default_is_true(self):
         cd = ClusterDefinition("localhost", 3000)

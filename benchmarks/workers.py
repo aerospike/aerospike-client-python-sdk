@@ -659,6 +659,37 @@ def _build_op_async(
             kid = rng.randint(1, kc)
             return (key_from_int(ns_str, set_str, kid), kid)
 
+    # Window API (--mode async-many) — usable on any loop the caller drives,
+    # including each AsyncPool loop. One op issues a get_many/put_many window of
+    # cfg.many_size keys and returns (n_ok, n_err) for the pool worker's
+    # bulk_record path. Mirrors run_async_many's counting exactly: a not-found
+    # read slot counts as ok (success-with-no-record), only real errors/timeouts
+    # count as errors — so pooled-window TPS is comparable to the single-loop
+    # async-many cells.
+    if cfg.mode == "async-many":
+        K = max(1, cfg.many_size)
+        w_bins = {b0_name: 1} if single_bin else full_bins(fields_t)
+        async def op(rng):
+            is_read = rng.randint(1, 100) <= read_pct
+            decision[0] = is_read
+            keys = [
+                key_from_int(ns_str, set_str, rng.randint(1, kc))
+                for _ in range(K)
+            ]
+            if is_read:
+                results = await session.get_many(keys)
+            else:
+                results = await session.put_many(keys, w_bins)
+            n_ok = 0
+            n_err = 0
+            for r in results:
+                if isinstance(r, BaseException) and not _is_not_found(r):
+                    n_err += 1
+                else:
+                    n_ok += 1
+            return n_ok, n_err
+        return op
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             async def op(rng):
@@ -998,6 +1029,99 @@ async def run_async(
                         ws.record(decision[0], False, False, dt)
                     else:
                         ws.bulk_record(decision[0], ret[0], ret[1], dt)
+                local_count += 1
+
+        tasks = [asyncio.create_task(worker(i)) for i in range(cfg.async_tasks)]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def run_async_many(
+    cfg: WorkloadConfig,
+    stats: StatsCollector,
+    stop: asyncio.Event,
+    connected: asyncio.Event | None = None,
+) -> None:
+    """Worker for ``--mode async-many`` — the explicit ``get_many``/``put_many``
+    window API.
+
+    Each iteration issues ONE window of ``cfg.many_size`` independent point ops
+    in a single call: ``session.get_many(keys)`` (read window) or
+    ``session.put_many(keys, bins)`` (write window), split by ``read_percent``
+    at the window granularity. This is client-side fusion of N independent
+    point ops into a single FFI crossing + one completion — NOT a server batch
+    request (contrast ``--batch-size``). Each key counts as one op for TPS; a
+    per-key exception slot is that key's error, a not-found slot is a miss.
+    """
+    policy = client_policy_from_config(cfg)
+    K = max(1, cfg.many_size)
+    kc = cfg.key_count
+    read_pct = cfg.read_percent
+    fields_t = tuple(cfg.bin_fields)
+    single_bin = len(fields_t) == 1
+    b0_name = fields_t[0].name
+    ns_str = cfg.namespace
+    set_str = cfg.set_name
+    key_from_int = Key.from_int_user_key
+    async with Client(cfg.seeds, policy=policy) as client:
+        session = client.create_session(Behavior.DEFAULT)
+        dataset = DataSet.of(cfg.namespace, cfg.set_name)
+        # Fail the self-test BEFORE signalling `connected` (see run_async).
+        await _self_test_psdk_async(session, dataset)
+        if connected is not None:
+            connected.set()
+
+        async def worker(worker_id: int) -> None:
+            seed = (cfg.seed + worker_id + 1) % (2**32)
+            rng = FastRng(seed)
+            has_limit = cfg.max_ops is not None
+            sample_every = cfg.lat_sample_every
+            with_tel = cfg.with_telemetry
+            write_bins = (
+                {b0_name: worker_id + 1} if single_bin else full_bins(fields_t)
+            )
+            ws = stats.register_worker()
+            local_count = 0
+            while not stop.is_set():
+                if has_limit and stats.total_ops() >= cfg.max_ops:
+                    return
+                is_read = rng.randint(1, 100) <= read_pct
+                keys = [
+                    key_from_int(ns_str, set_str, rng.randint(1, kc))
+                    for _ in range(K)
+                ]
+                sample = with_tel and (local_count % sample_every == 0)
+                t0 = time.perf_counter() if sample else 0.0
+                try:
+                    if is_read:
+                        results = await session.get_many(keys)
+                    else:
+                        results = await session.put_many(keys, write_bins)
+                except BaseException as exc:
+                    dt = (time.perf_counter() - t0) * 1000.0 if sample else None
+                    # Whole-window failure (e.g. timeout): count all K as errors.
+                    ws.bulk_record(is_read, 0, K, dt)
+                    if not isinstance(exc, Exception):
+                        raise
+                else:
+                    dt = (time.perf_counter() - t0) * 1000.0 if sample else None
+                    n_ok = 0
+                    n_err = 0
+                    for r in results:
+                        if isinstance(r, BaseException) and not _is_not_found(r):
+                            n_err += 1
+                        else:
+                            # A record OR a not-found both count as a completed
+                            # read op — matches run_async, where not-found is
+                            # "success-with-no-record" (reads += 1), and only
+                            # real errors/timeouts are excluded. Keeps async-many
+                            # TPS accounting consistent with the single-op cells.
+                            n_ok += 1
+                    ws.bulk_record(is_read, n_ok, n_err, dt)
                 local_count += 1
 
         tasks = [asyncio.create_task(worker(i)) for i in range(cfg.async_tasks)]

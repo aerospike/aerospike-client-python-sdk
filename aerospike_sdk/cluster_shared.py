@@ -390,21 +390,37 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._preferred_racks = list(racks) if racks else None
         return self
 
-    def using_services_alternate(self) -> Self:
-        """Enable the use of alternate services for cluster discovery.
+    def using_services_alternate(self, enabled: bool = True) -> Self:
+        """Enable (or disable) alternate services for cluster discovery.
 
-        When enabled, the client uses alternate service endpoints for cluster
-        discovery, useful in certain network configurations or service-mesh
-        setups.
+        When enabled, the client discovers peers through each node's
+        ``alternate-access-address`` instead of its standard service address —
+        useful in certain network configurations or service-mesh setups. Only
+        enable it against a cluster that actually publishes those addresses:
+        against one that does not, peer discovery comes back empty and the
+        client falls back to a single node, so every key outside that node's
+        partitions fails to route.
+
+        Passing ``enabled=False`` is the only way to turn the setting back off
+        once it defaults on, which it does whenever
+        ``AEROSPIKE_USE_SERVICES_ALTERNATE`` is truthy in the environment.
+
+        Args:
+            enabled: Whether to use alternate service endpoints. Defaults to
+                ``True`` so the no-argument call reads as an enable.
 
         Returns:
             This ClusterDefinition for method chaining.
 
         Example::
 
-            cd = ClusterDefinition("localhost", 3000).using_services_alternate()
+            cd = ClusterDefinition("bench-asd", 3000).using_services_alternate(False)
+
+        See Also:
+            :meth:`with_ip_map`: Client-side address translation, for when the
+                cluster publishes no alternate addresses.
         """
-        self._use_services_alternate = True
+        self._use_services_alternate = enabled
         return self
 
     def fail_if_not_connected(self, fail: bool) -> Self:

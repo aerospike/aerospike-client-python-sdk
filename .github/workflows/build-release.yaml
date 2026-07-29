@@ -13,6 +13,15 @@ on:
         required: false
         type: boolean
         default: true
+      version-override:
+        description: |
+          Version stamped ephemerally into the build workspace instead of the
+          committed VERSION file (dev-channel builds, e.g.
+          "0.9.0-alpha.6.dev.123"). Empty means build the committed version
+          as-is.
+        required: false
+        type: string
+        default: ''
 
 env:
   SHARED_WORKFLOWS_REF: 7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
@@ -21,7 +30,7 @@ jobs:
   extract-version:
     runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
     outputs:
-      version: ${{ steps.extract.outputs.release-version }}
+      version: ${{ inputs.version-override != '' && inputs.version-override || steps.extract.outputs.release-version }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -60,6 +69,11 @@ jobs:
       build-script: |
         set -euo pipefail
 
+        # Dev-channel builds stamp an ephemeral version; never committed.
+        if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+          python .github/scripts/stamp_version.py "$VERSION_OVERRIDE"
+        fi
+
         python -m pip install --upgrade pip build
 
         make generate-ael
@@ -72,7 +86,7 @@ jobs:
         else
           python -m build --wheel --outdir dist
         fi
-      build-env: PACKAGE_KIND=${{ matrix.package-kind }}
+      build-env: PACKAGE_KIND=${{ matrix.package-kind }};VERSION_OVERRIDE=${{ inputs.version-override }}
       gh-artifact-directory: dist
       gh-artifact-name: build-artifacts-${{ matrix.name }}
       gh-retention-days: 1

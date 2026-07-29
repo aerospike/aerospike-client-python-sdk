@@ -192,16 +192,26 @@ def test_default_loop_count_uses_cpu_count(_cpu, _gil, definition):
 
 @patch("aerospike_sdk.aio.pool.os.cpu_count", return_value=8)
 class TestUvloopGate:
-    """``use_uvloop`` auto-decide tracks the GIL: OFF under free-threading.
+    """``use_uvloop`` auto-decide: on under the GIL, and under free-threading
+    only when uvloop's libuv race (MagicStack/uvloop #720/#721) is mitigated.
 
-    uvloop's libuv free-threading race on ``loop._ready_len`` (MagicStack/
-    uvloop #720/#721) stalls a multi-loop pool when the GIL is disabled, so
-    the auto path must pick the stdlib selector loop there. Under GIL-on the
-    race can't fire, so uvloop is left on to preserve prior behavior.
+    The mitigation is reported by ``_uvloop_safe_under_ft`` — PAC's pipe-wake
+    transport active (the default) or a fixed uvloop release; its env→safe
+    mapping is covered in ``async_pool_uvloop_gate_test``. Here we pin only the
+    ``__init__`` resolution: ``_gil_is_enabled() or _uvloop_safe_under_ft()``.
     """
 
+    @patch("aerospike_sdk.aio.pool._uvloop_safe_under_ft", return_value=True)
     @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
-    def test_auto_off_under_free_threading(self, _gil, _cpu, definition):
+    def test_auto_on_under_ft_when_mitigated(self, _gil, _safe, _cpu, definition):
+        # Free-threading + a #720 mitigation available (e.g. pipe-wake) → uvloop on.
+        pool = AsyncPool(definition, loop_count=4)
+        assert pool._use_uvloop is True
+
+    @patch("aerospike_sdk.aio.pool._uvloop_safe_under_ft", return_value=False)
+    @patch("aerospike_sdk.aio.pool._gil_is_enabled", return_value=False)
+    def test_auto_off_under_ft_when_unmitigated(self, _gil, _safe, _cpu, definition):
+        # Free-threading with no mitigation → stdlib selector loop (the stall guard).
         pool = AsyncPool(definition, loop_count=4)
         assert pool._use_uvloop is False
 

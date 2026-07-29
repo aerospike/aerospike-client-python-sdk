@@ -184,6 +184,101 @@ reads it dynamically, so the wheel and the working tree are guaranteed to
 match. See the [Development](#development--contributing) section below for the
 bump procedure.
 
+### Pre-release builds (Aerospike internal)
+
+Every merge to `dev` publishes a wheel and an sdist to Aerospike's internal
+package index, versioned as a dev release leading toward the next
+pre-release — `0.9.0a6.dev123`, where `123` is the publishing workflow's run
+number. This is for Aerospike test teams and internal consumers who need a
+specific `dev` build; external users should use the public PyPI releases.
+
+These builds are **not** on public PyPI, so installing one requires
+credentials for the internal index. Generate an identity token in the JFrog UI
+(avatar → *Edit Profile* → *Identity Tokens*); your username is your Aerospike
+**email address**, and the `@` in it must be URL-encoded as `%40`:
+
+```bash
+export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
+```
+
+Persist it in `~/.config/pip/pip.conf` under `[global] extra-index-url`, or put
+the credentials in `~/.netrc` for `artifact.aerospike.io`, if you'd rather not
+set it per shell.
+
+With that in place, installing needs no repository checkout, no Java, and no
+ANTLR generation step — the parser ships inside the package:
+
+```bash
+pip index versions aerospike-sdk --pre        # what's available
+pip install "aerospike-sdk==0.9.0a6.dev123"   # a specific build
+```
+
+Pin the exact dev version rather than reaching for `--pre --upgrade`. If the
+index is unconfigured or the token has expired, `--pre` quietly resolves the
+newest *public* pre-release instead and looks like it worked; an exact dev
+version fails loudly with "no matching distribution".
+
+The same index also serves the pinned `aerospike-async` (PAC) pre-release, so
+one credential setup resolves both. Adding `--only-binary aerospike-async` is
+worth it on unusual platforms: it turns a missing PAC wheel into a clear
+resolution error instead of a slow source build that needs a Rust toolchain.
+Report bugs against the exact `aerospike_sdk.__version__` you installed.
+
+### Benchmarking a dev build (Aerospike internal)
+
+The benchmark tools live in `benchmarks/` in this repository and are not part of
+the published package — they are development tooling, with their own shell
+scripts and a Rust helper project. To benchmark a published dev build, install
+the package from the index (per
+[Pre-release builds](#pre-release-builds-aerospike-internal) above) and check
+out *only* the tools:
+
+```bash
+git clone --depth 1 --branch dev --filter=blob:none --sparse \
+  https://github.com/aerospike/aerospike-client-python-sdk.git psdk-bench
+cd psdk-bench
+git sparse-checkout set benchmarks           # directories only; root files come free
+
+pip install "aerospike-sdk==0.9.0a6.dev123"
+
+export AEROSPIKE_HOST=10.0.0.5:3000
+export AEROSPIKE_USE_SERVICES_ALTERNATE=false
+python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
+```
+
+Nothing here needs Java, Rust, or `make generate-ael`: the tools are plain
+scripts, and the generated parser arrives inside the installed package.
+
+Connection settings come from the environment. `benchmarks/_env.py` loads
+`aerospike.env` if you made one and otherwise the committed
+`aerospike.env.example`, skipping any key already exported — so exported values
+win and there is no file to edit. Set `AEROSPIKE_USE_SERVICES_ALTERNATE`
+explicitly rather than inheriting it: the example file ships `true` for
+container setups, and using alternate access addresses against a cluster that
+doesn't publish them strands the client on a single node, where most reads then
+fail to route.
+
+Take the tools from the same branch the build came from. `--depth 1` otherwise
+clones the default branch (`main`), and dev builds are published from `dev`, so
+bench flags introduced alongside a new SDK feature — `--mode async-many`, for
+instance — may not exist in `main`'s copy of the tools yet,
+and the run dies on an unknown flag. For a build published by a manual dispatch
+from a feature branch, or when you want exact parity, use the git revision
+recorded in that build's JFrog build-info.
+
+Use a sparse checkout rather than a full clone. `benchmarks/benchmark.py`
+prepends its parent directory to `sys.path`, so in a full checkout the
+repository's own `aerospike_sdk/` shadows the installed package — at best the
+run fails because the generated parser is absent from a fresh clone, and at
+worst it silently measures your working tree instead of the build you pinned.
+With only `benchmarks/` checked out there is nothing to shadow.
+
+`python -m benchmarks.compare` is a maintainer tool rather than a tester one: it
+drives several client repositories side by side and expects a pyenv environment
+per repository. See [`benchmarks/README.md`](benchmarks/README.md) for the full
+flag reference and [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md)
+for methodology.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
@@ -228,22 +323,16 @@ toolchain), then install this SDK with `--no-deps`. Released versions of
 `aerospike-sdk` on public PyPI depend only on public PyPI packages and
 need none of this.
 
-**Aerospike engineers:** configure the internal index once. Generate an
-identity token in the JFrog UI (avatar → *Edit Profile* → *Identity
-Tokens*), then point pip at the index — your username is your **email
-address**:
+**Aerospike engineers:** configure the internal index once, per
+[Pre-release builds](#pre-release-builds-aerospike-internal) above, then:
 
 ```bash
-export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
 pip install -e ".[dev]"
 ```
 
-(Or persist the same URL in `~/.config/pip/pip.conf` under
-`[global] extra-index-url`, or credentials in `~/.netrc` for
-`artifact.aerospike.io`. Note the `%40` — the `@` in the email must be
-URL-encoded.) CI does the equivalent with short-lived OIDC credentials;
-ReadTheDocs builds need `PIP_EXTRA_INDEX_URL` set as an environment
-variable in the RTD project dashboard.
+CI does the equivalent with short-lived OIDC credentials; ReadTheDocs builds
+need `PIP_EXTRA_INDEX_URL` set as an environment variable in the RTD project
+dashboard.
 
 ### Local PAC checkout
 

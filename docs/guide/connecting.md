@@ -52,6 +52,22 @@ async with await cluster_def.connect() as cluster:
     # ...
 ```
 
+### Alternate access addresses
+
+`using_services_alternate()` makes peer discovery follow each node's
+`alternate-access-address` rather than its standard service address. Enable it
+only against a cluster that publishes those addresses: against one that does
+not, the peer list comes back empty, the client falls back to a single node,
+and every key outside that node's partitions fails to route.
+
+The setting **defaults to on** whenever `AEROSPIKE_USE_SERVICES_ALTERNATE` is
+truthy in the environment, so pass `False` explicitly to force it off
+regardless of the environment:
+
+```python
+cluster_def = ClusterDefinition("localhost", 3000).using_services_alternate(False)
+```
+
 ### TLS
 
 Server-side TLS with CA certificate verification:

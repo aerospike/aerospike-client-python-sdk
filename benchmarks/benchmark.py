@@ -34,6 +34,7 @@ from benchmarks.config import WorkloadKind, build_arg_parser, config_from_args  
 from benchmarks.stats import StatsCollector, latency_column_labels  # noqa: E402
 from benchmarks.workers import (  # noqa: E402
     run_async,
+    run_async_many,
     run_async_pool,
     run_legacy_sync,
     run_pac_async,
@@ -234,6 +235,12 @@ async def async_main() -> int:
         tracemalloc.start()
     if cfg.mode == "async":
         runner = run_async_pool if cfg.pool_loops > 0 else None
+        stats = await _run_async_mode(cfg, runner=runner)
+    elif cfg.mode == "async-many":
+        # pool_loops>0 drives the window API across each AsyncPool loop
+        # (run_async_pool → _build_op_async's async-many branch); otherwise the
+        # single-loop window worker.
+        runner = run_async_pool if cfg.pool_loops > 0 else run_async_many
         stats = await _run_async_mode(cfg, runner=runner)
     elif cfg.mode == "pac-async":
         stats = await _run_async_mode(cfg, runner=run_pac_async)
