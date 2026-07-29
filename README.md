@@ -224,6 +224,61 @@ worth it on unusual platforms: it turns a missing PAC wheel into a clear
 resolution error instead of a slow source build that needs a Rust toolchain.
 Report bugs against the exact `aerospike_sdk.__version__` you installed.
 
+### Benchmarking a dev build (Aerospike internal)
+
+The benchmark tools live in `benchmarks/` in this repository and are not part of
+the published package — they are development tooling, with their own shell
+scripts and a Rust helper project. To benchmark a published dev build, install
+the package from the index (per
+[Pre-release builds](#pre-release-builds-aerospike-internal) above) and check
+out *only* the tools:
+
+```bash
+git clone --depth 1 --branch dev --filter=blob:none --sparse \
+  https://github.com/aerospike/aerospike-client-python-sdk.git psdk-bench
+cd psdk-bench
+git sparse-checkout set benchmarks           # directories only; root files come free
+
+pip install "aerospike-sdk==0.9.0a6.dev123"
+
+export AEROSPIKE_HOST=10.0.0.5:3000
+export AEROSPIKE_USE_SERVICES_ALTERNATE=false
+python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
+```
+
+Nothing here needs Java, Rust, or `make generate-ael`: the tools are plain
+scripts, and the generated parser arrives inside the installed package.
+
+Connection settings come from the environment. `benchmarks/_env.py` loads
+`aerospike.env` if you made one and otherwise the committed
+`aerospike.env.example`, skipping any key already exported — so exported values
+win and there is no file to edit. Set `AEROSPIKE_USE_SERVICES_ALTERNATE`
+explicitly rather than inheriting it: the example file ships `true` for
+container setups, and using alternate access addresses against a cluster that
+doesn't publish them strands the client on a single node, where most reads then
+fail to route.
+
+Take the tools from the same branch the build came from. `--depth 1` otherwise
+clones the default branch (`main`), and dev builds are published from `dev`, so
+bench flags introduced alongside a new SDK feature — `--mode async-many`, for
+instance — may not exist in `main`'s copy of the tools yet,
+and the run dies on an unknown flag. For a build published by a manual dispatch
+from a feature branch, or when you want exact parity, use the git revision
+recorded in that build's JFrog build-info.
+
+Use a sparse checkout rather than a full clone. `benchmarks/benchmark.py`
+prepends its parent directory to `sys.path`, so in a full checkout the
+repository's own `aerospike_sdk/` shadows the installed package — at best the
+run fails because the generated parser is absent from a fresh clone, and at
+worst it silently measures your working tree instead of the build you pinned.
+With only `benchmarks/` checked out there is nothing to shadow.
+
+`python -m benchmarks.compare` is a maintainer tool rather than a tester one: it
+drives several client repositories side by side and expects a pyenv environment
+per repository. See [`benchmarks/README.md`](benchmarks/README.md) for the full
+flag reference and [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md)
+for methodology.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.

@@ -54,7 +54,12 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``-c`` | Stop after this many successful operations |
 | ``--batch-size`` | Keys per batch command (``0`` or ``1`` for single-record) |
 | ``--latency`` | ``COLUMNS,SHIFT`` histogram shape |
-| ``--mode`` | ``async`` (default, PSDK), ``sync`` (PSDK SyncClient), ``pac-blocking`` (PAC sync direct), ``pac-async`` (PAC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
+| ``--mode`` | ``async`` (default, PSDK), ``async-many`` (PSDK window API — ``get_many``/``put_many``, see ``--many-size``), ``sync`` (PSDK SyncClient), ``pac-blocking`` (PAC sync direct), ``pac-async`` (PAC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
+| ``--many-size`` | For ``--mode async-many``: keys per ``get_many``/``put_many`` window (default: 16) |
+| ``--fast-path`` | Use ``Session.get``/``put`` shortcut methods (bypass the builder + stream); pair with ``async`` or ``sync`` |
+| ``--pool-loops`` | Use ``AsyncPool`` with N event loops instead of a single Client (each loop gets ``-z`` tasks; free-threaded only) |
+| ``--current-thread-runtime`` | (sync) per-thread PAC ``LocalClient`` on its own current-thread Tokio runtime |
+| ``--with-telemetry`` | Per-second TPS ticker, sampled latency histograms, and warmup/cooldown windowing |
 | ``--warmup`` / ``--cooldown`` | Full-second intervals dropped from the summary |
 | ``--truncate`` | Truncate the set before running |
 | ``--truncate-after`` | Truncate the set after running |
@@ -64,6 +69,19 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``--auth-mode`` | ``INTERNAL``, ``EXTERNAL``, or ``PKI`` |
 
 Note: Python reserves ``-h`` for help; use ``-H`` for hosts.
+
+## Environment knobs
+
+Read from the environment, not passed as flags — so they do **not** appear in
+``--help``:
+
+- ``PYTHON_GIL=0`` / ``PYTHON_GIL=1`` -- on a free-threaded build (e.g. 3.14t),
+  force the GIL off / on. This is the main free-threaded-vs-GIL sweep axis; pair
+  ``PYTHON_GIL=1`` with ``ALLOW_GIL_ON=1``.
+- ``PSDK_COALESCE=0`` -- disable the transparent async read+write coalescer
+  (default on) to A/B the fast path with and without submission fusion.
+- ``PSDK_COALESCE_WRITES=0`` -- keep reads coalescing but send writes direct
+  (isolate the write half of the coalescer).
 
 ## Makefile targets
 
