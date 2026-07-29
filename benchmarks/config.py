@@ -74,6 +74,8 @@ class WorkloadConfig:
     tls_cert_file: Optional[str] = None
     tls_key_file: Optional[str] = None
     auth_mode: Optional[str] = None
+    many_size: int = 16
+    """For ``--mode async-many``: keys per ``get_many``/``put_many`` call."""
     auth_user: Optional[str] = None
     auth_password: Optional[str] = None
     services_alternate: Optional[bool] = None
@@ -271,13 +273,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=("async", "sync", "pac-blocking", "pac-async", "legacy-sync"),
+        choices=("async", "async-many", "sync", "pac-blocking", "pac-async", "legacy-sync"),
         default="async",
         help="Client API style. 'async' / 'sync' use PSDK sessions. "
+        "'async-many' uses the explicit get_many/put_many window API "
+        "(see --many-size). "
         "'pac-blocking' calls PAC's `_blocking` entries directly. "
         "'pac-async' uses PAC's async client directly, bypassing PSDK. "
         "'legacy-sync' uses the legacy `aerospike` C client. "
         "(default: %(default)s)",
+    )
+    p.add_argument(
+        "--many-size",
+        type=int,
+        default=16,
+        help="For --mode async-many: number of keys per get_many/put_many "
+        "call (the window size). Client-side fusion of independent point "
+        "ops — NOT a server batch (contrast --batch-size). (default: %(default)s)",
     )
     p.add_argument(
         "--warmup",
@@ -494,6 +506,7 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         duration_sec=float(ns.duration),
         max_ops=ns.max_ops,
         batch_size=max(0, int(ns.batch_size)),
+        many_size=max(1, int(ns.many_size)),
         latency_columns=cols,
         latency_shift=shift,
         mode=ns.mode,

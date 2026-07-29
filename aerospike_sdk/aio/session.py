@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import typing
 from typing import (
     Any,
@@ -75,6 +77,17 @@ def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
     return exists, sc_opt
 
 
+# Gates for the transparent same-tick coalescer (on by default; PSDK_COALESCE=0
+# disables both directions, PSDK_COALESCE_WRITES=0 leaves reads fusing but sends
+# writes direct). Fusing mechanism + transparency contract are documented at the
+# dispatch sites (:meth:`Session._coalesced_get`, :meth:`Session._coalesced_put`);
+# the measured lift is in docs/guide/performance.md ("Async operation coalescing").
+# Writes get their own gate because the two directions carry different overheads —
+# a buffered write also copies its payload — so their break-even fan-in differs.
+_COALESCE = os.environ.get("PSDK_COALESCE", "1") != "0"
+_COALESCE_WRITES = _COALESCE and os.environ.get("PSDK_COALESCE_WRITES", "1") != "0"
+
+
 class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Perform reads and writes against Aerospike with a fixed :class:`~aerospike_sdk.policy.behavior.Behavior`.
 
@@ -129,6 +142,16 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         # TransactionalSession overrides this to yield its active Txn so every
         # builder spawned from the session auto-participates.
         self._txn: Optional[Txn] = None
+        # Transparent coalescer state (prototype; single-loop assumption).
+        # Only touched when _COALESCE is enabled. Reads and writes buffer
+        # separately because they are distinct submissions, but share one armed
+        # flush so a mixed tick still pays a single call_soon.
+        self._coalesce_keys: List[Key] = []
+        self._coalesce_futs: List[Any] = []
+        self._coalesce_write_keys: List[Key] = []
+        self._coalesce_write_bins: List[Dict[str, Any]] = []
+        self._coalesce_write_futs: List[Any] = []
+        self._coalesce_scheduled = False
 
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
@@ -216,6 +239,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`put`: Direct single-key upsert.
         """
         if self._txn is None:
+            if _COALESCE and bins is None:
+                return await self._coalesced_get(key)
             return await self._pac_client.get(
                 key, bins,
                 policy=self._cached_read_policy,
@@ -224,6 +249,135 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
         return await self._pac_client.get(key, bins, policy=policy)
+
+    async def _coalesced_get(self, key: Key) -> Record:
+        """Opportunistic same-tick coalescing for a no-projection read.
+
+        The *first* ``get`` of an event-loop iteration finds no flush armed, so
+        it dispatches **directly** (paying none of the coalescer's buffer /
+        create_task machinery) and arms a single :meth:`_flush_coalesced`.
+        Any *followers* in the same tick see the armed flush and enqueue, so
+        they fuse into one ``_submit_coalesced_read`` crossing that resolves
+        each future the instant its own key returns (per-op delivery, no
+        head-of-line). A lone or low-rate ``get`` is therefore just a direct
+        :meth:`get`; under load all but the tick's first op coalesce. The record
+        (or raised exception) is byte-identical to a direct read either way.
+        """
+        loop = asyncio.get_running_loop()
+        if self._coalesce_scheduled:
+            fut = loop.create_future()
+            self._coalesce_keys.append(key)
+            self._coalesce_futs.append(fut)
+            return await fut
+        self._coalesce_scheduled = True
+        loop.call_soon(self._flush_coalesced)
+        return await self._pac_client.get(
+            key, None,
+            policy=self._cached_read_policy,
+            policy_sc=self._cached_read_policy_sc,
+        )
+
+    async def _coalesced_put(self, key: Key, bins: Dict[str, Any]) -> None:
+        """Opportunistic same-tick coalescing for a point write.
+
+        Write-side mirror of :meth:`_coalesced_get`: the tick's first ``put``
+        dispatches directly and arms the flush, and followers enqueue to fuse
+        into one ``_submit_coalesced_write`` crossing carrying a per-key
+        payload each. ``None`` (or the raised exception) is delivered exactly
+        as a direct write delivers it.
+
+        Buffered payloads are copied because the submission is deferred to the
+        flush: a caller that reuses one dict across concurrent writes would
+        otherwise have every buffered op see its final contents, where a direct
+        write converts the payload before returning.
+        """
+        loop = asyncio.get_running_loop()
+        if self._coalesce_scheduled:
+            fut = loop.create_future()
+            self._coalesce_write_keys.append(key)
+            self._coalesce_write_bins.append(dict(bins))
+            self._coalesce_write_futs.append(fut)
+            await fut
+            return
+        self._coalesce_scheduled = True
+        loop.call_soon(self._flush_coalesced)
+        await self._pac_client.put(
+            key, bins,
+            policy=self._cached_write_policy,
+            policy_sc=self._cached_write_policy_sc,
+        )
+
+    def _flush_coalesced(self) -> None:
+        """Fuse the tick's follower ops into one crossing per direction.
+
+        Either buffer can be empty — the tick's first op of that kind went
+        direct, and a read-only or write-only tick never fills the other.
+
+        This runs as a loop callback, so an exception escaping it would be
+        reported to the loop's handler while the callers of the drained buffers
+        awaited futures nothing would ever complete. Every submission is
+        therefore responsible for resolving the futures it took ownership of,
+        including when it fails.
+        """
+        self._coalesce_scheduled = False
+        # Fire-and-forget: PAC resolves each future through the bridge's drainer
+        # the instant its own op completes (per-op delivery — no head-of-line).
+        keys = self._coalesce_keys
+        if keys:
+            futs = self._coalesce_futs
+            self._coalesce_keys = []
+            self._coalesce_futs = []
+            try:
+                self._pac_client._submit_coalesced_read(
+                    keys, futs, None,
+                    policy=self._cached_read_policy,
+                    policy_sc=self._cached_read_policy_sc,
+                )
+            except Exception as exc:
+                # A read window carries no per-key conversion, so the only way
+                # to get here is a whole-submission failure (e.g. a client
+                # closed mid-tick) that applies equally to every key.
+                for fut in futs:
+                    if not fut.done():
+                        fut.set_exception(exc)
+        write_keys = self._coalesce_write_keys
+        if write_keys:
+            write_futs = self._coalesce_write_futs
+            write_bins = self._coalesce_write_bins
+            self._coalesce_write_keys = []
+            self._coalesce_write_futs = []
+            self._coalesce_write_bins = []
+            try:
+                self._pac_client._submit_coalesced_write(
+                    write_keys, write_futs, write_bins,
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+            except Exception:
+                self._resubmit_writes_individually(
+                    write_keys, write_futs, write_bins)
+
+    def _resubmit_writes_individually(
+        self, keys: List[Key], futs: List[Any], bins_list: List[Dict[str, Any]],
+    ) -> None:
+        """Retry a failed write window one op at a time.
+
+        The batched crossing converts every payload before submitting anything,
+        so a single unconvertible value aborts the whole window. Dispatching the
+        survivors individually keeps a buffered write's outcome identical to a
+        direct one: only the caller that passed a bad payload sees the error.
+        """
+        for key, fut, bins in zip(keys, futs, bins_list):
+            if fut.done():
+                continue
+            try:
+                self._pac_client._submit_coalesced_write(
+                    [key], [fut], [bins],
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+            except Exception as exc:
+                fut.set_exception(exc)
 
     async def put(
         self, key: Key, bins: Dict[str, Any],
@@ -259,6 +413,9 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`get`: Direct single-key point read.
         """
         if self._txn is None:
+            if _COALESCE_WRITES:
+                await self._coalesced_put(key, bins)
+                return
             await self._pac_client.put(
                 key, bins,
                 policy=self._cached_write_policy,
@@ -270,6 +427,89 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
         policy.txn = self._txn
         await self._pac_client.put(key, bins, policy=policy)
+
+    async def get_many(
+        self, keys: List[Key], bins: Optional[List[str]] = None,
+    ) -> List[Any]:
+        """Direct point reads for a window of keys — one await, one result list.
+
+        Client-side fusion of independent single-record reads: one call
+        submits the whole window and one completion delivers all results,
+        so per-op submission and wakeup overhead is amortized across the
+        window. These are NOT a server batch request — each key remains an
+        independent wire op (use :meth:`query` with a key list for wire
+        batching).
+
+        Args:
+            keys: Target keys; results are positional.
+            bins: Optional bin-name projection shared by the window.
+
+        Returns:
+            A list the same length as ``keys``. Each slot is the
+            :class:`~aerospike_async.Record` for that key, or the exception
+            instance (not raised) for that key — check with
+            ``isinstance(slot, Exception)``. One failed key never fails its
+            window-mates.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            records = await session.get_many([users.id(i) for i in range(16)])
+            found = [r for r in records if not isinstance(r, Exception)]
+
+        See Also:
+            :meth:`get`: Single-key point read.
+            :meth:`put_many`: Window counterpart for writes.
+        """
+        if self._txn is None:
+            return await self._pac_client._submit_many_read(
+                keys, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
+            )
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy.txn = self._txn
+        return await self._pac_client._submit_many_read(keys, bins, policy=policy)
+
+    async def put_many(
+        self, keys: List[Key], bins: Dict[str, Any],
+    ) -> List[Any]:
+        """Direct upserts of one payload to a window of keys — one await.
+
+        Write counterpart of :meth:`get_many`: the ``bins`` payload is
+        converted once and written to every key in the window as
+        independent wire ops with client-side fused submission/completion.
+
+        Args:
+            keys: Target keys; results are positional.
+            bins: Mapping of bin name to value written to every key.
+
+        Returns:
+            A list the same length as ``keys``: ``None`` for each success,
+            or the exception instance (not raised) for that key.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            outcomes = await session.put_many(
+                [users.id(i) for i in range(16)], {"active": True})
+            errors = [e for e in outcomes if e is not None]
+
+        See Also:
+            :meth:`put`: Single-key upsert.
+            :meth:`get_many`: Window counterpart for reads.
+        """
+        if self._txn is None:
+            return await self._pac_client._submit_many_write(
+                keys, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
+            )
+        policy = to_write_policy(
+            self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+        policy.txn = self._txn
+        return await self._pac_client._submit_many_write(keys, bins, policy=policy)
 
     @property
     def client(self) -> Client:

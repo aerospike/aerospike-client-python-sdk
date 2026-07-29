@@ -87,3 +87,48 @@ def test_config_from_args_seed() -> None:
     ns = p.parse_args(["--seed", "0", "-d", "1"])
     cfg = config_from_args(ns)
     assert cfg.seed != 0
+
+
+def _cfg_for(argv: list[str]):
+    return config_from_args(build_arg_parser().parse_args([*argv, "-d", "1"]))
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["--no-services-alternate"], False),
+    (["--services-alternate"], True),
+    ([], True),  # neither form passed: the env var decides
+])
+def test_services_alternate_agrees_across_bench_client_paths(
+    argv: list[str], expected: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both bench client shapes must resolve services-alternate identically.
+
+    The single-client modes build a ``ClientPolicy`` directly while the
+    AsyncPool mode builds a ``ClusterDefinition``. When only the former honored
+    ``--no-services-alternate``, the pool discovered peers through absent
+    alternate addresses, fell back to one node, and ~2/3 of point reads failed
+    to route while every other mode looked healthy.
+    """
+    from benchmarks._env import client_policy_from_config, cluster_def_from_config
+
+    monkeypatch.setenv("AEROSPIKE_USE_SERVICES_ALTERNATE", "true")
+    cfg = _cfg_for(argv)
+
+    direct = client_policy_from_config(cfg)
+    pooled = cluster_def_from_config(cfg)._get_policy(None)
+
+    assert direct.use_services_alternate is expected
+    assert pooled.use_services_alternate == direct.use_services_alternate
+
+
+def test_conn_pools_per_node_reaches_the_pool_path() -> None:
+    """``--conn-pools-per-node`` must land on the pool path too.
+
+    It only reached the direct-client policy before, so tuning it while
+    benchmarking an AsyncPool silently measured nothing.
+    """
+    from benchmarks._env import client_policy_from_config, cluster_def_from_config
+
+    cfg = _cfg_for(["--conn-pools-per-node", "8"])
+    assert client_policy_from_config(cfg).conn_pools_per_node == 8
+    assert cluster_def_from_config(cfg)._get_policy(None).conn_pools_per_node == 8

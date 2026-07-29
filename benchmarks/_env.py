@@ -132,17 +132,26 @@ def cluster_def_from_config(cfg: object):
     deprecated ``client_factory`` shape in that case.
     """
     from aerospike_sdk import ClusterDefinition, Host
+    from aerospike_sdk.policy.system_settings import SystemSettings
 
     if getattr(cfg, "seed_only_cluster", False):
         return None
 
     cluster_def = ClusterDefinition(hosts=Host.parse_hosts(cfg.seeds, 3000))
 
+    # Always set both directions explicitly. `ClusterDefinition` seeds this from
+    # AEROSPIKE_USE_SERVICES_ALTERNATE, so only enabling it here would let the
+    # env var win over an explicit `--no-services-alternate` — which routes
+    # discovery through absent alternate addresses and strands the client on one
+    # node (~2/3 of point reads then fail to route).
     env_alt = os.environ.get(
         "AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower() in ("true", "1", "yes")
     cli_alt = getattr(cfg, "services_alternate", None)
-    if (cli_alt if cli_alt is not None else env_alt):
-        cluster_def.using_services_alternate()
+    cluster_def.using_services_alternate(cli_alt if cli_alt is not None else env_alt)
+
+    pools = int(getattr(cfg, "conn_pools_per_node", 0) or 0)
+    if pools > 0:
+        cluster_def.with_system_settings(SystemSettings(conn_pools_per_node=pools))
 
     ca = getattr(cfg, "tls_ca_file", None)
     cert = getattr(cfg, "tls_cert_file", None)
