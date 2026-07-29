@@ -57,7 +57,7 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``--mode`` | ``async`` (default, PSDK), ``async-many`` (PSDK window API — ``get_many``/``put_many``, see ``--many-size``), ``sync`` (PSDK SyncClient), ``pac-blocking`` (PAC sync direct), ``pac-async`` (PAC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
 | ``--many-size`` | For ``--mode async-many``: keys per ``get_many``/``put_many`` window (default: 16) |
 | ``--fast-path`` | Use ``Session.get``/``put`` shortcut methods (bypass the builder + stream); pair with ``async`` or ``sync`` |
-| ``--pool-loops`` | Use ``AsyncPool`` with N event loops instead of a single Client (each loop gets ``-z`` tasks; free-threaded only) |
+| ``--pool-loops`` | Use ``AsyncPool`` with N event loops instead of a single Client (each loop gets ``-z`` tasks; free-threaded only). Composes with ``--mode async-many`` to run the window API across loops — the highest-throughput async config (peak at 4 loops × an 8-key window; the sweet-spot window *shrinks* as loops grow, since in-flight = ``loops × z × k``). |
 | ``--current-thread-runtime`` | (sync) per-thread PAC ``LocalClient`` on its own current-thread Tokio runtime |
 | ``--with-telemetry`` | Per-second TPS ticker, sampled latency histograms, and warmup/cooldown windowing |
 | ``--warmup`` / ``--cooldown`` | Full-second intervals dropped from the summary |

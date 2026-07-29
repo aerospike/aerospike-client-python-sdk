@@ -176,6 +176,20 @@ for gil in 0 1; do
   done
 done
 
+# --- PSDK async-many WINDOW × AsyncPool (window API across pool loops) -------
+# Runs the get_many/put_many window on each of N AsyncPool loops. The sweet-spot
+# window SHRINKS as loops grow (in-flight = loops × z × k): single-loop peaks at
+# k16, 4-loop peaks at k8 (~442K — the top async mode; 4 loops beats 8, which
+# over-saturates). Free-threaded only.
+for gil in 0 1; do
+  for k in 8 16; do
+    tag="psdk_poolmany_4x_k${k}_z32_gil${gil}"
+    PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
+      run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
+        --mode async-many --many-size $k --pool-loops 4 -z 32
+  done
+done
+
 # --- PSDK AsyncPool (4 loops × 64 tasks) -----------------------------------
 for gil in 0 1; do
   for fp in --fast-path --no-fast-path; do
