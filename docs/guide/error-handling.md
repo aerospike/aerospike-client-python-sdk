@@ -123,6 +123,43 @@ unique, so always interpret the `(result_code, sub_code)` pair together. The
 `SubCode` catalog enumerates the known subcodes. Requires Aerospike server 8.1.3
 or later; older servers ignore the request and leave the attributes `None`.
 
+## In-Doubt Writes
+
+Every `AerospikeError` carries an `in_doubt` flag. It is `True` when a **write**
+reached the server but its outcome is unknown — the record may or may not have
+been applied. Typical producers are a client-side timeout after the request was
+sent, a connection that dropped mid-flight, and retry exhaustion on a write.
+Failures where the request never left the client (validation errors, timeouts
+before send) and read operations are never in doubt.
+
+```python
+from aerospike_sdk import TimeoutError
+
+try:
+    await session.insert(orders.id(order_id)).put(payload).execute()
+except TimeoutError as err:
+    if err.in_doubt:
+        ...  # verify with a read before retrying a non-idempotent write
+    else:
+        ...  # the write did not happen; safe to retry as-is
+```
+
+For batch operations with in-stream errors, the per-key flag is
+`RecordResult.in_doubt`. For transactions, `CommitError.in_doubt` reports
+whether the commit itself may have landed (see
+[Transactions](transactions.md)).
+
+One caveat: the direct point-operation shortcuts — `session.get`,
+`session.put`, `session.get_many`, and `session.put_many` — trade the SDK
+error boundary for minimum per-op overhead. They surface the underlying
+client's exception types (from `aerospike_async.exceptions`), which do
+**not** inherit from this module's `AerospikeError`: `get`/`put` raise them,
+and the `_many` variants also deliver them as the per-key exception
+*instances* in their result lists. Those exceptions carry the same
+`in_doubt` attribute, but an `except TimeoutError` written against the
+SDK's class will not catch them. Use the builder path when typed handling
+matters, or handle the underlying client's types explicitly on these calls.
+
 ## ErrorStrategy
 
 Override the default with `on_error` at execute time:
