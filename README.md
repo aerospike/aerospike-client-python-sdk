@@ -184,6 +184,46 @@ reads it dynamically, so the wheel and the working tree are guaranteed to
 match. See the [Development](#development--contributing) section below for the
 bump procedure.
 
+### Pre-release builds (Aerospike internal)
+
+Every merge to `dev` publishes a wheel and an sdist to Aerospike's internal
+package index, versioned as a dev release leading toward the next
+pre-release — `0.9.0a6.dev123`, where `123` is the publishing workflow's run
+number. This is for Aerospike test teams and internal consumers who need a
+specific `dev` build; external users should use the public PyPI releases.
+
+These builds are **not** on public PyPI, so installing one requires
+credentials for the internal index. Generate an identity token in the JFrog UI
+(avatar → *Edit Profile* → *Identity Tokens*); your username is your Aerospike
+**email address**, and the `@` in it must be URL-encoded as `%40`:
+
+```bash
+export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
+```
+
+Persist it in `~/.config/pip/pip.conf` under `[global] extra-index-url`, or put
+the credentials in `~/.netrc` for `artifact.aerospike.io`, if you'd rather not
+set it per shell.
+
+With that in place, installing needs no repository checkout, no Java, and no
+ANTLR generation step — the parser ships inside the package:
+
+```bash
+pip index versions aerospike-sdk --pre        # what's available
+pip install "aerospike-sdk==0.9.0a6.dev123"   # a specific build
+```
+
+Pin the exact dev version rather than reaching for `--pre --upgrade`. If the
+index is unconfigured or the token has expired, `--pre` quietly resolves the
+newest *public* pre-release instead and looks like it worked; an exact dev
+version fails loudly with "no matching distribution".
+
+The same index also serves the pinned `aerospike-async` (PAC) pre-release, so
+one credential setup resolves both. Adding `--only-binary aerospike-async` is
+worth it on unusual platforms: it turns a missing PAC wheel into a clear
+resolution error instead of a slow source build that needs a Rust toolchain.
+Report bugs against the exact `aerospike_sdk.__version__` you installed.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
@@ -228,22 +268,16 @@ toolchain), then install this SDK with `--no-deps`. Released versions of
 `aerospike-sdk` on public PyPI depend only on public PyPI packages and
 need none of this.
 
-**Aerospike engineers:** configure the internal index once. Generate an
-identity token in the JFrog UI (avatar → *Edit Profile* → *Identity
-Tokens*), then point pip at the index — your username is your **email
-address**:
+**Aerospike engineers:** configure the internal index once, per
+[Pre-release builds](#pre-release-builds-aerospike-internal) above, then:
 
 ```bash
-export PIP_EXTRA_INDEX_URL="https://<you>%40aerospike.com:<identity-token>@artifact.aerospike.io/artifactory/api/pypi/database-pypi-dev-local/simple/"
 pip install -e ".[dev]"
 ```
 
-(Or persist the same URL in `~/.config/pip/pip.conf` under
-`[global] extra-index-url`, or credentials in `~/.netrc` for
-`artifact.aerospike.io`. Note the `%40` — the `@` in the email must be
-URL-encoded.) CI does the equivalent with short-lived OIDC credentials;
-ReadTheDocs builds need `PIP_EXTRA_INDEX_URL` set as an environment
-variable in the RTD project dashboard.
+CI does the equivalent with short-lived OIDC credentials; ReadTheDocs builds
+need `PIP_EXTRA_INDEX_URL` set as an environment variable in the RTD project
+dashboard.
 
 ### Local PAC checkout
 
