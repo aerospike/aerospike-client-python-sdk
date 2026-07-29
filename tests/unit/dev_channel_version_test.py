@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Tests for the dev-channel version computation used by CI.
+"""Tests for the dev-channel version computation and stamping used by CI.
 
 A wrong answer here publishes packages that sort incorrectly against real
 releases, which is close to unrecoverable once consumers have resolved them,
@@ -27,24 +27,20 @@ import pytest
 
 from packaging.version import Version
 
-_SCRIPT = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / ".github"
-    / "scripts"
-    / "next_dev_version.py"
-)
+_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / ".github" / "scripts"
 
 
-def _load_next_dev_version():
-    """Import the CI script, which lives outside any importable package."""
-    spec = importlib.util.spec_from_file_location("next_dev_version", _SCRIPT)
+def _load(name: str):
+    """Import a CI script, which lives outside any importable package."""
+    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.next_dev_version
+    return module
 
 
-next_dev_version = _load_next_dev_version()
+next_dev_version = _load("next_dev_version").next_dev_version
+stamp = _load("stamp_version").stamp
 
 
 @pytest.mark.parametrize(
@@ -88,3 +84,25 @@ def test_rejects_a_base_that_already_carries_a_dev_segment():
 def test_rejects_an_unrecognized_shape():
     with pytest.raises(ValueError, match="unrecognized version shape"):
         next_dev_version("0.9.0-alpha", 1)
+
+
+def test_stamping_writes_exactly_the_computed_version(tmp_path, monkeypatch):
+    """Stamping once ran through a shell escape that appended a stray
+    character, so the build failed on an unparseable version. Pin the exact
+    file contents, not just that a write happened.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "VERSION").write_text("0.9.0-alpha.5\n")
+
+    stamped, pep440 = next_dev_version("0.9.0-alpha.5", 1)
+    stamp(stamped)
+
+    written = (tmp_path / "VERSION").read_text()
+    assert written == f"{stamped}\n"
+    assert str(Version(written.strip())) == pep440
+
+
+def test_stamping_outside_the_repository_root_fails_loudly(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="VERSION not found"):
+        stamp("0.9.0-alpha.6.dev.1")
