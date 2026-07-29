@@ -69,11 +69,9 @@ jobs:
       build-script: |
         set -euo pipefail
 
-        # setuptools reads the version dynamically from this file, so stamping
-        # it is the whole of a dev-channel version override. Never committed.
+        # Dev-channel builds stamp an ephemeral version; never committed.
         if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
-          printf '%s\n' "$VERSION_OVERRIDE" > VERSION
-          echo "Stamped version $VERSION_OVERRIDE"
+          python .github/scripts/stamp_version.py "$VERSION_OVERRIDE"
         fi
 
         python -m pip install --upgrade pip build
