@@ -95,10 +95,14 @@ jobs:
         run: python -m pytest tests/unit -v
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        os: [
+          ubuntu-latest,
+          ["self-hosted", "macOS", "ARM64"]
+        ]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
