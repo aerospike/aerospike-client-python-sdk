@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from aerospike_async import Filter, QueryDuration, QuerySelection, ResultCode
+from aerospike_async import Filter, QueryDuration, ResultCode
 
 from aerospike_sdk import DataSet, Exp, QueryHint, SyncClient, val
 from aerospike_sdk.exceptions import AerospikeError
@@ -32,6 +32,7 @@ from tests.integration.query_selection_helpers import (
     BOGUS_INDEX_NAME,
     INDEX_NAME,
     NS,
+    QuerySelection,
     QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
@@ -41,7 +42,10 @@ from tests.integration.query_selection_helpers import (
     count_records_sync,
     explain_plan_blocking,
     key_name,
+    requires_pac_query_selection_api,
 )
+
+pytestmark = requires_pac_query_selection_api
 
 
 def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):

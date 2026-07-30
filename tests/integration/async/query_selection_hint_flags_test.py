@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, QuerySelection, ResultCode
+from aerospike_async import Filter, ResultCode
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
 from aerospike_sdk import Client, DataSet, QueryHint
@@ -37,9 +37,13 @@ from tests.integration.query_selection_helpers import (
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
     NS,
+    QuerySelection,
     explain_plan_async,
     hint_key_name,
+    requires_pac_query_selection_api,
 )
+
+pytestmark = requires_pac_query_selection_api
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")

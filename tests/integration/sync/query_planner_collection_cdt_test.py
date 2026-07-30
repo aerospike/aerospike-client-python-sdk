@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import pytest
-from aerospike_async import CollectionIndexType, IndexType, QuerySelection
+from aerospike_async import CollectionIndexType, IndexType
 
 from aerospike_sdk import DataSet, SyncClient
 
@@ -31,11 +31,15 @@ from tests.integration.query_selection_helpers import (
     CDT_SET_NAME,
     CDT_SIZE,
     NS,
+    QuerySelection,
     cdt_key_name,
     create_index_quiet_blocking,
     explain_plan_blocking,
     long_bytes_be,
+    requires_pac_query_selection_api,
 )
+
+pytestmark = requires_pac_query_selection_api
 
 
 @pytest.fixture(scope="module")

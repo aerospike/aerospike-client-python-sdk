@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from aerospike_async import Filter, QuerySelection, ResultCode
+from aerospike_async import Filter, ResultCode
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
 from aerospike_sdk import DataSet, QueryHint, SyncClient
@@ -34,9 +34,13 @@ from tests.integration.query_selection_helpers import (
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
     NS,
+    QuerySelection,
     explain_plan_blocking,
     hint_key_name,
+    requires_pac_query_selection_api,
 )
+
+pytestmark = requires_pac_query_selection_api
 
 
 def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):

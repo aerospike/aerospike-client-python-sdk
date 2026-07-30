@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, QueryDuration, QuerySelection, ResultCode
+from aerospike_async import Filter, QueryDuration, ResultCode
 
 from aerospike_sdk import Client, DataSet, Exp, QueryHint, val
 from aerospike_sdk.exceptions import AerospikeError
@@ -35,6 +35,7 @@ from tests.integration.query_selection_helpers import (
     BOGUS_INDEX_NAME,
     INDEX_NAME,
     NS,
+    QuerySelection,
     QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
@@ -44,7 +45,10 @@ from tests.integration.query_selection_helpers import (
     count_records_async,
     explain_plan_async,
     key_name,
+    requires_pac_query_selection_api,
 )
+
+pytestmark = requires_pac_query_selection_api
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
