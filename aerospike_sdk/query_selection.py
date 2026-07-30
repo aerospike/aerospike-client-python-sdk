@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from aerospike_sdk.feature_gates import PSDK_ENABLE_QUERY_SELECTION
+
 
 def _version_supports_query_selection(version_obj: object) -> bool:
     """Call PAC ``Version.supports_query_selection()`` when present."""
@@ -33,6 +35,8 @@ async def compute_query_selection_support(pac: Any) -> bool:
 
     Mirrors Rust ``Cluster::supports_query_selection()`` (all nodes >= 8.1.3).
     """
+    if not PSDK_ENABLE_QUERY_SELECTION:
+        return False
     nodes_fn = getattr(pac, "nodes", None)
     if not callable(nodes_fn):
         return False
@@ -44,6 +48,8 @@ async def compute_query_selection_support(pac: Any) -> bool:
 
 def compute_query_selection_support_blocking(pac: Any) -> bool:
     """Blocking counterpart of :func:`compute_query_selection_support`."""
+    if not PSDK_ENABLE_QUERY_SELECTION:
+        return False
     nodes_fn = getattr(pac, "nodes_blocking", None)
     if not callable(nodes_fn):
         return False

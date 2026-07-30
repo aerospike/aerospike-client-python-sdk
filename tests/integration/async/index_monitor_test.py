@@ -84,8 +84,9 @@ async def cluster(aerospike_host, make_cluster_definition, enterprise):
 
         # Index monitor tests exercise the client-side cache directly; start it
         # explicitly because server query selection skips lazy monitor startup.
-        client._indexes_monitor.start(client.underlying_client)
-        await asyncio.to_thread(client._indexes_monitor.wait_until_ready)
+        sdk_client = c._client
+        sdk_client._indexes_monitor.start(sdk_client.underlying_client)
+        await asyncio.to_thread(sdk_client._indexes_monitor.wait_until_ready)
 
         await asyncio.sleep(0.75 if not enterprise else 0.4)
 
