@@ -118,11 +118,11 @@ class TestFromBatchRecords:
     async def test_converts_and_iterates(self):
         br1 = SimpleNamespace(
             key=_key(1), record=_record(),
-            result_code=ResultCode.OK, in_doubt=False,
+            result_code=ResultCode.OK, in_doubt=False, sub_code=None,
         )
         br2 = SimpleNamespace(
             key=_key(2), record=None,
-            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None,
         )
 
         stream = RecordStream.from_batch_records([br1, br2])
@@ -163,11 +163,11 @@ class TestFromPacBatchStreamOnError:
     async def test_no_handler_includes_failures(self):
         br_ok = SimpleNamespace(
             key=_key(1), record=_record(),
-            result_code=ResultCode.OK, in_doubt=False,
+            result_code=ResultCode.OK, in_doubt=False, sub_code=None,
         )
         br_fail = SimpleNamespace(
             key=_key(2), record=None,
-            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None,
         )
         stream = RecordStream._from_pac_batch_stream(
             _FakeBatchStream([(0, br_ok), (1, br_fail)]),
@@ -179,11 +179,11 @@ class TestFromPacBatchStreamOnError:
     async def test_handler_excludes_failures_and_receives_args(self):
         br_ok = SimpleNamespace(
             key=_key(1), record=_record(),
-            result_code=ResultCode.OK, in_doubt=False,
+            result_code=ResultCode.OK, in_doubt=False, sub_code=None,
         )
         br_fail = SimpleNamespace(
             key=_key(2), record=None,
-            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None,
         )
 
         captured: list = []
@@ -199,6 +199,24 @@ class TestFromPacBatchStreamOnError:
         k, i, exc = captured[0]
         assert k == _key(2) and i == 1
         assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    async def test_sub_code_reaches_result_and_handler(self):
+        br_fail = SimpleNamespace(
+            key=_key(1), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, in_doubt=False, sub_code=4,
+        )
+
+        stream = RecordStream._from_pac_batch_stream(_FakeBatchStream([(0, br_fail)]))
+        results = await stream.collect()
+        assert results[0].sub_code == 4
+
+        captured: list = []
+        stream = RecordStream._from_pac_batch_stream(
+            _FakeBatchStream([(0, br_fail)]),
+            on_error=lambda k, i, e: captured.append(e),
+        )
+        await stream.collect()
+        assert captured[0].sub_code == 4
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +347,7 @@ class TestPopKeepsOpen:
     async def test_pop_does_not_close_producer(self):
         fake = _FakeBatchStream([
             (i, SimpleNamespace(key=_key(i), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False))
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None))
             for i in range(3)
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
@@ -347,7 +365,7 @@ class TestFirstIsTerminal:
     async def test_first_closes_producer(self):
         fake = _FakeBatchStream([
             (i, SimpleNamespace(key=_key(i), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False))
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None))
             for i in range(5)
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
@@ -360,9 +378,9 @@ class TestFirstIsTerminal:
     async def test_first_or_raise_closes_producer(self):
         fake = _FakeBatchStream([
             (0, SimpleNamespace(key=_key(0), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False)),
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None)),
             (1, SimpleNamespace(key=_key(1), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False)),
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None)),
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
         head = await stream.first_or_raise()
@@ -373,7 +391,7 @@ class TestFirstIsTerminal:
         fake = _FakeBatchStream([
             (0, SimpleNamespace(key=_key(0), record=None,
                                 result_code=ResultCode.KEY_NOT_FOUND_ERROR,
-                                in_doubt=False)),
+                                in_doubt=False, sub_code=None)),
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
         with pytest.raises(AerospikeError):
@@ -470,9 +488,9 @@ class TestCloseReleasesProducer:
     async def test_close_forwards_to_batch_stream(self):
         fake = _FakeBatchStream([
             (0, SimpleNamespace(key=_key(1), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False)),
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None)),
             (1, SimpleNamespace(key=_key(2), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False)),
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None)),
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
         # Consume one, then abandon.
@@ -484,7 +502,7 @@ class TestCloseReleasesProducer:
     async def test_close_stops_iteration(self):
         fake = _FakeBatchStream([
             (i, SimpleNamespace(key=_key(i), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False))
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None))
             for i in range(5)
         ])
         stream = RecordStream._from_pac_batch_stream(fake)
@@ -536,7 +554,7 @@ class TestAsyncContextManager:
     async def test_normal_exit_closes(self):
         fake = _FakeBatchStream([
             (i, SimpleNamespace(key=_key(i), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False))
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None))
             for i in range(3)
         ])
         rows = []
@@ -549,7 +567,7 @@ class TestAsyncContextManager:
     async def test_early_break_closes(self):
         fake = _FakeBatchStream([
             (i, SimpleNamespace(key=_key(i), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False))
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None))
             for i in range(10)
         ])
         async with RecordStream._from_pac_batch_stream(fake) as stream:
@@ -560,7 +578,7 @@ class TestAsyncContextManager:
     async def test_exception_closes_and_propagates(self):
         fake = _FakeBatchStream([
             (0, SimpleNamespace(key=_key(0), record=_record(),
-                                result_code=ResultCode.OK, in_doubt=False)),
+                                result_code=ResultCode.OK, in_doubt=False, sub_code=None)),
         ])
         with pytest.raises(RuntimeError, match="boom"):
             async with RecordStream._from_pac_batch_stream(fake) as stream:

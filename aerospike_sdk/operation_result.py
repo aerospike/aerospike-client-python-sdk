@@ -20,11 +20,12 @@ type-safe accessors that raise on type mismatch and return idiomatic defaults
 on ``None``
 
 Note:
-    A positional :attr:`Record.results` array indexed in operation order is
-    not yet exposed by the underlying async client. Until the async client
-    surfaces ordered per-op results, ``OperationResult`` is most useful as a
-    typed wrapper over values retrieved by bin name (or projected via the
-    ops projection / ``get(return: ...)`` machinery).
+    Positional per-op results are exposed in operation order: the raw value
+    for the *i*-th op via :meth:`RecordResult.operation_result`, or wrapped
+    in an ``OperationResult`` via :meth:`RecordResult.typed_operation_result`.
+    ``OperationResult`` is equally useful as a typed wrapper over values
+    retrieved by bin name (or projected via the ops projection /
+    ``get(return: ...)`` machinery).
 """
 
 from __future__ import annotations

@@ -148,7 +148,8 @@ class _IndexBuilderBase:
             raise ValueError("index_name is required. Call named() first.")
         if not self._index_type:
             raise ValueError(
-                "index_type is required. Call numeric() or string() first.",
+                "index_type is required. "
+                "Call numeric(), string(), blob(), or geo2dsphere() first.",
             )
         assert self._expression is not None
         return self._index_name, self._index_type, self._expression
@@ -199,6 +200,18 @@ class _IndexBuilderBase:
             ``self`` for method chaining.
         """
         self._index_type = IndexType.GEO2D_SPHERE
+        return self
+
+    def blob(self) -> Self:
+        """Set the secondary index type to blob (for bytes bin values).
+
+        Call this before :meth:`create` to index a bin containing raw ``bytes``
+        values for exact-match query. Requires server 7.0 or newer.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        self._index_type = IndexType.BLOB
         return self
 
     def collection(self, collection_index_type: CollectionIndexType) -> Self:

@@ -46,6 +46,15 @@ await (
     .geo2dsphere()
     .create()
 )
+
+# Blob index (for bytes bins; server 7.0+)
+await (
+    session.index(users)
+    .on_bin("avatar_hash")
+    .named("users_avatar_hash_idx")
+    .blob()
+    .create()
+)
 ```
 
 ## Expression-Based Indexes

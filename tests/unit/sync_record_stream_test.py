@@ -90,8 +90,29 @@ def _br(idx: int, ok: bool = True):
     return SimpleNamespace(
         key=_key(idx), record=_record() if ok else None,
         result_code=ResultCode.OK if ok else ResultCode.KEY_NOT_FOUND_ERROR,
-        in_doubt=False,
+        in_doubt=False, sub_code=None,
     )
+
+
+class TestSyncSubCodePropagation:
+
+    def test_sub_code_reaches_result_and_handler(self):
+        br_fail = SimpleNamespace(
+            key=_key(1), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, in_doubt=False, sub_code=4,
+        )
+
+        stream = SyncRecordStream._from_pac_batch_stream(_FakeBatchStream([(0, br_fail)]))
+        results = list(stream)
+        assert results[0].sub_code == 4
+
+        captured: list = []
+        stream = SyncRecordStream._from_pac_batch_stream(
+            _FakeBatchStream([(0, br_fail)]),
+            on_error=lambda k, i, e: captured.append(e),
+        )
+        list(stream)
+        assert captured[0].sub_code == 4
 
 
 class TestSyncCloseReleasesProducer:

@@ -123,6 +123,11 @@ unique, so always interpret the `(result_code, sub_code)` pair together. The
 `SubCode` catalog enumerates the known subcodes. Requires Aerospike server 8.1.3
 or later; older servers ignore the request and leave the attributes `None`.
 
+Batches report failures per record rather than raising, so the same detail
+travels as data instead: a failed batch row carries the subcode on
+`RecordResult.sub_code` (`None` for successful rows or when detail was not
+requested), and `RecordResult.or_raise()` attaches it to the raised error.
+
 ## In-Doubt Writes
 
 Every `AerospikeError` carries an `in_doubt` flag. It is `True` when a **write**

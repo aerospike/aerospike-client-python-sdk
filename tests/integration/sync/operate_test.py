@@ -103,3 +103,31 @@ def test_touch_record_resets_ttl(session, ds):
     )
     row = stream.first_or_raise()
     assert row.record.bins["score"] == 42
+
+
+def test_scalar_multi_op_results_are_op_aligned(session, ds):
+    """get/add/get on one bin through the sync path: one slot per op
+    positionally, while the bins view merges the reads and skips the
+    write's empty slot."""
+    key = ds.id("scalar_positional")
+    session.delete(key).execute()
+    session.upsert(key).bin("n").set_to(1).execute()
+
+    result = (
+        session.upsert(key)
+        .bin("n").get()
+        .bin("n").add(10)
+        .bin("n").get()
+        .execute()
+    ).first_or_raise()
+    rec = result.record_or_raise()
+
+    assert rec.results == [1, None, 11]
+    assert rec.bins["n"] == [1, 11]
+
+    assert result.operation_result(1) is None
+    assert result.operation_result(2) == 11
+    typed = result.typed_operation_result(2)
+    assert typed is not None and typed.get_long() == 11
+
+    session.delete(key).execute()

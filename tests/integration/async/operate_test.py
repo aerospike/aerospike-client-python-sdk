@@ -185,3 +185,39 @@ class TestOperate:
         )
         row = await stream.first_or_raise()
         assert row.record.bins["score"] == 42
+
+class TestOperatePositionalResults:
+    """Positional per-op results for scalar multi-op operates."""
+
+    async def test_scalar_multi_op_results_are_op_aligned(self, cluster, test_set: DataSet):
+        """get/add/get on one bin: one slot per op positionally, while the
+        bins view merges the two reads and skips the write's empty slot."""
+        session = cluster.create_session()
+        key = test_set.id("scalar_positional")
+        await session.delete(key).execute()
+        await session.upsert(key).bin("n").set_to(1).execute()
+
+        stream = await (
+            session.upsert(key)
+            .bin("n").get()
+            .bin("n").add(10)
+            .bin("n").get()
+            .execute()
+        )
+        result = await stream.first_or_raise()
+        rec = result.record_or_raise()
+
+        assert rec.results == [1, None, 11]
+        assert rec.bins["n"] == [1, 11]
+
+        assert result.operation_result(0) == 1
+        assert result.operation_result(1) is None
+        assert result.operation_result(2) == 11
+
+        typed = result.typed_operation_result(2)
+        assert typed is not None and typed.get_long() == 11
+        write_slot = result.typed_operation_result(1)
+        assert write_slot is not None and write_slot.value is None
+        assert result.typed_operation_result(99) is None
+
+        await session.delete(key).execute()

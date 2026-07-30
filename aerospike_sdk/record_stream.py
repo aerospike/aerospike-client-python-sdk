@@ -169,7 +169,8 @@ class RecordStream:
                 async for idx, br in pac_stream:
                     rc = br.result_code if br.result_code is not None else ResultCode.OK
                     if on_error is not None and rc != ResultCode.OK:
-                        on_error(br.key, idx, _result_code_to_exception(rc, str(rc), br.in_doubt))
+                        on_error(br.key, idx, _result_code_to_exception(
+                            rc, str(rc), br.in_doubt, sub_code=br.sub_code))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -177,6 +178,7 @@ class RecordStream:
                         result_code=rc,
                         in_doubt=br.in_doubt,
                         index=idx,
+                        sub_code=br.sub_code,
                     )
             except Exception as e:
                 raise _convert_pac_exception(e) from e

@@ -280,3 +280,98 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
     assert not any(
         i["name"] == index_name for i in await session.list_indexes()
     ), "expression index still listed after drop"
+
+async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_for_index):
+    """Create a blob index on a bytes bin, query through it, drop it."""
+    if not supports_blob_index:
+        pytest.skip("blob secondary indexes require server 7.0+")
+
+    set_name = "blob_idx_set"
+    index_name = "psdk_blob_payload_idx"
+    ds = DataSet.of("test", set_name)
+    session = cluster.create_session()
+
+    try:
+        await session.index("test", set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+    # The decoy shares a prefix with the needle, so a truncating comparison
+    # would over-match.
+    needle = b"\xde\xad\xbe\xef"
+    blobs = [b"\x01\x02", needle, b"\xff", b"\xde\xad"]
+    keys = [ds.id(f"blob_u{i}") for i in range(len(blobs))]
+    for k, blob in zip(keys, blobs):
+        await session.upsert(k).put({"payload": blob}).execute()
+
+    try:
+        await (
+            session.index("test", set_name)
+            .on_bin("payload")
+            .named(index_name)
+            .blob()
+            .create()
+        )
+
+        flt = Filter.equal("payload", needle)
+        await wait_for_index(cluster, "test", set_name, flt)
+
+        stream = await session.query("test", set_name).filter(flt).bins(["payload"]).execute()
+        matches = [r.record.bins["payload"] async for r in stream if r.is_ok and r.record]
+        assert matches == [needle]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index("test", set_name).named(index_name).drop()
+        except Exception:
+            pass
+
+async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index, wait_for_index):
+    """Blob index over LIST collection elements: create, query via contains, drop."""
+    if not supports_blob_index:
+        pytest.skip("blob secondary indexes require server 7.0+")
+
+    set_name = "blob_list_idx_set"
+    index_name = "psdk_blob_list_payloads_idx"
+    ds = DataSet.of("test", set_name)
+    session = cluster.create_session()
+
+    try:
+        await session.index("test", set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+    # Only one record's list holds the needle; another list holds a
+    # prefix-sharing decoy that a truncating comparison would match.
+    needle = b"\xde\xad\xbe\xef"
+    lists = [
+        [b"\x01\x02", b"\xff"],
+        [b"\x0a", needle],
+        [b"\xde\xad"],
+    ]
+    keys = [ds.id(f"blob_list_u{i}") for i in range(len(lists))]
+    for k, blobs in zip(keys, lists):
+        await session.upsert(k).put({"payloads": blobs}).execute()
+
+    try:
+        await (
+            session.index("test", set_name)
+            .on_bin("payloads")
+            .named(index_name)
+            .blob()
+            .collection(CollectionIndexType.LIST)
+            .create()
+        )
+
+        flt = Filter.contains("payloads", needle, CollectionIndexType.LIST)
+        await wait_for_index(cluster, "test", set_name, flt)
+
+        stream = await session.query("test", set_name).filter(flt).bins(["payloads"]).execute()
+        matches = [r.record.bins["payloads"] async for r in stream if r.is_ok and r.record]
+        assert matches == [[b"\x0a", needle]]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index("test", set_name).named(index_name).drop()
+        except Exception:
+            pass

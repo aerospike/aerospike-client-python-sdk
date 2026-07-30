@@ -27,7 +27,7 @@ a value is the stable contract paired with its result code.
 import pytest
 from aerospike_sdk import Exp, ErrorDetailVerbosity, ExpressionTrace, SubCode
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
@@ -204,3 +204,35 @@ class TestErrorDetail:
             assert exc.exp_trace.phase == ExpressionTrace.PHASE_BUILD
             return
         pytest.fail("expected the type-mismatched expression to fail to build")
+
+
+class TestBatchErrorDetail:
+    """Per-record error detail on batch results.
+
+    A batch reports failures per record rather than raising, so the subcode
+    the single-key path puts on the exception travels as data on
+    :attr:`RecordResult.sub_code` instead.
+    """
+
+    async def test_batch_row_carries_sub_code(self, cluster, supports_error_detail):
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        k_bad = _DS.id("batch-bad")
+        k_good = _DS.id("batch-good")
+        for k in (k_bad, k_good):
+            await session.upsert(k).put({"nums": [1, 2, 3]}).execute()
+
+        rs = await (
+            session
+            .query(k_bad).bin("nums").on_list_index(99).get_values()
+            .query(k_good).bins(["nums"])
+            .execute()
+        )
+        results = await rs.collect()
+
+        assert len(results) == 2
+        assert results[0].result_code == ResultCode.OP_NOT_APPLICABLE
+        assert results[0].sub_code == _SUB_CDT_INDEX_OUT_OF_BOUNDS
+        assert results[1].is_ok
+        assert results[1].sub_code is None
