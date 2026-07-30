@@ -16,17 +16,6 @@
 """Tests for the SDK exception hierarchy, factory, and dependency converter."""
 
 import pytest
-from aerospike_async.exceptions import (
-    AerospikeError as PacAerospikeError,
-    ConnectionError as PacConnectionError,
-    InvalidNodeError as PacInvalidNodeError,
-    ServerError as PacServerError,
-    TimeoutError as PacTimeoutError,
-    UDFBadResponse as PacUDFBadResponse,
-)
-from aerospike_async.exceptions import ResultCode
-
-from aerospike_sdk.ael.exceptions import NoApplicableFilterError
 from aerospike_sdk.exceptions import (
     AerospikeError,
     AuthenticationError,
@@ -40,6 +29,7 @@ from aerospike_sdk.exceptions import (
     CapacityError,
     CommitError,
     ConnectionError,
+    _convert_pac_exception,
     ElementError,
     ElementExistsError,
     ElementNotFoundError,
@@ -55,14 +45,27 @@ from aerospike_sdk.exceptions import (
     RecordExistsError,
     RecordNotFoundError,
     RecordTooBigError,
+    _result_code_to_exception,
+    ResultCode,
     SecondaryIndexError,
     SecurityError,
     SerializationError,
     TimeoutError,
     TransactionError,
-    _convert_pac_exception,
-    _result_code_to_exception,
 )
+# The dependency-converter tests construct real PAC exceptions. PSDK's own
+# AerospikeError/ConnectionError/TimeoutError shadow the PAC names, so pull
+# the PAC types via the Pac* aliases the exceptions module already binds.
+from aerospike_sdk.exceptions import (
+    PacAerospikeError,
+    PacConnectionError,
+    PacInvalidNodeError,
+    PacServerError,
+    PacTimeoutError,
+    PacUDFBadResponse,
+)
+
+from aerospike_sdk.ael.exceptions import NoApplicableFilterError
 
 
 class TestExceptionHierarchy:
@@ -285,11 +288,27 @@ class TestConvertPacException:
         pac = PacTimeoutError("timed out")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is TimeoutError
+        assert pfc.in_doubt is False
+
+    def test_pac_timeout_in_doubt_propagated(self):
+        pac = PacTimeoutError("timed out")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TimeoutError
+        assert pfc.in_doubt is True
 
     def test_pac_connection(self):
         pac = PacConnectionError("conn refused")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is ConnectionError
+        assert pfc.in_doubt is False
+
+    def test_pac_connection_in_doubt_propagated(self):
+        pac = PacConnectionError("conn reset mid-write")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is ConnectionError
+        assert pfc.in_doubt is True
 
     def test_pac_invalid_node(self):
         pac = PacInvalidNodeError("node gone")
@@ -306,6 +325,14 @@ class TestConvertPacException:
         pac = PacAerospikeError("something broke")
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is AerospikeError
+        assert pfc.in_doubt is False
+
+    def test_pac_generic_in_doubt_propagated(self):
+        pac = PacAerospikeError("batch failed over an in-doubt write")
+        pac.in_doubt = True
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is AerospikeError
+        assert pfc.in_doubt is True
 
     def test_unknown_exception_wrapped(self):
         pfc = _convert_pac_exception(RuntimeError("wat"))

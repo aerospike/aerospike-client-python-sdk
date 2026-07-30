@@ -47,9 +47,7 @@ def skip_reason_no_sc_namespace(namespace_names: list[str]) -> str:
         "one namespace; AP-only clusters skip."
     )
     if not os.environ.get("AEROSPIKE_HOST_SC", "").strip():
-        msg += (
-            " If SC is on another seed (different host/port), set AEROSPIKE_HOST_SC."
-        )
+        msg += " If SC is on another seed (different host/port), set AEROSPIKE_HOST_SC."
     return msg
 
 

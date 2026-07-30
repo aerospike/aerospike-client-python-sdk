@@ -23,15 +23,8 @@ Covers:
 
 import pytest
 
-from aerospike_async import (
-    Key,
-    ListOrderType,
-    ListPolicy,
-    ListWriteFlags,
-    MapOrder,
-    MapPolicy,
-    MapWriteFlags,
-)
+from aerospike_sdk import Key, ListOrderType, ListWriteFlags, MapOrder, MapWriteFlags
+from aerospike_async import ListPolicy, MapPolicy
 
 from aerospike_sdk.aio.operations.cdt_write import (
     _resolve_list_policy,
@@ -80,18 +73,14 @@ class TestResolveListPolicy:
 
     def test_combined_flags_bitmask(self):
         policy = _resolve_list_policy(None, unique=True, no_fail=True)
-        assert policy.write_flags == (
-            ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL
-        )
+        assert policy.write_flags == (ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL)
 
     def test_three_combined_flags_bitmask(self):
         policy = _resolve_list_policy(
             None, unique=True, no_fail=True, partial=True,
         )
         assert policy.write_flags == (
-            ListWriteFlags.ADD_UNIQUE
-            | ListWriteFlags.NO_FAIL
-            | ListWriteFlags.PARTIAL
+            ListWriteFlags.ADD_UNIQUE | ListWriteFlags.NO_FAIL | ListWriteFlags.PARTIAL
         )
 
 

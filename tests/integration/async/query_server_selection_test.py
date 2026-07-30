@@ -35,6 +35,7 @@ from tests.integration.query_selection_helpers import (
     BOGUS_INDEX_NAME,
     INDEX_NAME,
     NS,
+    QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
     SIZE,
@@ -104,7 +105,7 @@ async def qsel_client(
             client, NS, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE),
         )
 
-        yield client
+        yield QuerySelectionClientFacade(client, session)
 
         for i in range(1, SIZE + 1):
             try:

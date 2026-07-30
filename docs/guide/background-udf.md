@@ -88,6 +88,26 @@ async for result in stream:
     print(result.record.key, result.udf_result)
 ```
 
+### Chaining with Reads and Writes
+
+UDF segments compose with read and write segments in both directions —
+the whole chain executes as one batch, one result row per segment. Use
+`execute_udf(*keys)` mid-chain to close the current segment and open a
+UDF segment on new keys; from a UDF segment, `query(...)` or a write
+verb switches back:
+
+```python
+stream = await (
+    session.upsert(orders.id(17)).put({"status": "paid"})
+    .execute_udf(stats.id("daily"))
+    .function("order_stats", "record_payment")
+    .passing(17)
+    .query(orders.id(17)).bin("status").get()
+    .execute()
+)
+rows = await stream.collect()  # write result, UDF result, read result
+```
+
 ## UDF Registration
 
 Register and remove Lua modules:

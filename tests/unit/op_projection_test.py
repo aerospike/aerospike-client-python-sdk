@@ -20,7 +20,8 @@ are stored on the builder and forwarded to the underlying ``Statement``
 via ``set_operations``.
 """
 
-from aerospike_async import CTX, CdtOperation, Operation
+from aerospike_sdk import CTX, CdtOperation
+from aerospike_async import Operation
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 

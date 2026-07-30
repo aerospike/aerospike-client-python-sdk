@@ -253,7 +253,7 @@ class TestServerCompiledAelWhere:
 
         sentinel = object()
         with patch(
-            "aerospike_sdk.aio.operations.query.filter_expression_from_ael_string",
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
             return_value=sentinel,
         ) as factory:
             qb = _async_builder(

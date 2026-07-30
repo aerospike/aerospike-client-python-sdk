@@ -38,7 +38,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.session import SyncSession
 
-from ._env import client_policy_from_config
+from ._env import client_policy_from_config, cluster_def_from_config
 from .config import WorkloadConfig, WorkloadKind
 from .record_spec import (
     BinField,
@@ -305,9 +305,8 @@ async def _one_op_async(
                 bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -335,9 +334,8 @@ async def _one_op_async(
             bins = full_bins(fields)
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.replace_if_exists(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.replace_if_exists(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -362,9 +360,8 @@ async def _one_op_async(
             bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
                 await _drain_async(stream, bsz)
@@ -486,15 +483,13 @@ def _build_op_sync(
             decision[0] = False
             keys = [ds_id(str(bench.next_insert_key())) for _ in range(bsz)]
             bins = full_bins(fields_t)
-            b = session.batch()
-            cur = b
-            for k in keys:
+            cur = session.upsert(keys[0]).put(bins)
+            for k in keys[1:]:
                 cur = cur.upsert(k).put(bins)
             stream = cur.execute()
             results = stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -568,15 +563,13 @@ def _build_op_sync(
                     bins = full_bins(fields_t)
                 else:
                     bins = single_bin_put(fields_t, pick_bin_index(rng, field_count))
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
             results = stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -603,10 +596,7 @@ def _prebuilt_key_pairs(cfg: WorkloadConfig):
     ns_str = cfg.namespace
     set_str = cfg.set_name
     kc = cfg.key_count
-    return [
-        (key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i)
-        for _ in range(pkn)
-    ]
+    return [(key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i) for _ in range(pkn)]
 
 
 def _build_op_async(
@@ -669,6 +659,37 @@ def _build_op_async(
             kid = rng.randint(1, kc)
             return (key_from_int(ns_str, set_str, kid), kid)
 
+    # Window API (--mode async-many) — usable on any loop the caller drives,
+    # including each AsyncPool loop. One op issues a get_many/put_many window of
+    # cfg.many_size keys and returns (n_ok, n_err) for the pool worker's
+    # bulk_record path. Mirrors run_async_many's counting exactly: a not-found
+    # read slot counts as ok (success-with-no-record), only real errors/timeouts
+    # count as errors — so pooled-window TPS is comparable to the single-loop
+    # async-many cells.
+    if cfg.mode == "async-many":
+        K = max(1, cfg.many_size)
+        w_bins = {b0_name: 1} if single_bin else full_bins(fields_t)
+        async def op(rng):
+            is_read = rng.randint(1, 100) <= read_pct
+            decision[0] = is_read
+            keys = [
+                key_from_int(ns_str, set_str, rng.randint(1, kc))
+                for _ in range(K)
+            ]
+            if is_read:
+                results = await session.get_many(keys)
+            else:
+                results = await session.put_many(keys, w_bins)
+            n_ok = 0
+            n_err = 0
+            for r in results:
+                if isinstance(r, BaseException) and not _is_not_found(r):
+                    n_err += 1
+                else:
+                    n_ok += 1
+            return n_ok, n_err
+        return op
+
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
             async def op(rng):
@@ -687,15 +708,13 @@ def _build_op_async(
             decision[0] = False
             keys = [ds_id(str(bench.next_insert_key())) for _ in range(bsz)]
             bins = full_bins(fields_t)
-            b = session.batch()
-            cur: Any = b
-            for k in keys:
+            cur: Any = session.upsert(keys[0]).put(bins)
+            for k in keys[1:]:
                 cur = cur.upsert(k).put(bins)
             stream = await cur.execute()
             results = await stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -771,15 +790,13 @@ def _build_op_async(
                     bins = full_bins(fields_t)
                 else:
                     bins = single_bin_put(fields_t, pick_bin_index(rng, field_count))
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = await cur.execute()
             results = await stream.collect()
             n_err = sum(
-                1 for r in results
-                if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
+                1 for r in results if not r.is_ok and not isinstance(r.error, _AsRecordNotFound)
             )
             return len(results) - n_err, n_err
         return op
@@ -836,9 +853,8 @@ def _one_op_sync(
                 bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur: Any = b
-                for k in keys:
+                cur: Any = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
@@ -866,9 +882,8 @@ def _one_op_sync(
             bins = full_bins(fields)
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.replace_if_exists(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.replace_if_exists(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
@@ -893,9 +908,8 @@ def _one_op_sync(
             bins = single_bin_put(fields, pick_bin_index(rng, len(fields)))
             if bsz > 1:
                 assert isinstance(keys, list)
-                b = session.batch()
-                cur = b
-                for k in keys:
+                cur = session.upsert(keys[0]).put(bins)
+                for k in keys[1:]:
                     cur = cur.upsert(k).put(bins)
                 stream = cur.execute()
                 _drain_sync(stream, bsz)
@@ -1026,6 +1040,99 @@ async def run_async(
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def run_async_many(
+    cfg: WorkloadConfig,
+    stats: StatsCollector,
+    stop: asyncio.Event,
+    connected: asyncio.Event | None = None,
+) -> None:
+    """Worker for ``--mode async-many`` — the explicit ``get_many``/``put_many``
+    window API.
+
+    Each iteration issues ONE window of ``cfg.many_size`` independent point ops
+    in a single call: ``session.get_many(keys)`` (read window) or
+    ``session.put_many(keys, bins)`` (write window), split by ``read_percent``
+    at the window granularity. This is client-side fusion of N independent
+    point ops into a single FFI crossing + one completion — NOT a server batch
+    request (contrast ``--batch-size``). Each key counts as one op for TPS; a
+    per-key exception slot is that key's error, a not-found slot is a miss.
+    """
+    policy = client_policy_from_config(cfg)
+    K = max(1, cfg.many_size)
+    kc = cfg.key_count
+    read_pct = cfg.read_percent
+    fields_t = tuple(cfg.bin_fields)
+    single_bin = len(fields_t) == 1
+    b0_name = fields_t[0].name
+    ns_str = cfg.namespace
+    set_str = cfg.set_name
+    key_from_int = Key.from_int_user_key
+    async with Client(cfg.seeds, policy=policy) as client:
+        session = client.create_session(Behavior.DEFAULT)
+        dataset = DataSet.of(cfg.namespace, cfg.set_name)
+        # Fail the self-test BEFORE signalling `connected` (see run_async).
+        await _self_test_psdk_async(session, dataset)
+        if connected is not None:
+            connected.set()
+
+        async def worker(worker_id: int) -> None:
+            seed = (cfg.seed + worker_id + 1) % (2**32)
+            rng = FastRng(seed)
+            has_limit = cfg.max_ops is not None
+            sample_every = cfg.lat_sample_every
+            with_tel = cfg.with_telemetry
+            write_bins = (
+                {b0_name: worker_id + 1} if single_bin else full_bins(fields_t)
+            )
+            ws = stats.register_worker()
+            local_count = 0
+            while not stop.is_set():
+                if has_limit and stats.total_ops() >= cfg.max_ops:
+                    return
+                is_read = rng.randint(1, 100) <= read_pct
+                keys = [
+                    key_from_int(ns_str, set_str, rng.randint(1, kc))
+                    for _ in range(K)
+                ]
+                sample = with_tel and (local_count % sample_every == 0)
+                t0 = time.perf_counter() if sample else 0.0
+                try:
+                    if is_read:
+                        results = await session.get_many(keys)
+                    else:
+                        results = await session.put_many(keys, write_bins)
+                except BaseException as exc:
+                    dt = (time.perf_counter() - t0) * 1000.0 if sample else None
+                    # Whole-window failure (e.g. timeout): count all K as errors.
+                    ws.bulk_record(is_read, 0, K, dt)
+                    if not isinstance(exc, Exception):
+                        raise
+                else:
+                    dt = (time.perf_counter() - t0) * 1000.0 if sample else None
+                    n_ok = 0
+                    n_err = 0
+                    for r in results:
+                        if isinstance(r, BaseException) and not _is_not_found(r):
+                            n_err += 1
+                        else:
+                            # A record OR a not-found both count as a completed
+                            # read op — matches run_async, where not-found is
+                            # "success-with-no-record" (reads += 1), and only
+                            # real errors/timeouts are excluded. Keeps async-many
+                            # TPS accounting consistent with the single-op cells.
+                            n_ok += 1
+                    ws.bulk_record(is_read, n_ok, n_err, dt)
+                local_count += 1
+
+        tasks = [asyncio.create_task(worker(i)) for i in range(cfg.async_tasks)]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run_async_pool(
     cfg: WorkloadConfig,
     stats: StatsCollector,
@@ -1047,23 +1154,34 @@ async def run_async_pool(
 
     n_loops = cfg.pool_loops
     bench_state = _BenchState()
-    policy = client_policy_from_config(cfg)
 
     # threading.Event is safe to check from any OS thread / event loop.
     thread_stop = threading.Event()
-
-    def factory() -> Client:
-        return Client(cfg.seeds, policy=policy)
 
     async def _bridge_stop() -> None:
         await stop.wait()
         thread_stop.set()
 
-    async with AsyncPool(factory, loop_count=n_loops) as pool:
+    # Definition-based pool contract. ``seed_only_cluster`` has no
+    # ClusterDefinition surface, so that config falls back to the deprecated
+    # factory shape (whose callbacks receive raw Clients — the worker below
+    # only calls ``create_session``, which both member types expose).
+    cluster_def = cluster_def_from_config(cfg)
+    if cluster_def is not None:
+        pool = AsyncPool(cluster_def, loop_count=n_loops)
+    else:
+        policy = client_policy_from_config(cfg)
+
+        def factory() -> Client:
+            return Client(cfg.seeds, policy=policy)
+
+        pool = AsyncPool(client_factory=factory, loop_count=n_loops)
+
+    async with pool:
         dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)
 
-        async def _do_self_test(client: Client) -> None:
-            session = client.create_session(Behavior.DEFAULT)
+        async def _do_self_test(member) -> None:
+            session = member.create_session(Behavior.DEFAULT)
             await _self_test_psdk_async(session, dataset_for_self_test)
 
         # Self-test BEFORE `connected.set()` so the failure aborts the
@@ -1084,8 +1202,8 @@ async def run_async_pool(
         _pkn = len(pk_pairs) if pk_pairs else 0
         _n_workers = max(1, n_loops * cfg.async_tasks)
 
-        async def loop_worker(client: Client, loop_idx: int) -> None:
-            session = client.create_session(Behavior.DEFAULT)
+        async def loop_worker(member, loop_idx: int) -> None:
+            session = member.create_session(Behavior.DEFAULT)
             dataset = DataSet.of(cfg.namespace, cfg.set_name)
             fields = list(cfg.bin_fields)
 
@@ -1131,10 +1249,7 @@ async def run_async_pool(
                             ws.bulk_record(decision[0], ret[0], ret[1], dt)
                     local_count += 1
 
-            tasks = [
-                asyncio.create_task(worker(i))
-                for i in range(cfg.async_tasks)
-            ]
+            tasks = [asyncio.create_task(worker(i)) for i in range(cfg.async_tasks)]
             try:
                 await asyncio.gather(*tasks)
             finally:
@@ -1257,13 +1372,10 @@ def run_pac_blocking(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-blocking mode currently supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"pac-blocking mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "pac-blocking mode does not yet support --batch-size > 1."
-        )
+        raise NotImplementedError("pac-blocking mode does not yet support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     seeds = cfg.seeds
@@ -1285,8 +1397,7 @@ def run_pac_blocking(
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
         _pk_pairs = [
-            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i)
-            for _ in range(pkn)
+            (dataset.id(str(i := _pk_rng.randint(1, cfg.key_count))), i) for _ in range(pkn)
         ]
 
     # ct_runtime: each worker thread gets its own `_LocalClient` (per-thread
@@ -1391,9 +1502,7 @@ def run_pac_blocking(
                     elif rng.randint(1, 100) <= wab_pct:
                         payload = full_bins(fields_t)
                     else:
-                        payload = single_bin_put(
-                            fields_t, pick_bin_index(rng, len(fields_t))
-                        )
+                        payload = single_bin_put(fields_t, pick_bin_index(rng, len(fields_t)))
 
             sample = with_tel and (local_count % sample_every == 0)
             t0 = time.perf_counter() if sample else 0.0
@@ -1452,13 +1561,10 @@ async def run_pac_async(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-async mode currently supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"pac-async mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "pac-async mode does not support --batch-size > 1."
-        )
+        raise NotImplementedError("pac-async mode does not support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     read_policy = ReadPolicy()
@@ -1480,8 +1586,7 @@ async def run_pac_async(
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
         _pk_pairs = [
-            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i)
-            for _ in range(pkn)
+            (key_from_int(ns, set_name, i := _pk_rng.randint(1, kc)), i) for _ in range(pkn)
         ]
 
     client = await new_client(policy, cfg.seeds)
@@ -1525,11 +1630,7 @@ async def run_pac_async(
                         payload = None
                     else:
                         verb = "put"
-                        payload = (
-                            {b0_name: kid}
-                            if single_bin
-                            else full_bins(fields_t)
-                        )
+                        payload = {b0_name: kid} if single_bin else full_bins(fields_t)
 
                 sample = with_tel and (local_count % sample_every == 0)
                 t0 = time.perf_counter() if sample else 0.0
@@ -1582,13 +1683,10 @@ def run_legacy_sync(
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"legacy-sync mode supports only RU/I workloads "
-            f"(got {cfg.workload.name})."
+            f"legacy-sync mode supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError(
-            "legacy-sync mode does not support --batch-size > 1."
-        )
+        raise NotImplementedError("legacy-sync mode does not support --batch-size > 1.")
 
     import os as _os
 
@@ -1640,10 +1738,7 @@ def run_legacy_sync(
     pkn = max(0, cfg.prebuilt_keys)
     if pkn > 0:
         _pk_rng = random.Random(cfg.seed)
-        _pk_pairs = [
-            ((ns, set_name, str(i := _pk_rng.randint(1, kc))), i)
-            for _ in range(pkn)
-        ]
+        _pk_pairs = [((ns, set_name, str(i := _pk_rng.randint(1, kc))), i) for _ in range(pkn)]
 
     legacy_st_key = (ns, set_name, _SELF_TEST_KEY)
 
@@ -1703,11 +1798,7 @@ def run_legacy_sync(
                     payload = None
                 else:
                     verb = "put"
-                    payload = (
-                        {b0_name: kid}
-                        if single_bin
-                        else full_bins(fields_t)
-                    )
+                    payload = {b0_name: kid} if single_bin else full_bins(fields_t)
 
             sample = with_tel and (local_count % sample_every == 0)
             t0 = time.perf_counter() if sample else 0.0

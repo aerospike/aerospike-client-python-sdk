@@ -32,6 +32,7 @@ from tests.integration.query_selection_helpers import (
     BOGUS_INDEX_NAME,
     INDEX_NAME,
     NS,
+    QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
     SIZE,
@@ -43,12 +44,12 @@ from tests.integration.query_selection_helpers import (
 )
 
 
-def _sync_wait_for_index(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
     deadline = time.monotonic() + timeout
     last_err = None
     while time.monotonic() < deadline:
         try:
-            stream = client.query(ns, set_name).filter(sindex_filter).execute()
+            stream = session.query(namespace=ns, set_name=set_name).filter(sindex_filter).execute()
             for _ in stream:
                 break
             stream.close()
@@ -103,13 +104,13 @@ def qsel_client(
                 pass
 
         _sync_wait_for_index(
-            client, NS, SET_NAME, Filter.range(BIN_AGE, 1, SIZE),
+            client, session, NS, SET_NAME, Filter.range(BIN_AGE, 1, SIZE),
         )
         _sync_wait_for_index(
-            client, NS, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE),
+            client, session, NS, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE),
         )
 
-        yield client
+        yield QuerySelectionClientFacade(client, session)
 
         for i in range(1, SIZE + 1):
             try:

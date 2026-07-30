@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import typing
 from typing import (
     Any,
@@ -30,15 +32,14 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
-    from aerospike_sdk.record_result import RecordResult
 
-from aerospike_async import Key, Record, ResultCode, Txn
+from aerospike_async import Key, Record, ResultCode, Txn, UDFLang
 
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
-from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
@@ -50,7 +51,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-from aerospike_sdk.session_shared import NamespaceScStatus
+from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 
 
 def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
@@ -76,7 +77,18 @@ def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
     return exists, sc_opt
 
 
-class Session:
+# Gates for the transparent same-tick coalescer (on by default; PSDK_COALESCE=0
+# disables both directions, PSDK_COALESCE_WRITES=0 leaves reads fusing but sends
+# writes direct). Fusing mechanism + transparency contract are documented at the
+# dispatch sites (:meth:`Session._coalesced_get`, :meth:`Session._coalesced_put`);
+# the measured lift is in docs/guide/performance.md ("Async operation coalescing").
+# Writes get their own gate because the two directions carry different overheads —
+# a buffered write also copies its payload — so their break-even fan-in differs.
+_COALESCE = os.environ.get("PSDK_COALESCE", "1") != "0"
+_COALESCE_WRITES = _COALESCE and os.environ.get("PSDK_COALESCE_WRITES", "1") != "0"
+
+
+class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Perform reads and writes against Aerospike with a fixed :class:`~aerospike_sdk.policy.behavior.Behavior`.
 
     A session binds a connected :class:`Client` to policy defaults (timeouts,
@@ -84,7 +96,8 @@ class Session:
     sessions with :meth:`Client.create_session`; do not construct
     ``Session`` directly.
 
-    Example:
+    Example::
+
         async with Client("localhost:3000") as client:
             session = client.create_session(Behavior.DEFAULT)
             users = DataSet.of("test", "users")
@@ -119,20 +132,26 @@ class Session:
         # right policy per resolved namespace mode without rebuilding.
         # `_cached_*_policy` stays as the AP alias (matches behavior's default
         # mode); session.get/put still use it.
-        self._cached_read_policy = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
-        self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
-        self._cached_read_policy_sc = to_read_policy(
-            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
-        self._cached_write_policy_sc = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
+        self._refresh_cached_policies()
+        # Config hot-reload pushes rebuilt policies into live sessions
+        # (weak registration; no per-operation check).
+        behavior._register_session(self)
         # Cache the raw PAC client for fast-path methods.
         self._pac_client = client._async_client
         # Transaction hook. Non-transactional sessions always return None;
         # TransactionalSession overrides this to yield its active Txn so every
         # builder spawned from the session auto-participates.
         self._txn: Optional[Txn] = None
+        # Transparent coalescer state (prototype; single-loop assumption).
+        # Only touched when _COALESCE is enabled. Reads and writes buffer
+        # separately because they are distinct submissions, but share one armed
+        # flush so a mixed tick still pays a single call_soon.
+        self._coalesce_keys: List[Key] = []
+        self._coalesce_futs: List[Any] = []
+        self._coalesce_write_keys: List[Key] = []
+        self._coalesce_write_bins: List[Dict[str, Any]] = []
+        self._coalesce_write_futs: List[Any] = []
+        self._coalesce_scheduled = False
 
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
@@ -179,47 +198,6 @@ class Session:
         cache[namespace] = mode
         return mode
 
-    def _bind_txn(self, builder):
-        """Stamp the session's current txn onto a builder if one is active.
-
-        Fast-path helper used by every builder factory on :class:`Session`
-        so that operations started inside a
-        :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        auto-participate in the transaction. Returns the builder for fluent
-        use; no-op outside an MRT.
-        """
-        if self._txn is not None:
-            builder.with_txn(self._txn)
-        return builder
-
-    def get_current_transaction(self) -> Optional[Txn]:
-        """Return the active transaction for this session, or ``None``.
-
-        Regular :class:`Session` instances always return ``None``; only
-        :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        inside its ``async with`` block returns a live
-        :class:`~aerospike_async.Txn`. Builders created from this session
-        call this hook at construction and thread the result through every
-        policy they hand to the PAC.
-
-        Returns:
-            The active :class:`~aerospike_async.Txn`, or ``None`` outside a
-            transaction.
-
-        Example::
-
-            session = client.create_session()
-            session.get_current_transaction() is None
-            # True
-            async with session.begin_transaction() as tx:
-                assert tx.get_current_transaction() is tx.txn
-
-        See Also:
-            :meth:`begin_transaction`: Enter a multi-record transaction.
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-        """
-        return self._txn
-
     # -- Fast-path single-key operations ------------------------------------
     # These bypass the QueryBuilder/OperationSpec/RecordStream chain for
     # simple single-key reads and writes, calling the PAC directly.
@@ -250,25 +228,156 @@ class Session:
                 client without being wrapped in a
                 :class:`~aerospike_sdk.record_result.RecordResult`.
 
-        Example:
-            >>> users = DataSet.of("test", "users")
-            >>> rec = await session.get(users.id(1))
-            >>> name = rec.bins["name"]
+        Example::
+
+            users = DataSet.of("test", "users")
+            rec = await session.get(users.id(1))
+            name = rec.bins["name"]
 
         See Also:
             :meth:`query`: Builder-based reads for projections, streams, and secondary-index queries.
             :meth:`put`: Direct single-key upsert.
         """
         if self._txn is None:
+            if _COALESCE and bins is None:
+                return await self._coalesced_get(key)
             return await self._pac_client.get(
                 key, bins,
                 policy=self._cached_read_policy,
                 policy_sc=self._cached_read_policy_sc,
             )
-        policy = to_read_policy(
-            self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
         policy.txn = self._txn
         return await self._pac_client.get(key, bins, policy=policy)
+
+    async def _coalesced_get(self, key: Key) -> Record:
+        """Opportunistic same-tick coalescing for a no-projection read.
+
+        The *first* ``get`` of an event-loop iteration finds no flush armed, so
+        it dispatches **directly** (paying none of the coalescer's buffer /
+        create_task machinery) and arms a single :meth:`_flush_coalesced`.
+        Any *followers* in the same tick see the armed flush and enqueue, so
+        they fuse into one ``_submit_coalesced_read`` crossing that resolves
+        each future the instant its own key returns (per-op delivery, no
+        head-of-line). A lone or low-rate ``get`` is therefore just a direct
+        :meth:`get`; under load all but the tick's first op coalesce. The record
+        (or raised exception) is byte-identical to a direct read either way.
+        """
+        loop = asyncio.get_running_loop()
+        if self._coalesce_scheduled:
+            fut = loop.create_future()
+            self._coalesce_keys.append(key)
+            self._coalesce_futs.append(fut)
+            return await fut
+        self._coalesce_scheduled = True
+        loop.call_soon(self._flush_coalesced)
+        return await self._pac_client.get(
+            key, None,
+            policy=self._cached_read_policy,
+            policy_sc=self._cached_read_policy_sc,
+        )
+
+    async def _coalesced_put(self, key: Key, bins: Dict[str, Any]) -> None:
+        """Opportunistic same-tick coalescing for a point write.
+
+        Write-side mirror of :meth:`_coalesced_get`: the tick's first ``put``
+        dispatches directly and arms the flush, and followers enqueue to fuse
+        into one ``_submit_coalesced_write`` crossing carrying a per-key
+        payload each. ``None`` (or the raised exception) is delivered exactly
+        as a direct write delivers it.
+
+        Buffered payloads are copied because the submission is deferred to the
+        flush: a caller that reuses one dict across concurrent writes would
+        otherwise have every buffered op see its final contents, where a direct
+        write converts the payload before returning.
+        """
+        loop = asyncio.get_running_loop()
+        if self._coalesce_scheduled:
+            fut = loop.create_future()
+            self._coalesce_write_keys.append(key)
+            self._coalesce_write_bins.append(dict(bins))
+            self._coalesce_write_futs.append(fut)
+            await fut
+            return
+        self._coalesce_scheduled = True
+        loop.call_soon(self._flush_coalesced)
+        await self._pac_client.put(
+            key, bins,
+            policy=self._cached_write_policy,
+            policy_sc=self._cached_write_policy_sc,
+        )
+
+    def _flush_coalesced(self) -> None:
+        """Fuse the tick's follower ops into one crossing per direction.
+
+        Either buffer can be empty — the tick's first op of that kind went
+        direct, and a read-only or write-only tick never fills the other.
+
+        This runs as a loop callback, so an exception escaping it would be
+        reported to the loop's handler while the callers of the drained buffers
+        awaited futures nothing would ever complete. Every submission is
+        therefore responsible for resolving the futures it took ownership of,
+        including when it fails.
+        """
+        self._coalesce_scheduled = False
+        # Fire-and-forget: PAC resolves each future through the bridge's drainer
+        # the instant its own op completes (per-op delivery — no head-of-line).
+        keys = self._coalesce_keys
+        if keys:
+            futs = self._coalesce_futs
+            self._coalesce_keys = []
+            self._coalesce_futs = []
+            try:
+                self._pac_client._submit_coalesced_read(
+                    keys, futs, None,
+                    policy=self._cached_read_policy,
+                    policy_sc=self._cached_read_policy_sc,
+                )
+            except Exception as exc:
+                # A read window carries no per-key conversion, so the only way
+                # to get here is a whole-submission failure (e.g. a client
+                # closed mid-tick) that applies equally to every key.
+                for fut in futs:
+                    if not fut.done():
+                        fut.set_exception(exc)
+        write_keys = self._coalesce_write_keys
+        if write_keys:
+            write_futs = self._coalesce_write_futs
+            write_bins = self._coalesce_write_bins
+            self._coalesce_write_keys = []
+            self._coalesce_write_futs = []
+            self._coalesce_write_bins = []
+            try:
+                self._pac_client._submit_coalesced_write(
+                    write_keys, write_futs, write_bins,
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+            except Exception:
+                self._resubmit_writes_individually(
+                    write_keys, write_futs, write_bins)
+
+    def _resubmit_writes_individually(
+        self, keys: List[Key], futs: List[Any], bins_list: List[Dict[str, Any]],
+    ) -> None:
+        """Retry a failed write window one op at a time.
+
+        The batched crossing converts every payload before submitting anything,
+        so a single unconvertible value aborts the whole window. Dispatching the
+        survivors individually keeps a buffered write's outcome identical to a
+        direct one: only the caller that passed a bad payload sees the error.
+        """
+        for key, fut, bins in zip(keys, futs, bins_list):
+            if fut.done():
+                continue
+            try:
+                self._pac_client._submit_coalesced_write(
+                    [key], [fut], [bins],
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+            except Exception as exc:
+                fut.set_exception(exc)
 
     async def put(
         self, key: Key, bins: Dict[str, Any],
@@ -294,15 +403,19 @@ class Session:
             AerospikeError: Server or client errors are raised from the
                 underlying client.
 
-        Example:
-            >>> users = DataSet.of("test", "users")
-            >>> await session.put(users.id(1), {"name": "Tim", "age": 30})
+        Example::
+
+            users = DataSet.of("test", "users")
+            await session.put(users.id(1), {"name": "Tim", "age": 30})
 
         See Also:
             :meth:`upsert`: Builder-based writes with full feature set.
             :meth:`get`: Direct single-key point read.
         """
         if self._txn is None:
+            if _COALESCE_WRITES:
+                await self._coalesced_put(key, bins)
+                return
             await self._pac_client.put(
                 key, bins,
                 policy=self._cached_write_policy,
@@ -315,15 +428,88 @@ class Session:
         policy.txn = self._txn
         await self._pac_client.put(key, bins, policy=policy)
 
-    @property
-    def behavior(self) -> Behavior:
-        """Policy bundle applied to operations created from this session.
+    async def get_many(
+        self, keys: List[Key], bins: Optional[List[str]] = None,
+    ) -> List[Any]:
+        """Direct point reads for a window of keys — one await, one result list.
+
+        Client-side fusion of independent single-record reads: one call
+        submits the whole window and one completion delivers all results,
+        so per-op submission and wakeup overhead is amortized across the
+        window. These are NOT a server batch request — each key remains an
+        independent wire op (use :meth:`query` with a key list for wire
+        batching).
+
+        Args:
+            keys: Target keys; results are positional.
+            bins: Optional bin-name projection shared by the window.
 
         Returns:
-            The :class:`~aerospike_sdk.policy.behavior.Behavior` passed to
-            :meth:`Client.create_session`.
+            A list the same length as ``keys``. Each slot is the
+            :class:`~aerospike_async.Record` for that key, or the exception
+            instance (not raised) for that key — check with
+            ``isinstance(slot, Exception)``. One failed key never fails its
+            window-mates.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            records = await session.get_many([users.id(i) for i in range(16)])
+            found = [r for r in records if not isinstance(r, Exception)]
+
+        See Also:
+            :meth:`get`: Single-key point read.
+            :meth:`put_many`: Window counterpart for writes.
         """
-        return self._behavior
+        if self._txn is None:
+            return await self._pac_client._submit_many_read(
+                keys, bins,
+                policy=self._cached_read_policy,
+                policy_sc=self._cached_read_policy_sc,
+            )
+        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+        policy.txn = self._txn
+        return await self._pac_client._submit_many_read(keys, bins, policy=policy)
+
+    async def put_many(
+        self, keys: List[Key], bins: Dict[str, Any],
+    ) -> List[Any]:
+        """Direct upserts of one payload to a window of keys — one await.
+
+        Write counterpart of :meth:`get_many`: the ``bins`` payload is
+        converted once and written to every key in the window as
+        independent wire ops with client-side fused submission/completion.
+
+        Args:
+            keys: Target keys; results are positional.
+            bins: Mapping of bin name to value written to every key.
+
+        Returns:
+            A list the same length as ``keys``: ``None`` for each success,
+            or the exception instance (not raised) for that key.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            outcomes = await session.put_many(
+                [users.id(i) for i in range(16)], {"active": True})
+            errors = [e for e in outcomes if e is not None]
+
+        See Also:
+            :meth:`put`: Single-key upsert.
+            :meth:`get_many`: Window counterpart for reads.
+        """
+        if self._txn is None:
+            return await self._pac_client._submit_many_write(
+                keys, bins,
+                policy=self._cached_write_policy,
+                policy_sc=self._cached_write_policy_sc,
+            )
+        policy = to_write_policy(
+            self._behavior.get_settings(
+                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+        policy.txn = self._txn
+        return await self._pac_client._submit_many_write(keys, bins, policy=policy)
 
     @property
     def client(self) -> Client:
@@ -335,54 +521,6 @@ class Session:
         return self._client
 
     # Delegate all Client operations to maintain same API
-
-    def batch(self) -> "BatchOperationBuilder":
-        """Start a multi-key batch of mixed write operations executed in one server round trip.
-
-        Chain ``insert``, ``update``, ``upsert``, ``replace``, ``delete``, and related
-        bin builders, then ``await ...execute()`` (buffered) or ``execute_stream()``
-        (lazy) to obtain per-key outcomes.
-
-        This is a write-focused convenience: it accepts write verbs and
-        expression reads (``bin(...).select_from(...)``) only. To combine plain
-        reads, ``touch``, or ``exists`` with writes in a single batch, use the
-        :meth:`query` chain, which accepts the same write verbs and is a
-        superset of this builder.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.batch.BatchOperationBuilder`
-            for chaining operations.
-
-        Raises:
-            RuntimeError: If the client is not connected.
-
-        Example::
-
-            results = await (
-                session.batch()
-                .insert(key1).put({"name": "Alice", "age": 25})
-                .update(key2).bin("counter").add(1)
-                .upsert(key3).put({"status": "active"})
-                .delete(key4)
-                .execute()
-            )
-            for row in results:
-                print(row.key, row.result_code)
-
-        See Also:
-            :meth:`query`: Chainable builder for reads and mixed read+write batches (a superset of this write-focused builder).
-            :meth:`upsert`: Single-record writes without batching.
-        """
-        if self._client._client is None:
-            raise RuntimeError("Client is not connected")
-
-        return BatchOperationBuilder(
-            self._client._client,
-            self._behavior,
-            txn=self._txn,
-            namespace_mode_resolver=self._resolve_namespace_mode,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-        )
 
     def background_task(self) -> "BackgroundTaskSession":
         """Configure a server-side background job (query + scan scope) on a dataset.
@@ -471,8 +609,7 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_query_selection=self._client.supports_query_selection,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            sdk_client=self._client,
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -553,265 +690,88 @@ class Session:
             txn=self._txn,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_query_selection=self._client.supports_query_selection,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            sdk_client=self._client,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
 
     def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
-        """Single-key write shortcut: bypass QueryBuilder entirely."""
+        """Single-key write shortcut: bypass QueryBuilder entirely.
+
+        Bench-hot: every arg stays positional (matching the
+        ``_SingleKeyWriteSegmentBase.__init__`` order) so this call never
+        materializes a kwargs dict. All eight write verbs route their
+        single-key shape through here from the shared session base.
+        """
         return _SingleKeyWriteSegment(
-            client=self._client._async_client,
-            key=key,
-            op_type=op_type,
-            behavior=self._behavior,
-            write_policy=self._cached_write_policy,
-            read_policy=self._cached_read_policy,
-            write_policy_sc=self._cached_write_policy_sc,
-            read_policy_sc=self._cached_read_policy_sc,
-            txn=self._txn,
-            namespace_mode_resolver=self._resolve_namespace_mode,
-            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_query_selection=self._client.supports_query_selection,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
+            self._client._async_client,
+            key,
+            op_type,
+            self._behavior,
+            self._cached_write_policy,
+            self._cached_read_policy,
+            self._txn,
+            self._resolve_namespace_mode,
+            self._resolve_namespace_mode_blocking,
+            self._cached_write_policy_sc,
+            self._cached_read_policy_sc,
+            self._client,
         )
 
     # -- Read entry point -----------------------------------------------------
+    # ``query`` itself is inherited from SessionBase (shared arg normalization);
+    # only the tree-specific builder construction lives here, behind the hooks
+    # the base routes to.
 
-    @typing.overload
-    def query(
-        self,
-        dataset: DataSet,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder from a DataSet."""
-        ...
+    def _fast_query_builder(self, key: Key, behavior: Behavior) -> QueryBuilder:
+        """Single-key query builder: skip ``Client.query()`` and per-op policy rebuilds.
 
-    @typing.overload
-    def query(
-        self,
-        key: Key,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for a single Key (point read)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        keys: List[Key],
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (batch read)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        *keys: Key,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder for multiple Keys (varargs)."""
-        ...
-
-    @typing.overload
-    def query(
-        self,
-        namespace: str,
-        set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Create a query builder with explicit namespace/set."""
-        ...
-
-    def query(
-        self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        arg2: Optional[Union[str, Key]] = None,
-        *keys: Key,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys_list: Optional[List[Key]] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> QueryBuilder:
-        """Start a read or secondary-index query for keys or a whole set.
-
-        This session's :attr:`behavior` is applied to the underlying
-        :class:`~aerospike_sdk.aio.operations.query.QueryBuilder`. Supported
-        shapes include a :class:`~aerospike_sdk.dataset.DataSet` (set-wide
-        query), a single :class:`~aerospike_async.Key`, multiple keys (list or
-        varargs), or explicit ``namespace`` / ``set_name`` for index scans.
-
-        Args:
-            arg1: Positional dataset, key, list of keys, or namespace string
-                (when paired with ``arg2`` as set name).
-            arg2: When ``arg1`` is a namespace, the set name; otherwise may be
-                a second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional argument is a key.
-            namespace: Keyword namespace (with ``set_name``) when not using a
-                dataset.
-            set_name: Keyword set name (with ``namespace``).
-            dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet`.
-            key: Keyword single key.
-            keys_list: Keyword list of keys when not using ``arg1`` or varargs;
-                forwarded to the client as ``keys``.
-            behavior: Optional override for this query; defaults to the session's
-                :attr:`behavior`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.QueryBuilder` to
-            chain ``where``, ``bins``, ``execute``, etc.
-
-        Raises:
-            TypeError: If positional types do not match the supported overloads.
-            ValueError: If a key list is empty or arguments are inconsistent.
-
-        Example:
-            users = DataSet.of("test", "users")
-            rs = await session.query(users.id(1)).bins(["name"]).execute()
-            row = await rs.first_or_raise()
-
-        Example:
-            users = DataSet.of("test", "users")
-            rs = await session.query(users.ids(1, 2, 3)).bins(["name"]).execute()
-            rows = await rs.collect()
-
-        See Also:
-            :meth:`Client.query`: Same shapes without session behavior.
-            :meth:`upsert`: Writes for the same keys.
+        Bench-hot: the common ``session.query(key)`` shape lands here directly
+        from the shared session base, bypassing the general key-resolution path.
+        Every arg stays positional (matching the ``_QueryBuilderBase.__init__``
+        order) so this call never materializes a kwargs dict — offsetting the
+        one added dispatch frame the shared-base ``query`` costs this path.
         """
-        # Ultra-fast entry for the most common shape: `session.query(key)`
-        # with no other positional or keyword args. Skip the entire
-        # isinstance chain (3 checks + wasted list alloc) and the kwarg
-        # routing — go straight to QueryBuilder construction. This is the
-        # bench / typical-app read pattern and now accounts for ~3.7 µs/op
-        # on async single-loop builder; this entry cuts it dramatically.
-        if (
-            arg1.__class__ is Key
-            and arg2 is None
-            and not keys
-            and namespace is None
-            and set_name is None
-            and dataset is None
-            and key is None
-            and keys_list is None
-            and behavior is None
-        ):
-            builder = QueryBuilder(
-                client=self._client._async_client,
-                namespace=arg1.namespace,
-                set_name=arg1.set_name,
-                behavior=self._behavior,
-                indexes_monitor=self._client._indexes_monitor,
-                cached_read_policy=self._cached_read_policy,
-                cached_write_policy=self._cached_write_policy,
-                cached_read_policy_sc=self._cached_read_policy_sc,
-                cached_write_policy_sc=self._cached_write_policy_sc,
-                txn=self._txn,
-                namespace_mode_resolver=self._resolve_namespace_mode,
-                namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                supports_query_selection=self._client.supports_query_selection,
-                supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-            )
-            builder._single_key = arg1
-            return builder
+        builder = QueryBuilder(
+            self._client._async_client,
+            key.namespace,
+            key.set_name,
+            behavior,
+            self._client._indexes_monitor,
+            self._cached_read_policy,
+            self._cached_write_policy,
+            self._cached_read_policy_sc,
+            self._cached_write_policy_sc,
+            self._txn,
+            self._resolve_namespace_mode,
+            self._resolve_namespace_mode_blocking,
+            self._client,
+            self._client.supports_server_compiled_ael,
+        )
+        builder._single_key = key
+        return builder
 
-        b = self._behavior if behavior is None else behavior
-        # Handle positional arguments (SDK API)
-        if arg1 is not None:
-            if isinstance(arg1, DataSet):
-                return self._bind_txn(
-                    self._client.query(
-                        dataset=arg1, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, Key):
-                all_keys = [arg1]
-                if isinstance(arg2, Key):
-                    all_keys.append(arg2)
-                    all_keys.extend(keys)
-                elif keys:
-                    all_keys.extend(keys)
-                else:
-                    # Fast path for single-key queries: construct the
-                    # QueryBuilder directly with cached policies to skip
-                    # Client.query() overhead and per-op policy rebuilds.
-                    builder = QueryBuilder(
-                        client=self._client._async_client,
-                        namespace=arg1.namespace,
-                        set_name=arg1.set_name,
-                        behavior=b,
-                        indexes_monitor=self._client._indexes_monitor,
-                        cached_read_policy=self._cached_read_policy,
-                        cached_write_policy=self._cached_write_policy,
-                        cached_read_policy_sc=self._cached_read_policy_sc,
-                        cached_write_policy_sc=self._cached_write_policy_sc,
-                        txn=self._txn,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                        supports_query_selection=self._client.supports_query_selection,
-                        supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-                    )
-                    builder._single_key = arg1
-                    return builder
-                return self._bind_txn(
-                    self._client.query(
-                        keys=all_keys, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, list):
-                if len(arg1) == 0:
-                    raise ValueError("keys list cannot be empty")
-                if not isinstance(arg1[0], Key):
-                    raise TypeError(f"Expected List[Key], but first element is {type(arg1[0])}")
-                return self._bind_txn(
-                    self._client.query(
-                        keys=arg1, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-            elif isinstance(arg1, str) and arg2 is not None:
-                return self._bind_txn(
-                    self._client.query(
-                        namespace=arg1, set_name=arg2, behavior=b,
-                        namespace_mode_resolver=self._resolve_namespace_mode,
-                        namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                    ))
-
-        if keys:
-            keys_list = list(keys)
-            if arg1 is not None and isinstance(arg1, Key):
-                keys_list.insert(0, arg1)
-            if arg2 is not None and isinstance(arg2, Key):
-                keys_list.insert(1 if arg1 is not None and isinstance(arg1, Key) else 0, arg2)
-            return self._bind_txn(
-                self._client.query(
-                    keys=keys_list, behavior=b,
-                    namespace_mode_resolver=self._resolve_namespace_mode,
-                    namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-                ))
-
-        return self._bind_txn(self._client.query(  # type: ignore[call-overload]
+    def _build_query_builder(
+        self,
+        *,
+        dataset: Optional[DataSet],
+        key: Optional[Key],
+        keys: Optional[List[Key]],
+        namespace: Optional[str],
+        set_name: Optional[str],
+        behavior: Behavior,
+    ) -> QueryBuilder:
+        """Dataset / multi-key / namespace query builder (non-single-key shapes)."""
+        return self._client._query(  # type: ignore[call-overload]
             namespace=namespace,
             set_name=set_name,
             dataset=dataset,
             key=key,
-            keys=keys_list,
-            behavior=b,
+            keys=keys,
+            behavior=behavior,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
-            supports_query_selection=self._client.supports_query_selection,
-            supports_server_compiled_ael=self._client.supports_server_compiled_ael,
-        ))
+        )
 
     @typing.overload
     def index(
@@ -882,47 +842,199 @@ class Session:
                 "  - index(namespace=..., set_name=...)"
             )
 
-    def transaction_session(self) -> "TransactionalSession":
-        """Create a transactional session using this session's behavior.
+    def _txn_session_cls(self) -> "type[TransactionalSession]":
+        """Return the async transactional-session class (late import breaks the cycle)."""
+        from aerospike_sdk.aio.transactional_session import TransactionalSession
+        return TransactionalSession
 
-        Alias for :meth:`begin_transaction`.
+    async def register_udf(
+        self,
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF package from in-memory bytes on the cluster.
+
+        Args:
+            body: Raw module source (for example UTF-8 encoded Lua).
+            server_path: Path name stored on the server (often ends ``.lua``).
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
 
         Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-            bound to this session's client and behavior.
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
 
-        See Also:
-            :meth:`begin_transaction`: Preferred entry point.
-            :meth:`aerospike_sdk.aio.client.Client.transaction_session`
-        """
-        return self.begin_transaction()
-
-    def begin_transaction(self) -> "TransactionalSession":
-        """Start a multi-record transaction (MRT) using this session's behavior.
-
-        Returns an async context manager that allocates a fresh
-        :class:`~aerospike_async.Txn`. Every operation run on the returned
-        session auto-participates in the transaction — builders stamp
-        ``policy.txn = tx.txn`` under the hood, so user code never touches a
-        policy object. On clean exit the transaction is committed; if an
-        exception propagates out of the ``async with`` block the transaction
-        is aborted.
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or admin errors (via PAC).
 
         Example::
 
-            async with session.begin_transaction() as tx:
-                await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-                await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
-
-        Returns:
-            :class:`~aerospike_sdk.aio.transactional_session.TransactionalSession`
-            bound to this session's client and behavior.
+            source = b"function echo(rec, v) return v end\\n"
+            task = await session.register_udf(source, "echo.lua")
+            await task.wait_till_complete()
 
         See Also:
-            :meth:`transaction_session`: Alias for this method.
-            :meth:`do_in_transaction`: Run a callable inside a retrying MRT.
+            :meth:`register_udf_from_file`, :meth:`register_udf_from_resource`,
+            :meth:`remove_udf`.
         """
-        return self._client.transaction_session(behavior=self._behavior)
+        return await self._client._register_udf(body, server_path, language, policy=policy)
+
+    async def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF by reading module bytes from a local file.
+
+        Args:
+            client_path: Filesystem path to the module on the client machine.
+            server_path: Path name stored on the server (often ends ``.lua``).
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            OSError: If ``client_path`` cannot be read.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.register_udf_from_file("udfs/echo.lua", "echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf`: Register from in-memory bytes.
+        """
+        return await self._client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    async def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource.
+
+        Reads the resource bytes via ``importlib.resources`` and registers them —
+        the Pythonic analog of registering a module shipped as package data.
+
+        Args:
+            package: Importable package holding the resource (e.g. ``"myapp.udfs"``).
+            resource: Resource name within the package (e.g. ``"echo.lua"``).
+            server_path: Path name stored on the server.
+            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.RegisterTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            ModuleNotFoundError: If ``package`` cannot be imported.
+            FileNotFoundError: If ``resource`` is not found in the package.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.register_udf_from_resource(
+                "myapp.udfs", "echo.lua", "echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf_from_file`, :meth:`register_udf`.
+        """
+        return await self._client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    async def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a registered UDF package from the cluster.
+
+        Args:
+            server_path: The server path used when the module was registered.
+            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+
+        Returns:
+            A :class:`~aerospike_async.UdfRemoveTask`; await
+            ``wait_till_complete(...)`` until propagation finishes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or admin errors (via PAC).
+
+        Example::
+
+            task = await session.remove_udf("echo.lua")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`register_udf`, :meth:`list_udf`.
+        """
+        return await self._client._remove_udf(server_path, policy=policy)
+
+    async def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster.
+
+        Returns:
+            One dict per module with ``name`` / ``hash`` / ``type`` keys; an
+            empty list when nothing is registered.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or info errors (via PAC).
+
+        Example::
+
+            for module in await session.list_udf():
+                print(module["name"], module["type"])
+
+        See Also:
+            :meth:`register_udf`, :meth:`remove_udf`.
+        """
+        return await self._client._list_udf()
+
+    async def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster.
+
+        Returns:
+            One dict per index with ``namespace`` / ``set`` / ``bin`` / ``name``
+            keys, plus ``type`` / ``index_type`` / ``context`` when the server
+            reports them (``context`` is present for CDT indexes). An empty list
+            when no secondary indexes are defined.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            AerospikeError: On cluster or info errors (via PAC).
+
+        Example::
+
+            for idx in await session.list_indexes():
+                print(idx["name"], idx["namespace"], idx["bin"])
+
+        See Also:
+            :meth:`index`: Create or drop a secondary index.
+        """
+        return await self._client._list_indexes()
 
     @overload
     def info(self) -> InfoCommands: ...
@@ -930,9 +1042,7 @@ class Session:
     @overload
     def info(self, command: str) -> Awaitable[Dict[str, str]]: ...
 
-    def info(
-        self, command: Optional[str] = None
-    ) -> Union[InfoCommands, Awaitable[Dict[str, str]]]:
+    def info(self, command: Optional[str] = None) -> Union[InfoCommands, Awaitable[Dict[str, str]]]:
         """
         Execute info commands or get the InfoCommands helper.
 
@@ -1020,8 +1130,7 @@ class Session:
             )
         return NamespaceScStatus(
             False,
-            f"Namespace {namespace!r} info did not report strong-consistency; "
-            "treating as non-SC.",
+            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
         )
 
     async def is_namespace_sc(self, namespace: str) -> bool:
@@ -1096,7 +1205,7 @@ class Session:
             result = await session.do_in_transaction(transfer)
 
         See Also:
-            :meth:`begin_transaction`: Manual MRT lifecycle.
+            :meth:`transaction`: Manual MRT lifecycle.
             :class:`TransactionalSession`
         """
         if max_attempts < 1:
@@ -1120,7 +1229,7 @@ class Session:
         last_exc: Optional[BaseException] = None
         for attempt in range(max_attempts):
             try:
-                async with self.begin_transaction() as tx_session:
+                async with self.transaction() as tx_session:
                     return await operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
@@ -1134,360 +1243,10 @@ class Session:
         assert last_exc is not None
         raise last_exc
 
-    # -- Write entry points ---------------------------------------------------
-
-    def upsert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a create-or-replace write for one or more keys.
-
-        If the record exists, bins are merged according to the chained operations;
-        if it does not exist, it is created. Use :meth:`insert` when the record
-        must not already exist.
-
-        Args:
-            arg1: A single :class:`~aerospike_async.Key`, a list of keys, or omit
-                and pass ``key`` / ``dataset`` + ``key_value`` / ``namespace`` +
-                ``set_name`` + ``key_value``.
-            arg2: Optional second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional is a key.
-            key: Single key (keyword form).
-            dataset: Dataset used with ``key_value`` to build a key.
-            namespace: Namespace used with ``set_name`` and ``key_value``.
-            set_name: Set name used with ``namespace`` and ``key_value``.
-            key_value: User key value with ``dataset`` or ``namespace``/``set_name``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`
-            for ``put``, ``bin``, ``where``, ``execute``, etc.
-
-        Raises:
-            ValueError: If no keys are resolved or lists are empty.
-            TypeError: If positional arguments are not keys or lists of keys.
-
-        Example:
-            users = DataSet.of("test", "users")
-            await session.upsert(users.id(1)).put({"name": "Tim", "age": 30}).execute()
-
-        See Also:
-            :meth:`insert`: Fails if the record already exists.
-            :meth:`update`: Fails if the record does not exist.
-            :meth:`replace`: Replace-entire-record semantics when configured.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            # Inline _fast_write_segment + use positional args to skip the
-            # extra function call and kwargs-dict construction. Bench-hot.
-            return _SingleKeyWriteSegment(
-                self._client._async_client,
-                arg1,
-                "upsert",
-                self._behavior,
-                self._cached_write_policy,
-                self._cached_read_policy,
-                self._txn,
-                self._resolve_namespace_mode,
-                self._resolve_namespace_mode_blocking,
-                self._cached_write_policy_sc,
-                self._cached_read_policy_sc,
-            )
-        return self._build_write_segment(
-            "upsert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def insert(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a create-only write; fails on execute if the record already exists.
-
-        Key resolution matches :meth:`upsert`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example:
-            users = DataSet.of("test", "users")
-            await session.insert(users.id(99)).put({"name": "new"}).execute()
-
-        See Also:
-            :meth:`upsert`: Create or update.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("insert", arg1)
-        return self._build_write_segment(
-            "insert", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def update(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start an update-only write; fails on execute if the record is missing.
-
-        Key resolution matches :meth:`upsert`.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`upsert`: Create if missing.
-            :meth:`replace_if_exists`: Replace semantics when the record exists.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("update", arg1)
-        return self._build_write_segment(
-            "update", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a full-record replace write (bins replaced per builder rules).
-
-        Key resolution matches :meth:`upsert`. Prefer :meth:`replace_if_exists`
-        when the record must already exist.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`replace_if_exists`: Replace only when the record exists.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("replace", arg1)
-        return self._build_write_segment(
-            "replace", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def replace_if_exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a replace write that requires an existing record.
-
-        Key resolution matches :meth:`upsert`. On execute, missing keys surface
-        as errors according to error strategy (default may raise).
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`replace`: Unconditional replace semantics.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("replace_if_exists", arg1)
-        return self._build_write_segment(
-            "replace_if_exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def delete(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a delete for one or more keys.
-
-        Key resolution matches :meth:`upsert`. Chain filters or durable-delete
-        options on the builder, then ``await ...execute()``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example:
-            users = DataSet.of("test", "users")
-            await session.delete(users.id(1)).execute()
-            await session.delete(users.ids(10, 11)).execute()
-
-        See Also:
-            :meth:`background_task`: Delete many records via a server job.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("delete", arg1)
-        return self._build_write_segment(
-            "delete", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def touch(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start a touch to refresh TTL without changing bins.
-
-        Key resolution matches :meth:`upsert`. Use the builder to set TTL or
-        related policy, then ``await ...execute()``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        See Also:
-            :meth:`upsert`: Writes that can also set expiration via the builder.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("touch", arg1)
-        return self._build_write_segment(
-            "touch", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
-
-    def exists(
-        self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> WriteSegmentBuilder:
-        """Start an existence check for one or more keys.
-
-        Key resolution matches :meth:`upsert`. After ``execute``, use
-        :meth:`~aerospike_sdk.record_result.RecordResult.as_bool` on each
-        :class:`~aerospike_sdk.record_result.RecordResult` or inspect
-        ``result_code``.
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder`.
-
-        Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
-
-        Example:
-            users = DataSet.of("test", "users")
-            rs = await session.exists(users.id(1)).execute()
-            exists = (await rs.first()).as_bool()
-
-        See Also:
-            :meth:`query`: Read record data when the key is known to exist.
-        """
-        if (
-            arg1.__class__ is Key and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        ):
-            return self._fast_write_segment("exists", arg1)
-        return self._build_write_segment(
-            "exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+    # The eight public write-verb factories (upsert/insert/update/replace/
+    # replace_if_exists/delete/touch/exists) live on `SessionBase`; they route
+    # the single-key shape through `_fast_write_segment` and everything else
+    # through `_build_write_segment` (both defined above on this leaf).
 
     async def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
         """
@@ -1517,11 +1276,7 @@ class Session:
         if self._client._client is None:
             raise RuntimeError("Client is not connected")
 
-        await self._client._client.truncate(
-            dataset.namespace,
-            dataset.set_name,
-            before_nanos
-        )
+        await self._client._client.truncate(dataset.namespace, dataset.set_name, before_nanos)
 
     def __repr__(self) -> str:
         """String representation of the session."""

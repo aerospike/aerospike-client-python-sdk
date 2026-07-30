@@ -20,9 +20,8 @@ Each parseFilterAndCompare or assert filter null is a separate test for clear fa
 
 import pytest
 
-from aerospike_async import Filter
-import pytest
 from aerospike_sdk import (
+    Filter,
     AelParseException,
     Index,
     IndexContext,

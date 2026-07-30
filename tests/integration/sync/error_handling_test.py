@@ -16,14 +16,14 @@
 """Sync integration tests mirroring async idempotent-op and TTL guard paths."""
 
 import pytest
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk.exceptions import ResultCode
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
@@ -42,37 +42,37 @@ def _cleanup(session, *keys):
 
 class TestSyncIdempotentOps:
 
-    def test_delete_nonexistent_succeeds(self, client, ds):
+    def test_delete_nonexistent_succeeds(self, cluster, ds):
         k = ds.id("sidm_del_miss")
-        _cleanup(client.create_session(), k)
-        session = client.create_session()
+        _cleanup(cluster.create_session(), k)
+        session = cluster.create_session()
         rs = session.delete(k).execute()
         rr = rs.first()
         assert rr is None or rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
-    def test_query_nonexistent_returns_empty(self, client, ds):
+    def test_query_nonexistent_returns_empty(self, cluster, ds):
         k = ds.id("sidm_get_miss")
-        _cleanup(client.create_session(), k)
-        session = client.create_session()
+        _cleanup(cluster.create_session(), k)
+        session = cluster.create_session()
         rs = session.query(k).execute()
         assert rs.first() is None
 
-    def test_batch_delete_all_missing_returns_empty(self, client, ds):
+    def test_batch_delete_all_missing_returns_empty(self, cluster, ds):
         k1 = ds.id("sidm_bd_1")
         k2 = ds.id("sidm_bd_2")
-        _cleanup(client.create_session(), k1, k2)
-        session = client.create_session()
+        _cleanup(cluster.create_session(), k1, k2)
+        session = cluster.create_session()
         results = session.delete([k1, k2]).execute().collect()
         assert len(results) == 0
 
 
 class TestSyncTtlPreservation:
 
-    def test_no_change_in_expiration_preserves_ttl(self, client, ds):
+    def test_no_change_in_expiration_preserves_ttl(self, cluster, ds):
         """Overwrite bins with ``with_no_change_in_expiration``; TTL stays in band."""
         k = ds.id("sidm_ttl_keep")
-        _cleanup(client.create_session(), k)
-        session = client.create_session()
+        _cleanup(cluster.create_session(), k)
+        session = cluster.create_session()
 
         session.upsert(k).expire_record_after_seconds(900).put({"v": 1}).execute()
         r1 = session.query(k).execute().first_or_raise()

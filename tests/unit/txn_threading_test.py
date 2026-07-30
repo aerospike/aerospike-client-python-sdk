@@ -25,18 +25,10 @@ network I/O.
 
 import pytest
 
-from aerospike_async import (
-    BatchPolicy,
-    Key,
-    QueryPolicy,
-    ReadPolicy,
-    ResultCode,
-    Txn,
-    WritePolicy,
-)
+from aerospike_sdk import Key, ResultCode, Txn
+from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
-from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteSegmentBuilder,
@@ -214,33 +206,6 @@ def test_single_key_segment_with_txn_threads_through_promotion() -> None:
     assert seg._qb._txn is txn
 
 
-# -- BatchOperationBuilder ---------------------------------------------------
-
-def test_batch_builder_captures_txn() -> None:
-    txn = Txn()
-    bb = BatchOperationBuilder(client=_FakePac(), txn=txn)
-    assert bb._txn is txn
-
-
-def test_batch_builder_apply_txn_stamps_batch_policy() -> None:
-    txn = Txn()
-    bb = BatchOperationBuilder(client=_FakePac(), txn=txn)
-    bp = BatchPolicy()
-    stamped = bb._apply_txn(bp)
-    assert stamped.txn is not None
-    assert stamped.txn.id == txn.id
-
-
-def test_batch_builder_with_txn_roundtrip() -> None:
-    bb = BatchOperationBuilder(client=_FakePac())
-    assert bb._txn is None
-    txn = Txn()
-    assert bb.with_txn(txn) is bb
-    assert bb._txn is txn
-    assert bb.with_txn(None) is bb
-    assert bb._txn is None
-
-
 # -- Session -> builder propagation ------------------------------------------
 
 def test_session_bind_txn_helper_applies_to_builder() -> None:
@@ -296,7 +261,7 @@ class _FakeSdkClientForRetry:
         self._client = self._async_client
         self._indexes_monitor = None
 
-    def transaction_session(self, behavior=None):
+    def transaction(self, behavior=None):
         return TransactionalSession(client=self, behavior=behavior)
 
 

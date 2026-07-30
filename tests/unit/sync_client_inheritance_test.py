@@ -25,7 +25,8 @@ got :class:`AttributeError` on the next method call.
 
 from unittest.mock import MagicMock
 
-from aerospike_async import ClientPolicy, Key
+from aerospike_sdk import Key
+from aerospike_async import ClientPolicy
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
@@ -49,31 +50,6 @@ def _make_offline_sync_session() -> SyncSession:
     return SyncSession(
         client=_make_offline_sync_client(), behavior=Behavior.DEFAULT,
     )
-
-
-class TestSyncClientFactoryReturnTypes:
-    """SyncClient factories must return :class:`SyncQueryBuilder` regardless of arg shape."""
-
-    def test_query_single_key(self):
-        client = _make_offline_sync_client()
-        builder = client.query(Key("test", "users", 1))
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_multi_key(self):
-        client = _make_offline_sync_client()
-        keys = [Key("test", "users", i) for i in range(3)]
-        builder = client.query(keys)
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_dataset(self):
-        client = _make_offline_sync_client()
-        builder = client.query(DataSet.of("test", "users"))
-        assert isinstance(builder, SyncQueryBuilder)
-
-    def test_query_namespace_set(self):
-        client = _make_offline_sync_client()
-        builder = client.query(namespace="test", set_name="users")
-        assert isinstance(builder, SyncQueryBuilder)
 
 
 class TestSyncSessionFactoryReturnTypes:

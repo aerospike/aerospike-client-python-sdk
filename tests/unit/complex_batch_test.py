@@ -27,13 +27,8 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 
-from aerospike_async import (
-    FilterExpression as Exp,
-    Key,
-    Operation,
-    RecordExistsAction,
-    WritePolicy,
-)
+from aerospike_sdk import Key
+from aerospike_async import FilterExpression as Exp, Operation, RecordExistsAction, WritePolicy
 
 from aerospike_sdk.aio.operations.query import (
     _OperationSpec,

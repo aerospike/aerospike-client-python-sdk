@@ -99,6 +99,10 @@ def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> 
     )
 
 
+# Integration tests: use with tests/integration/async/conftest.py autouse gate
+# (resolves ``cluster`` / ``session`` / ``session_with_*`` fixtures).
+
+
 async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
     """Assert invalid string AEL on a dataset query is rejected by the server.
 
@@ -123,6 +127,5 @@ async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> N
             stream.close()
 
 
-# Integration tests: use with tests/integration/conftest.py autouse gate (resolves ``client``).
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
 requires_client_side_ael = pytest.mark.requires_client_side_ael

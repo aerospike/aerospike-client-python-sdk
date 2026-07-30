@@ -20,8 +20,8 @@ different set must be excluded from filter selection. Indexes with no set
 name (cross-set / null set) remain eligible regardless of ``query_set``.
 """
 
-from aerospike_async import Filter
 from aerospike_sdk import (
+    Filter,
     Exp,
     Index,
     IndexContext,

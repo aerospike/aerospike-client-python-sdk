@@ -19,8 +19,8 @@ import re
 
 import pytest
 
-from aerospike_async import Filter
 from aerospike_sdk import (
+    Filter,
     AelParseException,
     Exp,
     Index,

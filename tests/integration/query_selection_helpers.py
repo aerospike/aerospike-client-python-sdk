@@ -18,10 +18,35 @@
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from aerospike_sdk import QueryHint
+
+
+class QuerySelectionClientFacade:
+    """Test helper: ``Client`` no longer exposes ``query()`` — delegate to ``Session``.
+
+    Fixtures yield this so selection integration tests keep ``qsel_client.query(ns, set)``
+    while still exposing ``underlying_client`` for direct PAC explain probes.
+    """
+
+    __slots__ = ("_client", "_session")
+
+    def __init__(self, client: Any, session: Any) -> None:
+        self._client = client
+        self._session = session
+
+    @property
+    def underlying_client(self) -> Any:
+        return self._client.underlying_client
+
+    def query(self, namespace: str, set_name: str) -> Any:
+        return self._session.query(namespace=namespace, set_name=set_name)
+
+    def index(self, *args: Any, **kwargs: Any) -> Any:
+        return self._client.index(*args, **kwargs)
+
 
 NS = "test"
 SET_NAME = "qselint"

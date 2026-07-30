@@ -39,12 +39,12 @@ from tests.integration.query_selection_helpers import (
 )
 
 
-def _sync_wait_for_index(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
     deadline = time.monotonic() + timeout
     last_err = None
     while time.monotonic() < deadline:
         try:
-            stream = client.query(ns, set_name).filter(sindex_filter).execute()
+            stream = session.query(namespace=ns, set_name=set_name).filter(sindex_filter).execute()
             for _ in stream:
                 break
             stream.close()
@@ -100,10 +100,10 @@ def qselhint_client(
         ).execute()
 
         _sync_wait_for_index(
-            client, NS, HINT_SET_NAME, Filter.range(BIN_AGE, 25, 30),
+            client, session, NS, HINT_SET_NAME, Filter.range(BIN_AGE, 25, 30),
         )
         _sync_wait_for_index(
-            client, NS, HINT_SET_NAME, Filter.range(BIN_SCORE, 25, 30),
+            client, session, NS, HINT_SET_NAME, Filter.range(BIN_SCORE, 25, 30),
         )
 
         yield client

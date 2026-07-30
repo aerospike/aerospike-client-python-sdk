@@ -20,9 +20,10 @@ See async :mod:`tests.integration.async.cdt_filter_context_test` for notes on
 """
 
 import pytest
-from aerospike_async import CTX, Filter, IndexType
+from aerospike_sdk import CTX, Filter
+from aerospike_async import IndexType
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 
 _NS = "test"
 _SET = "cdt_filter_ctx_test"
@@ -35,15 +36,18 @@ _INNER = "inner"
 def _require_filter_context() -> None:
     probe = Filter.equal("__bin", 1)
     if not hasattr(probe, "context"):
-        pytest.skip(
-            "aerospike_async Filter.context is required; upgrade the native async client."
-        )
+        pytest.skip("aerospike_async Filter.context is required; upgrade the native async client.")
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as client:
-        yield client
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        yield cluster
+
+
+@pytest.fixture
+def session(cluster):
+    return cluster.create_session()
 
 
 def _cleanup_records(session, keys):
@@ -90,7 +94,7 @@ def _admin_create_flat(pac, index_name: str) -> None:
     )
 
 
-def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wait_for_index):
+def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wait_for_index):
     """Sync query with ``Filter.equal(...).context([...])`` on a nested map value."""
     _require_filter_context()
 
@@ -100,9 +104,9 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
     key_missing_inner = ds.id("cdt_ctx_no_inner")
     keys = (key_hi, key_lo, key_missing_inner)
 
-    session = client.create_session()
-    ac = client._ensure_connected()
-    pac = ac.underlying_client
+    session = cluster.create_session()
+    # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
+    pac = cluster._client.underlying_client
 
     _cleanup_records(session, keys)
     try:
@@ -134,13 +138,11 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
     except Exception as e:
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
-    flt = Filter.equal(_BIN, target).context(
-        [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-    )
-    sync_wait_for_index(client, _NS, _SET, flt)
+    flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
+    sync_wait_for_index(cluster, _NS, _SET, flt)
 
     try:
-        stream = client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         try:
             user_keys = sorted(_user_keys_from_stream(stream))
         finally:
@@ -148,10 +150,8 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
 
         assert user_keys == ["cdt_ctx_hi"]
 
-        flt2 = Filter.equal(_BIN, 9999).context(
-            [CTX.map_key(_OUTER), CTX.map_key(_INNER)]
-        )
-        stream2 = client.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
+        flt2 = Filter.equal(_BIN, 9999).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
+        stream2 = session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream2)) == ["cdt_ctx_lo"]
         finally:
@@ -164,7 +164,7 @@ def test_query_filter_equal_with_map_nested_context(client, enterprise, sync_wai
         _cleanup_records(session, keys)
 
 
-def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait_for_index):
+def test_query_filter_equal_single_map_key_context(cluster, enterprise, sync_wait_for_index):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()
 
@@ -173,9 +173,9 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
     key_other = ds.id("cdt_ctx_flat_b")
     keys = (key_match, key_other)
 
-    session = client.create_session()
-    ac = client._ensure_connected()
-    pac = ac.underlying_client
+    session = cluster.create_session()
+    # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
+    pac = cluster._client.underlying_client
     index_name = f"{_INDEX}_flat"
     val = 5150
 
@@ -202,10 +202,10 @@ def test_query_filter_equal_single_map_key_context(client, enterprise, sync_wait
         pytest.skip(f"Could not create CDT-path numeric index: {e}")
 
     flt = Filter.equal(_BIN, val).context([CTX.map_key(_INNER)])
-    sync_wait_for_index(client, _NS, _SET, flt)
+    sync_wait_for_index(cluster, _NS, _SET, flt)
 
     try:
-        stream = client.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream)) == ["cdt_ctx_flat_a"]
         finally:

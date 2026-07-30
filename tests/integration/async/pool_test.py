@@ -13,38 +13,31 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""AsyncPool: multi-loop / multi-client dispatch and lifecycle.
+"""AsyncPool: multi-loop / multi-member dispatch and lifecycle.
 
 The pool spins up N event loops on N OS threads, each with its own
-:class:`~aerospike_sdk.aio.client.Client`.  Each client's PAC
-``CompletionBridge`` is bound to its own loop, so completions never cross
-loops and the cross-loop guard in the bridge never fires during normal use.
+:class:`~aerospike_sdk.aio.cluster.Cluster` member built from one shared
+:class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`.  Each
+member's PAC ``CompletionBridge`` is bound to its own loop, so completions
+never cross loops and the cross-loop guard in the bridge never fires during
+normal use.
 """
 
 import asyncio
 import pytest
 
-from aerospike_async import ClientPolicy
 from aerospike_sdk import AsyncPool
 from aerospike_sdk.aio.client import Client
+from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk import index_monitor as _index_monitor_module
-
-
-def _make_factory(aerospike_host, client_policy):
-    """Return a zero-arg factory of unconnected SDK Clients."""
-    def factory() -> Client:
-        return Client(seeds=aerospike_host, policy=client_policy)
-    return factory
 
 
 class TestAsyncPoolLifecycle:
     """Start / stop / repeat-use semantics."""
 
-    async def test_context_manager_starts_and_closes(
-        self, aerospike_host, client_policy
-    ):
-        pool = AsyncPool(_make_factory(aerospike_host, client_policy), loop_count=2)
+    async def test_context_manager_starts_and_closes(self, aerospike_host, make_cluster_definition):
+        pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         assert not pool.is_started
         async with pool:
             assert pool.is_started
@@ -52,20 +45,20 @@ class TestAsyncPoolLifecycle:
             assert pool.loop_count == 2
         assert pool.is_closed
 
-    async def test_run_before_start_raises(self, aerospike_host, client_policy):
-        pool = AsyncPool(_make_factory(aerospike_host, client_policy), loop_count=2)
+    async def test_run_before_start_raises(self, aerospike_host, make_cluster_definition):
+        pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         with pytest.raises(RuntimeError, match="not started"):
             await pool.run(lambda c: _noop(c))
 
-    async def test_run_after_close_raises(self, aerospike_host, client_policy):
-        pool = AsyncPool(_make_factory(aerospike_host, client_policy), loop_count=2)
+    async def test_run_after_close_raises(self, aerospike_host, make_cluster_definition):
+        pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         await pool.start()
         await pool.aclose()
         with pytest.raises(RuntimeError, match="closed"):
             await pool.run(lambda c: _noop(c))
 
-    async def test_double_start_raises(self, aerospike_host, client_policy):
-        pool = AsyncPool(_make_factory(aerospike_host, client_policy), loop_count=2)
+    async def test_double_start_raises(self, aerospike_host, make_cluster_definition):
+        pool = AsyncPool(make_cluster_definition(aerospike_host), loop_count=2)
         await pool.start()
         try:
             with pytest.raises(RuntimeError, match="already started"):
@@ -73,20 +66,16 @@ class TestAsyncPoolLifecycle:
         finally:
             await pool.aclose()
 
-    async def test_default_loop_count_is_cpu_count(
-        self, aerospike_host, client_policy
-    ):
+    async def test_default_loop_count_is_cpu_count(self, aerospike_host, make_cluster_definition):
         import os
-        pool = AsyncPool(_make_factory(aerospike_host, client_policy))
+        pool = AsyncPool(make_cluster_definition(aerospike_host))
         assert pool.loop_count == (os.cpu_count() or 4)
 
 
 class TestAsyncPoolDispatch:
     """run() / map() correctness and round-robin behavior."""
 
-    async def test_run_roundtrips_on_pool_loop(
-        self, aerospike_host, client_policy
-    ):
+    async def test_run_roundtrips_on_pool_loop(self, aerospike_host, make_cluster_definition):
         """Each `run` call dispatches a put+get; completions land on the right loop.
 
         The cross-loop guard in PAC's CompletionBridge is what makes this a
@@ -94,11 +83,9 @@ class TestAsyncPoolDispatch:
         would fail with the owning-loop RuntimeError.
         """
         ds = DataSet.of("test", "asyncpool_run")
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=4
-        ) as pool:
-            async def roundtrip(client: Client) -> int:
-                session = client.create_session()
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
+            async def roundtrip(cluster: Cluster) -> int:
+                session = cluster.create_session()
                 key = ds.id("k0")
                 await session.upsert(key).bin("v").set_to(99).execute()
                 stream = await session.query(key).execute()
@@ -108,15 +95,13 @@ class TestAsyncPoolDispatch:
             assert await pool.run(roundtrip) == 99
 
     async def test_map_dispatches_one_per_input_in_order(
-        self, aerospike_host, client_policy
+        self, aerospike_host, make_cluster_definition
     ):
         """map() returns results in input order even though dispatch is round-robin."""
         ds = DataSet.of("test", "asyncpool_map")
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=3
-        ) as pool:
-            async def put_and_read(client: Client, i: int) -> int:
-                session = client.create_session()
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
+            async def put_and_read(cluster: Cluster, i: int) -> int:
+                session = cluster.create_session()
                 key = ds.id(f"k{i}")
                 await session.upsert(key).bin("v").set_to(i * 10).execute()
                 stream = await session.query(key).execute()
@@ -127,32 +112,42 @@ class TestAsyncPoolDispatch:
             results = await pool.map(put_and_read, inputs)
             assert results == [i * 10 for i in inputs]
 
-    async def test_pick_selects_specific_loop(
-        self, aerospike_host, client_policy
-    ):
-        """`pick=` routes to a specific loop; result is the same for any pick."""
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=3
-        ) as pool:
-            async def id_self(client: Client) -> str:
-                return type(client).__name__
+    async def test_pick_selects_specific_loop(self, aerospike_host, make_cluster_definition):
+        """`pick=` routes to a specific loop; every member is a Cluster."""
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
+            async def id_self(cluster: Cluster) -> str:
+                return type(cluster).__name__
 
             for i in range(3):
-                assert await pool.run(id_self, pick=i) == "Client"
-            assert await pool.run(id_self, pick=10) == "Client"
+                assert await pool.run(id_self, pick=i) == "Cluster"
+            assert await pool.run(id_self, pick=10) == "Cluster"
 
-    async def test_each_loop_gets_distinct_client(
-        self, aerospike_host, client_policy
-    ):
-        """Identity-check: pick=i and pick=j return distinct Clients for i != j."""
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=3
-        ) as pool:
-            async def whoami(client: Client) -> int:
-                return id(client)
+    async def test_each_loop_gets_distinct_member(self, aerospike_host, make_cluster_definition):
+        """Identity-check: pick=i and pick=j return distinct members for i != j."""
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
+            async def whoami(cluster: Cluster) -> int:
+                return id(cluster)
 
             ids = [await pool.run(whoami, pick=i) for i in range(3)]
-            assert len(set(ids)) == 3, f"expected 3 distinct clients, got ids={ids}"
+            assert len(set(ids)) == 3, f"expected 3 distinct members, got ids={ids}"
+
+
+class TestAsyncPoolDeprecatedFactory:
+    """The one-cycle client_factory adapter: warns, and hands raw Clients."""
+
+    async def test_client_factory_warns_and_dispatch_hands_client(
+        self, aerospike_host, client_policy
+    ):
+        with pytest.warns(DeprecationWarning, match="client_factory"):
+            pool = AsyncPool(
+                client_factory=lambda: Client(seeds=aerospike_host, policy=client_policy),
+                loop_count=2,
+            )
+        async with pool:
+            async def type_name(member) -> str:
+                return type(member).__name__
+
+            assert await pool.run(type_name) == "Client"
 
 
 class TestAsyncPoolLoopType:
@@ -161,10 +156,11 @@ class TestAsyncPoolLoopType:
     uvloop 0.22.x has a libuv free-threading race on ``loop._ready_len``
     (MagicStack/uvloop issues #720, #721) that stalls a multi-loop pool when
     the GIL is disabled — the per-loop race fires across all loops at once and
-    wedges (a hard hang on the fast-path pool path). PAC's drainer thread tames
-    the single-loop case but not N concurrent loops, so ``AsyncPool`` defaults
-    to the stdlib selector loop under free-threading (auto-decide tracks the
-    GIL) and exposes ``use_uvloop`` to force either way.
+    wedges (a hard hang on the fast-path pool path). ``AsyncPool`` therefore
+    uses uvloop under free-threading only when the race is mitigated (PAC's
+    pipe-wake transport active — the default — or a fixed uvloop release);
+    otherwise it falls back to the stdlib selector loop. Under GIL-on the race
+    can't fire, so uvloop is always the default. ``use_uvloop`` forces either.
 
     These guard the contract so a regression in loop selection fails loudly.
     """
@@ -173,33 +169,39 @@ class TestAsyncPoolLoopType:
     def _is_uvloop(loop: asyncio.AbstractEventLoop) -> bool:
         return "uvloop" in type(loop).__module__.lower()
 
-    async def test_default_avoids_uvloop_under_free_threading(
-        self, aerospike_host, client_policy
+    async def test_default_uses_uvloop_under_free_threading_when_mitigated(
+        self, aerospike_host, make_cluster_definition
     ):
-        """Default (``use_uvloop=None``): under free-threading the pool loops
-        must NOT be uvloop — that's the multi-loop stall condition. Under
-        GIL-on the uvloop default is safe, so the guard only bites under FT."""
-        from aerospike_sdk.aio.pool import _gil_is_enabled
+        """Default (``use_uvloop=None``): under free-threading with the #720
+        mitigation active (pipe-wake, the default), the pool uses uvloop — the
+        unlock that lets a multi-loop pool run uvloop safely, no longer forcing
+        the selector loop."""
+        from aerospike_sdk.aio.pool import _gil_is_enabled, _uvloop_safe_under_ft
 
         if _gil_is_enabled():
-            pytest.skip("GIL enabled: uvloop default is safe (FT race can't fire)")
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=2
-        ) as pool:
+            pytest.skip("GIL enabled: uvloop is the default regardless of the FT gate")
+        if not _uvloop_safe_under_ft():
+            pytest.skip("no #720 mitigation (pipe-wake off, uvloop lacks #721); gate keeps selector")
+        # The pool relies on a process-wide uvloop policy; if none is installed,
+        # new_event_loop() yields the stdlib loop no matter the gate.
+        probe = asyncio.new_event_loop()
+        uvloop_policy_installed = self._is_uvloop(probe)
+        probe.close()
+        if not uvloop_policy_installed:
+            pytest.skip("no uvloop event-loop policy installed process-wide")
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=2) as pool:
             for i, loop in enumerate(pool._loops):
                 assert loop is not None, f"loop {i} is None"
-                assert not self._is_uvloop(loop), (
-                    f"loop {i} is uvloop ({type(loop).__module__}) under "
-                    f"free-threading — exposes the multi-loop libuv stall"
+                assert self._is_uvloop(loop), (
+                    f"loop {i} is {type(loop).__module__}; under free-threading with "
+                    f"the #720 mitigation the pool must use uvloop, not force selector"
                 )
 
-    async def test_use_uvloop_false_forces_selector(
-        self, aerospike_host, client_policy
-    ):
+    async def test_use_uvloop_false_forces_selector(self, aerospike_host, make_cluster_definition):
         """Explicit ``use_uvloop=False`` forces the stdlib selector loop
         regardless of the global uvloop policy or GIL state."""
         async with AsyncPool(
-            _make_factory(aerospike_host, client_policy),
+            make_cluster_definition(aerospike_host),
             loop_count=2,
             use_uvloop=False,
         ) as pool:
@@ -214,14 +216,10 @@ class TestAsyncPoolLoopType:
 class TestAsyncPoolGuards:
     """Misuse detection."""
 
-    async def test_self_dispatch_guard_raises(
-        self, aerospike_host, client_policy
-    ):
+    async def test_self_dispatch_guard_raises(self, aerospike_host, make_cluster_definition):
         """Running run() from within a pool loop deadlocks; the guard prevents it."""
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=2
-        ) as pool:
-            async def recursive(client: Client) -> None:
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=2) as pool:
+            async def recursive(cluster: Cluster) -> None:
                 # Called on a pool loop — dispatching back into the pool from
                 # here would deadlock the originating loop.
                 await pool.run(lambda c: _noop(c))
@@ -231,21 +229,17 @@ class TestAsyncPoolGuards:
 
 
 class TestAsyncPoolSharedMonitor:
-    """Index metadata is cluster-scoped, not client-scoped — one monitor for the pool."""
+    """Index metadata is cluster-scoped, not member-scoped — one monitor for the pool."""
 
-    async def test_all_clients_share_one_monitor_instance(
-        self, aerospike_host, client_policy
+    async def test_all_members_share_one_monitor_instance(
+        self, aerospike_host, make_cluster_definition
     ):
-        """Identity check: every client's ``_indexes_monitor`` is the same object."""
-        async with AsyncPool(
-            _make_factory(aerospike_host, client_policy), loop_count=4
-        ) as pool:
-            async def grab_monitor_id(client: Client) -> int:
-                return id(client._indexes_monitor)
+        """Identity check: every member client's monitor is the same object."""
+        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
+            async def grab_monitor_id(cluster: Cluster) -> int:
+                return id(cluster._client._indexes_monitor)
 
-            monitor_ids = [
-                await pool.run(grab_monitor_id, pick=i) for i in range(4)
-            ]
+            monitor_ids = [await pool.run(grab_monitor_id, pick=i) for i in range(4)]
             assert len(set(monitor_ids)) == 1, (
                 f"expected one shared IndexesMonitor across the pool, "
                 f"got distinct ids={monitor_ids}"
@@ -253,9 +247,9 @@ class TestAsyncPoolSharedMonitor:
             assert monitor_ids[0] == id(pool._shared_monitor)
 
     async def test_only_one_poll_per_refresh_interval(
-        self, aerospike_host, client_policy, monkeypatch
+        self, aerospike_host, make_cluster_definition, monkeypatch
     ):
-        """N clients should produce 1 poll per refresh_interval, not N."""
+        """N members should produce 1 poll per refresh_interval, not N."""
         call_count = 0
         real_fetch = _index_monitor_module._fetch_indexes_blocking
 
@@ -269,7 +263,7 @@ class TestAsyncPoolSharedMonitor:
         )
 
         async with AsyncPool(
-            _make_factory(aerospike_host, client_policy),
+            make_cluster_definition(aerospike_host),
             loop_count=4,
             index_refresh_interval=0.3,
         ) as pool:
@@ -283,10 +277,9 @@ class TestAsyncPoolSharedMonitor:
         # query touched the daemon thread. When it does start, expect
         # ≥1 and ≤3 calls.
         assert call_count <= 3, (
-            f"expected ≤3 _fetch_indexes_blocking calls with a shared "
-            f"monitor; got {call_count}"
+            f"expected ≤3 _fetch_indexes_blocking calls with a shared monitor; got {call_count}"
         )
 
 
-async def _noop(client: Client) -> None:
+async def _noop(cluster: Cluster) -> None:
     return None

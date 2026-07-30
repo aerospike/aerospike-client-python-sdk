@@ -18,23 +18,22 @@
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Client
 from aerospike_sdk.dataset import DataSet
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def client(aerospike_host, client_policy):
-    async with Client(seeds=aerospike_host, policy=client_policy) as client:
-        session = client.create_session()
+async def cluster(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        session = c.create_session()
         test_ds = DataSet.of("test", "test")
         await session.delete(test_ds.id("hll_bit_fluent_1")).execute()
         await session.delete(test_ds.id("hll_bit_fluent_2")).execute()
-        yield client
+        yield c
 
 
-async def test_hll_init_add_and_get_count(client):
+async def test_hll_init_add_and_get_count(cluster):
     from aerospike_sdk import HllConfig
-    session = client.create_session()
+    session = cluster.create_session()
     k = DataSet.of("test", "test").id("hll_bit_fluent_1")
     await (
         session.upsert(k)
@@ -52,8 +51,8 @@ async def test_hll_init_add_and_get_count(client):
     assert count >= 1
 
 
-async def test_bit_resize_set_and_get(client):
-    session = client.create_session()
+async def test_bit_resize_set_and_get(cluster):
+    session = cluster.create_session()
     k = DataSet.of("test", "test").id("hll_bit_fluent_2")
     await (
         session.upsert(k)

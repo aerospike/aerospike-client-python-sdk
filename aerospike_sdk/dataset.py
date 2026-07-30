@@ -29,7 +29,8 @@ class DataSet:
     many. Pass keys to :meth:`~aerospike_sdk.aio.session.Session.query`,
     :meth:`~aerospike_sdk.aio.session.Session.upsert`, and other session APIs.
 
-    Example:
+    Example::
+
         users = DataSet.of("test", "users")
         k = users.id("user-123")
         ks = users.ids("a", "b", "c")
@@ -71,7 +72,8 @@ class DataSet:
         Raises:
             ValueError: If either string is empty.
 
-        Example:
+        Example::
+
             orders = DataSet.of("prod", "orders")
 
         See Also:
@@ -99,7 +101,8 @@ class DataSet:
         Returns:
             A :class:`~aerospike_async.Key` bound to this dataset's namespace/set.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             key_str = users.id("user123")
             key_int = users.id(12345)
@@ -213,7 +216,8 @@ class DataSet:
         Raises:
             TypeError: If list elements are not supported key types.
 
-        Example:
+        Example::
+
             users = DataSet.of("test", "users")
             keys1 = users.ids("u1", "u2", "u3")
             keys2 = users.ids(["u1", "u2"])
@@ -229,9 +233,7 @@ class DataSet:
         # Handle multiple positional arguments
         return [self.id(id_obj) for id_obj in identifiers]
 
-    def ids_from_digests(
-        self, *digests: Union[str, bytes]
-    ) -> List[Key]:
+    def ids_from_digests(self, *digests: Union[str, bytes]) -> List[Key]:
         """
         Create multiple Aerospike keys from digests.
 

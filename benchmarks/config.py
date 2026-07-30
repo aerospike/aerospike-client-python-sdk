@@ -74,6 +74,8 @@ class WorkloadConfig:
     tls_cert_file: Optional[str] = None
     tls_key_file: Optional[str] = None
     auth_mode: Optional[str] = None
+    many_size: int = 16
+    """For ``--mode async-many``: keys per ``get_many``/``put_many`` call."""
     auth_user: Optional[str] = None
     auth_password: Optional[str] = None
     services_alternate: Optional[bool] = None
@@ -106,6 +108,11 @@ class WorkloadConfig:
     and summary percentiles. Default is the lean path that runs straight to
     ``--duration`` and prints only a final TPS / errors / timeouts summary."""
     prebuilt_keys: int = 0
+    conn_pools_per_node: int = 0
+    """When >0, override ``ClientPolicy.conn_pools_per_node``. Otherwise the
+    underlying default (4) applies. Sync workloads drive the client from many
+    caller threads and can contend on the per-node pool mutex, so this is the
+    knob for measuring whether a higher count earns its keep."""
     current_thread_runtime: bool = False
     """When True (sync mode only), SyncClient installs a thread-local proxy:
     each bench worker thread gets its own PAC `LocalClient` backed by a
@@ -133,8 +140,7 @@ def parse_latency_arg(value: str) -> tuple[int, int, str]:
         return 7, 1, "ycsb"
     parts = value.split(",")
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError(
-            "expected COLUMNS,SHIFT (e.g. 7,1) or 'ycsb'")
+        raise argparse.ArgumentTypeError("expected COLUMNS,SHIFT (e.g. 7,1) or 'ycsb'")
     try:
         cols = int(parts[0].strip())
         shift = int(parts[1].strip())
@@ -236,8 +242,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--threads",
         type=int,
         default=None,
-        help="Number of OS threads for sync mode. "
-        "If not set, falls back to -z value.",
+        help="Number of OS threads for sync mode. If not set, falls back to -z value.",
     )
     p.add_argument(
         "-d",
@@ -268,13 +273,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=("async", "sync", "pac-blocking", "pac-async", "legacy-sync"),
+        choices=("async", "async-many", "sync", "pac-blocking", "pac-async", "legacy-sync"),
         default="async",
         help="Client API style. 'async' / 'sync' use PSDK sessions. "
+        "'async-many' uses the explicit get_many/put_many window API "
+        "(see --many-size). "
         "'pac-blocking' calls PAC's `_blocking` entries directly. "
         "'pac-async' uses PAC's async client directly, bypassing PSDK. "
         "'legacy-sync' uses the legacy `aerospike` C client. "
         "(default: %(default)s)",
+    )
+    p.add_argument(
+        "--many-size",
+        type=int,
+        default=16,
+        help="For --mode async-many: number of keys per get_many/put_many "
+        "call (the window size). Client-side fusion of independent point "
+        "ops — NOT a server batch (contrast --batch-size). (default: %(default)s)",
     )
     p.add_argument(
         "--warmup",
@@ -365,8 +380,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "`--no-services-alternate` to force-disable (overrides "
         "AEROSPIKE_USE_SERVICES_ALTERNATE from `aerospike.env` if set). "
         "When neither form is passed, falls back to that env var (default: "
-        "env or False, matching JSDK's `--services-alternate` default of "
-        "false).",
+        "env or False",
     )
     p.add_argument(
         "--seed-only",
@@ -427,6 +441,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "TPS / errors / timeouts summary.",
     )
     p.add_argument(
+        "--conn-pools-per-node",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Override ClientPolicy.conn_pools_per_node (0 = leave at the "
+        "underlying default of 4). Higher counts reduce per-node pool mutex "
+        "contention for many-threaded sync workloads, but lengthen connection "
+        "setup at connect time.",
+    )
+    p.add_argument(
         "--current-thread-runtime",
         action="store_true",
         default=False,
@@ -482,6 +506,7 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         duration_sec=float(ns.duration),
         max_ops=ns.max_ops,
         batch_size=max(0, int(ns.batch_size)),
+        many_size=max(1, int(ns.many_size)),
         latency_columns=cols,
         latency_shift=shift,
         mode=ns.mode,
@@ -510,5 +535,6 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
             or getattr(ns, "latency_style", "columns") != "columns"
         ),
         prebuilt_keys=max(0, int(getattr(ns, "prebuilt_keys", 0))),
+        conn_pools_per_node=int(getattr(ns, "conn_pools_per_node", 0) or 0),
         current_thread_runtime=bool(getattr(ns, "current_thread_runtime", False)),
     )

@@ -54,8 +54,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("\nBatch Modify:")
     results = await (
-        session.batch()
-        .insert(SET.id(6)).bin("name").set_to("Wilma").bin("age").set_to(33).bin("value").set_to(20)
+        session.insert(SET.id(6)).bin("name").set_to("Wilma").bin("age").set_to(33).bin("value").set_to(20)
         .insert(SET.id(7)).bin("name").set_to("Wilma").bin("age").set_to(33).bin("value").set_to(20)
         .insert(SET.id(8)).bin("name").set_to("Wilma").bin("age").set_to(33).bin("value").set_to(20)
         .update(SET.id(2)).bin("value").add(5)

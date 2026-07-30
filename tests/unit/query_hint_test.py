@@ -16,7 +16,7 @@
 """Unit tests for QueryHint dataclass and QueryBuilder.with_hint()."""
 
 import pytest
-from aerospike_async import Filter, QueryDuration
+from aerospike_sdk import Filter, QueryDuration
 
 from aerospike_sdk import (
     Exp,

@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import threading
+import weakref
 from datetime import timedelta
 from typing import ClassVar, Dict, List, Optional, Tuple
 
@@ -34,11 +36,12 @@ from aerospike_sdk.policy.behavior_settings import (
 
 _OpKey = Tuple[OpKind, OpShape, Mode]
 
+# Guards session registration (create_session) against the reload walk
+# (config poller thread / task). Never taken on the operation path.
+_sessions_lock = threading.Lock()
+
 _ALL_KEYS: List[_OpKey] = [
-    (kind, shape, mode)
-    for kind in OpKind
-    for shape in OpShape
-    for mode in Mode
+    (kind, shape, mode) for kind in OpKind for shape in OpShape for mode in Mode
 ]
 
 
@@ -78,7 +81,7 @@ class Behavior:
     STRICTLY_CONSISTENT: ClassVar[Behavior]
     FAST_RACK_AWARE: ClassVar[Behavior]
 
-    __slots__ = ("_name", "_patches", "_parent", "_children", "_resolved")
+    __slots__ = ("_name", "_patches", "_parent", "_children", "_resolved", "_sessions")
 
     def __init__(
         self,
@@ -91,6 +94,9 @@ class Behavior:
         self._parent = parent
         self._children: List[Behavior] = []
         self._resolved: Dict[_OpKey, Settings] = {}
+        # Live sessions bound to this behavior; config hot-reload pushes
+        # rebuilt policies into them so nothing checks on the op path.
+        self._sessions: weakref.WeakSet = weakref.WeakSet()
         if parent is not None:
             parent._children.append(self)
         self._build_cache()
@@ -127,10 +133,33 @@ class Behavior:
         return self._resolved[(kind, shape, mode)]
 
     def clear_cache(self) -> None:
-        """Recompute the resolved settings matrix and cascade to children."""
+        """Recompute the resolved settings matrix and cascade to children.
+
+        Live sessions bound to this behavior have their cached policies
+        rebuilt and swapped in, so settings changes reach them without any
+        per-operation check.
+        """
         self._build_cache()
+        with _sessions_lock:
+            sessions = list(self._sessions)
+        for session in sessions:
+            session._refresh_cached_policies()
         for child in self._children:
             child.clear_cache()
+
+    def _register_session(self, session: object) -> None:
+        """Track a live session for config hot-reload policy pushes."""
+        with _sessions_lock:
+            self._sessions.add(session)
+
+    def _reload_patches(self, patches: Dict[Scope, Settings]) -> None:
+        """Replace this behavior's patches wholesale and re-resolve.
+
+        Used by config-file hot-reload; existing references (registry
+        entries, child behaviors, live sessions) observe the new settings.
+        """
+        self._patches = dict(patches)
+        self.clear_cache()
 
     def derive_with_changes(
         self,

@@ -25,11 +25,10 @@ Covers:
 """
 
 import pytest
-from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
-from aerospike_sdk.exceptions import AerospikeError, GenerationError
+from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from tests.pac_compat import (
     requires_server_compiled_ael,
@@ -45,8 +44,8 @@ def ds():
 
 
 @pytest.fixture
-async def session(client):
-    return client.create_session()
+async def session(cluster):
+    return cluster.create_session()
 
 
 async def _cleanup(session, *keys):
@@ -73,9 +72,9 @@ class TestDefaultDisposition:
         with pytest.raises(GenerationError):
             await (
                 session.update(k)
-                    .ensure_generation_is(999)
-                    .bin("v").set_to(2)
-                    .execute()
+                .ensure_generation_is(999)
+                .bin("v").set_to(2)
+                .execute()
             )
         await _cleanup(session, k)
 
@@ -89,8 +88,8 @@ class TestDefaultDisposition:
 
         rs = await (
             session.query(k1, k2)
-                .include_missing_keys()
-                .execute()
+            .include_missing_keys()
+            .execute()
         )
         results = await rs.collect()
         assert len(results) == 2
@@ -119,8 +118,8 @@ class TestInStreamStrategy:
             session
             .query(k)
             .update(k)
-                .ensure_generation_is(999)
-                .bin("v").set_to(2)
+            .ensure_generation_is(999)
+            .bin("v").set_to(2)
             .execute(on_error=ErrorStrategy.IN_STREAM)
         )
         results = await stream.collect()
@@ -158,8 +157,8 @@ class TestErrorHandler:
             session
             .query(k)
             .update(k)
-                .ensure_generation_is(999)
-                .bin("v").set_to(2)
+            .ensure_generation_is(999)
+            .bin("v").set_to(2)
             .execute(on_error=on_error)
         )
         results = await rs.collect()
@@ -215,8 +214,8 @@ class TestMultiSpecPartialFailure:
             session
             .query(k_good)
             .update(k_fail)
-                .ensure_generation_is(999)
-                .bin("v").set_to(99)
+            .ensure_generation_is(999)
+            .bin("v").set_to(99)
             .execute(on_error=ErrorStrategy.IN_STREAM)
         )
         results = await rs.collect()
@@ -325,10 +324,10 @@ class TestFailOnFilteredOut:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                    .bin("v").set_to(99)
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .bin("v").set_to(99)
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
@@ -342,10 +341,10 @@ class TestFailOnFilteredOut:
 
         await (
             session.upsert(k)
-                .bin("v").set_to(99)
-                .where("$.v == 1")
-                .fail_on_filtered_out()
-                .execute()
+            .bin("v").set_to(99)
+            .where("$.v == 1")
+            .fail_on_filtered_out()
+            .execute()
         )
         rr = await (await session.query(k).execute()).first_or_raise()
         assert rr.record.bins["v"] == 99
@@ -362,9 +361,9 @@ class TestFailOnFilteredOut:
         with pytest.raises(AerospikeError) as exc_info:
             rs = await (
                 session.query(k)
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
             await rs.first_or_raise()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
@@ -379,9 +378,9 @@ class TestFailOnFilteredOut:
 
         rs = await (
             session.query(k)
-                .where("$.v == 1")
-                .fail_on_filtered_out()
-                .execute()
+            .where("$.v == 1")
+            .fail_on_filtered_out()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.record.bins["v"] == 1
@@ -397,9 +396,9 @@ class TestFailOnFilteredOut:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.delete(k)
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
@@ -420,12 +419,12 @@ class TestFailOnFilteredOut:
         rs = await (
             session
             .upsert(k_match)
-                .bin("v").set_to(10)
-                .where("$.v == 1")
+            .bin("v").set_to(10)
+            .where("$.v == 1")
             .upsert(k_nomatch)
-                .bin("v").set_to(20)
-                .where("$.v == 999")
-                .fail_on_filtered_out()
+            .bin("v").set_to(20)
+            .where("$.v == 999")
+            .fail_on_filtered_out()
             .execute()
         )
         results = await rs.collect()
@@ -483,9 +482,9 @@ class TestFilteredDeletePaths:
 
         await (
             session.delete(k)
-                .with_durable_delete()
-                .where("$.v == 1")
-                .execute()
+            .with_durable_delete()
+            .where("$.v == 1")
+            .execute()
         )
 
         rs = await session.query(k).include_missing_keys().execute()
@@ -507,10 +506,10 @@ class TestFilteredDeletePaths:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.delete(k)
-                    .with_durable_delete()
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .with_durable_delete()
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
@@ -534,9 +533,9 @@ class TestOperateWithFilter:
 
         rs = await (
             session.upsert(k)
-                .bin("v").set_to(99)
-                .where("$.v == 1")
-                .execute()
+            .bin("v").set_to(99)
+            .where("$.v == 1")
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
@@ -554,9 +553,9 @@ class TestOperateWithFilter:
 
         await (
             session.upsert(k)
-                .bin("v").set_to(99)
-                .where("$.v == 999")
-                .execute()
+            .bin("v").set_to(99)
+            .where("$.v == 999")
+            .execute()
         )
 
         rr = await (await session.query(k).execute()).first_or_raise()
@@ -574,10 +573,10 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                    .bin("v").set_to(99)
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .bin("v").set_to(99)
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
@@ -596,7 +595,8 @@ class TestOperateWithFilter:
 
         rs = await (
             session.upsert(k)
-            .bin("result").select_from("$.v:INT")
+            .bin("result").select_from("$.v")
+            .where("$.v == 1")
             .execute()
         )
         rr = await rs.first_or_raise()
@@ -614,10 +614,10 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                    .bin("result").select_from("$.v")
-                    .where("$.v == 999")
-                    .fail_on_filtered_out()
-                    .execute()
+                .bin("result").select_from("$.v")
+                .where("$.v == 999")
+                .fail_on_filtered_out()
+                .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
@@ -637,9 +637,9 @@ class TestWriteBinGet:
 
         rs = await (
             session.upsert(k)
-                .bin("v").set_to(42)
-                .bin("v").get()
-                .execute()
+            .bin("v").set_to(42)
+            .bin("v").get()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
@@ -654,11 +654,11 @@ class TestWriteBinGet:
 
         rs = await (
             session.upsert(k)
-                .bin("a").set_to(1)
-                .bin("b").set_to("hello")
-                .bin("a").get()
-                .bin("b").get()
-                .execute()
+            .bin("a").set_to(1)
+            .bin("b").set_to("hello")
+            .bin("a").get()
+            .bin("b").get()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
@@ -675,9 +675,9 @@ class TestWriteBinGet:
 
         rs = await (
             session.upsert(k)
-                .bin("x").set_to(99)
-                .bin("y").get()
-                .execute()
+            .bin("x").set_to(99)
+            .bin("y").get()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
@@ -693,9 +693,9 @@ class TestWriteBinGet:
 
         rs = await (
             session.update(k)
-                .bin("c").upsert_from("$.a + 4")
-                .bin("c").get()
-                .execute()
+            .bin("c").upsert_from("$.a + 4")
+            .bin("c").get()
+            .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
@@ -716,10 +716,10 @@ class TestWriteBinGet:
 
         rs = await (
             session.upsert(k1)
-                .bin("status").set_to("active")
+            .bin("status").set_to("active")
             .query(k2)
-                .bin("name").get()
-                .bin("computed").select_from("$.age * 2")
+            .bin("name").get()
+            .bin("computed").select_from("$.age * 2")
             .execute()
         )
         results = await rs.collect()
@@ -781,9 +781,9 @@ class TestTtlExpiry:
 
         await (
             session.upsert(k)
-                .expire_record_after_seconds(2)
-                .put({"v": 1})
-                .execute()
+            .expire_record_after_seconds(2)
+            .put({"v": 1})
+            .execute()
         )
 
         rr = await (await session.query(k).execute()).first_or_raise()
@@ -819,15 +819,15 @@ class TestTtlExpiry:
 
         await (
             session.upsert(k)
-                .expire_record_after_seconds(2)
-                .put({"v": "touchvalue"})
-                .execute()
+            .expire_record_after_seconds(2)
+            .put({"v": "touchvalue"})
+            .execute()
         )
 
         await (
             session.touch(k)
-                .expire_record_after_seconds(5)
-                .execute()
+            .expire_record_after_seconds(5)
+            .execute()
         )
 
         await asyncio.sleep(3)
@@ -848,9 +848,9 @@ class TestTtlExpiry:
 
         await (
             session.upsert(k)
-                .expire_record_after_seconds(900)
-                .put({"v": 1})
-                .execute()
+            .expire_record_after_seconds(900)
+            .put({"v": 1})
+            .execute()
         )
         r1 = await (await session.query(k).execute()).first_or_raise()
         ttl1 = r1.record.ttl
@@ -858,9 +858,9 @@ class TestTtlExpiry:
 
         await (
             session.upsert(k)
-                .with_no_change_in_expiration()
-                .bin("v").set_to(2)
-                .execute()
+            .with_no_change_in_expiration()
+            .bin("v").set_to(2)
+            .execute()
         )
         r2 = await (await session.query(k).execute()).first_or_raise()
         ttl2 = r2.record.ttl

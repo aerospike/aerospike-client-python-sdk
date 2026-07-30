@@ -23,7 +23,7 @@ Covers:
 
 import pytest
 
-from aerospike_sdk import SyncClient, DataSet
+from aerospike_sdk import DataSet
 
 
 NS = "test"
@@ -31,14 +31,14 @@ SET = "operate_record_sync"
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
 
 
 @pytest.fixture
-def session(client):
-    return client.create_session()
+def session(cluster):
+    return cluster.create_session()
 
 
 @pytest.fixture
@@ -53,9 +53,9 @@ def test_delete_record_reads_then_deletes(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("name").get()
-            .delete_record()
-            .execute()
+        .bin("name").get()
+        .delete_record()
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["name"] == "Alice"
@@ -72,11 +72,11 @@ def test_delete_record_then_write_recreates(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("a").get()
-            .delete_record()
-            .bin("b").set_to(99)
-            .bin("b").get()
-            .execute()
+        .bin("a").get()
+        .delete_record()
+        .bin("b").set_to(99)
+        .bin("b").get()
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["a"] == 1
@@ -96,10 +96,10 @@ def test_touch_record_resets_ttl(session, ds):
 
     stream = (
         session.upsert(key)
-            .bin("score").get()
-            .touch_record()
-            .expire_record_after_seconds(120)
-            .execute()
+        .bin("score").get()
+        .touch_record()
+        .expire_record_after_seconds(120)
+        .execute()
     )
     row = stream.first_or_raise()
     assert row.record.bins["score"] == 42

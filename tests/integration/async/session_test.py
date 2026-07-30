@@ -22,36 +22,36 @@ from datetime import timedelta
 
 log = logging.getLogger(__name__)
 
-from aerospike_sdk import Behavior, DataSet, Client
+from aerospike_sdk import Behavior, DataSet
 
 
 @pytest.fixture
-async def session(client):
+async def session(cluster):
     """Setup session with default behavior for testing."""
-    return client.create_session(Behavior.DEFAULT)
+    return cluster.create_session(Behavior.DEFAULT)
 
 
-async def test_session_creation_default_behavior(client):
+async def test_session_creation_default_behavior(cluster):
     """Test creating a session with default behavior."""
-    session = client.create_session()
+    session = cluster.create_session()
     assert session is not None
     assert session.behavior.name == "DEFAULT"
-    assert session.client is client
+    assert session.client is cluster._client
 
 
-async def test_session_creation_custom_behavior(client):
+async def test_session_creation_custom_behavior(cluster):
     """Test creating a session with custom behavior."""
     custom_behavior = Behavior.DEFAULT.derive_with_changes(
         name="custom",
         total_timeout=timedelta(seconds=10),
         max_retries=5,
     )
-    session = client.create_session(custom_behavior)
+    session = cluster.create_session(custom_behavior)
     assert session is not None
     assert session.behavior.name == "custom"
     assert session.behavior.total_timeout == timedelta(seconds=10)
     assert session.behavior.max_retries == 5
-    assert session.client is client
+    assert session.client is cluster._client
 
 
 
@@ -92,7 +92,7 @@ async def test_session_upsert_with_dataset(session):
 
 async def test_session_upsert_with_namespace_set(session):
     """Test session.upsert() with explicit namespace/set."""
-    from aerospike_async import Key
+    from aerospike_sdk import Key
 
     key = Key("test", "users", "user789")
     await session.upsert(
@@ -228,10 +228,10 @@ async def test_session_upsert_error_no_key(session):
         await session.upsert().put({"name": "Test"}).execute()
 
 
-async def test_session_multiple_sessions_different_behaviors(client):
+async def test_session_multiple_sessions_different_behaviors(cluster):
     """Test creating multiple sessions with different behaviors."""
-    default_session = client.create_session(Behavior.DEFAULT)
-    fast_session = client.create_session(
+    default_session = cluster.create_session(Behavior.DEFAULT)
+    fast_session = cluster.create_session(
         Behavior.DEFAULT.derive_with_changes(
             name="fast",
             total_timeout=timedelta(seconds=5),
@@ -244,9 +244,9 @@ async def test_session_multiple_sessions_different_behaviors(client):
     assert default_session.behavior.total_timeout == timedelta(seconds=30)
 
 
-async def test_session_transaction_session(session):
-    """Test that session.transaction_session() works."""
-    tx_session = session.transaction_session()
+async def test_session_transaction(session):
+    """Test that session.transaction() works."""
+    tx_session = session.transaction()
     assert tx_session is not None
 
 

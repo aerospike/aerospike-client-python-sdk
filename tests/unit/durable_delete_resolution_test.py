@@ -18,12 +18,9 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
-from aerospike_async import Key
+from aerospike_sdk import Key
 
-from aerospike_sdk.aio.operations import batch as batch_mod
-from aerospike_sdk.aio.operations.batch import BatchOperationBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
 from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.policy.behavior import Behavior
@@ -56,9 +53,7 @@ class TestResolveDurableDelete:
     def test_resolver_override_wins_over_default_and_setting(
         self, setting, command_default, override, expected,
     ):
-        assert (
-            resolve_durable_delete(setting, command_default, override) is expected
-        )
+        assert resolve_durable_delete(setting, command_default, override) is expected
 
     def test_resolver_default_wins_over_setting_when_no_override(self):
         assert resolve_durable_delete(True, False, None) is False
@@ -122,72 +117,35 @@ class TestBatchPolicies:
         assert bwp.durable_delete is True
 
 
-@pytest.mark.asyncio
-class TestBatchOperationBuilderPolicies:
-    """Buffered ``execute()`` dispatches via ``client.batch(ops, ...)`` with
-    pre-wrapped per-key ops; the behavior-resolved
-    :class:`BatchDeletePolicy` is threaded through ``_build_pac_batch_ops``
-    onto each :class:`BatchDeleteOp`. PAC's ``BatchDeleteOp`` doesn't
-    expose its policy as a Python attribute, so we spy on
-    ``_build_pac_batch_ops`` to capture the resolved policy argument."""
+class TestBatchDeletePolicyFromBehavior:
+    """Multi-key delete specs resolve durable delete from behavior scopes
+    (``writes_batch`` / SC-mode ``writes``) even without a per-spec
+    override, and the resolved value lands on the
+    :class:`BatchDeletePolicy`."""
 
-    async def test_batch_delete_policy_arg_non_none_when_batch_writes_durable(
-        self, monkeypatch,
-    ):
-        captured: dict = {}
-        original = batch_mod._build_pac_batch_ops
-
-        def spy(key_operations, delete_policy):
-            captured["delete_policy"] = delete_policy
-            return original(key_operations, delete_policy)
-
-        monkeypatch.setattr(batch_mod, "_build_pac_batch_ops", spy)
-
-        mock_client = MagicMock()
-        mock_client.batch = AsyncMock(return_value=[])
-
+    def test_batch_delete_policy_non_none_when_batch_writes_durable(self):
         behavior = Behavior.DEFAULT.derive_with_changes(
             "batch_durable",
             writes_batch=Settings(durable_delete=True),
         )
-        bob = BatchOperationBuilder(mock_client, behavior=behavior)
-        await bob.delete(_make_key()).execute()
+        qb = _make_qb(behavior=behavior)
+        qb._namespace_mode = Mode.AP
+        spec = _OperationSpec(keys=[_make_key(1), _make_key(2)], op_type="delete")
+        bdp = qb._make_batch_delete_policy(spec)
+        assert bdp is not None
+        assert bdp.durable_delete is True
 
-        mock_client.batch.assert_awaited()
-        assert captured["delete_policy"] is not None
-
-    async def test_batch_delete_policy_uses_sc_namespace_mode(self, monkeypatch):
-        captured: dict = {}
-        original = batch_mod._build_pac_batch_ops
-
-        def spy(key_operations, delete_policy):
-            captured["delete_policy"] = delete_policy
-            return original(key_operations, delete_policy)
-
-        monkeypatch.setattr(batch_mod, "_build_pac_batch_ops", spy)
-
-        mock_client = MagicMock()
-        mock_client.batch = AsyncMock(return_value=[])
-
-        async def resolve_mode(namespace: str) -> Mode:
-            assert namespace == "test"
-            return Mode.SC
-
+    def test_batch_delete_policy_uses_sc_namespace_mode(self):
         behavior = Behavior.DEFAULT.derive_with_changes(
             "sc_batch_durable",
             writes_sc=Settings(durable_delete=True),
         )
-        bob = BatchOperationBuilder(
-            mock_client,
-            behavior=behavior,
-            namespace_mode_resolver=resolve_mode,
-        )
-        await bob.delete(_make_key()).execute()
-
-        mock_client.batch.assert_awaited()
-        delete_policy = captured["delete_policy"]
-        assert delete_policy is not None
-        assert delete_policy.durable_delete is True
+        qb = _make_qb(behavior=behavior)
+        qb._namespace_mode = Mode.SC
+        spec = _OperationSpec(keys=[_make_key(1), _make_key(2)], op_type="delete")
+        bdp = qb._make_batch_delete_policy(spec)
+        assert bdp is not None
+        assert bdp.durable_delete is True
 
 
 class TestUdfSpec:

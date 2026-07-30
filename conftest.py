@@ -15,7 +15,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.exceptions import ConnectionError as PacConnectionError
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -138,6 +138,53 @@ def _apply_auth_from_env(policy: ClientPolicy) -> None:
             policy.set_auth_mode(mode)
         else:
             policy.set_auth_mode(mode, user=user, password=password)
+
+
+def _apply_auth_to_definition(cluster_def) -> None:
+    """Apply ``AEROSPIKE_AUTH_*`` env vars to a ClusterDefinition, if set.
+
+    Mirror of :func:`_apply_auth_from_env` for the ``ClusterDefinition``
+    entry path (async or sync — both expose the same credential methods).
+    """
+    mode_str = os.environ.get('AEROSPIKE_AUTH_MODE', '').strip().upper()
+    if not mode_str or mode_str not in _AUTH_MODES:
+        return
+    user = os.environ.get('AEROSPIKE_AUTH_USER', '')
+    password = os.environ.get('AEROSPIKE_AUTH_PASSWORD', '')
+    if mode_str == "INTERNAL":
+        cluster_def.with_native_credentials(user, password)
+    elif mode_str == "EXTERNAL":
+        cluster_def.with_external_credentials(user, password)
+    else:  # PKI
+        cluster_def.with_certificate_credentials()
+
+
+@pytest.fixture(scope="session")
+def make_cluster_definition():
+    """Factory for ClusterDefinitions mirroring the ClientPolicy fixtures.
+
+    ``make_cluster_definition(seed)`` builds a ClusterDefinition for the AP seed
+    (services-alternate from env, no auth — same contract as
+    :func:`client_policy`); ``auth=True`` applies ``AEROSPIKE_AUTH_*`` (the
+    :func:`client_policy_sc` / :func:`client_policy_sec` contract);
+    ``sync=True`` returns the ``aerospike_sdk.sync`` cluster_def.
+    """
+    from aerospike_sdk import ClusterDefinition, Host
+    from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
+    from aerospike_sdk.sync import Host as SyncHost
+
+    def _make(seed: str, *, auth: bool = False, sync: bool = False):
+        if sync:
+            cluster_def = SyncClusterDefinition(hosts=SyncHost.parse_hosts(seed, 3000))
+        else:
+            cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
+        if _use_services_alternate_from_env():
+            cluster_def.using_services_alternate()
+        if auth:
+            _apply_auth_to_definition(cluster_def)
+        return cluster_def
+
+    return _make
 
 
 @pytest.fixture(scope="session")
@@ -263,19 +310,31 @@ def wait_for_index():
 
         await wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
     """
-    async def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+    async def _wait(
+        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
+    ):
+        # Server-side SI readiness is not monotonic right after create/drop —
+        # a single successful probe can be followed by a brief IndexNotReadable
+        # window. Require `stable` consecutive readable probes so the very next
+        # query in the test does not race that flicker.
         deadline = time.monotonic() + timeout
         last_err = None
+        hits = 0
+        session = client.create_session()
         while time.monotonic() < deadline:
             try:
-                stream = await client.query(ns, set_name).filter(sindex_filter).execute()
+                stream = await session.query(ns, set_name).filter(sindex_filter).execute()
                 async for _ in stream:
                     break
                 stream.close()
-                return
+                hits += 1
+                if hits >= stable:
+                    return
+                await asyncio.sleep(interval)
             except Exception as exc:
                 if "IndexNotReadable" not in str(exc):
                     raise
+                hits = 0  # a flicker resets the streak
                 last_err = exc
                 await asyncio.sleep(interval)
         raise last_err  # type: ignore[misc]
@@ -339,19 +398,31 @@ def sync_wait_for_index():
 
         sync_wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
     """
-    def _wait(client, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
+    def _wait(
+        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
+    ):
+        # Server-side SI readiness is not monotonic right after create/drop —
+        # a single successful probe can be followed by a brief IndexNotReadable
+        # window. Require `stable` consecutive readable probes so the very next
+        # query in the test does not race that flicker.
         deadline = time.monotonic() + timeout
         last_err = None
+        hits = 0
+        session = client.create_session()
         while time.monotonic() < deadline:
             try:
-                stream = client.query(ns, set_name).filter(sindex_filter).execute()
+                stream = session.query(ns, set_name).filter(sindex_filter).execute()
                 for _ in stream:
                     break
                 stream.close()
-                return
+                hits += 1
+                if hits >= stable:
+                    return
+                time.sleep(interval)
             except Exception as exc:
                 if "IndexNotReadable" not in str(exc):
                     raise
+                hits = 0  # a flicker resets the streak
                 last_err = exc
                 time.sleep(interval)
         raise last_err  # type: ignore[misc]
@@ -371,35 +442,46 @@ def aerospike_host_sec():
     return os.environ.get('AEROSPIKE_HOST_SEC', 'localhost:3109')
 
 
-@pytest.fixture(scope="session")
-def aerospike_host_8_1_2():
-    """Seed for an 8.1.2+ Aerospike cluster, when one is available locally.
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def aerospike_host_812_required(aerospike_host, server_version):
+    """The default seed, required to be server >= 8.1.2, else skip.
 
-    Returns ``None`` when ``AEROSPIKE_HOST_8_1_2`` is unset; tests that need
-    8.1.2+ behavior should accept this fixture and ``pytest.skip`` when it is
-    ``None`` rather than failing.
+    Single-host model: version-gated tests connect to the default
+    ``AEROSPIKE_HOST`` and skip unless it is 8.1.2+. Point ``AEROSPIKE_HOST``
+    at an 8.1.2+ build to run them; CI covers the version spread via a server
+    matrix rather than a dedicated host var. Skips when the seed is < 8.1.2 or
+    unreachable (``server_version`` probes to ``None``).
     """
-    return os.environ.get('AEROSPIKE_HOST_8_1_2')
-
-
-@pytest.fixture
-def aerospike_host_812_required(aerospike_host_8_1_2):
-    """Returns the 8.1.2+ host or skips the dependent test cleanly.
-
-    Tests that exercise server-8.1.2-only features opt in by depending on
-    this fixture (typically via a ``_812``-suffixed client fixture). When
-    ``AEROSPIKE_HOST_8_1_2`` is unset the dependent test is skipped with a
-    clear message rather than running against the wrong cluster. When set,
-    the test is auto-routed to the 8.1.2+ seed, so a single ``pytest`` run
-    can exercise the broad surface against ``AEROSPIKE_HOST`` and the
-    8.1.2-only subset against ``AEROSPIKE_HOST_8_1_2``.
-    """
-    if not aerospike_host_8_1_2:
+    if server_version is None or server_version < SERVER_8_1_2:
         pytest.skip(
-            "AEROSPIKE_HOST_8_1_2 is unset; this test requires an 8.1.2+ "
-            "cluster. Set AEROSPIKE_HOST_8_1_2 in aerospike.env to enable."
+            "default cluster is not 8.1.2+ (or unreachable); point "
+            "AEROSPIKE_HOST at an 8.1.2+ build to run these tests"
         )
-    return aerospike_host_8_1_2
+    return aerospike_host
+
+
+# Named server-version floors for capability gates. Compare against the
+# ``(M, m, p, b)`` tuple from :func:`server_version`. Centralized so feature
+# checks reference an intent-named constant instead of an inline magic tuple
+# (mirrors the Java clients' ``SERVER_VERSION_*`` constants). Add a new floor
+# here rather than inlining a tuple in a new ``supports_*`` gate.
+SERVER_8_1_1 = (8, 1, 1, 0)
+SERVER_8_1_2 = (8, 1, 2, 0)
+SERVER_8_1_3 = (8, 1, 3, 0)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_string_operations(server_version):
+    """``True`` when the (default-host) cluster supports server-side string ops.
+
+    Covers the ``str_*`` builder / ``StringOperation`` surface and string
+    filter expressions (server >= 8.1.3, gated server-side via the core's
+    ``Version::supports_string_operations``). Single-host model: point
+    ``AEROSPIKE_HOST`` at an 8.1.3+ build to exercise these; CI covers the
+    version spread via a server matrix rather than a dedicated host var.
+    Tests should ``pytest.skip`` when this is ``False``.
+    """
+    return server_version is not None and server_version >= SERVER_8_1_3
 
 
 def _parse_build_string(build: str):
@@ -465,7 +547,7 @@ async def supports_query_ops_projection_ext(server_version):
     facade ``QueryBuilder.with_op_projection``) should ``pytest.skip``
     when this is ``False``.
     """
-    return server_version is not None and server_version >= (8, 1, 2, 0)
+    return server_version is not None and server_version >= SERVER_8_1_2
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -500,5 +582,17 @@ async def supports_enhanced_expression_api(server_version):
     expression operators (``exp_select_*`` / ``exp_modify_*`` /
     ``exp_remove``). Server >= 8.1.2.
     """
-    return server_version is not None and server_version >= (8, 1, 2, 0)
+    return server_version is not None and server_version >= SERVER_8_1_2
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_error_detail(server_version):
+    """``True`` when the cluster supplies extended server error detail.
+
+    Covers ``error_detail_verbosity`` and the resulting ``AerospikeError``
+    ``sub_code`` / ``server_message`` / ``exp_trace``. Server >= 8.1.3;
+    older servers ignore the request flags. Tests that assert on error
+    detail should ``pytest.skip`` when this is ``False``.
+    """
+    return server_version is not None and server_version >= SERVER_8_1_3
 

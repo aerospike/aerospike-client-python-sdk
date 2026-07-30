@@ -15,7 +15,7 @@
 
 """Tests for SyncClient."""
 
-from aerospike_sdk import SyncClient
+from aerospike_sdk.sync.client import SyncClient
 
 
 def test_client_connection(aerospike_host, client_policy):

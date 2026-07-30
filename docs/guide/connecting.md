@@ -2,37 +2,40 @@
 
 ## Basic Connection
 
-The simplest way to connect is with a host and port:
+`ClusterDefinition` is the entry point for every connection. Connect it to
+obtain a `Cluster`, then create sessions from that cluster:
 
 ::::{tab-set}
 
 :::{tab-item} Async
 ```python
-from aerospike_sdk import Client
+from aerospike_sdk import ClusterDefinition
 
-async with Client("localhost:3000") as client:
-    session = client.create_session()
+async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 :::
 
 :::{tab-item} Sync
 ```python
-from aerospike_sdk import SyncClient
+from aerospike_sdk.sync import ClusterDefinition
 
-with SyncClient("localhost:3000") as client:
-    session = client.create_session()
+with ClusterDefinition("localhost", 3000).connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 :::
 
 ::::
 
-Both clients support context managers that automatically close the connection on exit.
+The `Cluster` returned by `connect()` supports the context-manager protocol,
+which automatically closes the connection on exit.
 
-## ClusterDefinition
+## Advanced Configuration
 
-For advanced configuration, use `ClusterDefinition`:
+`ClusterDefinition` exposes a fluent builder for credentials, alternate-access,
+IP mapping, TLS, rack awareness, and more:
 
 ```python
 from aerospike_sdk import ClusterDefinition
@@ -44,8 +47,25 @@ cluster_def = (
     .with_ip_map({"10.0.0.1": "3.72.54.187"})
 )
 
-async with cluster_def.connect() as client:
+async with await cluster_def.connect() as cluster:
+    session = cluster.create_session()
     # ...
+```
+
+### Alternate access addresses
+
+`using_services_alternate()` makes peer discovery follow each node's
+`alternate-access-address` rather than its standard service address. Enable it
+only against a cluster that publishes those addresses: against one that does
+not, the peer list comes back empty, the client falls back to a single node,
+and every key outside that node's partitions fails to route.
+
+The setting **defaults to on** whenever `AEROSPIKE_USE_SERVICES_ALTERNATE` is
+truthy in the environment, so pass `False` explicitly to force it off
+regardless of the environment:
+
+```python
+cluster_def = ClusterDefinition("localhost", 3000).using_services_alternate(False)
 ```
 
 ### TLS
@@ -53,7 +73,7 @@ async with cluster_def.connect() as client:
 Server-side TLS with CA certificate verification:
 
 ```python
-cluster = (
+cluster_def = (
     ClusterDefinition("localhost", 4333)
     .with_tls_config_of()
         .tls_name("myTlsName")
@@ -63,15 +83,15 @@ cluster = (
     .using_services_alternate()
 )
 
-async with await cluster.connect() as c:
-    session = c.create_session()
+async with await cluster_def.connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 
 Mutual TLS (mTLS) with client certificate authentication:
 
 ```python
-cluster = (
+cluster_def = (
     ClusterDefinition("localhost", 4333)
     .with_tls_config_of()
         .tls_name("myTlsName")
@@ -83,39 +103,21 @@ cluster = (
     .using_services_alternate()
 )
 
-async with await cluster.connect() as c:
-    session = c.create_session()
-    # ... use session ...
-```
-
-You can also configure TLS directly on a `Client` by passing a `ClientPolicy`
-with `tls_config` set:
-
-```python
-from aerospike_async import ClientPolicy, TlsConfig, AuthMode
-from aerospike_sdk import Client
-
-policy = ClientPolicy()
-policy.tls_config = TlsConfig("/path/to/ca.pem")
-policy.set_auth_mode(AuthMode.INTERNAL, user="admin", password="admin")
-policy.use_services_alternate = True
-
-async with Client("localhost:myTlsName:4333", policy) as client:
-    session = client.create_session()
+async with await cluster_def.connect() as cluster:
+    session = cluster.create_session()
     # ... use session ...
 ```
 
 :::{note}
-When using TLS, the seed string format is `host:tls_name:port` (three parts).
 The `tls_name` must match the server's configured TLS name for certificate
-validation. With `ClusterDefinition`, setting `tls_name()` on the builder
+validation. Setting `tls_name()` on the `ClusterDefinition` builder
 automatically applies it to all hosts.
 :::
 
 ### Rack Awareness
 
 ```python
-cluster = (
+cluster = await (
     ClusterDefinition("localhost", 3000)
     .preferring_racks(1, 2)
     .connect()
@@ -130,30 +132,37 @@ attribute load per calling application. It is separate from the client-library
 identifier the SDK reports automatically.
 
 ```python
-cluster = (
+cluster = await (
     ClusterDefinition("localhost", 3000)
     .app_id("billing-service")
     .connect()
 )
 ```
 
+### SDK Configuration File
+
+Connection pool sizing, circuit-breaker thresholds, tend interval, and named
+operation-policy behaviors can also come from a YAML file (the
+`AEROSPIKE_SDK_CONFIG_URL` environment variable), read at `connect()` and
+hot-reloaded on change. See [Dynamic SDK Configuration](dynamic-sdk-config.md).
+
 ## Sessions
 
-A **Session** binds a connected client to a set of policy defaults via a
+A **Session** binds a connected cluster to a set of policy defaults via a
 [`Behavior`](../api/behavior.md). All reads and writes go through a session.
 
 ```python
 from aerospike_sdk import Behavior
 
-session = client.create_session(Behavior.DEFAULT)
-fast_session = client.create_session(Behavior.READ_FAST)
-consistent_session = client.create_session(Behavior.STRICTLY_CONSISTENT)
+session = cluster.create_session(Behavior.DEFAULT)
+fast_session = cluster.create_session(Behavior.READ_FAST)
+consistent_session = cluster.create_session(Behavior.STRICTLY_CONSISTENT)
 ```
 
 :::{tip}
 Create different sessions for different workloads. A "fast read" session with
 short timeouts and a "batch import" session with longer timeouts can coexist
-on the same client.
+on the same cluster.
 :::
 
 ## Behaviors

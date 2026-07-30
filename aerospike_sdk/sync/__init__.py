@@ -15,28 +15,53 @@
 
 """Sync client and operations for the Aerospike SDK API."""
 
-from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
-from aerospike_sdk.sync.info import SyncInfoCommands
-from aerospike_sdk.sync.operations.batch import SyncBatchOperationBuilder
-from aerospike_sdk.sync.operations.index import SyncIndexBuilder
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.info import InfoCommands, SyncInfoCommands
+from aerospike_sdk.sync.operations.index import IndexBuilder, SyncIndexBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder, SyncQueryBuilder
+from aerospike_sdk.sync.session import Session, SyncSession
 from aerospike_sdk.sync.tls_builder import TlsBuilder
-from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+from aerospike_sdk.sync.transactional_session import (
+    SyncTransactionalSession,
+    TransactionalSession,
+)
 
+# The bare names are the committed convention (path-differentiated from the
+# aio classes of the same name — e.g. ``aerospike_sdk.sync.Session`` vs
+# ``aerospike_sdk.aio.Session``); the Sync*-prefixed aliases stay importable
+# for one deprecation cycle (removed at GA).
 __all__ = [
     "Cluster",
     "ClusterDefinition",
     "Host",
-    "SyncBatchOperationBuilder",
-    "SyncClient",
+    "IndexBuilder",
+    "InfoCommands",
+    "QueryBuilder",
+    "Session",
     "SyncInfoCommands",
     "SyncIndexBuilder",
     "SyncQueryBuilder",
     "SyncSession",
     "SyncTransactionalSession",
     "TlsBuilder",
+    "TransactionalSession",
 ]
+
+
+def __getattr__(name: str):
+    # Deprecated connection primitive, importable for one deprecation cycle.
+    if name == "SyncClient":
+        import warnings
+
+        warnings.warn(
+            "aerospike_sdk.sync.SyncClient is deprecated; connect with "
+            "aerospike_sdk.sync.ClusterDefinition(...).connect() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from aerospike_sdk.sync.client import SyncClient
+
+        return SyncClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

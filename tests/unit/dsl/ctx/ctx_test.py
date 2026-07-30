@@ -19,8 +19,7 @@ import io
 import contextlib
 import pytest
 
-from aerospike_async import CTX
-from aerospike_sdk import AelParseException, parse_ctx
+from aerospike_sdk import AelParseException, CTX, parse_ctx
 
 
 def _parse_ctx_quiet(path: str):

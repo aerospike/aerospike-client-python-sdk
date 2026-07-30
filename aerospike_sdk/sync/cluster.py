@@ -21,23 +21,29 @@ import types
 import typing
 from typing import Optional
 
-from aerospike_async import ClientPolicy
+from aerospike_async import ClientPolicy, UDFLang
 
+from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
-from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 from aerospike_sdk.sync.client import SyncClient
 
 if typing.TYPE_CHECKING:
-    from aerospike_sdk.sync.session import SyncSession
-    from aerospike_sdk.sync.transactional_session import SyncTransactionalSession
+    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
+    from aerospike_sdk.sync.session import Session
+    from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 
-class Cluster:
+class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Synchronous cluster handle from ``sync.cluster_definition.ClusterDefinition.connect``.
 
     Mirrors :class:`~aerospike_sdk.aio.cluster.Cluster` but uses
     :class:`~aerospike_sdk.sync.client.SyncClient` and
-    :class:`~aerospike_sdk.sync.session.SyncSession`.
+    :class:`~aerospike_sdk.sync.session.Session`. The
+    :meth:`create_session` / :meth:`transaction` / :meth:`is_connected`
+    factories are inherited from
+    :class:`~aerospike_sdk.cluster_shared.ClusterBase`.
 
     Example::
 
@@ -61,31 +67,47 @@ class Cluster:
         self._sdk_client = sdk_client
     
     @classmethod
-    def _create(cls, policy: ClientPolicy, seeds: str) -> Cluster:
+    def _create(
+        cls,
+        policy: ClientPolicy,
+        seeds: str,
+        index_refresh_interval: float = 5.0,
+        sdk_settings: Optional[SystemSettings] = None,
+        sdk_config_source: Optional[SdkConfigSource] = None,
+    ) -> Cluster:
         """
         Internal method to create a new Cluster instance.
-        
+
         Args:
             policy: The ClientPolicy configuration
             seeds: The seeds string (e.g., "localhost:3000")
-        
+            index_refresh_interval: Seconds between secondary-index cache refreshes
+            sdk_settings: Resolved SDK settings to store for runtime reads
+            sdk_config_source: When set, arms config hot-reload on the client
+
         Returns:
             A new Cluster instance
-        
+
         Raises:
             ConnectionError: If post-connect validation fails
         """
-        sdk_client = SyncClient(seeds=seeds, policy=policy)
+        sdk_client = SyncClient(
+            seeds=seeds,
+            policy=policy,
+            index_refresh_interval=index_refresh_interval,
+        )
+        if sdk_settings is not None:
+            sdk_client._sdk_settings = sdk_settings
         sdk_client.connect()
 
         # Bypass asyncio for the post-connect sanity check — `is_connected`
         # on PAC is a non-blocking synchronous probe (no I/O).
         if not sdk_client._pac_client().is_connected_blocking():
             sdk_client.close()
-            raise ConnectionError(
-                f"Connected to seeds '{seeds}' but cluster reports not connected"
-            )
+            raise ConnectionError(f"Connected to seeds '{seeds}' but cluster reports not connected")
 
+        if sdk_config_source is not None:
+            sdk_client._start_sdk_config_monitor(sdk_config_source)
         return cls(sdk_client)
     
     def __enter__(self) -> Cluster:
@@ -105,71 +127,108 @@ class Cluster:
     def _client(self) -> SyncClient:
         """Get the underlying SyncClient."""
         return self._sdk_client
-    
-    def create_session(self, behavior: Optional[Behavior] = None) -> SyncSession:
-        """Return a :class:`~aerospike_sdk.sync.session.SyncSession` for this cluster.
 
-        A session represents a logical connection to the cluster with specific
-        behavior settings that control how operations are performed (timeouts,
-        retry policies, consistency levels, etc.).
-        Args:
-            behavior: Defaults to :attr:`~aerospike_sdk.policy.behavior.Behavior.DEFAULT`.
-
-        Returns:
-            A new sync session bound to this cluster's client.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.cluster.Cluster.create_session`
-        """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.create_session(behavior)
-    
-    def create_transactional_session(
+    def register_udf(
         self,
-        behavior: Optional[Behavior] = None,
-    ) -> "SyncTransactionalSession":
-        """Return a :class:`SyncTransactionalSession` for a multi-record transaction.
+        body: bytes,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from bytes (synchronous).
 
-        Equivalent to ``create_session(behavior).begin_transaction()`` — the
-        returned context manager allocates a fresh
-        :class:`~aerospike_async.Txn` on entry and commits/aborts on exit.
-
-        Multi-record transactions require an Aerospike server running in
-        strong-consistency (SC) mode on the target namespace.
-
-        Args:
-            behavior: Optional :class:`~aerospike_sdk.policy.behavior.Behavior`
-                for operations inside the transaction. Defaults to
-                :attr:`Behavior.DEFAULT` when omitted.
-
-        Returns:
-            A :class:`~aerospike_sdk.sync.transactional_session.SyncTransactionalSession`
-            bound to this cluster's client and behavior.
-
-        Example::
-
-            with cluster.create_transactional_session() as tx:
-                tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
-                tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
 
         See Also:
-            :meth:`create_session`: Non-transactional session.
-            :meth:`~aerospike_sdk.aio.cluster.Cluster.create_transactional_session`: Async equivalent.
+            :meth:`aerospike_sdk.aio.session.Session.register_udf`
         """
-        if behavior is None:
-            behavior = Behavior.DEFAULT
-        return self._sdk_client.create_transactional_session(behavior)
-    
-    def is_connected(self) -> bool:
+        return self._sdk_client._register_udf(body, server_path, language, policy=policy)
+
+    def register_udf_from_file(
+        self,
+        client_path: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF module from a local file (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
         """
-        Checks if the cluster connection is currently active.
-        
-        Returns:
-            True if the connection is active, False otherwise
+        return self._sdk_client._register_udf_from_file(
+            client_path, server_path, language, policy=policy)
+
+    def register_udf_from_resource(
+        self,
+        package: str,
+        resource: str,
+        server_path: str,
+        language: UDFLang = UDFLang.LUA,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "RegisterTask":
+        """Register a UDF from a Python package resource (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
         """
-        return self._sdk_client.is_connected
-    
+        return self._sdk_client._register_udf_from_resource(
+            package, resource, server_path, language, policy=policy)
+
+    def remove_udf(
+        self,
+        server_path: str,
+        *,
+        policy: Optional["AdminPolicy"] = None,
+    ) -> "UdfRemoveTask":
+        """Remove a UDF module from the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.remove_udf`
+        """
+        return self._sdk_client._remove_udf(server_path, policy=policy)
+
+    def list_udf(self) -> list[dict[str, str]]:
+        """List the UDF modules registered on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_udf`
+        """
+        return self._sdk_client._list_udf()
+
+    def list_indexes(self) -> list[dict[str, str]]:
+        """List the secondary indexes defined on the cluster (synchronous).
+
+        Raises:
+            RuntimeError: If not connected.
+            AerospikeError: On cluster errors (via PAC).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.list_indexes`
+        """
+        return self._sdk_client._list_indexes()
+
     def close(self) -> None:
         """
         Closes the cluster connection and releases all associated resources.

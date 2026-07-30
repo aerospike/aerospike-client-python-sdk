@@ -19,7 +19,7 @@ import dataclasses
 
 import pytest
 
-from aerospike_async import HLLWriteFlags
+from aerospike_sdk import HLLWriteFlags
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.aio.operations.query import _resolve_hll_flags

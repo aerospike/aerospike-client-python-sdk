@@ -27,7 +27,7 @@ await (
 )
 
 # Collection index (list elements)
-from aerospike_async import CollectionIndexType
+from aerospike_sdk import CollectionIndexType
 
 await (
     session.index(users)
@@ -48,19 +48,63 @@ await (
 )
 ```
 
+## Expression-Based Indexes
+
+On server 8.1.2+, an index can cover the value an expression computes per
+record instead of a plain bin. Replace `on_bin()` with `on_expression()`
+(they are mutually exclusive). The expression's result type must match the
+index type — index a value-producing expression, not a boolean predicate:
+
+```python
+from aerospike_sdk import Exp, Filter
+
+# Index the value of the "age" bin computed through an expression
+expr = Exp.int_bin("age")
+
+await (
+    session.index(users)
+    .on_expression(expr)
+    .named("users_age_exp_idx")
+    .numeric()
+    .create()
+)
+```
+
+To query through an expression index, attach the same expression to the
+filter:
+
+```python
+flt = Filter.range("age", 25, 40).expression(expr)
+stream = await session.query(users).filter(flt).execute()
+```
+
+`context()` is not supported with expression indexes — encode CDT
+navigation inside the expression instead.
+
 ## Dropping Indexes
 
 ```python
 await session.index(users).named("users_age_idx").drop()
 ```
 
+## Listing Indexes
+
+`list_indexes()` returns the secondary indexes defined on the cluster, one dict
+per index with `namespace`, `set`, `bin` and `name` keys (plus `type`,
+`index_type`, and `context` for CDT indexes when the server reports them). It is
+available on the session, cluster, and client:
+
+```python
+for idx in await session.list_indexes():
+    print(idx["name"], idx["namespace"], idx["bin"])
+```
+
 ## Auto-Index Discovery
 
 The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a daemon thread,
 periodically fetching secondary index metadata from the cluster via PAC's
-blocking info APIs. It works identically for the async
-{class}`~aerospike_sdk.aio.client.Client` and the synchronous
-{class}`~aerospike_sdk.SyncClient` — no event loop required.
+blocking info APIs. It works identically on the async and synchronous surfaces — no event
+loop required.
 
 The monitor **starts lazily**: the daemon thread spins up the first time an
 AEL `.where()` query needs cached secondary-index metadata. Code paths that
@@ -86,7 +130,11 @@ stream = await (
 The refresh interval defaults to 5 seconds:
 
 ```python
-client = Client("localhost:3000", index_refresh_interval=2.0)
+cluster = await (
+    ClusterDefinition("localhost", 3000)
+    .with_index_refresh_interval(2.0)
+    .connect()
+)
 ```
 
 ### Explicit Override

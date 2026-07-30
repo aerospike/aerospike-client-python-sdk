@@ -153,18 +153,15 @@ async def test_cluster_create_session(cluster):
     assert session2 is not None
 
     # Create session with custom behavior
-    custom_behavior = Behavior.DEFAULT.derive_with_changes(
-        name="test",
-        max_retries=3
-    )
+    custom_behavior = Behavior.DEFAULT.derive_with_changes(name="test", max_retries=3)
     session3 = cluster.create_session(custom_behavior)
     assert session3 is not None
     assert session3.behavior.name == "test"
 
 
-async def test_cluster_create_transactional_session(cluster):
+async def test_cluster_transaction(cluster):
     """Test creating transactional session from cluster."""
-    tx_session = cluster.create_transactional_session()
+    tx_session = cluster.transaction()
     assert tx_session is not None
 
 
@@ -211,6 +208,24 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
     cluster = await cd.connect()
     try:
         assert cluster.is_connected()
+    finally:
+        await cluster.close()
+
+
+async def test_with_index_refresh_interval_threads_through(aerospike_host):
+    """``with_index_refresh_interval`` reaches the connected cluster's monitor."""
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname = aerospike_host
+        port = 3000
+
+    cd = ClusterDefinition(hostname, port).with_index_refresh_interval(2.5)
+    assert cd._index_refresh_interval == 2.5
+    cluster = await cd.connect()
+    try:
+        assert cluster._sdk_client._indexes_monitor._refresh_interval == 2.5
     finally:
         await cluster.close()
 

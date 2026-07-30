@@ -31,11 +31,11 @@ def dataset():
 
 
 @pytest.fixture
-async def cleanup(client, dataset):
+async def cleanup(cluster, dataset):
     """Delete test keys after each test."""
     keys_to_clean = []
     yield keys_to_clean
-    session = client.create_session()
+    session = cluster.create_session()
     for key in keys_to_clean:
         try:
             await session.delete(key).execute()
@@ -43,14 +43,14 @@ async def cleanup(client, dataset):
             pass
 
 
-async def test_custom_behavior_put_get(client, dataset, cleanup):
+async def test_custom_behavior_put_get(cluster, dataset, cleanup):
     """A session with a derived behavior can write and read back data."""
     behavior = Behavior.DEFAULT.derive_with_changes(
         "integration_custom",
         reads=Settings(total_timeout=timedelta(seconds=10), max_retries=3),
         writes=Settings(total_timeout=timedelta(seconds=10)),
     )
-    session = client.create_session(behavior)
+    session = cluster.create_session(behavior)
     key = dataset.id("bhv_custom_1")
     cleanup.append(key)
 
@@ -61,10 +61,10 @@ async def test_custom_behavior_put_get(client, dataset, cleanup):
         assert result.record.bins == {"name": "Alice", "score": 100}
 
 
-async def test_predefined_read_fast(client, dataset, cleanup):
+async def test_predefined_read_fast(cluster, dataset, cleanup):
     """Behavior.READ_FAST works end-to-end for writes (inherited from
     DEFAULT) and reads (with its own short timeouts)."""
-    session = client.create_session(Behavior.READ_FAST)
+    session = cluster.create_session(Behavior.READ_FAST)
     key = dataset.id("bhv_readfast_1")
     cleanup.append(key)
 
@@ -76,7 +76,7 @@ async def test_predefined_read_fast(client, dataset, cleanup):
     assert result.record.bins["x"] == 42
 
 
-async def test_behavior_inheritance_chain(client, dataset, cleanup):
+async def test_behavior_inheritance_chain(cluster, dataset, cleanup):
     """A grandchild behavior inherits correctly through the chain and
     can perform operations."""
     parent = Behavior.DEFAULT.derive_with_changes(
@@ -91,7 +91,7 @@ async def test_behavior_inheritance_chain(client, dataset, cleanup):
     name = child.name  # sanity
     assert name == "child"
 
-    s = client.create_session(child)
+    s = cluster.create_session(child)
     key = dataset.id("bhv_inherit_1")
     cleanup.append(key)
 
@@ -102,7 +102,7 @@ async def test_behavior_inheritance_chain(client, dataset, cleanup):
         assert result.record.bins["level"] == "grandchild"
 
 
-async def test_different_sessions_independent(client, dataset, cleanup):
+async def test_different_sessions_independent(cluster, dataset, cleanup):
     """Two sessions with different behaviors operate independently on
     the same cluster connection."""
     fast = Behavior.DEFAULT.derive_with_changes(
@@ -120,8 +120,8 @@ async def test_different_sessions_independent(client, dataset, cleanup):
         ),
     )
 
-    fast_session = client.create_session(fast)
-    safe_session = client.create_session(safe)
+    fast_session = cluster.create_session(fast)
+    safe_session = cluster.create_session(safe)
 
     key_fast = dataset.id("bhv_fast_1")
     key_safe = dataset.id("bhv_safe_1")
@@ -142,13 +142,13 @@ async def test_different_sessions_independent(client, dataset, cleanup):
     assert safe_session.behavior.name == "safe"
 
 
-async def test_batch_with_custom_behavior(client, dataset, cleanup):
+async def test_batch_with_custom_behavior(cluster, dataset, cleanup):
     """Batch operations work through a session with a custom behavior."""
     behavior = Behavior.DEFAULT.derive_with_changes(
         "batch_bhv",
         reads=Settings(max_retries=3),
     )
-    session = client.create_session(behavior)
+    session = cluster.create_session(behavior)
 
     keys = dataset.ids("bhv_batch_1", "bhv_batch_2", "bhv_batch_3")
     cleanup.extend(keys)

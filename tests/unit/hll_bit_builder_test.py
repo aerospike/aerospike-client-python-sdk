@@ -15,14 +15,8 @@
 
 """Unit tests for HyperLogLog and bit-operation fluent builders."""
 
-from aerospike_async import (
-    BitOperation,
-    BitPolicy,
-    BitwiseOverflowActions,
-    BitwiseResizeFlags,
-    BitWriteFlags,
-    HllOperation,
-)
+from aerospike_sdk import BitPolicy, BitWriteFlags, BitwiseOverflowActions, BitwiseResizeFlags
+from aerospike_async import BitOperation, HllOperation
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.aio.operations.query import (

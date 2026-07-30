@@ -84,10 +84,10 @@ def connect():
     from aerospike_sdk import ClusterDefinition
 
     hostname, port = _host_and_port()
-    defn = ClusterDefinition(hostname, port)
+    cluster_def = ClusterDefinition(hostname, port)
     if _services_alternate():
-        defn = defn.using_services_alternate()
-    return defn
+        cluster_def = cluster_def.using_services_alternate()
+    return cluster_def
 
 
 def sync_connect():
@@ -95,7 +95,7 @@ def sync_connect():
     from aerospike_sdk.sync import ClusterDefinition
 
     hostname, port = _host_and_port()
-    defn = ClusterDefinition(hostname, port)
+    cluster_def = ClusterDefinition(hostname, port)
     if _services_alternate():
-        defn = defn.using_services_alternate()
-    return defn
+        cluster_def = cluster_def.using_services_alternate()
+    return cluster_def

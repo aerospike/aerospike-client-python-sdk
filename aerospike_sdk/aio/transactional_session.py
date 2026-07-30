@@ -22,13 +22,14 @@ from typing import Any, Optional, TYPE_CHECKING
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
     from aerospike_sdk.policy.behavior import Behavior
 
 
-class TransactionalSession(Session):
+class TransactionalSession(TransactionalSessionBase, Session):
     """Async context manager that groups operations into a multi-record transaction.
 
     Subclasses :class:`~aerospike_sdk.aio.session.Session`, so every session
@@ -46,14 +47,14 @@ class TransactionalSession(Session):
 
     Example::
 
-        async with client.create_session().begin_transaction() as tx:
+        async with client.create_session().transaction() as tx:
             await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
             await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
         # Auto-committed on clean exit; auto-aborted on exception.
 
     See Also:
-        :meth:`aerospike_sdk.aio.session.Session.begin_transaction`
-        :meth:`aerospike_sdk.aio.client.Client.transaction_session`
+        :meth:`aerospike_sdk.aio.session.Session.transaction`
+        :meth:`aerospike_sdk.aio.client.Client.transaction`
     """
 
     def __init__(
@@ -61,7 +62,7 @@ class TransactionalSession(Session):
         client: "Client",
         behavior: Optional["Behavior"] = None,
     ) -> None:
-        """Create a transactional session; prefer :meth:`Session.begin_transaction`.
+        """Create a transactional session; prefer :meth:`Session.transaction`.
 
         Args:
             client: Connected :class:`~aerospike_sdk.aio.client.Client`.
@@ -70,44 +71,19 @@ class TransactionalSession(Session):
 
         Note:
             Application code should not construct ``TransactionalSession``
-            directly; call :meth:`Session.begin_transaction` or
-            :meth:`Client.transaction_session` instead.
+            directly; call :meth:`Session.transaction` or
+            :meth:`Client.transaction` instead.
 
         See Also:
-            :meth:`aerospike_sdk.aio.session.Session.begin_transaction`
+            :meth:`aerospike_sdk.aio.session.Session.transaction`
         """
         if behavior is None:
             from aerospike_sdk.policy.behavior import Behavior as _Behavior
             behavior = _Behavior.DEFAULT
         super().__init__(client, behavior)
         # _txn is inherited from Session (initially None); __aenter__ sets it.
+        # txn / active come from TransactionalSessionBase.
         self._finalized = False
-
-    @property
-    def txn(self) -> Txn:
-        """Return the underlying :class:`~aerospike_async.Txn`.
-
-        Raises:
-            RuntimeError: If the session has not been entered (no active txn).
-
-        Returns:
-            The active :class:`~aerospike_async.Txn`.
-        """
-        if self._txn is None:
-            raise RuntimeError(
-                "TransactionalSession is not active; enter the 'async with' "
-                "block before accessing .txn."
-            )
-        return self._txn
-
-    @property
-    def active(self) -> bool:
-        """``True`` when a transaction has been started and not yet finalized.
-
-        Returns:
-            Whether a transaction is currently active on this session.
-        """
-        return self._txn is not None and not self._finalized
 
     async def commit(self) -> CommitStatus:
         """Commit the transaction and return the server-reported status.

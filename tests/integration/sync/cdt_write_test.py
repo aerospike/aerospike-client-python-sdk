@@ -16,11 +16,10 @@
 """Integration tests for sync CDT write operations: list_add, append, pop, trim, remove, exists."""
 
 import pytest
-from aerospike_async import ListOrderType, ListSortFlags, MapOrder
-from aerospike_async.exceptions import ResultCode
+from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk import DataSet, SyncClient
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import DataSet
 
 
 NS = "test"
@@ -76,8 +75,8 @@ def _assert_list_get_relative_batch(raw_bin):
 
 
 @pytest.fixture
-def client(aerospike_host, client_policy):
-    with SyncClient(seeds=aerospike_host, policy=client_policy) as c:
+def cluster(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         session = c.create_session()
         for key_id in range(1, 130):
             session.delete(DS.id(key_id)).execute()
@@ -91,9 +90,9 @@ def client(aerospike_host, client_policy):
 class TestListAdd:
     """Ordered list add operations via list_add()."""
 
-    def test_list_add_maintains_sorted_order(self, client):
+    def test_list_add_maintains_sorted_order(self, cluster):
         """Insert values out of order; verify they are stored sorted."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(1)
         session.upsert(k).put({"name": "placeholder"}).execute()
 
@@ -103,9 +102,9 @@ class TestListAdd:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30, 40, 50]
 
-    def test_list_add_to_empty_bin(self, client):
+    def test_list_add_to_empty_bin(self, cluster):
         """Create an ordered list from scratch on a non-existent bin."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(2)
         session.upsert(k).put({"name": "placeholder"}).execute()
 
@@ -123,9 +122,9 @@ class TestListAdd:
 class TestListAppend:
     """Unordered list append operations via list_append()."""
 
-    def test_list_append_adds_to_end(self, client):
+    def test_list_append_adds_to_end(self, cluster):
         """Append a value to an existing list; verify it lands at the end."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(3)
         session.upsert(k).put({"items": ["a", "b"]}).execute()
 
@@ -134,9 +133,9 @@ class TestListAppend:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["items"] == ["a", "b", "c"]
 
-    def test_list_append_multiple(self, client):
+    def test_list_append_multiple(self, cluster):
         """Append multiple values sequentially; verify order is preserved."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(4)
         session.upsert(k).put({"nums": [1]}).execute()
 
@@ -154,9 +153,9 @@ class TestListAppend:
 class TestMapKeyRemove:
     """Remove map entries by key or key range."""
 
-    def test_remove_map_key(self, client):
+    def test_remove_map_key(self, cluster):
         """Remove a single map entry by key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(5)
         session.upsert(k).put({"ratings": {"a": 1, "b": 2, "c": 3}}).execute()
 
@@ -167,9 +166,9 @@ class TestMapKeyRemove:
         assert "b" not in ratings
         assert ratings == {"a": 1, "c": 3}
 
-    def test_remove_map_key_range(self, client):
+    def test_remove_map_key_range(self, cluster):
         """Remove map entries within a key range [b, d)."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(6)
         session.upsert(k).put({"data": {"a": 1, "b": 2, "c": 3, "d": 4}}).execute()
 
@@ -187,9 +186,9 @@ class TestMapKeyRemove:
 class TestListValueRemove:
     """Remove list elements by value or index."""
 
-    def test_remove_list_value(self, client):
+    def test_remove_list_value(self, cluster):
         """Remove a list element matching a specific value."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(7)
         session.upsert(k).put({"scores": [10, 20, 30, 40]}).execute()
 
@@ -198,9 +197,9 @@ class TestListValueRemove:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["scores"] == [10, 30, 40]
 
-    def test_remove_list_by_index(self, client):
+    def test_remove_list_by_index(self, cluster):
         """Remove a list element at a specific index."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(8)
         session.upsert(k).put({"items": ["x", "y", "z"]}).execute()
 
@@ -217,18 +216,18 @@ class TestListValueRemove:
 class TestMapKeyExists:
     """Check map key existence via on_map_key().exists()."""
 
-    def test_map_key_exists_true(self, client):
+    def test_map_key_exists_true(self, cluster):
         """Existing key returns True."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(9)
         session.upsert(k).put({"info": {"name": "Alice", "age": 30}}).execute()
 
         result = session.query(k).bin("info").on_map_key("name").exists().execute().first_or_raise()
         assert result.record.bins["info"] is True
 
-    def test_map_key_exists_false(self, client):
+    def test_map_key_exists_false(self, cluster):
         """Non-existent key returns False."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(10)
         session.upsert(k).put({"info": {"name": "Bob"}}).execute()
 
@@ -243,18 +242,18 @@ class TestMapKeyExists:
 class TestListValueExists:
     """Check list value existence via on_list_value().exists()."""
 
-    def test_list_value_exists_true(self, client):
+    def test_list_value_exists_true(self, cluster):
         """Present value returns True."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(11)
         session.upsert(k).put({"tags": ["red", "green", "blue"]}).execute()
 
         result = session.query(k).bin("tags").on_list_value("green").exists().execute().first_or_raise()
         assert result.record.bins["tags"] is True
 
-    def test_list_value_exists_false(self, client):
+    def test_list_value_exists_false(self, cluster):
         """Absent value returns False."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(12)
         session.upsert(k).put({"tags": ["red", "green"]}).execute()
 
@@ -269,9 +268,9 @@ class TestListValueExists:
 class TestCdtWriteCombined:
     """Multi-step CDT write scenarios combining different operations."""
 
-    def test_list_add_then_remove(self, client):
+    def test_list_add_then_remove(self, cluster):
         """Add several values to an ordered list, then remove one."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(13)
         session.upsert(k).put({"name": "placeholder"}).execute()
 
@@ -283,9 +282,9 @@ class TestCdtWriteCombined:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [20, 25, 30]
 
-    def test_multi_bin_cdt_ops(self, client):
+    def test_multi_bin_cdt_ops(self, cluster):
         """Multiple CDT operations on different bins in one request."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(14)
         session.upsert(k).put({
             "scores": [10, 20, 30],
@@ -294,9 +293,9 @@ class TestCdtWriteCombined:
 
         (
             session.update(k)
-                .bin("scores").list_append(40)
-                .bin("meta").on_map_key("x").remove()
-                .execute()
+            .bin("scores").list_append(40)
+            .bin("meta").on_map_key("x").remove()
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
@@ -311,9 +310,9 @@ class TestCdtWriteCombined:
 class TestNestedSetTo:
     """Nested CDT navigation with set_to() write terminal."""
 
-    def test_set_to_on_map_key(self, client):
+    def test_set_to_on_map_key(self, cluster):
         """Set a value at a single-level map key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(15)
         session.upsert(k).put({"ratings": {"a": 1, "b": 2}}).execute()
 
@@ -322,9 +321,9 @@ class TestNestedSetTo:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["ratings"] == {"a": 10, "b": 2}
 
-    def test_set_to_creates_new_key(self, client):
+    def test_set_to_creates_new_key(self, cluster):
         """set_to() on a non-existent key creates it."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(16)
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -333,9 +332,9 @@ class TestNestedSetTo:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["m"] == {"a": 1, "b": 2}
 
-    def test_nested_set_to_two_deep(self, client):
+    def test_nested_set_to_two_deep(self, cluster):
         """Set a value at a 2-deep nested map path."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(17)
         session.upsert(k).put({
             "rooms": {"room1": {"rate": 100, "avail": True}},
@@ -343,8 +342,8 @@ class TestNestedSetTo:
 
         (
             session.update(k)
-                .bin("rooms").on_map_key("room1").on_map_key("rate").set_to(150)
-                .execute()
+            .bin("rooms").on_map_key("room1").on_map_key("rate").set_to(150)
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
@@ -355,9 +354,9 @@ class TestNestedSetTo:
 class TestNestedAdd:
     """Nested CDT navigation with add() (increment) terminal."""
 
-    def test_add_on_map_key(self, client):
+    def test_add_on_map_key(self, cluster):
         """Increment a value at a single-level map key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(18)
         session.upsert(k).put({"counters": {"views": 10}}).execute()
 
@@ -366,9 +365,9 @@ class TestNestedAdd:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["counters"]["views"] == 15
 
-    def test_nested_add_two_deep(self, client):
+    def test_nested_add_two_deep(self, cluster):
         """Increment at a 2-deep nested map path."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(19)
         session.upsert(k).put({
             "rooms": {"room1": {"rates": {"base": 100}}},
@@ -376,8 +375,8 @@ class TestNestedAdd:
 
         (
             session.update(k)
-                .bin("rooms").on_map_key("room1").on_map_key("rates").on_map_key("base").add(10)
-                .execute()
+            .bin("rooms").on_map_key("room1").on_map_key("rates").on_map_key("base").add(10)
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
@@ -387,9 +386,9 @@ class TestNestedAdd:
 class TestNestedCombined:
     """Combined nested write operations."""
 
-    def test_nested_set_to_and_flat_read(self, client):
+    def test_nested_set_to_and_flat_read(self, cluster):
         """Combine nested set_to with flat read in one execute."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(20)
         session.upsert(k).put({
             "meta": {"status": "draft"},
@@ -398,26 +397,26 @@ class TestNestedCombined:
 
         (
             session.update(k)
-                .bin("meta").on_map_key("status").set_to("published")
-                .bin("scores").list_append(30)
-                .execute()
+            .bin("meta").on_map_key("status").set_to("published")
+            .bin("scores").list_append(30)
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["meta"]["status"] == "published"
         assert result.record.bins["scores"] == [10, 20, 30]
 
-    def test_multiple_nested_writes_same_map(self, client):
+    def test_multiple_nested_writes_same_map(self, cluster):
         """Multiple set_to operations on different keys in the same map."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(21)
         session.upsert(k).put({"info": {"a": 1, "b": 2, "c": 3}}).execute()
 
         (
             session.update(k)
-                .bin("info").on_map_key("a").set_to(10)
-                .bin("info").on_map_key("c").set_to(30)
-                .execute()
+            .bin("info").on_map_key("a").set_to(10)
+            .bin("info").on_map_key("c").set_to(30)
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
@@ -431,22 +430,22 @@ class TestNestedCombined:
 class TestProductRatingsWorkflow:
     """End-to-end CDT map workflow: write, read by key/rank/range, update, remove."""
 
-    def test_bulk_set_to_multiple_keys(self, client):
+    def test_bulk_set_to_multiple_keys(self, cluster):
         """Write multiple map entries in one upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(22)
         session.upsert(k).put({"name": "product"}).execute()
 
         (
             session.upsert(k)
-                .bin("ratings").on_map_key("alice").set_to(5)
-                .bin("ratings").on_map_key("bob").set_to(4)
-                .bin("ratings").on_map_key("carol").set_to(4)
-                .bin("ratings").on_map_key("dave").set_to(3)
-                .bin("ratings").on_map_key("eve").set_to(5)
-                .bin("ratings").on_map_key("frank").set_to(2)
-                .bin("ratings").on_map_key("grace").set_to(4)
-                .execute()
+            .bin("ratings").on_map_key("alice").set_to(5)
+            .bin("ratings").on_map_key("bob").set_to(4)
+            .bin("ratings").on_map_key("carol").set_to(4)
+            .bin("ratings").on_map_key("dave").set_to(3)
+            .bin("ratings").on_map_key("eve").set_to(5)
+            .bin("ratings").on_map_key("frank").set_to(2)
+            .bin("ratings").on_map_key("grace").set_to(4)
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
@@ -455,9 +454,9 @@ class TestProductRatingsWorkflow:
         assert ratings["alice"] == 5
         assert ratings["frank"] == 2
 
-    def test_read_by_map_key(self, client):
+    def test_read_by_map_key(self, cluster):
         """Read a specific map entry by key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(23)
         session.upsert(k).put({
             "ratings": {"alice": 5, "bob": 4, "carol": 3},
@@ -465,13 +464,13 @@ class TestProductRatingsWorkflow:
 
         result = (
             session.query(k).bin("ratings").on_map_key("alice").get_values()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["ratings"] == 5
 
-    def test_read_highest_by_rank(self, client):
+    def test_read_highest_by_rank(self, cluster):
         """Read the highest-ranked entry (rank -1)."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(24)
         session.upsert(k).put({
             "ratings": {"alice": 5, "bob": 3, "carol": 4},
@@ -479,14 +478,14 @@ class TestProductRatingsWorkflow:
 
         result = (
             session.query(k)
-                .bin("ratings").on_map_rank(-1).get_keys_and_values()
-                .execute().first_or_raise()
+            .bin("ratings").on_map_rank(-1).get_keys_and_values()
+            .execute().first_or_raise()
         )
         assert result.record.bins["ratings"] == {"alice": 5}
 
-    def test_count_by_value_range(self, client):
+    def test_count_by_value_range(self, cluster):
         """Count entries within a value range [4, 6)."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(25)
         session.upsert(k).put({
             "ratings": {"alice": 5, "bob": 4, "carol": 3, "dave": 5, "eve": 2},
@@ -494,14 +493,14 @@ class TestProductRatingsWorkflow:
 
         result = (
             session.query(k)
-                .bin("ratings").on_map_value_range(4, 6).count()
-                .execute().first_or_raise()
+            .bin("ratings").on_map_value_range(4, 6).count()
+            .execute().first_or_raise()
         )
         assert result.record.bins["ratings"] == 3
 
-    def test_update_then_remove_then_verify(self, client):
+    def test_update_then_remove_then_verify(self, cluster):
         """Update a rating, remove another, then verify the map state."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(26)
         session.upsert(k).put({
             "ratings": {"alice": 5, "bob": 3, "carol": 4, "dave": 2},
@@ -514,9 +513,9 @@ class TestProductRatingsWorkflow:
         ratings = result.record.bins["ratings"]
         assert ratings == {"alice": 5, "bob": 5, "carol": 4}
 
-    def test_count_after_update_and_remove(self, client):
+    def test_count_after_update_and_remove(self, cluster):
         """Verify value-range count changes after updates and removals."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(27)
         session.upsert(k).put({
             "ratings": {"a": 5, "b": 4, "c": 3, "d": 5, "e": 2, "f": 4},
@@ -524,7 +523,7 @@ class TestProductRatingsWorkflow:
 
         result = (
             session.query(k).bin("ratings").on_map_value_range(4, 6).count()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["ratings"] == 4
 
@@ -533,7 +532,7 @@ class TestProductRatingsWorkflow:
 
         result = (
             session.query(k).bin("ratings").on_map_value_range(4, 6).count()
-                .execute().first_or_raise()
+            .execute().first_or_raise()
         )
         assert result.record.bins["ratings"] == 5
 
@@ -545,37 +544,37 @@ class TestProductRatingsWorkflow:
 class TestCdtReadsInWriteContext:
     """CDT read operations (get_values, count) issued as part of an upsert/update."""
 
-    def test_cdt_read_in_upsert(self, client):
+    def test_cdt_read_in_upsert(self, cluster):
         """Read a CDT value as part of an upsert; the result is returned."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(28)
         session.upsert(k).put({"info": {"name": "Alice", "age": 30}}).execute()
 
         rs = (
             session.upsert(k)
-                .bin("info").on_map_key("name").get_values()
-                .execute()
+            .bin("info").on_map_key("name").get_values()
+            .execute()
         )
         result = rs.first_or_raise()
         assert result.record.bins["info"] == "Alice"
 
-    def test_cdt_count_in_upsert(self, client):
+    def test_cdt_count_in_upsert(self, cluster):
         """Count CDT elements in an upsert context."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(29)
         session.upsert(k).put({"tags": {"a": 1, "b": 2, "c": 3}}).execute()
 
         rs = (
             session.upsert(k)
-                .bin("tags").on_map_key_range("a", "c").count()
-                .execute()
+            .bin("tags").on_map_key_range("a", "c").count()
+            .execute()
         )
         result = rs.first_or_raise()
         assert result.record.bins["tags"] == 2
 
-    def test_mixed_cdt_read_and_write_in_upsert(self, client):
+    def test_mixed_cdt_read_and_write_in_upsert(self, cluster):
         """Mix CDT reads and writes on different bins in a single upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(30)
         session.upsert(k).put({
             "rooms": {"r1": {"rate": 100}, "r2": {"rate": 200}},
@@ -584,9 +583,9 @@ class TestCdtReadsInWriteContext:
 
         rs = (
             session.upsert(k)
-                .bin("rooms").on_map_key("r1").get_values()
-                .bin("meta").on_map_key("ver").set_to(2)
-                .execute()
+            .bin("rooms").on_map_key("r1").get_values()
+            .bin("meta").on_map_key("ver").set_to(2)
+            .execute()
         )
         result = rs.first_or_raise()
         assert result.record.bins["rooms"] == {"rate": 100}
@@ -594,17 +593,17 @@ class TestCdtReadsInWriteContext:
         verify = session.query(k).execute().first_or_raise()
         assert verify.record.bins["meta"]["ver"] == 2
 
-    def test_cdt_read_and_flat_write_in_upsert(self, client):
+    def test_cdt_read_and_flat_write_in_upsert(self, cluster):
         """CDT read + flat bin write in the same upsert."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(31)
         session.upsert(k).put({"scores": {"math": 90, "sci": 85}}).execute()
 
         rs = (
             session.upsert(k)
-                .bin("scores").on_map_key("math").get_values()
-                .bin("status").set_to("reviewed")
-                .execute()
+            .bin("scores").on_map_key("math").get_values()
+            .bin("status").set_to("reviewed")
+            .execute()
         )
         result = rs.first_or_raise()
         assert result.record.bins["scores"] == 90
@@ -612,9 +611,9 @@ class TestCdtReadsInWriteContext:
         verify = session.query(k).execute().first_or_raise()
         assert verify.record.bins["status"] == "reviewed"
 
-    def test_inverted_count_in_write_context(self, client):
+    def test_inverted_count_in_write_context(self, cluster):
         """Inverted count (count_all_others) in an upsert context."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(32)
         session.upsert(k).put({
             "data": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5},
@@ -622,8 +621,8 @@ class TestCdtReadsInWriteContext:
 
         rs = (
             session.upsert(k)
-                .bin("data").on_map_key_range("b", "d").count_all_others()
-                .execute()
+            .bin("data").on_map_key_range("b", "d").count_all_others()
+            .execute()
         )
         result = rs.first_or_raise()
         assert result.record.bins["data"] == 3
@@ -636,8 +635,8 @@ class TestCdtReadsInWriteContext:
 class TestMapCollectionOps:
     """Top-level and nested map collection CDT operations."""
 
-    def test_map_clear_top_level(self, client):
-        session = client.create_session()
+    def test_map_clear_top_level(self, cluster):
+        session = cluster.create_session()
         k = DS.id(33)
         session.upsert(k).put({"m": {"a": 1, "b": 2}}).execute()
 
@@ -646,8 +645,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["m"] == {}
 
-    def test_map_clear_nested(self, client):
-        session = client.create_session()
+    def test_map_clear_nested(self, cluster):
+        session = cluster.create_session()
         k = DS.id(34)
         session.upsert(k).put({"outer": {"inner": {"x": 1, "y": 2}}}).execute()
 
@@ -656,8 +655,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["outer"]["inner"] == {}
 
-    def test_map_upsert_items(self, client):
-        session = client.create_session()
+    def test_map_upsert_items(self, cluster):
+        session = cluster.create_session()
         k = DS.id(35)
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -666,8 +665,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["m"] == {"a": 1, "b": 2, "c": 3}
 
-    def test_map_insert_items_new_keys_only(self, client):
-        session = client.create_session()
+    def test_map_insert_items_new_keys_only(self, cluster):
+        session = cluster.create_session()
         k = DS.id(36)
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -676,8 +675,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["m"] == {"a": 1, "b": 2}
 
-    def test_map_update_items_existing_keys_only(self, client):
-        session = client.create_session()
+    def test_map_update_items_existing_keys_only(self, cluster):
+        session = cluster.create_session()
         k = DS.id(37)
         session.upsert(k).put({"m": {"a": 1, "b": 2}}).execute()
 
@@ -686,9 +685,9 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["m"] == {"a": 10, "b": 2}
 
-    def test_map_insert_items_rejects_existing_key(self, client):
+    def test_map_insert_items_rejects_existing_key(self, cluster):
         """CREATE_ONLY refuses to overwrite an existing map key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(49)
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -696,9 +695,9 @@ class TestMapCollectionOps:
             session.update(k).bin("m").map_insert_items({"a": 2}).execute()
         assert exc_info.value.result_code == ResultCode.ELEMENT_EXISTS
 
-    def test_map_update_items_rejects_new_key(self, client):
+    def test_map_update_items_rejects_new_key(self, cluster):
         """UPDATE_ONLY refuses to create a map entry for a missing key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(50)
         session.upsert(k).put({"m": {"a": 1}}).execute()
 
@@ -706,8 +705,8 @@ class TestMapCollectionOps:
             session.update(k).bin("m").map_update_items({"b": 2}).execute()
         assert exc_info.value.result_code == ResultCode.ELEMENT_NOT_FOUND
 
-    def test_map_create_then_upsert_key_ordered(self, client):
-        session = client.create_session()
+    def test_map_create_then_upsert_key_ordered(self, cluster):
+        session = cluster.create_session()
         k = DS.id(38)
         session.upsert(k).put({"p": 1}).execute()
 
@@ -717,8 +716,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert list(result.record.bins["ord"].keys()) == ["a", "b", "c"]
 
-    def test_map_set_policy_key_ordered(self, client):
-        session = client.create_session()
+    def test_map_set_policy_key_ordered(self, cluster):
+        session = cluster.create_session()
         k = DS.id(39)
         session.upsert(k).put({"m": {"z": 1, "a": 2}}).execute()
 
@@ -727,8 +726,8 @@ class TestMapCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert list(result.record.bins["m"].keys()) == ["a", "z"]
 
-    def test_map_size_in_update_context(self, client):
-        session = client.create_session()
+    def test_map_size_in_update_context(self, cluster):
+        session = cluster.create_session()
         k = DS.id(40)
         session.upsert(k).put({"m": {"x": 1, "y": 2, "z": 3}}).execute()
 
@@ -744,8 +743,8 @@ class TestMapCollectionOps:
 class TestListCollectionOps:
     """List clear, sort, bulk append, create, and order."""
 
-    def test_list_clear(self, client):
-        session = client.create_session()
+    def test_list_clear(self, cluster):
+        session = cluster.create_session()
         k = DS.id(41)
         session.upsert(k).put({"lst": [1, 2, 3]}).execute()
 
@@ -754,8 +753,8 @@ class TestListCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["lst"] == []
 
-    def test_list_sort_descending(self, client):
-        session = client.create_session()
+    def test_list_sort_descending(self, cluster):
+        session = cluster.create_session()
         k = DS.id(42)
         session.upsert(k).put({"lst": [1, 5, 3, 2]}).execute()
 
@@ -764,8 +763,8 @@ class TestListCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["lst"] == [5, 3, 2, 1]
 
-    def test_list_append_items(self, client):
-        session = client.create_session()
+    def test_list_append_items(self, cluster):
+        session = cluster.create_session()
         k = DS.id(43)
         session.upsert(k).put({"lst": [1, 2]}).execute()
 
@@ -774,8 +773,8 @@ class TestListCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["lst"] == [1, 2, 3, 4]
 
-    def test_list_add_items_ordered(self, client):
-        session = client.create_session()
+    def test_list_add_items_ordered(self, cluster):
+        session = cluster.create_session()
         k = DS.id(44)
         session.upsert(k).put({"name": "x", "scores": []}).execute()
         session.update(k).bin("scores").list_set_order(
@@ -786,8 +785,8 @@ class TestListCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30]
 
-    def test_empty_list_then_append_items(self, client):
-        session = client.create_session()
+    def test_empty_list_then_append_items(self, cluster):
+        session = cluster.create_session()
         k = DS.id(45)
         session.upsert(k).put({"t": 1, "items": []}).execute()
         session.update(k).bin("items").list_append_items(["a", "b"]).execute()
@@ -795,8 +794,8 @@ class TestListCollectionOps:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["items"] == ["a", "b"]
 
-    def test_list_set_order(self, client):
-        session = client.create_session()
+    def test_list_set_order(self, cluster):
+        session = cluster.create_session()
         k = DS.id(46)
         session.upsert(k).put({"lst": [3, 1, 2]}).execute()
 
@@ -813,22 +812,22 @@ class TestListCollectionOps:
 class TestNestedMapCollectionOps:
     """Collection-level ops with accumulated CDT context."""
 
-    def test_nested_map_upsert_items(self, client):
-        session = client.create_session()
+    def test_nested_map_upsert_items(self, cluster):
+        session = cluster.create_session()
         k = DS.id(47)
         session.upsert(k).put({"root": {"inner": {"a": 1}}}).execute()
 
         (
             session.update(k)
-                .bin("root").on_map_key("inner").map_upsert_items({"b": 2})
-                .execute()
+            .bin("root").on_map_key("inner").map_upsert_items({"b": 2})
+            .execute()
         )
 
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["root"]["inner"] == {"a": 1, "b": 2}
 
-    def test_nested_map_size_read_path(self, client):
-        session = client.create_session()
+    def test_nested_map_size_read_path(self, cluster):
+        session = cluster.create_session()
         k = DS.id(48)
         session.upsert(k).put({"data": {"sub": {"u": 1, "v": 2}}}).execute()
 
@@ -860,166 +859,166 @@ class TestRelativeRangeNavigation:
             [0, 4, 5, 9, 11, 15],
         ).execute()
 
-    def test_map_get_by_key_relative_index_range(self, client):
-        session = client.create_session()
+    def test_map_get_by_key_relative_index_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(52)
         self._seed_key_ordered_map(session, k)
 
         rs = (
             session.update(k)
-                .bin("mapbin")
-                .on_map_key_relative_index_range(5, 0, None)
-                .get_keys()
-                .execute()
+            .bin("mapbin")
+            .on_map_key_relative_index_range(5, 0, None)
+            .get_keys()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["mapbin"])
         assert 5 in flat
         assert 9 in flat
 
-    def test_map_get_by_value_relative_rank_range(self, client):
-        session = client.create_session()
+    def test_map_get_by_value_relative_rank_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(53)
         self._seed_key_ordered_map(session, k)
 
         rs = (
             session.update(k)
-                .bin("mapbin")
-                .on_map_value_relative_rank_range(11, 1, None)
-                .get_values()
-                .execute()
+            .bin("mapbin")
+            .on_map_value_relative_rank_range(11, 1, None)
+            .get_values()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["mapbin"])
         assert [int(x) for x in flat] == [17]
 
-    def test_map_remove_by_key_relative_index_range(self, client):
-        session = client.create_session()
+    def test_map_remove_by_key_relative_index_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(54)
         self._seed_key_ordered_map(session, k)
 
         (
             session.update(k)
-                .bin("mapbin")
-                .on_map_key_relative_index_range(5, 0, None)
-                .remove()
-                .execute()
+            .bin("mapbin")
+            .on_map_key_relative_index_range(5, 0, None)
+            .remove()
+            .execute()
         )
 
         rec = session.query(k).execute().first_or_raise()
         assert rec.record.bins["mapbin"] == {0: 17, 4: 2}
 
-    def test_map_remove_by_value_relative_rank_range(self, client):
-        session = client.create_session()
+    def test_map_remove_by_value_relative_rank_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(55)
         self._seed_key_ordered_map(session, k)
 
         (
             session.update(k)
-                .bin("mapbin")
-                .on_map_value_relative_rank_range(11, 1, None)
-                .remove()
-                .execute()
+            .bin("mapbin")
+            .on_map_value_relative_rank_range(11, 1, None)
+            .remove()
+            .execute()
         )
 
         rec = session.query(k).execute().first_or_raise()
         assert rec.record.bins["mapbin"] == {4: 2, 5: 15, 9: 10}
 
-    def test_list_get_by_value_relative_rank_range(self, client):
-        session = client.create_session()
+    def test_list_get_by_value_relative_rank_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(56)
         self._seed_ordered_list(session, k)
 
         rs = (
             session.update(k)
-                .bin("lst")
-                .on_list_value_relative_rank_range(5, 0, None)
-                .get_values()
-                .execute()
+            .bin("lst")
+            .on_list_value_relative_rank_range(5, 0, None)
+            .get_values()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["lst"])
         assert [int(x) for x in flat] == [5, 9, 11, 15]
 
-    def test_list_remove_by_value_relative_rank_range(self, client):
-        session = client.create_session()
+    def test_list_remove_by_value_relative_rank_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(57)
         self._seed_ordered_list(session, k)
 
         (
             session.update(k)
-                .bin("lst")
-                .on_list_value_relative_rank_range(5, 0, None)
-                .remove()
-                .execute()
+            .bin("lst")
+            .on_list_value_relative_rank_range(5, 0, None)
+            .remove()
+            .execute()
         )
 
         rec = session.query(k).execute().first_or_raise()
         assert rec.record.bins["lst"] == [0, 4]
 
-    def test_relative_range_unbounded_count_none(self, client):
-        session = client.create_session()
+    def test_relative_range_unbounded_count_none(self, cluster):
+        session = cluster.create_session()
         k = DS.id(58)
         self._seed_key_ordered_map(session, k)
         self._seed_ordered_list(session, k)
 
         rs_map = (
             session.update(k)
-                .bin("mapbin")
-                .on_map_key_relative_index_range(5, 0, None)
-                .get_keys()
-                .execute()
+            .bin("mapbin")
+            .on_map_key_relative_index_range(5, 0, None)
+            .get_keys()
+            .execute()
         )
         assert _flatten_cdt_values(rs_map.first_or_raise().record.bins["mapbin"])
 
         rs_list = (
             session.update(k)
-                .bin("lst")
-                .on_list_value_relative_rank_range(5, 0, None)
-                .get_values()
-                .execute()
+            .bin("lst")
+            .on_list_value_relative_rank_range(5, 0, None)
+            .get_values()
+            .execute()
         )
         assert _flatten_cdt_values(rs_list.first_or_raise().record.bins["lst"])
 
-    def test_relative_range_with_count(self, client):
-        session = client.create_session()
+    def test_relative_range_with_count(self, cluster):
+        session = cluster.create_session()
         k = DS.id(59)
         self._seed_ordered_list(session, k)
 
         rs = (
             session.update(k)
-                .bin("lst")
-                .on_list_value_relative_rank_range(5, 0, 2)
-                .get_values()
-                .execute()
+            .bin("lst")
+            .on_list_value_relative_rank_range(5, 0, 2)
+            .get_values()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["lst"])
         assert 5 in flat
         assert 9 in flat
 
-    def test_relative_range_inverted_get_all_other_values(self, client):
-        session = client.create_session()
+    def test_relative_range_inverted_get_all_other_values(self, cluster):
+        session = cluster.create_session()
         k = DS.id(60)
         self._seed_ordered_list(session, k)
 
         rs = (
             session.update(k)
-                .bin("lst")
-                .on_list_value_relative_rank_range(5, 0, 2)
-                .get_all_other_values()
-                .execute()
+            .bin("lst")
+            .on_list_value_relative_rank_range(5, 0, 2)
+            .get_all_other_values()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["lst"])
         assert 0 in flat or 4 in flat or 11 in flat or 15 in flat
 
-    def test_query_read_path_key_relative_index_range(self, client):
-        session = client.create_session()
+    def test_query_read_path_key_relative_index_range(self, cluster):
+        session = cluster.create_session()
         k = DS.id(61)
         self._seed_key_ordered_map(session, k)
 
         rs = (
             session.query(k)
-                .bin("mapbin")
-                .on_map_key_relative_index_range(5, 0, None)
-                .get_keys()
-                .execute()
+            .bin("mapbin")
+            .on_map_key_relative_index_range(5, 0, None)
+            .get_keys()
+            .execute()
         )
         flat = _flatten_cdt_values(rs.first_or_raise().record.bins["mapbin"])
         assert 5 in flat
@@ -1038,8 +1037,8 @@ class TestRelativeRangeBatchOrdering:
     Remove coverage uses a trailing ``.get()`` and asserts final bin state.
     """
 
-    def test_operate_map_get_relative_batch(self, client):
-        session = client.create_session()
+    def test_operate_map_get_relative_batch(self, cluster):
+        session = cluster.create_session()
         k = DS.id(70)
         session.delete(k).execute()
         session.upsert(k).put({"p": 1}).execute()
@@ -1067,8 +1066,8 @@ class TestRelativeRangeBatchOrdering:
         raw = rs.first_or_raise().record.bins["mapbin"]
         _assert_map_get_relative_batch(raw)
 
-    def test_operate_list_get_relative_batch(self, client):
-        session = client.create_session()
+    def test_operate_list_get_relative_batch(self, cluster):
+        session = cluster.create_session()
         k = DS.id(71)
         session.delete(k).execute()
         session.upsert(k).put({"x": 1}).execute()
@@ -1090,8 +1089,8 @@ class TestRelativeRangeBatchOrdering:
         raw = rs.first_or_raise().record.bins["lst"]
         _assert_list_get_relative_batch(raw)
 
-    def test_operate_map_remove_relative_final_state(self, client):
-        session = client.create_session()
+    def test_operate_map_remove_relative_final_state(self, cluster):
+        session = cluster.create_session()
         k = DS.id(72)
         session.delete(k).execute()
         session.upsert(k).put({"p": 1}).execute()
@@ -1102,11 +1101,11 @@ class TestRelativeRangeBatchOrdering:
 
         rs = (
             session.update(k)
-                .bin("mapbin").on_map_key_relative_index_range(5, 0, None).remove()
-                .bin("mapbin").on_map_key_relative_index_range(5, 1, None).remove()
-                .bin("mapbin").on_map_key_relative_index_range(5, -1, 1).remove()
-                .bin("mapbin").get()
-                .execute()
+            .bin("mapbin").on_map_key_relative_index_range(5, 0, None).remove()
+            .bin("mapbin").on_map_key_relative_index_range(5, 1, None).remove()
+            .bin("mapbin").on_map_key_relative_index_range(5, -1, 1).remove()
+            .bin("mapbin").get()
+            .execute()
         )
         m = rs.first_or_raise().record.bins["mapbin"]
         assert m == {0: 17}
@@ -1120,30 +1119,30 @@ class TestRelativeRangeBatchOrdering:
 
         rs2 = (
             session.update(k)
-                .bin("mapbin").on_map_value_relative_rank_range(11, 1, None).remove()
-                .bin("mapbin").on_map_value_relative_rank_range(11, -1, 1).remove()
-                .bin("mapbin").get()
-                .execute()
+            .bin("mapbin").on_map_value_relative_rank_range(11, 1, None).remove()
+            .bin("mapbin").on_map_value_relative_rank_range(11, -1, 1).remove()
+            .bin("mapbin").get()
+            .execute()
         )
         m2 = rs2.first_or_raise().record.bins["mapbin"]
         assert m2 == {4: 2, 5: 15}
 
-    def test_operate_list_remove_relative_final_state(self, client):
-        session = client.create_session()
+    def test_operate_list_remove_relative_final_state(self, cluster):
+        session = cluster.create_session()
         k = DS.id(73)
         session.delete(k).execute()
         session.upsert(k).put({"x": 1}).execute()
         session.update(k).bin("lst").list_add_items([0, 4, 5, 9, 11, 15]).execute()
         rs = (
             session.update(k)
-                .bin("lst").on_list_value_relative_rank_range(5, 0, None).remove()
-                .bin("lst").on_list_value_relative_rank_range(5, 1, None).remove()
-                .bin("lst").on_list_value_relative_rank_range(5, -1, None).remove()
-                .bin("lst").on_list_value_relative_rank_range(3, -3, 1).remove()
-                .bin("lst").on_list_value_relative_rank_range(3, -3, 2).remove()
-                .bin("lst").on_list_value_relative_rank_range(3, -3, 3).remove()
-                .bin("lst").get()
-                .execute()
+            .bin("lst").on_list_value_relative_rank_range(5, 0, None).remove()
+            .bin("lst").on_list_value_relative_rank_range(5, 1, None).remove()
+            .bin("lst").on_list_value_relative_rank_range(5, -1, None).remove()
+            .bin("lst").on_list_value_relative_rank_range(3, -3, 1).remove()
+            .bin("lst").on_list_value_relative_rank_range(3, -3, 2).remove()
+            .bin("lst").on_list_value_relative_rank_range(3, -3, 3).remove()
+            .bin("lst").get()
+            .execute()
         )
         lst = rs.first_or_raise().record.bins["lst"]
         assert lst == []
@@ -1156,9 +1155,9 @@ class TestRelativeRangeBatchOrdering:
 class TestListPopAndTrim:
     """Index-based list removal: pop, pop_range, trim, remove_range."""
 
-    def test_list_pop_returns_element(self, client):
+    def test_list_pop_returns_element(self, cluster):
         """Pop index 0; returned value and remaining list match expectations."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(100)
         session.upsert(k).put({"items": ["a", "b", "c"]}).execute()
 
@@ -1169,9 +1168,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["items"] == ["b", "c"]
 
-    def test_list_pop_range_returns_elements(self, client):
+    def test_list_pop_range_returns_elements(self, cluster):
         """Pop two elements starting at index 1; verify slice and remainder."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(101)
         session.upsert(k).put({"nums": [10, 20, 30, 40]}).execute()
 
@@ -1182,9 +1181,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [10, 40]
 
-    def test_list_pop_range_to_end(self, client):
+    def test_list_pop_range_to_end(self, cluster):
         """Pop from index through the end when count is None."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(102)
         session.upsert(k).put({"nums": [10, 20, 30, 40]}).execute()
 
@@ -1195,9 +1194,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [10, 20]
 
-    def test_list_trim_keeps_middle(self, client):
+    def test_list_trim_keeps_middle(self, cluster):
         """trim(index, count) keeps only that slice of the list."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(103)
         session.upsert(k).put({"letters": ["a", "b", "c", "d"]}).execute()
 
@@ -1206,9 +1205,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["letters"] == ["b", "c"]
 
-    def test_list_remove_range(self, client):
+    def test_list_remove_range(self, cluster):
         """remove_range removes a fixed count from an index."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(104)
         session.upsert(k).put({"nums": [1, 2, 3, 4]}).execute()
 
@@ -1217,9 +1216,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [3, 4]
 
-    def test_list_remove_range_to_end(self, client):
+    def test_list_remove_range_to_end(self, cluster):
         """remove_range with count None removes through the end."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(105)
         session.upsert(k).put({"nums": [1, 2, 3, 4]}).execute()
 
@@ -1228,9 +1227,9 @@ class TestListPopAndTrim:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [1, 2]
 
-    def test_nested_list_pop(self, client):
+    def test_nested_list_pop(self, cluster):
         """list_pop after on_map_key on a nested list."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(106)
         session.upsert(k).put({"wrap": {"items": [1, 2, 3]}}).execute()
 
@@ -1245,9 +1244,9 @@ class TestListPopAndTrim:
 class TestListInsertItems:
     """Bulk list insert via list_insert_items."""
 
-    def test_list_insert_items(self, client):
+    def test_list_insert_items(self, cluster):
         """Insert multiple values at an index."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(107)
         session.upsert(k).put({"nums": [1, 2, 3]}).execute()
 
@@ -1256,9 +1255,9 @@ class TestListInsertItems:
         result = session.query(k).execute().first_or_raise()
         assert result.record.bins["nums"] == [1, 10, 20, 2, 3]
 
-    def test_nested_list_insert_items(self, client):
+    def test_nested_list_insert_items(self, cluster):
         """list_insert_items on a list under a map key."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(108)
         session.upsert(k).put({"outer": {"data": [1, 2]}}).execute()
 
@@ -1271,9 +1270,9 @@ class TestListInsertItems:
 class TestListSortDropDuplicates:
     """List sort flags beyond descending order."""
 
-    def test_list_sort_drop_duplicates(self, client):
+    def test_list_sort_drop_duplicates(self, cluster):
         """Sort with DROP_DUPLICATES collapses equal elements."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(109)
         session.upsert(k).put({"lst": [3, 1, 2, 1, 3]}).execute()
 
@@ -1286,9 +1285,9 @@ class TestListSortDropDuplicates:
 class TestNoneElementsInList:
     """Round-trip for null list elements."""
 
-    def test_none_elements_round_trip(self, client):
+    def test_none_elements_round_trip(self, cluster):
         """None in a list is stored and read back as null."""
-        session = client.create_session()
+        session = cluster.create_session()
         k = DS.id(110)
         session.upsert(k).put({"tags": ["x"]}).execute()
 
@@ -1306,16 +1305,16 @@ class TestNoneElementsInList:
 class TestBatchCdtWrite:
     """Multi-key batch writes combined with CDT operations."""
 
-    def test_batch_uniform_map_key_set_to(self, client):
-        session = client.create_session()
+    def test_batch_uniform_map_key_set_to(self, cluster):
+        session = cluster.create_session()
         k1, k2, k3 = DS.id(80), DS.id(81), DS.id(82)
         for k in (k1, k2, k3):
             session.upsert(k).put({"info": {"a": 0, "b": 0}}).execute()
 
         (
             session.update(k1, k2, k3)
-                .bin("info").on_map_key("a").set_to(99)
-                .execute()
+            .bin("info").on_map_key("a").set_to(99)
+            .execute()
         )
 
         for k in (k1, k2, k3):
@@ -1323,17 +1322,17 @@ class TestBatchCdtWrite:
             assert rec.record.bins["info"]["a"] == 99
             assert rec.record.bins["info"]["b"] == 0
 
-    def test_batch_per_key_cdt_ops(self, client):
-        session = client.create_session()
+    def test_batch_per_key_cdt_ops(self, cluster):
+        session = cluster.create_session()
         k1, k2 = DS.id(83), DS.id(84)
         session.upsert(k1).put({"m": {"x": 1}}).execute()
         session.upsert(k2).put({"m": {"y": 2}}).execute()
 
         (
             session
-                .update(k1).bin("m").on_map_key("x").set_to(10)
-                .update(k2).bin("m").on_map_key("y").set_to(20)
-                .execute()
+            .update(k1).bin("m").on_map_key("x").set_to(10)
+            .update(k2).bin("m").on_map_key("y").set_to(20)
+            .execute()
         )
 
         r1 = session.query(k1).execute().first_or_raise()
@@ -1341,17 +1340,17 @@ class TestBatchCdtWrite:
         r2 = session.query(k2).execute().first_or_raise()
         assert r2.record.bins["m"]["y"] == 20
 
-    def test_batch_mixed_cdt_and_scalar(self, client):
-        session = client.create_session()
+    def test_batch_mixed_cdt_and_scalar(self, cluster):
+        session = cluster.create_session()
         k1, k2 = DS.id(85), DS.id(86)
         session.upsert(k1).put({"name": "old", "m": {"k": 0}}).execute()
         session.upsert(k2).put({"name": "old"}).execute()
 
         (
             session
-                .update(k1).bin("name").set_to("new").bin("m").on_map_key("k").set_to(5)
-                .update(k2).bin("name").set_to("new")
-                .execute()
+            .update(k1).bin("name").set_to("new").bin("m").on_map_key("k").set_to(5)
+            .update(k2).bin("name").set_to("new")
+            .execute()
         )
 
         r1 = session.query(k1).execute().first_or_raise()
@@ -1360,32 +1359,32 @@ class TestBatchCdtWrite:
         r2 = session.query(k2).execute().first_or_raise()
         assert r2.record.bins["name"] == "new"
 
-    def test_batch_cdt_collection_clear(self, client):
-        session = client.create_session()
+    def test_batch_cdt_collection_clear(self, cluster):
+        session = cluster.create_session()
         k1, k2 = DS.id(87), DS.id(88)
         session.upsert(k1).put({"m": {"a": 1, "b": 2}}).execute()
         session.upsert(k2).put({"m": {"c": 3, "d": 4}}).execute()
 
         (
             session.update(k1, k2)
-                .bin("m").map_clear()
-                .execute()
+            .bin("m").map_clear()
+            .execute()
         )
 
         for k in (k1, k2):
             rec = session.query(k).execute().first_or_raise()
             assert rec.record.bins["m"] == {}
 
-    def test_batch_cdt_remove(self, client):
-        session = client.create_session()
+    def test_batch_cdt_remove(self, cluster):
+        session = cluster.create_session()
         k1, k2 = DS.id(89), DS.id(90)
         session.upsert(k1).put({"m": {"keep": 1, "drop": 2}}).execute()
         session.upsert(k2).put({"m": {"keep": 3, "drop": 4}}).execute()
 
         (
             session.update(k1, k2)
-                .bin("m").on_map_key("drop").remove()
-                .execute()
+            .bin("m").on_map_key("drop").remove()
+            .execute()
         )
 
         for k in (k1, k2):
@@ -1393,16 +1392,16 @@ class TestBatchCdtWrite:
             assert "drop" not in rec.record.bins["m"]
             assert "keep" in rec.record.bins["m"]
 
-    def test_batch_cdt_list_add_items(self, client):
-        session = client.create_session()
+    def test_batch_cdt_list_add_items(self, cluster):
+        session = cluster.create_session()
         k1, k2 = DS.id(91), DS.id(92)
         session.upsert(k1).put({"tags": []}).execute()
         session.upsert(k2).put({"tags": []}).execute()
 
         (
             session.update(k1, k2)
-                .bin("tags").list_append_items(["a", "b"])
-                .execute()
+            .bin("tags").list_append_items(["a", "b"])
+            .execute()
         )
 
         for k in (k1, k2):
