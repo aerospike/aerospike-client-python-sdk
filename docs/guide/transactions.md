@@ -150,7 +150,7 @@ cleanup-style deletes that do not need atomicity.
 
 | Error | Meaning |
 |-------|---------|
-| `CommitError` | Commit failed (server-side); the transaction is in an indeterminate state. `in_doubt` flag on the exception indicates whether writes may have reached the server. |
+| `CommitError` | Commit failed (server-side); the transaction is in an indeterminate state. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. |
 | `MRT_BLOCKED` | Another transaction has one of the records locked. Retry. |
 | `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry. |
 | `MRT_EXPIRED` | Transaction monitor TTL elapsed before commit. |

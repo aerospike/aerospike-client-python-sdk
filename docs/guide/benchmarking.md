@@ -139,7 +139,7 @@ Every cell in the matrix below was produced by `python -m benchmarks.benchmark -
 (per-language-baselines)=
 ## Cross-client Performance — single-key
 
-50/50 RW, 100K keys, 32 threads / tasks (or 4×64 / 8×64 for AsyncPool), 10–15 s measured. Free-threaded runs use `PYTHON_GIL=0`; non-FT runs use `PYTHON_GIL=1 ALLOW_GIL_ON=1`. The Rust core has no GIL — one number applies, shown in the FT column. **Re-measured 2026-07-28 on core `4dd1a93` (v3) / PAC `0.6.0a7.dev6`, 0 errors across every cell.** The pooled-window rows and the **FT p99** column are from the 2026-07-29 published-build runs (PAC `0.6.0a7.dev7` / PSDK `0.9.0a6.dev2`, same v3 core; `matrix-pub` + the window×pool frontier sweep + a targeted fill for the 8×64 / single-thread rows), 0 errors; overlapping single-key modes reproduced the dev6 TPS within ~2%, so the columns are comparable. This table lists modes at **usable tail latency (p99 < 2.8 ms)**; the window×pool *peak* (~442K) trades a ~6 ms tail for only ~4% more TPS and is covered in the window-API section below. Rust-core p99 (`—`) was not captured — it is a comparison baseline, not re-run for tail latency.
+50/50 RW, 100K keys, 10–15 s measured, each mode at a representative concurrency (see the Threads / Tasks column). Free-threaded runs use `PYTHON_GIL=0`; non-FT runs use `PYTHON_GIL=1 ALLOW_GIL_ON=1`. The Rust core has no GIL — one number applies, shown in the FT column. **Re-measured 2026-07-28 on core `4dd1a93` (v3) / PAC `0.6.0a7.dev6`, 0 errors across every cell.** The pooled-window rows and the **FT p99** column are from the 2026-07-29 published-build runs (PAC `0.6.0a7.dev7` / PSDK `0.9.0a6.dev2`, same v3 core; `matrix-pub` + the window×pool frontier sweep + a targeted fill for the 8×64 / single-thread rows), 0 errors; overlapping single-key modes reproduced the dev6 TPS within ~2%, so the columns are comparable. This table lists modes at **usable tail latency (p99 < 2.8 ms)**; the window×pool *peak* (~442K) trades a ~6 ms tail for only ~4% more TPS and is covered in the window-API section below. Rust-core p99 (`—`) was not captured — it is a comparison baseline, not re-run for tail latency.
 
 | Client / Mode | Threads / Tasks | FT TPS | FT p99 | non-FT TPS |
 |---|---|---|---|---|
@@ -151,8 +151,8 @@ Every cell in the matrix below was produced by `python -m benchmarks.benchmark -
 | **PSDK sync, fast-path** (`session.get` / `session.put`) | 32 | **241,104** | 0.2ms | 51,876 |
 | PSDK sync, builder, ct_runtime | 32 | 186,338 | 0.4ms | 31,924 |
 | PSDK async AsyncPool, builder | 4×64 | 180,187 | 2.6ms | 58,142 |
+| **PSDK async single-loop, fast-path** | 128 tasks | **172,150** | 1.2ms | 161,660 |
 | PSDK sync, builder (chained API) | 32 | 153,934 | 0.4ms | 30,813 |
-| **PSDK async single-loop, fast-path** | 32 tasks | **128,073** | 0.3ms | 110,203 |
 | PSDK async single-loop, builder | 32 tasks | 66,322 | 0.6ms | 63,891 |
 | PSDK sync, fast-path | 1 | 10,875 | 0.1ms | 10,507 |
 | PSDK sync, builder | 1 | 9,534 | 0.1ms | 9,642 |
@@ -268,7 +268,7 @@ Four event loops × 64 tasks per loop. Free-threaded only.
 | **16** | **376,016** | 5.7 ms | **2.70×** |
 | 32 | 347,376 | 12.2 ms | 2.49× |
 
-At a 16-key window the single-loop window API hits **~376K TPS — above the AsyncPool fast-path (~317K at 8×64)**: it collapses N task-resumes into one `await` and fuses submission into a single crossing, breaking past the single-loop submission ceiling (~139K). It stays N wire ops, so it's a *client-overhead* win, not a network one — server batch (which sends one request per node) still wins on WAN links and on the sync path.
+At a 16-key window the single-loop window API hits **~376K TPS — above the AsyncPool fast-path (~317K at 8×64)**: it collapses N task-resumes into one `await` and fuses submission into a single crossing, breaking past the single-loop single-op submission ceiling (~139K raw; the coalescer already lifts the plain fast path to ~172–184K, and the window goes further). It stays N wire ops, so it's a *client-overhead* win, not a network one — server batch (which sends one request per node) still wins on WAN links and on the sync path.
 
 **Across `AsyncPool` loops (`--pool-loops N`) the window API goes higher still** — each loop runs its own windows, so in-flight = `loops × z × k`, and *both* throughput and tail latency track that depth. Fixing loops=4 (the sweet count — 8 over-saturates) and sweeping `z × k` maps the throughput/latency frontier (published build, 50/50, single run/cell):
 

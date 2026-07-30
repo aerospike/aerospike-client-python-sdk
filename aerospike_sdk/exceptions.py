@@ -672,16 +672,16 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
         )
 
     if isinstance(exc, PacMaxErrorRate):
-        return MaxErrorRate(str(exc))
+        return MaxErrorRate(str(exc), in_doubt=getattr(exc, "in_doubt", False))
 
     if isinstance(exc, PacTimeoutError):
-        return TimeoutError(str(exc))
+        return TimeoutError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
 
     if isinstance(exc, PacConnectionError):
-        return ConnectionError(str(exc))
+        return ConnectionError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
 
     if isinstance(exc, PacInvalidNodeError):
-        return InvalidNodeError(str(exc))
+        return InvalidNodeError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
 
     if isinstance(exc, PacUDFBadResponse):
         return _result_code_to_exception(
@@ -691,6 +691,6 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
         )
 
     if isinstance(exc, PacAerospikeError):
-        return AerospikeError(str(exc))
+        return AerospikeError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
 
     return AerospikeError(str(exc))

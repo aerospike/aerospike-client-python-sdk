@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import importlib
 import os
+from datetime import timedelta
 
 import pytest
-from aerospike_sdk import UDFLang
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk import Behavior, UDFLang
+from aerospike_sdk.exceptions import AerospikeError, ResultCode, TimeoutError
 from aerospike_sdk import ClusterDefinition, DataSet
+from aerospike_sdk.policy.behavior_settings import Settings
 
 NS = "test"
 SET = "test"
@@ -596,3 +598,61 @@ async def test_write_chain_udf_then_read_chain(cluster_with_udf):
     assert all(r.is_ok for r in rows)
     assert rows[2].record is not None
     assert rows[2].record.bins.get("seed") == "new"
+
+
+SLEEP_LUA_FILE = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "udf", "sleep_example.lua"),
+)
+SLEEP_SERVER_PATH = "sleep_example.lua"
+SLEEP_MODULE = "sleep_example"
+
+
+@pytest.fixture
+async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        udf_session = c.create_session()
+        try:
+            rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+        reg = await udf_session.register_udf_from_file(
+            SLEEP_LUA_FILE, SLEEP_SERVER_PATH, UDFLang.LUA
+        )
+        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        yield c
+        try:
+            rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
+            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        except Exception:
+            pass
+
+
+async def test_udf_client_timeout_marks_in_doubt(cluster_with_sleep_udf):
+    """A client socket timeout on a write that reached the server marks the error in-doubt."""
+    # The socket timeout must fire while the server is still executing the
+    # UDF: the write reached the wire but its outcome is unknown, which is
+    # exactly the in-doubt condition. total_timeout must stay 0: a nonzero
+    # total makes the client send min(socket, total) as the server-side
+    # deadline, and the server's own UDF abort then beats the client's
+    # socket timer. With no server deadline the client's 250ms timer is the
+    # only one racing the 1000ms UDF sleep, so the client-side timeout is
+    # deterministic even under server load.
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "udf_client_timeout",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=0,
+        ),
+    )
+    session = cluster_with_sleep_udf.create_session(behavior)
+    k = DS.id("udf_in_doubt_1")
+    with pytest.raises(TimeoutError) as exc_info:
+        await (
+            session.execute_udf(k)
+            .function(SLEEP_MODULE, "sleep")
+            .passing(1000)
+            .execute()
+        )
+    assert exc_info.value.in_doubt is True
