@@ -25,6 +25,7 @@ from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import _result_code_to_exception
 from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.operation_result import OperationResult
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
     from aerospike_async import BatchRecord
@@ -50,6 +51,11 @@ class RecordResult:
         exception: Embedded :class:`~aerospike_sdk.exceptions.AerospikeError`
             when the client placed an error in-stream instead of raising.
         udf_result: Lua return value for successful foreground UDF calls.
+        sub_code: Server error subcode for this row, or ``None``. Populated
+            only for failed batch rows when the request asked for extended
+            error detail (``error_detail_verbosity``) and the server supplies
+            it (8.1.3+). Subcode values are scoped to their parent
+            :attr:`result_code` — interpret the pair together.
 
     Example::
 
@@ -73,6 +79,7 @@ class RecordResult:
     index: int = -1
     exception: AerospikeError | None = None
     udf_result: Any | None = None
+    sub_code: int | None = None
 
     @property
     def is_ok(self) -> bool:
@@ -110,7 +117,10 @@ class RecordResult:
         if not self.is_ok:
             if self.exception is not None:
                 raise self.exception
-            raise _result_code_to_exception(self.result_code, str(self.result_code), self.in_doubt)
+            raise _result_code_to_exception(
+                self.result_code, str(self.result_code), self.in_doubt,
+                sub_code=self.sub_code,
+            )
         return self
 
     def record_or_raise(self) -> Record:
@@ -160,6 +170,44 @@ class RecordResult:
         if self.record is None:
             return None
         return self.record.operation_result(i)
+
+    def typed_operation_result(self, i: int) -> OperationResult | None:
+        """Return the *i*-th positional result wrapped in an :class:`OperationResult`.
+
+        Same slot semantics as :meth:`operation_result` — one slot per op in
+        request order — but the value comes back inside the typed-accessor
+        wrapper, so mismatched reads raise :class:`TypeError` instead of
+        propagating a miscast value. Ops that produced no value (write-only
+        modifies) wrap ``None``; an out-of-range *i* or an error row
+        (:attr:`record` is ``None``) returns ``None`` — no wrapper — mirroring
+        the raw accessor.
+
+        Use the raw :meth:`operation_result` when you just want the value;
+        use this when you want per-op type enforcement.
+
+        Args:
+            i: Zero-based op index into the originating request.
+
+        Returns:
+            An :class:`OperationResult` wrapping the slot's value, or ``None``
+            for out-of-range indices and error rows.
+
+        Example::
+
+            result = await (
+                session.upsert(key).bin("s").str_upper().bin("s").get().execute()
+            ).first_or_raise()
+            assert result.typed_operation_result(1).get_string() == "AB"
+
+        See Also:
+            :meth:`operation_result`: The raw, zero-allocation accessor.
+        """
+        if self.record is None:
+            return None
+        results = self.record.results
+        if results is None or not 0 <= i < len(results):
+            return None
+        return OperationResult(results[i])
 
     def get_hll_config(self, bin_name: str) -> HllConfig | None:
         """Return the HLL bin's :class:`~aerospike_sdk.HllConfig` from a ``hll_describe()`` result.
@@ -239,6 +287,7 @@ def batch_records_to_results(
             result_code=br.result_code if br.result_code is not None else ResultCode.OK,
             in_doubt=br.in_doubt,
             index=i,
+            sub_code=br.sub_code,
         )
         for i, br in enumerate(batch_records)
     ]

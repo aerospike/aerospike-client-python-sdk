@@ -102,7 +102,7 @@ class IndexTypeEnum(Enum):
         elif self == IndexTypeEnum.GEO2D_SPHERE:
             return IndexType.GEO2D_SPHERE
         elif self == IndexTypeEnum.BLOB:
-            return getattr(IndexType, "BLOB", IndexType.STRING)
+            return IndexType.BLOB
         raise ValueError(f"Unknown index type: {self}")
 
 

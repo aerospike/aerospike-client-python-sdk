@@ -23,6 +23,7 @@ from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.operation_result import OperationResult
 
 
 def _key(val: int = 1) -> Key:
@@ -38,10 +39,12 @@ def _batch_record(
     record: object = None,
     result_code: ResultCode = ResultCode.OK,
     in_doubt: bool = False,
+    sub_code: int | None = None,
 ):
     return SimpleNamespace(
         key=_key(key_val), record=record,
         result_code=result_code, in_doubt=in_doubt,
+        sub_code=sub_code,
     )
 
 
@@ -203,6 +206,33 @@ class TestBatchRecordsToResults:
         results = batch_records_to_results([br])
         assert results[0].in_doubt is True
 
+    def test_sub_code_propagated(self):
+        br = _batch_record(result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=4)
+        results = batch_records_to_results([br])
+        assert results[0].sub_code == 4
+
+    def test_sub_code_defaults_to_none(self):
+        results = batch_records_to_results([_batch_record()])
+        assert results[0].sub_code is None
+
+    def test_or_raise_carries_sub_code(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=4,
+        )
+        with pytest.raises(AerospikeError) as exc_info:
+            rr.or_raise()
+        assert exc_info.value.sub_code == 4
+
+    def test_or_raise_sub_code_none_when_absent(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+        )
+        with pytest.raises(AerospikeError) as exc_info:
+            rr.or_raise()
+        assert exc_info.value.sub_code is None
+
     def test_empty_list_returns_empty(self):
         assert batch_records_to_results([]) == []
 
@@ -254,3 +284,63 @@ class TestGetHllConfig:
         )
         with pytest.raises(TypeError, match="not a 2-element list"):
             rr.get_hll_config("h")
+
+
+# ---------------------------------------------------------------------------
+# positional operation results (raw + typed accessors)
+# ---------------------------------------------------------------------------
+
+class TestPositionalOperationResults:
+    """Contract shared by ``operation_result`` and ``typed_operation_result``:
+    one slot per op in request order, write-only ops occupy a slot with no
+    value, out-of-range indices and error rows yield ``None``."""
+
+    def _rec(self, results):
+        def _op_result(i):
+            if results is None or not 0 <= i < len(results):
+                return None
+            return results[i]
+        return SimpleNamespace(bins={}, results=results, operation_result=_op_result)
+
+    def _rr(self, results):
+        return RecordResult(
+            key=_key(), record=self._rec(results), result_code=ResultCode.OK,
+        )
+
+    def test_raw_slots_are_op_aligned(self):
+        rr = self._rr([1, None, 11])
+        assert [rr.operation_result(i) for i in range(3)] == [1, None, 11]
+
+    def test_raw_out_of_range_returns_none(self):
+        assert self._rr([1]).operation_result(5) is None
+
+    def test_raw_error_row_returns_none(self):
+        rr = RecordResult(
+            key=_key(), record=None, result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+        )
+        assert rr.operation_result(0) is None
+
+    def test_typed_wraps_slot_value(self):
+        wrapped = self._rr([1, None, 11]).typed_operation_result(2)
+        assert isinstance(wrapped, OperationResult)
+        assert wrapped.get_long() == 11
+
+    def test_typed_write_only_slot_wraps_none(self):
+        # In-range slot with no value: a wrapper around None, so the typed
+        # defaults apply — not a bare None, which is reserved for "no slot".
+        wrapped = self._rr([1, None, 11]).typed_operation_result(1)
+        assert isinstance(wrapped, OperationResult)
+        assert wrapped.value is None
+        assert wrapped.get_long() == 0
+
+    def test_typed_out_of_range_returns_none(self):
+        assert self._rr([1]).typed_operation_result(5) is None
+
+    def test_typed_error_row_returns_none(self):
+        rr = RecordResult(
+            key=_key(), record=None, result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+        )
+        assert rr.typed_operation_result(0) is None
+
+    def test_typed_no_positional_results_returns_none(self):
+        assert self._rr(None).typed_operation_result(0) is None

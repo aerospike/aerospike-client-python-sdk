@@ -134,3 +134,21 @@ class TestExpressionCreateSync:
             "test", "users", "users_age_exp_idx", IndexType.NUMERIC, exp, None,
         )
         pac.create_index_blocking.assert_not_called()
+
+
+class TestIndexTypeSetters:
+
+    def test_blob_sets_index_type(self):
+        b = _async_builder().on_bin("payload").named("payload_idx").blob()
+        assert b._index_type is IndexType.BLOB
+
+    def test_last_type_setter_wins(self):
+        b = _async_builder().on_bin("payload").numeric().blob()
+        assert b._index_type is IndexType.BLOB
+
+    async def test_blob_passes_through_to_create(self):
+        b = _async_builder().on_bin("payload").named("payload_idx").blob()
+        await b.create()
+        b._client.create_index.assert_awaited_once_with(
+            "test", "users", "payload", "payload_idx", IndexType.BLOB, None, None,
+        )

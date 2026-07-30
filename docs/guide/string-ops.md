@@ -266,6 +266,33 @@ Use ``results[i]`` (or ``record.operation_result(i)``) when you need to
 distinguish *which* op produced *which* value — especially in pipelines
 that interleave modifies and reads on the same or different bins.
 
+The slot-per-op contract holds for scalar ops too, and the two views
+diverge on purpose when one bin is read more than once: the positional
+list keeps every slot, while ``bins`` merges the reads and skips the
+write's empty slot.
+
+```python
+stream = await (session.upsert(key)
+                .bin("n").get()
+                .bin("n").add(10)
+                .bin("n").get()
+                .execute())
+row = await stream.first_or_raise()
+rec = row.record_or_raise()
+
+assert rec.results == [1, None, 11]   # one slot per op
+assert rec.bins["n"] == [1, 11]       # reads merged, write slot skipped
+```
+
+For per-op type enforcement, `RecordResult.typed_operation_result(i)`
+wraps the same slot in an {class}`~aerospike_sdk.OperationResult`, whose
+``get_*`` accessors raise ``TypeError`` on a mismatched read instead of
+propagating a miscast value:
+
+```python
+count = row.typed_operation_result(2).get_long()   # 11
+```
+
 ## See Also
 
 - {class}`~aerospike_async.StringOperation` — low-level operation factory

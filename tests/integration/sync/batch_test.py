@@ -19,7 +19,10 @@ import time
 
 import pytest
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, ErrorDetailVerbosity
+from aerospike_sdk.exceptions import ResultCode
+from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
 from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
@@ -375,3 +378,39 @@ class TestSyncBatchStreamClose:
         assert stream_ref["s"].collect() == []
         rec = session.query(keys[1]).execute().first_or_raise()
         assert rec.record.bins["v"] == 1
+
+
+class TestSyncBatchErrorDetail:
+    """Per-record error detail travels on RecordResult.sub_code through the
+    sync batch stream (independent of the async implementation)."""
+
+    def test_batch_row_carries_sub_code(self, cluster: Cluster, users: DataSet):
+        builds = cluster.create_session().info().build()
+        versions = [tuple(int(p) for p in b.split("-")[0].split(".")) for b in builds]
+        if not versions or min(versions) < (8, 1, 3):
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+
+        behavior = Behavior(
+            "sync-batch-error-detail",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.MESSAGE)},
+        )
+        session = cluster.create_session(behavior=behavior)
+        k_bad = users.id("sb_subcode_bad")
+        k_good = users.id("sb_subcode_good")
+        for k in (k_bad, k_good):
+            session.upsert(k).put({"nums": [1, 2, 3]}).execute()
+
+        rs = (
+            session
+            .query(k_bad).bin("nums").on_list_index(99).get_values()
+            .query(k_good).bins(["nums"])
+            .execute()
+        )
+        results = rs.collect()
+
+        assert len(results) == 2
+        assert results[0].result_code == ResultCode.OP_NOT_APPLICABLE
+        # Subcode 1 = CDT index out of bounds, scoped to OP_NOT_APPLICABLE.
+        assert results[0].sub_code == 1
+        assert results[1].is_ok
+        assert results[1].sub_code is None

@@ -596,3 +596,14 @@ async def supports_error_detail(server_version):
     """
     return server_version is not None and server_version >= SERVER_8_1_3
 
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_blob_index(server_version):
+    """``True`` when the cluster supports blob secondary indexes.
+
+    Covers ``IndexBuilder.blob()`` and blob equality filters served by a
+    secondary index. Server >= 7.0. Tests that create blob indexes should
+    ``pytest.skip`` when this is ``False``.
+    """
+    return server_version is not None and server_version >= (7, 0, 0, 0)
+

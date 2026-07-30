@@ -637,12 +637,6 @@ class TestBatchDeleteEdgeCases:
 class TestBatchWriteComplex:
     """Chained writes starting from session.upsert() (BinBuilder → QueryBuilder transition)."""
 
-    @pytest.mark.xfail(
-        reason="Rust core rejects entire batch when any key targets an unknown "
-               "namespace; pending core fix for per-key INVALID_NAMESPACE",
-        raises=Exception,
-        strict=True,
-    )
     async def test_batch_write_complex(self, session, ds, seed_data):
         keys = seed_data["keys"]
         k1, k6 = keys[0], keys[5]
@@ -679,12 +673,6 @@ class TestBatchWriteComplex:
         assert verify[1].record.bins[BIN_NAME3] == 1006
         assert verify[2].result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
-    @pytest.mark.xfail(
-        reason="Rust core rejects entire batch when any key targets an unknown "
-               "namespace; pending core fix for per-key INVALID_NAMESPACE",
-        raises=Exception,
-        strict=True,
-    )
     async def test_batch_write_invalid_namespace(self, session, ds, seed_data):
         """A chain targeting an invalid namespace embeds the error in the
         stream by default (batch disposition is IN_STREAM)."""

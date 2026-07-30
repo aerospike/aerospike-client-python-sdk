@@ -114,7 +114,9 @@ class IndexBuilder(_IndexBuilderBase):
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
         if not self._index_type:
-            raise ValueError("index_type is required. Call numeric() or string() first.")
+            raise ValueError(
+                "index_type is required. "
+                "Call numeric(), string(), blob(), or geo2dsphere() first.")
 
         try:
             await self._client.create_index(
