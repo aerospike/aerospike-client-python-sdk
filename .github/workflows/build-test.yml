@@ -164,6 +164,7 @@ jobs:
 
       - name: Generate ANTLR parser
         run: |
+          echo $PATH | sed 's/:/\n/g'
           java -version
           make generate-ael
 
