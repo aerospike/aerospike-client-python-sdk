@@ -23,7 +23,7 @@ import pytest
 from aerospike_async import Filter, ResultCode
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import DataSet, QueryHint, SyncClient
+from aerospike_sdk import DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     BIN_AGE,
@@ -38,6 +38,7 @@ from tests.integration.query_selection_helpers import (
     explain_plan_blocking,
     hint_key_name,
     requires_pac_query_selection_api,
+    skip_unless_query_selection,
 )
 
 pytestmark = requires_pac_query_selection_api
@@ -64,19 +65,16 @@ def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeou
 @pytest.fixture(scope="module")
 def qselhint_client(
     aerospike_host,
-    client_policy,
+    make_cluster_definition,
     supports_query_selection,
 ):
-    if not supports_query_selection:
-        pytest.skip("cluster does not support query selection (PAC)")
+    skip_unless_query_selection(supports_query_selection)
 
-    with SyncClient(
-        seeds=aerospike_host,
-        policy=client_policy,
-        index_refresh_interval=0.25,
-    ) as client:
-        pac = client.underlying_client
-        session = client.create_session()
+    cluster_def = make_cluster_definition(aerospike_host, sync=True)
+    cluster_def.with_index_refresh_interval(0.25)
+    with cluster_def.connect() as cluster:
+        client = cluster._sdk_client
+        session = cluster.create_session()
         ds = DataSet.of(NS, HINT_SET_NAME)
 
         for suffix in ("1", "2"):

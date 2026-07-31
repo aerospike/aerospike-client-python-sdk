@@ -60,6 +60,8 @@ def resolve_ael_client_from_funcargs(
 
     for name, value in funcargs.items():
         if name == "session" or name.startswith("session_with_"):
-            return value.client  # type: ignore[return-value]
+            client = getattr(value, "client", None)
+            if getattr(client, "supports_server_compiled_ael", None) is not None:
+                return client  # type: ignore[return-value]
 
     return None

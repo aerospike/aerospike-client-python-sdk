@@ -553,7 +553,11 @@ async def supports_query_selection(aerospike_host, client_policy):
     """
     if not aerospike_host:
         return False
+    from aerospike_sdk.feature_gates import PSDK_ENABLE_QUERY_SELECTION
     from aerospike_sdk.query_selection import compute_query_selection_support
+
+    if not PSDK_ENABLE_QUERY_SELECTION:
+        return False
 
     try:
         client = await new_client(client_policy, aerospike_host)

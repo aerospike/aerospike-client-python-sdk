@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 from aerospike_async import CollectionIndexType, IndexType
 
-from aerospike_sdk import DataSet, SyncClient
+from aerospike_sdk import DataSet
 
 from tests.integration.query_selection_helpers import (
     NS,
@@ -40,6 +40,7 @@ from tests.integration.query_selection_helpers import (
     explain_plan_blocking,
     long_bytes_be,
     requires_pac_query_selection_api,
+    skip_unless_query_selection,
 )
 
 pytestmark = requires_pac_query_selection_api
@@ -48,21 +49,19 @@ pytestmark = requires_pac_query_selection_api
 @pytest.fixture(scope="module")
 def qscexp_client(
     aerospike_host,
-    client_policy,
+    make_cluster_definition,
     supports_query_selection,
 ):
-    if not supports_query_selection:
-        pytest.skip("cluster does not support query selection (PAC)")
+    skip_unless_query_selection(supports_query_selection)
 
     blob_bytes = long_bytes_be(50001)
 
-    with SyncClient(
-        seeds=aerospike_host,
-        policy=client_policy,
-        index_refresh_interval=0.25,
-    ) as client:
+    cluster_def = make_cluster_definition(aerospike_host, sync=True)
+    cluster_def.with_index_refresh_interval(0.25)
+    with cluster_def.connect() as cluster:
+        client = cluster._sdk_client
         pac = client.underlying_client
-        session = client.create_session()
+        session = cluster.create_session()
         ds = DataSet.of(NS, SCOPE_SET_NAME)
 
         for key_id in ("k1", "k2"):

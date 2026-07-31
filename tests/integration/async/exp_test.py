@@ -20,7 +20,6 @@ Tests expression building and usage with actual database operations.
 
 import base64
 
-
 import pytest
 from aerospike_async import FilterExpression
 
@@ -2059,8 +2058,13 @@ class TestAelErrorHandling:
 # Advanced expression filter tests (JFC FilterExpTest equivalents)
 # =============================================================================
 
+DS = DataSet.of("test", "filter_exp_test")
+
+
 @pytest.fixture
-async def filter_session(aerospike_host, make_cluster_definition, wait_for_set_visible):
+async def session_with_filter_exp(
+    aerospike_host, make_cluster_definition, wait_for_set_visible,
+):
     """Session with test data matching JFC FilterExpTest setUp.
 
     Key "A": A=1, B=1.1, C="abcde",      D=1, E=-1
@@ -2069,25 +2073,24 @@ async def filter_session(aerospike_host, make_cluster_definition, wait_for_set_v
     """
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
-        ds = DataSet.of("test", "filter_exp_test")
 
         for key in ["A", "B", "C"]:
             try:
-                await session.delete(ds.id(key)).execute()
+                await session.delete(DS.id(key)).execute()
             except Exception:
                 pass
 
-        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
+        await session.upsert(DS.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+        await session.upsert(DS.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+        await session.upsert(DS.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
 
         await wait_for_set_visible(session, "test", "filter_exp_test", 3)
 
-        yield session, ds
+        yield session
 
         for key in ["A", "B", "C"]:
             try:
-                await session.delete(ds.id(key)).execute()
+                await session.delete(DS.id(key)).execute()
             except Exception:
                 pass
 
@@ -2128,48 +2131,42 @@ class TestAdvancedExpFilters:
         rr = await rs.first_or_raise()
         assert rr.record.bins[bin_name] == expected_value
 
-    async def test_filter_arshift(self, filter_session):
+    async def test_filter_arshift(self, session_with_filter_exp):
         """Arithmetic right shift: arshift(-2, 62) == -1 for key B."""
-        session, ds = filter_session
-        key = ds.id("B")
-        await self._assert_filtered_out(session, key, "not (($.E >> 62) == -1)")
-        await self._assert_matches(session, key, "($.E >> 62) == -1", "E", -2)
+        key = DS.id("B")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (($.E >> 62) == -1)")
+        await self._assert_matches(session_with_filter_exp, key, "($.E >> 62) == -1", "E", -2)
 
-    async def test_filter_bit_count(self, filter_session):
+    async def test_filter_bit_count(self, session_with_filter_exp):
         """Bit count (popcount): countOneBits(1) == 1 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
-        await self._assert_filtered_out(session, key, "not (countOneBits($.A) == 1)")
-        await self._assert_matches(session, key, "countOneBits($.A) == 1", "A", 1)
+        key = DS.id("A")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (countOneBits($.A) == 1)")
+        await self._assert_matches(session_with_filter_exp, key, "countOneBits($.A) == 1", "A", 1)
 
-    async def test_filter_lscan(self, filter_session):
+    async def test_filter_lscan(self, session_with_filter_exp):
         """Left scan: findBitLeft($.A, true) == 63 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
+        key = DS.id("A")
         expr = f"findBitLeft($.A, true) == 63"
-        await self._assert_filtered_out(session, key, f"not ({expr})")
-        await self._assert_matches(session, key, expr, "A", 1)
+        await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
+        await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
 
-    async def test_filter_rscan(self, filter_session):
+    async def test_filter_rscan(self, session_with_filter_exp):
         """Right scan: findBitRight(1, true) == 63 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
-        await self._assert_filtered_out(session, key, "not (findBitRight($.A, true) == 63)")
-        await self._assert_matches(session, key, "findBitRight($.A, true) == 63", "A", 1)
+        key = DS.id("A")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (findBitRight($.A, true) == 63)")
+        await self._assert_matches(session_with_filter_exp, key, "findBitRight($.A, true) == 63", "A", 1)
 
-    async def test_filter_min(self, filter_session):
+    async def test_filter_min(self, session_with_filter_exp):
         """Min of bins: min(1, 1, -1) == -1 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
-        await self._assert_filtered_out(session, key, "not (min($.A, $.D, $.E) == -1)")
-        await self._assert_matches(session, key, "min($.A, $.D, $.E) == -1", "A", 1)
+        key = DS.id("A")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (min($.A, $.D, $.E) == -1)")
+        await self._assert_matches(session_with_filter_exp, key, "min($.A, $.D, $.E) == -1", "A", 1)
 
-    async def test_filter_max(self, filter_session):
+    async def test_filter_max(self, session_with_filter_exp):
         """Max of bins: max(1, 1, -1) == 1 for key A."""
-        session, ds = filter_session
-        key = ds.id("A")
-        await self._assert_filtered_out(session, key, "not (max($.A, $.D, $.E) == 1)")
-        await self._assert_matches(session, key, "max($.A, $.D, $.E) == 1", "A", 1)
+        key = DS.id("A")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (max($.A, $.D, $.E) == 1)")
+        await self._assert_matches(session_with_filter_exp, key, "max($.A, $.D, $.E) == 1", "A", 1)
 
     @pytest.mark.parametrize("ael", [
         pytest.param(
@@ -2189,12 +2186,11 @@ class TestAdvancedExpFilters:
             marks=requires_server_compiled_ael,
         ),
     ])
-    async def test_filter_cond(self, filter_session, ael):
+    async def test_filter_cond(self, session_with_filter_exp, ael):
         """Conditional ``when(...) == 2`` for key A (A==1 ⇒ D−E==2); client vs typed server AEL."""
-        session, ds = filter_session
-        key = ds.id("A")
-        await self._assert_filtered_out(session, key, f"not ({ael})")
-        await self._assert_matches(session, key, ael, "A", 1)
+        key = DS.id("A")
+        await self._assert_filtered_out(session_with_filter_exp, key, f"not ({ael})")
+        await self._assert_matches(session_with_filter_exp, key, ael, "A", 1)
 
 
 class TestInExpression:
@@ -2385,6 +2381,12 @@ def _b64_blob_expr(payload: bytes) -> str:
     return f'$.payload.get(type: BLOB) == "{enc}"'
 
 
+@pytest.fixture
+async def cluster_ael_blob(aerospike_host, make_cluster_definition):
+    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+        yield cluster
+
+
 class TestAelMapBlobIntegrationQueries:
     """Extra map and blob AEL filters exercised against a live server."""
 
@@ -2448,34 +2450,32 @@ class TestAelMapBlobIntegrationQueries:
     )
     async def test_blob_bin_ael_equality(
         self,
-        aerospike_host,
-        make_cluster_definition,
+        cluster_ael_blob,
         wait_for_set_visible,
         make_expr,
     ):
         """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
-        async with await make_cluster_definition(aerospike_host).connect() as cluster:
-            session = cluster.create_session()
-            k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
-            payload = bytes([1, 2, 254])
+        session = cluster_ael_blob.create_session()
+        k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
+        payload = bytes([1, 2, 254])
 
-            try:
-                await session.delete(k).execute()
-            except Exception:
-                pass
-
-            await session.upsert(k).put({"payload": payload}).execute()
-            await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
-
-            stream = await (
-                session.query("test", "ael_blob_srv_it")
-                .where(make_expr(payload))
-                .execute()
-            )
-            rows = [r.record async for r in stream]
-            stream.close()
-
-            assert len(rows) == 1
-            assert rows[0].bins["payload"] == payload
-
+        try:
             await session.delete(k).execute()
+        except Exception:
+            pass
+
+        await session.upsert(k).put({"payload": payload}).execute()
+        await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
+
+        stream = await (
+            session.query("test", "ael_blob_srv_it")
+            .where(make_expr(payload))
+            .execute()
+        )
+        rows = [r.record async for r in stream]
+        stream.close()
+
+        assert len(rows) == 1
+        assert rows[0].bins["payload"] == payload
+
+        await session.delete(k).execute()

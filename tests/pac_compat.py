@@ -29,6 +29,7 @@ from typing import Any, Protocol
 import pytest
 from aerospike_async.exceptions import InvalidRequest, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.feature_gates import PSDK_ENABLE_SERVER_COMPILED_AEL
 
 
 class SupportsServerCompiledAel(Protocol):
@@ -47,6 +48,11 @@ def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None
     **first active** node's ``Version`` must report server-compiled AEL support
     (homogeneous cluster: all nodes same build).
     """
+    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
+        pytest.skip(
+            "server-compiled AEL feature gate disabled "
+            "(PSDK_ENABLE_SERVER_COMPILED_AEL)"
+        )
     if client.supports_server_compiled_ael:
         return
     pytest.skip(
@@ -63,6 +69,8 @@ def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> 
     :func:`~aerospike_sdk.ael.parser.parse_ael` path (``Client.supports_server_compiled_ael``
     is false: missing PAC API, old server build, or pre-connect client).
     """
+    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
+        return
     if not client.supports_server_compiled_ael:
         return
     pytest.skip(
@@ -71,8 +79,9 @@ def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> 
     )
 
 
-# Integration tests: use with tests/integration/async/conftest.py autouse gate
-# (resolves ``cluster`` / ``session`` / ``session_with_*`` fixtures).
+# Integration tests: ``requires_*_ael`` markers are enforced in
+# ``tests/integration/conftest.py`` (``pytest_runtest_call`` resolves
+# ``client`` / ``cluster*`` / ``session*`` / ``session_with_*`` fixtures).
 
 
 async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
