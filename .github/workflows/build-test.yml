@@ -187,10 +187,14 @@ jobs:
   # de-facto serialization (module-level singletons, dict mutation races,
   # cross-loop asyncio primitives) fails here before it reaches users.
   unit-freethreaded:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         python: ['3.14t']
+        os: [
+          ubuntu-latest,
+          macos-14
+        ]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -234,10 +238,14 @@ jobs:
         run: python -m pytest tests/unit -v
 
   integration-freethreaded:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         python: ['3.14t']
+        os: [
+          ubuntu-latest,
+          ["self-hosted", "macOS", "ARM64"]
+        ]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
