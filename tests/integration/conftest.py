@@ -48,7 +48,9 @@ def resolve_ael_client_from_funcargs(
 ) -> SupportsServerCompiledAel | None:
     """Return a connected SDK client from a test's resolved fixture dict."""
     if "client" in funcargs:
-        return funcargs["client"]  # type: ignore[return-value]
+        client = funcargs["client"]
+        if getattr(client, "supports_server_compiled_ael", None) is not None:
+            return client  # type: ignore[return-value]
 
     for name, value in funcargs.items():
         if name == "cluster" or name.startswith("cluster_"):

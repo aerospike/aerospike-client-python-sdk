@@ -28,7 +28,7 @@ import pytest
 from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
-from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
+from tests.pac_compat import requires_client_side_ael
 
 
 REGION_SET = "georeg_psdk"
@@ -137,9 +137,9 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
+    @requires_client_side_ael
     async def test_ael_with_explicit_get_type_geo(self, session):
         """Same query expressed with explicit ``.get(type: GEO)`` cast on the bin."""
-        xfail_if_server_compiled_ael_wire_active(session.client)
         stream = await (
             session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}.get(type: GEO), geoJson('{QUERY_POINT}'))")

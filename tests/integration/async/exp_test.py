@@ -18,13 +18,10 @@
 Tests expression building and usage with actual database operations.
 """
 
-import asyncio
 import base64
-import inspect
 
 
 import pytest
-import pytest_asyncio
 from aerospike_async import FilterExpression
 
 from aerospike_sdk import AelParseException, Exp, in_list, map_keys, map_values, val

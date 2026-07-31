@@ -58,7 +58,7 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
@@ -376,8 +376,12 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             return expression
         if self._qb is not None:
             supports = self._qb._supports_server_compiled_ael
+        elif getattr(self, "_sdk_client_fast", None) is not None:
+            supports = getattr(
+                self._sdk_client_fast, "supports_server_compiled_ael", False,
+            )
         else:
-            supports = getattr(self, "_supports_server_compiled_ael", False)
+            supports = False
         return filter_expression_from_ael_string(
             expression,
             supports_server_compiled_ael=supports,
@@ -684,7 +688,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     ) -> Self:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.read(bin_name, expr, flags))
 
     def insert_from(
@@ -701,7 +705,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
@@ -718,7 +722,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
@@ -735,7 +739,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.DEFAULT, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def query(
@@ -878,16 +882,6 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
-        if sdk_client is not None:
-            self._supports_server_compiled_ael = getattr(
-                sdk_client, "supports_server_compiled_ael", False,
-            )
-            self._supports_query_selection = getattr(
-                sdk_client, "supports_query_selection", False,
-            )
-        else:
-            self._supports_server_compiled_ael = False
-            self._supports_query_selection = False
         # _dd_command_default, _dd_override, _record_delete_in_fast_ops
         # are class-level defaults; reads fall through, chained-method
         # writes shadow.

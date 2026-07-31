@@ -21,7 +21,6 @@ every test function. Tests must keep keys isolated (unique names / sets) or
 clean up.
 """
 
-import pytest
 import pytest_asyncio
 
 

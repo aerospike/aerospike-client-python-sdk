@@ -24,8 +24,6 @@ from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
 
-from tests.pac_compat import xfail_if_server_compiled_ael_wire_active
-
 
 @pytest.fixture
 def ds():
@@ -189,7 +187,6 @@ class TestWriteWithExpressions:
     """Expression-based writes in a chained context."""
 
     async def test_upsert_from_expression(self, session, ds):
-        xfail_if_server_compiled_ael_wire_active(session.client)
         k = ds.id("cb_exp_1")
         await _cleanup(session, k)
 

@@ -79,10 +79,13 @@ class TestQueryBuilderWhere:
 
     def test_where_server_compiled_when_supported(self) -> None:
         """where(str) uses server-compiled path when builder flag is set."""
+        if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+            pytest.skip("PAC does not expose FilterExpression.from_server_compiled_ael")
         builder = _query_builder(supports_server_compiled_ael=True)
-        expected_parse = parse_ael("$.age > 20")
         builder.where("$.age > 20")
-        assert builder._filter_expression != expected_parse
+        assert builder._filter_expression == FilterExpression.from_server_compiled_ael(
+            "$.age > 20",
+        )
 
 
 class TestSyncQueryBuilderWhere:

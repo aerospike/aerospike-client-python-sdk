@@ -1823,8 +1823,6 @@ class _QueryBuilderBase:
             return
         if self._use_server_query_selection(hint):
             return
-        if self._supports_server_compiled_ael:
-            return
         self._auto_generate_filters(hint, policy)
 
     async def _run_dataset_query_async(
@@ -5214,7 +5212,11 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
         if isinstance(expression, str):
-            expr = self._parent._filter_expression_from_ael(expression)  # type: ignore[union-attr]
+            supports = getattr(self._parent, "_supports_server_compiled_ael", False)
+            expr = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=supports,
+            )
         else:
             expr = expression
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
