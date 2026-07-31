@@ -738,7 +738,9 @@ class _BlockingQueryDispatch:
         log.debug(
             "dataset query (blocking): %s.%s filter=%s chunk=%s hint=%s",
             self._namespace, self._set_name,
-            self._filter_expression is not None or bool(self._filter_records),
+            self._filter_expression is not None
+            or self._where_ael is not None
+            or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
@@ -754,25 +756,35 @@ class _BlockingQueryDispatch:
         if self._chunk_size is not None and self._chunk_size > 0:
             policy.max_records = self._chunk_size
         hint = self._query_hint
-        self._apply_dataset_query_policy_filter(policy, hint)
+        use_server_query_selection = self._use_server_query_selection(hint)
+        self._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=use_server_query_selection,
+        )
 
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        self._prepare_dataset_query_index_context(hint)
-        self._wait_for_dataset_query_index_context_blocking(hint)
+        self._prepare_dataset_query_index_context(
+            use_server_query_selection=use_server_query_selection,
+        )
+        self._wait_for_dataset_query_index_context_blocking(
+            use_server_query_selection=use_server_query_selection,
+        )
 
         self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        self._maybe_auto_generate_filters(hint, policy)
+        self._maybe_auto_generate_filters(
+            hint, policy, use_server_query_selection=use_server_query_selection,
+        )
 
         statement = self._build_statement()
 
         try:
             recordset, plan = self._run_dataset_query_blocking(
                 policy, partition_filter, hint, statement,
+                use_server_query_selection=use_server_query_selection,
             )
         except Exception as e:
             raise _convert_pac_exception(e) from e

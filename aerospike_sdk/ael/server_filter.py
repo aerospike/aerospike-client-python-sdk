@@ -21,6 +21,12 @@ from aerospike_async import FilterExpression
 
 from aerospike_sdk.ael.parser import parse_ael
 
+# Resolved once at import — the PAC factory does not change at runtime.
+_SERVER_COMPILED_FACTORY = getattr(
+    FilterExpression, "from_server_compiled_ael", None,
+)
+_PAC_EXPOSES_SERVER_COMPILED: bool = callable(_SERVER_COMPILED_FACTORY)
+
 
 def filter_expression_from_ael_string(
     ael: str,
@@ -29,13 +35,11 @@ def filter_expression_from_ael_string(
 ) -> FilterExpression:
     """Return a ``FilterExpression`` for *ael*, using server-compiled wire when allowed.
 
-    When ``supports_server_compiled_ael`` is true, returns field **43**
-    MessagePack ``[128, "<utf-8 ael>"]`` via PAC
+    When ``supports_server_compiled_ael`` is true and PAC exposes the factory,
+    returns field **43** MessagePack ``[128, "<utf-8 ael>"]`` via
     :meth:`~aerospike_async.FilterExpression.from_server_compiled_ael`.
     Otherwise parses on the client via :func:`~aerospike_sdk.ael.parser.parse_ael`.
     """
-    if supports_server_compiled_ael:
-        factory = getattr(FilterExpression, "from_server_compiled_ael", None)
-        if callable(factory):
-            return factory(ael)
+    if supports_server_compiled_ael and _PAC_EXPOSES_SERVER_COMPILED:
+        return _SERVER_COMPILED_FACTORY(ael)  # type: ignore[misc]
     return parse_ael(ael)

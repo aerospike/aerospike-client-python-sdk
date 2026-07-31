@@ -135,7 +135,9 @@ class TestApplyDatasetQueryPolicyFilter:
     def test_skips_filter_expression_on_server_path(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
         policy = QueryPolicy()
-        qb._apply_dataset_query_policy_filter(policy, None)
+        qb._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=True,
+        )
         assert policy.filter_expression is None
 
     def test_sets_filter_expression_on_legacy_path(self):
@@ -144,7 +146,9 @@ class TestApplyDatasetQueryPolicyFilter:
             supports_query_selection=False,
         ).where("$.age > 30")
         policy = QueryPolicy()
-        qb._apply_dataset_query_policy_filter(policy, None)
+        qb._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=False,
+        )
         assert policy.filter_expression is not None
 
 
@@ -194,6 +198,7 @@ class TestExecuteDatasetQueryRouting:
             await qb._execute_dataset_query()
 
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
+        assert str(exc_info.value) == "Query plan filtered out by server"
         client.query_explain.assert_awaited_once()
         client.query_with_plan.assert_not_awaited()
 
@@ -243,6 +248,7 @@ class TestExecuteDatasetQueryBlockingRouting:
             qb._execute_dataset_query_blocking()
 
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
+        assert str(exc_info.value) == "Query plan filtered out by server"
         client.query_explain_blocking.assert_called_once()
         client.query_with_plan_blocking.assert_not_called()
 
@@ -260,6 +266,7 @@ class TestServerCompiledAelWhere:
                 _ClientSupportsSelection(),
                 supports_server_compiled_ael=True,
             ).where("$.age > 30")
+            qb._resolve_where_filter_expression()
         factory.assert_called_once_with(
             "$.age > 30",
             supports_server_compiled_ael=True,
@@ -273,7 +280,9 @@ class TestServerCompiledAelWhere:
             supports_server_compiled_ael=True,
         ).where("$.age > 30")
         policy = QueryPolicy()
-        qb._apply_dataset_query_policy_filter(policy, None)
+        qb._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=True,
+        )
         assert policy.filter_expression is None
         assert qb._use_server_query_selection(None) is True
 

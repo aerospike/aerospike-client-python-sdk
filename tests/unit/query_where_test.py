@@ -45,12 +45,14 @@ class TestQueryBuilderWhere:
     """Test QueryBuilder.where() overloads."""
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) parses AEL and sets _filter_expression."""
+        """where(str) records AEL and materializes on demand."""
         builder = _query_builder()
         expected = parse_ael("$.age > 20")
         result = builder.where("$.age > 20")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == "$.age > 20"
+        assert builder._filter_expression is None
+        assert builder._effective_filter_expression() == expected
 
     def test_where_ael_fstring_sets_filter_expression(self):
         """where(str) with f-string interpolation."""
@@ -59,7 +61,8 @@ class TestQueryBuilderWhere:
         expected = parse_ael("$.age > 21")
         result = builder.where(f"$.age > {age}")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == f"$.age > {age}"
+        assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(FilterExpression) stores the expression directly."""
@@ -83,8 +86,8 @@ class TestQueryBuilderWhere:
             pytest.skip("PAC does not expose FilterExpression.from_server_compiled_ael")
         builder = _query_builder(supports_server_compiled_ael=True)
         builder.where("$.age > 20")
-        assert builder._filter_expression == FilterExpression.from_server_compiled_ael(
-            "$.age > 20",
+        assert builder._effective_filter_expression() == (
+            FilterExpression.from_server_compiled_ael("$.age > 20")
         )
 
 
@@ -100,12 +103,13 @@ class TestSyncQueryBuilderWhere:
         )
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) parses AEL and sets _filter_expression on the delegate."""
+        """where(str) records AEL and materializes on demand."""
         builder = self._sync_builder()
         expected = parse_ael("$.age > 20")
         result = builder.where("$.age > 20")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == "$.age > 20"
+        assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(FilterExpression) stores the expression directly."""

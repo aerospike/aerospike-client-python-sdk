@@ -36,14 +36,18 @@ class TestFilterExpressionFromAelString:
         sentinel = object()
         factory = MagicMock(return_value=sentinel)
         with patch(
-            "aerospike_sdk.ael.server_filter.FilterExpression"
-        ) as fe_cls:
-            fe_cls.from_server_compiled_ael = factory
-            with patch("aerospike_sdk.ael.server_filter.parse_ael") as parse_ael:
-                result = filter_expression_from_ael_string(
-                    "$.age > 1",
-                    supports_server_compiled_ael=True,
-                )
+            "aerospike_sdk.ael.server_filter._SERVER_COMPILED_FACTORY",
+            factory,
+        ):
+            with patch(
+                "aerospike_sdk.ael.server_filter._PAC_EXPOSES_SERVER_COMPILED",
+                True,
+            ):
+                with patch("aerospike_sdk.ael.server_filter.parse_ael") as parse_ael:
+                    result = filter_expression_from_ael_string(
+                        "$.age > 1",
+                        supports_server_compiled_ael=True,
+                    )
         assert result is sentinel
         factory.assert_called_once_with("$.age > 1")
         parse_ael.assert_not_called()

@@ -418,6 +418,9 @@ class _QueryBuilderBase:
     # Set by with_txn(None): the caller explicitly opted out of any
     # transaction, so the implicit batch-write wrap must not fire either.
     _txn_opted_out: bool = False
+    _default_where_ael: Optional[str] = None
+    _supports_server_compiled_ael: bool = False
+    _supports_query_selection: bool = False
 
     def __init__(
         self,
@@ -489,22 +492,22 @@ class _QueryBuilderBase:
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode: Optional[Mode] = None
         self._sdk_client = sdk_client
-        if supports_server_compiled_ael is not None:
-            self._supports_server_compiled_ael = supports_server_compiled_ael
-        elif sdk_client is not None:
-            self._supports_server_compiled_ael = getattr(
-                sdk_client, "supports_server_compiled_ael", False,
-            )
-        else:
-            self._supports_server_compiled_ael = False
-        if supports_query_selection is not None:
-            self._supports_query_selection = supports_query_selection
-        elif sdk_client is not None:
-            self._supports_query_selection = getattr(
-                sdk_client, "supports_query_selection", False,
-            )
-        else:
-            self._supports_query_selection = False
+        if supports_server_compiled_ael is True:
+            self._supports_server_compiled_ael = True
+        elif (
+            supports_server_compiled_ael is None
+            and sdk_client is not None
+            and getattr(sdk_client, "supports_server_compiled_ael", False)
+        ):
+            self._supports_server_compiled_ael = True
+        if supports_query_selection is True:
+            self._supports_query_selection = True
+        elif (
+            supports_query_selection is None
+            and sdk_client is not None
+            and getattr(sdk_client, "supports_query_selection", False)
+        ):
+            self._supports_query_selection = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -523,6 +526,24 @@ class _QueryBuilderBase:
             ael,
             supports_server_compiled_ael=self._supports_server_compiled_ael,
         )
+
+    def _resolve_where_filter_expression(self) -> None:
+        """Materialize a pending string ``where()`` into ``_filter_expression``."""
+        if self._where_ael is not None and self._filter_expression is None:
+            self._filter_expression = self._filter_expression_from_ael(self._where_ael)
+
+    def _resolve_default_filter_expression(self) -> None:
+        """Materialize a pending string ``default_where()``."""
+        if self._default_where_ael is not None and self._default_filter_expression is None:
+            self._default_filter_expression = self._filter_expression_from_ael(
+                self._default_where_ael,
+            )
+
+    def _effective_filter_expression(self) -> Optional[FilterExpression]:
+        """Return the active filter, materializing pending AEL strings on demand."""
+        self._resolve_where_filter_expression()
+        self._resolve_default_filter_expression()
+        return self._filter_expression or self._default_filter_expression
 
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
@@ -795,7 +816,6 @@ class _QueryBuilderBase:
         """
         if isinstance(expression, str):
             self._where_ael = expression
-            self._filter_expression = self._filter_expression_from_ael(expression)
         else:
             self._where_ael = None
             self._filter_expression = expression
@@ -1216,8 +1236,10 @@ class _QueryBuilderBase:
             :meth:`where`: Per-operation filter on the current operation.
         """
         if isinstance(expression, str):
-            self._default_filter_expression = self._filter_expression_from_ael(expression)
+            self._default_where_ael = expression
+            self._default_filter_expression = None
         else:
+            self._default_where_ael = None
             self._default_filter_expression = expression
         return self
 
@@ -1320,7 +1342,7 @@ class _QueryBuilderBase:
         else:
             return
 
-        filt = self._filter_expression or self._default_filter_expression
+        filt = self._effective_filter_expression()
         ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
 
         # Hand off the current operations list directly; allocate a fresh
@@ -1347,6 +1369,7 @@ class _QueryBuilderBase:
         self._bins = None
         self._with_no_bins = False
         self._filter_expression = None
+        self._where_ael = None
         self._op_type = None
         self._generation = None
         self._ttl_seconds = None
@@ -1378,7 +1401,7 @@ class _QueryBuilderBase:
             keys = list(self._keys)
         else:
             return
-        filt = self._filter_expression or self._default_filter_expression
+        filt = self._effective_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
         )
@@ -1761,7 +1784,10 @@ class _QueryBuilderBase:
     def _raise_if_filtered_out_plan(self, plan: Any) -> None:
         """Phase-1 plan with no matching records; do not run execute."""
         if plan.is_filtered_out:
-            raise _result_code_to_exception(ResultCode.FILTERED_OUT, "")
+            raise _result_code_to_exception(
+                ResultCode.FILTERED_OUT,
+                "Query plan filtered out by server",
+            )
 
     def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
@@ -1776,41 +1802,45 @@ class _QueryBuilderBase:
     def _apply_dataset_query_policy_filter(
         self,
         policy: QueryPolicy,
-        hint: Optional[QueryHint],
+        *,
+        use_server_query_selection: bool,
     ) -> None:
-        if (
-            self._filter_expression is not None
-            and not self._use_server_query_selection(hint)
-        ):
+        if use_server_query_selection:
+            return
+        self._resolve_where_filter_expression()
+        if self._filter_expression is not None:
             policy.filter_expression = self._filter_expression
 
     def _prepare_dataset_query_index_context(
         self,
-        hint: Optional[QueryHint],
+        *,
+        use_server_query_selection: bool,
     ) -> None:
         if self._where_ael is None or self._indexes_monitor is None:
             return
-        if self._use_server_query_selection(hint):
+        if use_server_query_selection:
             return
         self._indexes_monitor.start(self._client)
 
     async def _wait_for_dataset_query_index_context(
         self,
-        hint: Optional[QueryHint],
+        *,
+        use_server_query_selection: bool,
     ) -> None:
         if self._where_ael is None or self._indexes_monitor is None:
             return
-        if self._use_server_query_selection(hint):
+        if use_server_query_selection:
             return
         await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
 
     def _wait_for_dataset_query_index_context_blocking(
         self,
-        hint: Optional[QueryHint],
+        *,
+        use_server_query_selection: bool,
     ) -> None:
         if self._where_ael is None or self._indexes_monitor is None:
             return
-        if self._use_server_query_selection(hint):
+        if use_server_query_selection:
             return
         self._indexes_monitor.wait_until_ready()
 
@@ -1818,10 +1848,12 @@ class _QueryBuilderBase:
         self,
         hint: Optional[QueryHint],
         policy: QueryPolicy,
+        *,
+        use_server_query_selection: bool,
     ) -> None:
         if self._where_ael is None or self._index_context is None:
             return
-        if self._use_server_query_selection(hint):
+        if use_server_query_selection:
             return
         self._auto_generate_filters(hint, policy)
 
@@ -1831,20 +1863,17 @@ class _QueryBuilderBase:
         partition_filter: PartitionFilter,
         hint: Optional[QueryHint],
         statement: Statement,
+        *,
+        use_server_query_selection: bool,
     ) -> tuple[Any, Any | None]:
         """Run dataset query; returns (recordset, plan) when server selection was used."""
-        if not self._use_server_query_selection(hint):
+        if not use_server_query_selection:
             recordset = await self._client.query(
                 statement, partition_filter, policy=policy,
             )
             return recordset, None
 
         assert self._where_ael is not None
-        log.debug(
-            "Server query selection: explain→execute for %s.%s",
-            self._namespace,
-            self._set_name,
-        )
         plan = await self._client.query_explain(
             self._namespace,
             self._where_ael,
@@ -1852,6 +1881,13 @@ class _QueryBuilderBase:
             index_name_hint=self._query_explain_index_hint(hint),
             explain_where_flags=self._query_explain_where_flags(hint),
             policy=policy,
+        )
+        log.debug(
+            "Server query selection: explain→execute for %s.%s selection=%s index=%s",
+            self._namespace,
+            self._set_name,
+            plan.selection,
+            plan.index_name,
         )
         self._raise_if_filtered_out_plan(plan)
         recordset = await self._client.query_with_plan(
@@ -1865,19 +1901,16 @@ class _QueryBuilderBase:
         partition_filter: PartitionFilter,
         hint: Optional[QueryHint],
         statement: Statement,
+        *,
+        use_server_query_selection: bool,
     ) -> tuple[Any, Any | None]:
-        if not self._use_server_query_selection(hint):
+        if not use_server_query_selection:
             recordset = self._client.query_blocking(
                 statement, partition_filter, policy=policy,
             )
             return recordset, None
 
         assert self._where_ael is not None
-        log.debug(
-            "Server query selection: explain→execute for %s.%s",
-            self._namespace,
-            self._set_name,
-        )
         plan = self._client.query_explain_blocking(
             self._namespace,
             self._where_ael,
@@ -1885,6 +1918,13 @@ class _QueryBuilderBase:
             index_name_hint=self._query_explain_index_hint(hint),
             explain_where_flags=self._query_explain_where_flags(hint),
             policy=policy,
+        )
+        log.debug(
+            "Server query selection: explain→execute for %s.%s selection=%s index=%s",
+            self._namespace,
+            self._set_name,
+            plan.selection,
+            plan.index_name,
         )
         self._raise_if_filtered_out_plan(plan)
         recordset = self._client.query_with_plan_blocking(
@@ -5212,11 +5252,16 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
         if isinstance(expression, str):
-            supports = getattr(self._parent, "_supports_server_compiled_ael", False)
-            expr = filter_expression_from_ael_string(
-                expression,
-                supports_server_compiled_ael=supports,
-            )
+            materialize = getattr(self._parent, "_filter_expression_from_ael", None)
+            if materialize is None:
+                expr = filter_expression_from_ael_string(
+                    expression,
+                    supports_server_compiled_ael=getattr(
+                        self._parent, "_supports_server_compiled_ael", False,
+                    ),
+                )
+            else:
+                expr = materialize(expression)
         else:
             expr = expression
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
