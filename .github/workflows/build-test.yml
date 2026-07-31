@@ -163,7 +163,9 @@ jobs:
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
-        run: make generate-ael
+        run: |
+          java -version
+          make generate-ael
 
       - name: Run integration tests
         env:
