@@ -5252,7 +5252,16 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
         if isinstance(expression, str):
-            expr = self._parent._filter_expression_from_ael(expression)  # type: ignore[union-attr]
+            materialize = getattr(self._parent, "_filter_expression_from_ael", None)
+            if materialize is not None:
+                expr = materialize(expression)
+            else:
+                expr = filter_expression_from_ael_string(
+                    expression,
+                    supports_server_compiled_ael=getattr(
+                        self._parent, "_supports_server_compiled_ael", False,
+                    ),
+                )
         else:
             expr = expression
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
