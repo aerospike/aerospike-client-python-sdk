@@ -121,7 +121,8 @@ class TestWithHint:
         )
         assert result is builder
         assert builder._query_hint is not None
-        assert builder._filter_expression is not None
+        assert builder._where_ael == "$.age > 30"
+        assert builder._filter_expression is None
 
     def test_where_stores_ael_string(self):
         builder = _query_builder()
