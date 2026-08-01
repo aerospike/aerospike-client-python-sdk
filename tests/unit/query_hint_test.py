@@ -72,6 +72,19 @@ class TestQueryHintValidation:
         with pytest.raises(ValueError, match="mutually exclusive"):
             QueryHint(index_name="idx", bin_name="b")
 
+    def test_hard_hint_without_index_name_raises(self):
+        with pytest.raises(ValueError, match="hard_hint requires index_name"):
+            QueryHint(hard_hint=True)
+
+    def test_require_index_and_hard_hint_allowed(self):
+        hint = QueryHint(
+            index_name="age_idx",
+            require_index=True,
+            hard_hint=True,
+        )
+        assert hint.require_index is True
+        assert hint.hard_hint is True
+
     def test_frozen(self):
         hint = QueryHint(index_name="idx")
         # `setattr` instead of direct `hint.index_name = ...` to bypass static
@@ -108,7 +121,8 @@ class TestWithHint:
         )
         assert result is builder
         assert builder._query_hint is not None
-        assert builder._filter_expression is not None
+        assert builder._where_ael == "$.age > 30"
+        assert builder._filter_expression is None
 
     def test_where_stores_ael_string(self):
         builder = _query_builder()

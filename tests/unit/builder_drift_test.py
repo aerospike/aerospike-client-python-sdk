@@ -233,6 +233,7 @@ _POSITIONAL_CTOR_ORDER = {
             "cached_read_policy_sc", "cached_write_policy_sc",
             "txn", "namespace_mode_resolver",
             "namespace_mode_resolver_blocking", "sdk_client",
+            "supports_server_compiled_ael", "supports_query_selection",
         ),
     ),
     _SingleKeyWriteSegmentBase: (

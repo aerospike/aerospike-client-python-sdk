@@ -27,6 +27,8 @@ import pytest_asyncio
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
+from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+
 
 @pytest.fixture
 def users():
@@ -627,7 +629,19 @@ class TestBatchExpressionOps:
             rec = await rs.first_or_raise()
             assert rec.record.bins["C"] == (i + 1) * 10 + 1
 
-    async def test_batch_select_from(self, cluster, users: DataSet):
+    @pytest.mark.parametrize("sum_ael", [
+        pytest.param(
+            "$.A + $.B",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.A:INT + $.B:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_batch_select_from(self, cluster, users: DataSet, sum_ael):
         """select_from (expression read) in batch context."""
         session = cluster.create_session()
         keys = [users.id(f"bexp_sel_{i}") for i in range(2)]
@@ -636,8 +650,8 @@ class TestBatchExpressionOps:
         await session.upsert(keys[1]).put({"A": 10, "B": 7}).execute()
 
         stream = await (
-            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
-            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            session.query(keys[0]).bin("sum").select_from(sum_ael)
+            .query(keys[1]).bin("sum").select_from(sum_ael)
             .execute()
         )
         results = await stream.collect()
@@ -697,15 +711,27 @@ class TestBatchStream:
             except Exception:
                 pass
 
+    @pytest.mark.parametrize("sum_ael", [
+        pytest.param(
+            "$.A + $.B",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.A:INT + $.B:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
     async def test_stream_mixed_ops_yields_all(
-        self, cluster, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key, sum_ael,
     ):
         """Mixed writes + AEL read + delete in one streaming batch.
 
         Verifies:
         - All 4 ops yield a RecordResult (set-equality on input indices).
         - The streamed expression-read result carries the computed value
-          (`select_from "$.A + $.B"` → sum bin).
+          (`select_from` bin+bin sum → sum bin).
         - Post-batch persisted state matches op semantics: the WRITE
           actually flipped its bin; the two READS did NOT persist a
           `sum` bin (select_from is a read, not a write); the DELETE
@@ -718,8 +744,8 @@ class TestBatchStream:
 
         stream = await (
             session.upsert(keys[0]).bin("A").set_to(99)
-            .query(keys[1]).bin("sum").select_from("$.A + $.B")
-            .query(keys[2]).bin("sum").select_from("$.A + $.B")
+            .query(keys[1]).bin("sum").select_from(sum_ael)
+            .query(keys[2]).bin("sum").select_from(sum_ael)
             .delete(keys[3])
             .stream()
         )
@@ -756,8 +782,20 @@ class TestBatchStream:
         empty = await (await session.query(keys[3]).execute()).collect()
         assert empty == []
 
+    @pytest.mark.parametrize("sum_ael", [
+        pytest.param(
+            "$.A + $.B",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.A:INT + $.B:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
     async def test_stream_read_only_ops_dispatch_as_reads(
-        self, cluster, users: DataSet, track_key,
+        self, cluster, users: DataSet, track_key, sum_ael,
     ):
         """AEL select_from under the read verb dispatches as BatchReadOp on
         the wire so the server accepts it, even in a lazy write-batch
@@ -770,8 +808,8 @@ class TestBatchStream:
             await session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = await (
-            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
-            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            session.query(keys[0]).bin("sum").select_from(sum_ael)
+            .query(keys[1]).bin("sum").select_from(sum_ael)
             .stream()
         )
         results = await stream.collect()

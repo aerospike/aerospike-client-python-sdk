@@ -35,6 +35,7 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import ResultCode, ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
+from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
 
 NS = "test"
 SET = "exp_ops"
@@ -127,10 +128,24 @@ class TestSelectFrom:
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
 
-    async def test_select_from_returns_nil(self, session):
+    @pytest.mark.parametrize("bin_ael", [
+        pytest.param(
+            "$.A",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.A:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_select_from_returns_nil(self, session, bin_ael):
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
-            session.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
+            session.query(_key(KEY_B)).bin("ev").select_from(
+                bin_ael, ignore_eval_failure=True,
+            )
             .execute()
         )
         result = await rs.first_or_raise()
@@ -262,13 +277,26 @@ class TestInsertFrom:
 
 class TestCombinedExpression:
 
-    async def test_upsert_from_and_select_from(self, cluster):
+    @pytest.mark.parametrize("upsert_ael,select_ael", [
+        pytest.param(
+            "$.D + 10", "$.A",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.D:INT + 10", "$.A:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_upsert_from_and_select_from(self, cluster, upsert_ael, select_ael):
         """upsert_from + select_from in same execute."""
         session = cluster.create_session()
+
         stream = await (
             session.update(_key(KEY_A))
-            .bin("D").upsert_from("$.D + 10")
-            .bin("ev").select_from("$.A")
+            .bin("D").upsert_from(upsert_ael)
+            .bin("ev").select_from(select_ael)
             .execute()
         )
         result = await stream.first_or_raise()
@@ -286,13 +314,28 @@ class TestCombinedExpression:
         assert result is not None
         assert result.record.bins["C"] == 5
 
-    async def test_write_eval_error_with_ignore(self, cluster):
+    @pytest.mark.parametrize("upsert_ael,select_ael", [
+        pytest.param(
+            "$.A + 4", "$.A",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.A:INT + 4", "$.A:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_write_eval_error_with_ignore(
+        self, cluster, upsert_ael, select_ael,
+    ):
         """upsert_from + select_from with ignore_eval_failure on both."""
         session = cluster.create_session()
+
         stream = await (
             session.update(_key(KEY_B))
-            .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
-            .bin("ev").select_from("$.A", ignore_eval_failure=True)
+            .bin("C").upsert_from(upsert_ael, ignore_eval_failure=True)
+            .bin("ev").select_from(select_ael, ignore_eval_failure=True)
             .execute()
         )
         result = await stream.first_or_raise()

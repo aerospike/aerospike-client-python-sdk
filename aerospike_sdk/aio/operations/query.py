@@ -78,6 +78,7 @@ from aerospike_sdk.exceptions import (
     AerospikeError,
     _convert_pac_exception,
 )
+from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -965,7 +966,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         log.debug(
             "dataset query: %s.%s filter=%s chunk=%s hint=%s",
             self._namespace, self._set_name,
-            self._filter_expression is not None or bool(self._filter_records),
+            self._filter_expression is not None
+            or self._where_ael is not None
+            or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
@@ -980,40 +983,52 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             policy = self._apply_txn(QueryPolicy())
         if self._chunk_size is not None and self._chunk_size > 0:
             policy.max_records = self._chunk_size
-        if self._filter_expression is not None:
-            policy.filter_expression = self._filter_expression
-
         hint = self._query_hint
+        use_server_query_selection = self._use_server_query_selection(hint)
+        self._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=use_server_query_selection,
+        )
+
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        if self._where_ael is not None and self._indexes_monitor is not None:
-            # Lazy start: the monitor's daemon thread only spins up on the
-            # first AEL ``where()`` query. ``start()`` is idempotent.
-            self._indexes_monitor.start(self._client)
-            # Offload the readiness wait so the event loop isn't pinned for
-            # the first-fetch case (subsequent calls return immediately).
-            await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
+        self._prepare_dataset_query_index_context(
+            use_server_query_selection=use_server_query_selection,
+        )
+        await self._wait_for_dataset_query_index_context(
+            use_server_query_selection=use_server_query_selection,
+        )
 
-        self._resolve_index_context()
+        if not use_server_query_selection and self._where_ael is not None:
+            self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        if self._where_ael is not None and self._index_context is not None:
-            self._auto_generate_filters(hint, policy)
+        self._maybe_auto_generate_filters(
+            hint, policy, use_server_query_selection=use_server_query_selection,
+        )
 
         statement = self._build_statement()
 
         try:
-            recordset = await self._client.query(statement, partition_filter, policy=policy)
+            recordset, plan = await self._run_dataset_query_async(
+                policy, partition_filter, hint, statement,
+                use_server_query_selection=use_server_query_selection,
+            )
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
 
-            async def _reexecute(pf: PartitionFilter) -> Any:
-                return await client.query(statement, pf, policy=policy)
+            if plan is not None:
+                async def _reexecute(pf: PartitionFilter) -> Any:
+                    return await client.query_with_plan(
+                        statement, pf, plan, policy=policy,
+                    )
+            else:
+                async def _reexecute(pf: PartitionFilter) -> Any:
+                    return await client.query(statement, pf, policy=policy)
 
             return RecordStream._from_chunked_pac_recordset(
                 recordset,
@@ -1148,6 +1163,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            **cached_ael_capability_kwargs(
+                getattr(self._sdk_client_fast, "_cached_supports_server_compiled_ael", None),
+                getattr(self._sdk_client_fast, "_cached_supports_query_selection", None),
+            ),
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

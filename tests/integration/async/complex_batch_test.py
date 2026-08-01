@@ -202,6 +202,10 @@ class TestWriteWithExpressions:
 
         rec_result = await (await session.query(k).execute()).first_or_raise()
         rec = rec_result.record
+        assert "computed" in rec.bins, (
+            "expected upsert_from to create bin 'computed'; "
+            f"bins={rec.bins!r}"
+        )
         assert rec.bins["computed"] == 1006
 
         await _cleanup(session, k)

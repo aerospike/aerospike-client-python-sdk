@@ -18,26 +18,41 @@
 Tests the two forms: where(str) and where(FilterExpression).
 """
 
+import pytest
+from aerospike_async import FilterExpression
+
 from aerospike_sdk import Exp, parse_ael
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
 
 
-def _query_builder():
+def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    client = kwargs.pop("client", None)
+    supports_server_compiled_ael = kwargs.pop("supports_server_compiled_ael", False)
+    if client is None:
+        client = object()
+    return QueryBuilder(
+        client=client,
+        namespace="test",
+        set_name="unit_test",
+        supports_server_compiled_ael=supports_server_compiled_ael,
+        **kwargs,
+    )
 
 
 class TestQueryBuilderWhere:
     """Test QueryBuilder.where() overloads."""
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) parses AEL and sets _filter_expression."""
+        """where(str) records AEL and materializes on demand."""
         builder = _query_builder()
         expected = parse_ael("$.age > 20")
         result = builder.where("$.age > 20")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == "$.age > 20"
+        assert builder._filter_expression is None
+        assert builder._effective_filter_expression() == expected
 
     def test_where_ael_fstring_sets_filter_expression(self):
         """where(str) with f-string interpolation."""
@@ -46,7 +61,8 @@ class TestQueryBuilderWhere:
         expected = parse_ael("$.age > 21")
         result = builder.where(f"$.age > {age}")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == f"$.age > {age}"
+        assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(FilterExpression) stores the expression directly."""
@@ -64,6 +80,16 @@ class TestQueryBuilderWhere:
         assert builder._filter_expression is exp
         assert builder._bins == ["name"]
 
+    def test_where_server_compiled_when_supported(self) -> None:
+        """where(str) uses server-compiled path when builder flag is set."""
+        if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
+            pytest.skip("PAC does not expose FilterExpression.from_server_compiled_ael")
+        builder = _query_builder(supports_server_compiled_ael=True)
+        builder.where("$.age > 20")
+        assert builder._effective_filter_expression() == (
+            FilterExpression.from_server_compiled_ael("$.age > 20")
+        )
+
 
 class TestSyncQueryBuilderWhere:
     """Test SyncQueryBuilder.where() overloads (same behavior as QueryBuilder)."""
@@ -77,12 +103,13 @@ class TestSyncQueryBuilderWhere:
         )
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) parses AEL and sets _filter_expression on the delegate."""
+        """where(str) records AEL and materializes on demand."""
         builder = self._sync_builder()
         expected = parse_ael("$.age > 20")
         result = builder.where("$.age > 20")
         assert result is builder
-        assert builder._filter_expression == expected
+        assert builder._where_ael == "$.age > 20"
+        assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(FilterExpression) stores the expression directly."""

@@ -661,6 +661,9 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
     should use ``raise convert_pac_exception(e) from e``.
         :func:`_result_code_to_exception`
     """
+    if isinstance(exc, AerospikeError):
+        return exc
+
     if isinstance(exc, PacServerError):
         return _result_code_to_exception(
             exc.result_code,

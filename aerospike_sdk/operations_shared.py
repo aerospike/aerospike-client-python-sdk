@@ -58,7 +58,7 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
@@ -364,9 +364,37 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     # is tier-neutral but lives in aio.operations.query, so we avoid the
     # cross-tier reverse import).
     _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
+    _ssael_flag: Optional[bool] = None
 
     def __init__(self, qb: _QB) -> None:
         self._qb: _QB = qb
+
+    def _resolve_ssael_flag(self) -> bool:
+        """Lazy snapshot of server-compiled AEL support for this segment's lifetime."""
+        flag = self._ssael_flag
+        if flag is None:
+            if self._qb is not None:
+                flag = self._qb._supports_server_compiled_ael
+            else:
+                client = getattr(self, "_sdk_client_fast", None)
+                flag = (
+                    bool(getattr(client, "_cached_supports_server_compiled_ael", False))
+                    if client is not None
+                    else False
+                )
+            self._ssael_flag = flag
+        return flag
+
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
+        if not isinstance(expression, str):
+            return expression
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=self._resolve_ssael_flag(),
+        )
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
@@ -402,7 +430,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             self for method chaining.
         """
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self
@@ -669,7 +697,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     ) -> Self:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.read(bin_name, expr, flags))
 
     def insert_from(
@@ -686,7 +714,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
@@ -703,7 +731,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
@@ -720,7 +748,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.DEFAULT, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def query(
@@ -976,6 +1004,10 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def include_missing_keys(self):
         self._promote()
         return super().include_missing_keys()
+
+    def respond_all_keys(self):
+        self._promote()
+        return super().respond_all_keys()
 
     def fail_on_filtered_out(self):
         self._promote()
