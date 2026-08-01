@@ -377,11 +377,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
         if self._qb is not None:
             return self._qb._filter_expression_from_ael(expression)
         sdk_client = getattr(self, "_sdk_client_fast", None)
-        supports = (
-            getattr(sdk_client, "supports_server_compiled_ael", False)
-            if sdk_client is not None
-            else False
-        )
+        supports = bool(getattr(sdk_client, "_cached_supports_server_compiled_ael", False))
         return filter_expression_from_ael_string(
             expression,
             supports_server_compiled_ael=supports,

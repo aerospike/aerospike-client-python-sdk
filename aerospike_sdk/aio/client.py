@@ -44,6 +44,11 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.feature_gates import (
+    PSDK_ENABLE_QUERY_SELECTION,
+    PSDK_ENABLE_SERVER_COMPILED_AEL,
+    cached_ael_capability_kwargs,
+)
 from aerospike_sdk.query_selection import (
     compute_query_selection_support,
     compute_query_selection_support_blocking,
@@ -230,12 +235,18 @@ class Client:
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
-        self._cached_supports_query_selection = await compute_query_selection_support(
-            self._client,
-        )
-        self._cached_supports_server_compiled_ael = (
-            await compute_server_compiled_ael_support(self._client)
-        )
+        if PSDK_ENABLE_QUERY_SELECTION:
+            self._cached_supports_query_selection = await compute_query_selection_support(
+                self._client,
+            )
+        else:
+            self._cached_supports_query_selection = False
+        if PSDK_ENABLE_SERVER_COMPILED_AEL:
+            self._cached_supports_server_compiled_ael = (
+                await compute_server_compiled_ael_support(self._client)
+            )
+        else:
+            self._cached_supports_server_compiled_ael = False
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -335,12 +346,18 @@ class Client:
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
-        self._cached_supports_query_selection = compute_query_selection_support_blocking(
-            self._client,
-        )
-        self._cached_supports_server_compiled_ael = (
-            compute_server_compiled_ael_support_blocking(self._client)
-        )
+        if PSDK_ENABLE_QUERY_SELECTION:
+            self._cached_supports_query_selection = compute_query_selection_support_blocking(
+                self._client,
+            )
+        else:
+            self._cached_supports_query_selection = False
+        if PSDK_ENABLE_SERVER_COMPILED_AEL:
+            self._cached_supports_server_compiled_ael = (
+                compute_server_compiled_ael_support_blocking(self._client)
+            )
+        else:
+            self._cached_supports_server_compiled_ael = False
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -537,6 +554,10 @@ class Client:
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 sdk_client=self,
+                **cached_ael_capability_kwargs(
+                    self._cached_supports_server_compiled_ael,
+                    self._cached_supports_query_selection,
+                ),
             )
             builder._single_key = key
             return builder
@@ -556,6 +577,10 @@ class Client:
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 sdk_client=self,
+                **cached_ael_capability_kwargs(
+                    self._cached_supports_server_compiled_ael,
+                    self._cached_supports_query_selection,
+                ),
             )
             builder._keys = keys
             return builder
@@ -585,6 +610,10 @@ class Client:
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
             sdk_client=self,
+            **cached_ael_capability_kwargs(
+                self._cached_supports_server_compiled_ael,
+                self._cached_supports_query_selection,
+            ),
         )
 
     @overload

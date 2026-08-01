@@ -78,6 +78,7 @@ from aerospike_sdk.exceptions import (
     AerospikeError,
     _convert_pac_exception,
 )
+from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -998,7 +999,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             use_server_query_selection=use_server_query_selection,
         )
 
-        self._resolve_index_context()
+        if not use_server_query_selection and self._where_ael is not None:
+            self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
@@ -1161,6 +1163,10 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            **cached_ael_capability_kwargs(
+                getattr(self._sdk_client_fast, "_cached_supports_server_compiled_ael", None),
+                getattr(self._sdk_client_fast, "_cached_supports_query_selection", None),
+            ),
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

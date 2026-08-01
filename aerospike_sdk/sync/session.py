@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 from aerospike_async import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -282,6 +283,10 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
+                **cached_ael_capability_kwargs(
+                    self._client._cached_supports_server_compiled_ael,
+                    self._client._cached_supports_query_selection,
+                ),
             )
             builder._single_key = key
             return builder
@@ -303,6 +308,10 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
+                **cached_ael_capability_kwargs(
+                    self._client._cached_supports_server_compiled_ael,
+                    self._client._cached_supports_query_selection,
+                ),
             )
             builder._keys = keys
             return builder
@@ -329,6 +338,10 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
+            **cached_ael_capability_kwargs(
+                self._client._cached_supports_server_compiled_ael,
+                self._client._cached_supports_query_selection,
+            ),
         )
 
     def background_task(self) -> SyncBackgroundTaskSession:

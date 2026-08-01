@@ -201,6 +201,9 @@ class _BackgroundOperationBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
+        self._supports_server_compiled_ael = bool(
+            getattr(session.client, "_cached_supports_server_compiled_ael", False),
+        )
 
     def default_with_durable_delete(self) -> BackgroundOperationBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
@@ -248,7 +251,7 @@ class _BackgroundOperationBuilderBase:
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
                 expression,
-                supports_server_compiled_ael=self._session.client.supports_server_compiled_ael,
+                supports_server_compiled_ael=self._supports_server_compiled_ael,
             )
         else:
             self._filter_expression = expression
@@ -545,6 +548,9 @@ class _BackgroundUdfBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
+        self._supports_server_compiled_ael = bool(
+            getattr(session.client, "_cached_supports_server_compiled_ael", False),
+        )
 
     def default_with_durable_delete(self) -> BackgroundUdfBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
@@ -592,7 +598,7 @@ class _BackgroundUdfBuilderBase:
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
                 expression,
-                supports_server_compiled_ael=self._session.client.supports_server_compiled_ael,
+                supports_server_compiled_ael=self._supports_server_compiled_ael,
             )
         else:
             self._filter_expression = expression

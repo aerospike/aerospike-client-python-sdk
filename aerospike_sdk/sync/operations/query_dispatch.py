@@ -771,7 +771,8 @@ class _BlockingQueryDispatch:
             use_server_query_selection=use_server_query_selection,
         )
 
-        self._resolve_index_context()
+        if not use_server_query_selection and self._where_ael is not None:
+            self._resolve_index_context()
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
