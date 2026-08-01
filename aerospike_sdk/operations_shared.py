@@ -364,9 +364,26 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     # is tier-neutral but lives in aio.operations.query, so we avoid the
     # cross-tier reverse import).
     _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
+    _ssael_flag: Optional[bool] = None
 
     def __init__(self, qb: _QB) -> None:
         self._qb: _QB = qb
+
+    def _resolve_ssael_flag(self) -> bool:
+        """Lazy snapshot of server-compiled AEL support for this segment's lifetime."""
+        flag = self._ssael_flag
+        if flag is None:
+            if self._qb is not None:
+                flag = self._qb._supports_server_compiled_ael
+            else:
+                client = getattr(self, "_sdk_client_fast", None)
+                flag = (
+                    bool(getattr(client, "_cached_supports_server_compiled_ael", False))
+                    if client is not None
+                    else False
+                )
+            self._ssael_flag = flag
+        return flag
 
     def _expression_from_ael_string_for_ops(
         self, expression: Union[str, FilterExpression],
@@ -374,13 +391,9 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
         """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
         if not isinstance(expression, str):
             return expression
-        if self._qb is not None:
-            return self._qb._filter_expression_from_ael(expression)
-        sdk_client = getattr(self, "_sdk_client_fast", None)
-        supports = bool(getattr(sdk_client, "_cached_supports_server_compiled_ael", False))
         return filter_expression_from_ael_string(
             expression,
-            supports_server_compiled_ael=supports,
+            supports_server_compiled_ael=self._resolve_ssael_flag(),
         )
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
