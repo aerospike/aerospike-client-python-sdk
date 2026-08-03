@@ -35,14 +35,20 @@ def _read_total_timeout(behavior: Behavior) -> float | None:
     return td.total_seconds() if td is not None else None
 
 
-async def part1_named_behaviors() -> None:
-    """Load the shipped config file and use a file-defined behavior."""
-    print("=== Part 1: named behaviors from the config file ===")
-    # The config file is resolved from this env var at connect() time.
-    os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
+from _env import Example
 
-    cluster = await _env.connect().connect()
-    try:
+class NamedBehaviors(Example):
+    async def __init__(self):
+        await super().__init__(self)
+
+    def cleanup(self):
+        os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
+
+    async def run(self):
+        """Load the shipped config file and use a file-defined behavior."""
+        print("=== Part 1: named behaviors from the config file ===")
+        # The config file is resolved from this env var at connect() time.
+        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
         # The file's `system:` settings were applied to the connection during
         # connect(); its `behaviors:` profiles are now in the registry.
         for name in ("high-performance", "batch-optimized"):
@@ -51,7 +57,7 @@ async def part1_named_behaviors() -> None:
             print(f"  behavior {name!r}: registered, parent={parent}")
 
         # `batch-optimized` inherits `high-performance` and overrides per field.
-        session = cluster.create_session(get_behavior("high-performance"))
+        session = self.cluster.create_session(get_behavior("high-performance"))
         users = DataSet.of("test", "users")
         key = users.id("cfg_demo_user")
         await session.upsert(key).put({"name": "Ada", "age": 36}).execute()
@@ -59,23 +65,20 @@ async def part1_named_behaviors() -> None:
         record = (await stream.first_or_raise()).record
         print(f"  op via 'high-performance' session: {record.bins}")
         await session.delete(key).execute()
-    finally:
-        await cluster.close()
 
 
-async def part2_hot_reload() -> None:
-    """Edit the config file while connected; watch a live session update."""
-    print("\n=== Part 2: hot-reload into a live session ===")
-    with tempfile.TemporaryDirectory() as tmp:
-        config = Path(tmp) / "sdk-config.yaml"
-        config.write_text(
-            "behaviors:\n  demo-fast:\n    allOperations:\n      abandonCallAfter: 1s\n"
-        )
-        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(config)
+class HotReload(Example):
+    async def run(self):
+        """Edit the config file while connected; watch a live session update."""
+        print("\n=== Part 2: hot-reload into a live session ===")
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "sdk-config.yaml"
+            config.write_text(
+                "behaviors:\n  demo-fast:\n    allOperations:\n      abandonCallAfter: 1s\n"
+            )
+            os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(config)
 
-        cluster = await _env.connect().connect()
-        try:
-            session = cluster.create_session(get_behavior("demo-fast"))
+            session = self.cluster.create_session(get_behavior("demo-fast"))
             print(f"  initial total_timeout: {_read_total_timeout(session.behavior)}s")
 
             # Edit the file; the client polls its mtime (~1s cadence) and
@@ -91,18 +94,3 @@ async def part2_hot_reload() -> None:
                     break
                 await asyncio.sleep(0.25)
             print(f"  live session total_timeout: {_read_total_timeout(session.behavior)}s")
-        finally:
-            await cluster.close()
-
-
-async def main() -> None:
-    try:
-        await part1_named_behaviors()
-        await part2_hot_reload()
-        print("\nAll operations completed successfully!")
-    finally:
-        os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

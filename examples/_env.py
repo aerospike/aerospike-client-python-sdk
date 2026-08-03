@@ -105,9 +105,9 @@ from aerospike_sdk import Behavior, DataSet
 
 
 class Example:
-    async def __init__(self):
+    async def __init__(self, behavior: Behavior = Behavior.DEFAULT):
         self.cluster = await connect().connect()
-        self.session = self.cluster.create_session(Behavior.DEFAULT)
+        self.session = self.cluster.create_session(behavior)
         self.users = DataSet.of("test", "users")
         self.key = self.users.id("user123")
 
