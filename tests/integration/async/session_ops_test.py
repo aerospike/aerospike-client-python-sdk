@@ -18,6 +18,11 @@
 import pytest
 import pytest_asyncio
 from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    RecordNotFoundError,
+    ResultCode,
+)
 
 
 _SHARED_KEYS = (1, 2, "user1")
@@ -198,3 +203,44 @@ async def test_transactional_session_context_manager(cluster):
         pytest.xfail(f"Requires SC cluster for MRT commit: {exc}")
 
     assert tx_session.active is False
+
+
+async def test_fast_path_get_missing_key_raises_sdk_type(cluster):
+    """A fast-path failure is catchable as the SDK's typed hierarchy.
+
+    ``session.get`` reaches the client in one await; the raised
+    ``KEY_NOT_FOUND_ERROR`` must arrive as :class:`RecordNotFoundError`
+    (an :class:`AerospikeError`), not as the underlying client's type.
+    Exercises the default (coalesced) dispatch.
+    """
+    session = cluster.create_session()
+    key = DataSet.of("test", "test").id("fastpath-missing-key")
+    try:
+        await session.delete(key).execute()
+    except Exception:
+        pass
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await session.get(key)
+    assert isinstance(exc_info.value, RecordNotFoundError)
+    assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+    # Retry context rides along: the failing attempt's node is recorded.
+    assert exc_info.value.node
+    assert exc_info.value.iteration is not None
+
+
+async def test_fast_path_get_with_projection_raises_sdk_type(cluster):
+    """The direct (non-coalesced) dispatch converts identically.
+
+    A bin projection bypasses the coalescer, so this pins the other
+    fast-path branch.
+    """
+    session = cluster.create_session()
+    key = DataSet.of("test", "test").id("fastpath-missing-key")
+    try:
+        await session.delete(key).execute()
+    except Exception:
+        pass
+
+    with pytest.raises(RecordNotFoundError):
+        await session.get(key, bins=["name"])

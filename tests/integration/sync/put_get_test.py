@@ -16,7 +16,7 @@
 """Integration tests for synchronous put/get and core SDK operations."""
 
 import pytest
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, RecordNotFoundError, ResultCode
 from aerospike_sdk import DataSet
 
 
@@ -307,4 +307,24 @@ def test_replace_if_exists_fails_if_record_not_exists(cluster):
         pass
     with pytest.raises(AerospikeError) as exc_info:
         session.replace_if_exists(key).put({"name": "Bob"}).execute()
+    assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
+def test_fast_path_get_missing_key_raises_sdk_type(cluster):
+    """A sync fast-path failure is catchable as the SDK's typed hierarchy.
+
+    ``session.get`` reaches the client in one blocking call; the raised
+    ``KEY_NOT_FOUND_ERROR`` must arrive as a typed ``AerospikeError``
+    subclass, not as the underlying client's type.
+    """
+    session = cluster.create_session()
+    key = DataSet.of("test", "test").id("fastpath-missing-key")
+    try:
+        session.delete(key).execute()
+    except Exception:
+        pass
+
+    with pytest.raises(AerospikeError) as exc_info:
+        session.get(key)
+    assert isinstance(exc_info.value, RecordNotFoundError)
     assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR

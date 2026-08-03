@@ -541,6 +541,14 @@ class _QueryBuilderBase:
 
     def _effective_filter_expression(self) -> Optional[FilterExpression]:
         """Return the active filter, materializing pending AEL strings on demand."""
+        # Hot path: spec finalization calls this once per segment. When no
+        # string AEL is pending (the common case), answer with attribute
+        # reads only — the resolve helpers would each re-check and return.
+        if self._where_ael is None:
+            if self._default_where_ael is None:
+                return self._filter_expression or self._default_filter_expression
+            self._resolve_default_filter_expression()
+            return self._filter_expression or self._default_filter_expression
         self._resolve_where_filter_expression()
         self._resolve_default_filter_expression()
         return self._filter_expression or self._default_filter_expression
@@ -1342,7 +1350,14 @@ class _QueryBuilderBase:
         else:
             return
 
-        filt = self._effective_filter_expression()
+        # Inline the no-AEL fast path: this runs once per segment, and the
+        # resolver chain is only needed when a string ``where()`` is pending.
+        filt = self._filter_expression
+        if filt is None:
+            if self._where_ael is None and self._default_where_ael is None:
+                filt = self._default_filter_expression
+            else:
+                filt = self._effective_filter_expression()
         ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
 
         # Hand off the current operations list directly; allocate a fresh

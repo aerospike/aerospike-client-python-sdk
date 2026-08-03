@@ -75,6 +75,17 @@ class AerospikeError(Exception):
             expression-build failures at trace-level verbosity; ``None``
             otherwise. Surfaced as an opaque passthrough of the underlying
             client value.
+        node: Cluster node the failing attempt targeted, when the retry loop
+            recorded one; ``None`` for failures that never reached node
+            selection (for example, argument validation).
+        iteration: Number of attempts made before the command failed, when
+            recorded; ``None`` when the failure precedes the retry loop.
+        sub_exceptions: Exceptions from prior retry attempts of the same
+            command, oldest first, each converted to this hierarchy. Empty
+            when the command was not retried.
+        base_message: The failure message without the retry-context decoration
+            the full message carries; ``None`` when no undecorated form was
+            recorded.
 
     Example::
         try:
@@ -98,6 +109,10 @@ class AerospikeError(Exception):
         sub_code: int | None = None,
         server_message: str | None = None,
         exp_trace: object | None = None,
+        node: str | None = None,
+        iteration: int | None = None,
+        sub_exceptions: tuple[AerospikeError, ...] = (),
+        base_message: str | None = None,
     ) -> None:
         super().__init__(message)
         self.result_code = result_code
@@ -105,6 +120,10 @@ class AerospikeError(Exception):
         self.sub_code = sub_code
         self.server_message = server_message
         self.exp_trace = exp_trace
+        self.node = node
+        self.iteration = iteration
+        self.sub_exceptions = sub_exceptions
+        self.base_message = base_message
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +139,11 @@ class TimeoutError(AerospikeError):
     client timeouts.
 
     Attributes:
+        client: ``True`` when the client's own deadline fired (socket or
+            total timeout expired locally); ``False`` when the server
+            reported the timeout result code. A client timeout says nothing
+            about server-side progress — pair it with ``in_doubt`` when
+            deciding whether a write needs read-verification.
         result_code: Set when the server returned a timeout-related code;
             otherwise often ``None`` for client-side timeouts.
 
@@ -130,9 +154,16 @@ class TimeoutError(AerospikeError):
     Example::
         try:
             await stream.first_or_raise()
-        except TimeoutError:
-            ...  # retry or fall back
+        except TimeoutError as err:
+            if err.client:
+                ...  # local deadline; the server may still be working
+            else:
+                ...  # the server itself timed the operation out
     """
+
+    def __init__(self, message: str = "", *, client: bool = False, **kwargs: object) -> None:
+        super().__init__(message, **kwargs)  # type: ignore[arg-type]
+        self.client = client
 
 
 class ConnectionError(AerospikeError):
@@ -476,15 +507,62 @@ class IndexAlreadyExistsError(SecondaryIndexError):
 # Operations
 # ---------------------------------------------------------------------------
 
-class QueryTerminatedError(AerospikeError):
+class QueryError(AerospikeError):
+    """Base class for query and scan execution failures.
+
+    Covers generic query errors, aborted scans, and query network failures.
+    Timeout-flavored query codes raise :class:`TimeoutError` instead, and a
+    full query queue raises :class:`CapacityError` — catch this class for
+    failures of the query itself.
+
+    Attributes:
+        result_code: A query-related code such as ``ResultCode.QUERY_GENERIC``
+            or ``ResultCode.SCAN_ABORT``.
+    """
+
+
+class QueryTerminatedError(QueryError):
     """Raised when a query stops early (aborted, canceled, or server-terminated).
 
     Partial rows may already have been delivered on streaming paths; this error
     represents the overall query outcome, not a single-key failure inside a
-    batch.
+    batch. Catch :class:`QueryError` to handle it alongside other query
+    failures.
 
     Attributes:
         result_code: May include ``ResultCode.QUERY_ABORTED`` or related codes.
+    """
+
+
+class UdfError(AerospikeError):
+    """Raised when a server-side UDF execution reports a failure.
+
+    The server ran the registered function and it returned an error (or the
+    response was not a valid UDF result). The failure detail is in the
+    message; check the UDF's own error string when debugging Lua code.
+
+    Attributes:
+        result_code: ``ResultCode.UDF_BAD_RESPONSE``.
+
+    Example::
+
+        try:
+            await session.execute_udf(key).function("mod", "fn").execute()
+        except UdfError:
+            ...  # the function itself failed on the server
+    """
+
+
+class BatchError(AerospikeError):
+    """Raised when the server's batch subsystem rejects a batch request.
+
+    Signals a batch-level condition (for example, batch disabled on the
+    server) rather than a per-key failure — per-key outcomes surface as
+    :class:`~aerospike_sdk.record_result.RecordResult` errors in the stream.
+    Full batch queues raise :class:`CapacityError` instead.
+
+    Attributes:
+        result_code: A batch-related code such as ``ResultCode.BATCH_DISABLED``.
     """
 
 
@@ -553,8 +631,15 @@ class CommitError(TransactionError):
         roll_records: list | None = None,
         result_code: ResultCode | None = None,
         in_doubt: bool = False,
+        **kwargs: object,
     ) -> None:
-        super().__init__(message, result_code=result_code, in_doubt=in_doubt)
+        # Detail and retry-context fields (sub_code, server_message,
+        # exp_trace, node, iteration, ...) pass through to the base so a
+        # commit failure is not the one place they get dropped.
+        super().__init__(
+            message, result_code=result_code, in_doubt=in_doubt,
+            **kwargs,  # type: ignore[arg-type]
+        )
         self.commit_error_type = commit_error_type
         self.verify_records = verify_records
         self.roll_records = roll_records
@@ -564,14 +649,21 @@ class CommitError(TransactionError):
 # Factory: ResultCode -> typed exception
 # ---------------------------------------------------------------------------
 
-# Codes not yet exposed by the PAC are omitted; they will fall through to
-# AerospikeError until the PAC adds them.
+# Server codes without a meaningfully distinct handling story (for example
+# INVALID_GEOJSON, PARAMETER_ERROR) fall through to AerospikeError; client-side
+# failures never reach this map (they convert by PAC exception type instead).
 
 _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.GENERATION_ERROR: GenerationError,
-    # Authentication
+    # Authentication (identity / credential problems)
     ResultCode.NOT_AUTHENTICATED: AuthenticationError,
     ResultCode.INVALID_USER: AuthenticationError,
+    ResultCode.INVALID_PASSWORD: AuthenticationError,
+    ResultCode.INVALID_CREDENTIAL: AuthenticationError,
+    ResultCode.EXPIRED_PASSWORD: AuthenticationError,
+    # Authorization (valid identity, disallowed operation)
+    ResultCode.ROLE_VIOLATION: AuthorizationError,
+    ResultCode.NOT_ALLOWLISTED: AuthorizationError,
     # Security (catch-all for remaining security codes)
     ResultCode.ILLEGAL_STATE: SecurityError,
     ResultCode.USER_ALREADY_EXISTS: SecurityError,
@@ -579,13 +671,30 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.SECURITY_NOT_SUPPORTED: SecurityError,
     ResultCode.SECURITY_NOT_ENABLED: SecurityError,
     ResultCode.SECURITY_SCHEME_NOT_SUPPORTED: SecurityError,
+    ResultCode.EXPIRED_SESSION: SecurityError,
+    ResultCode.INVALID_ROLE: SecurityError,
+    ResultCode.ROLE_ALREADY_EXISTS: SecurityError,
+    ResultCode.INVALID_PRIVILEGE: SecurityError,
+    ResultCode.INVALID_ALLOWLIST: SecurityError,
+    # Quota
+    ResultCode.QUOTA_EXCEEDED: QuotaError,
+    ResultCode.QUOTAS_NOT_ENABLED: QuotaError,
+    ResultCode.INVALID_QUOTA: QuotaError,
     # Timeout
     ResultCode.TIMEOUT: TimeoutError,
     ResultCode.QUERY_TIMEOUT: TimeoutError,
     # Namespace
     ResultCode.INVALID_NAMESPACE: InvalidNamespaceError,
-    # Query terminated
+    # Query / scan
     ResultCode.QUERY_ABORTED: QueryTerminatedError,
+    ResultCode.QUERY_GENERIC: QueryError,
+    ResultCode.SCAN_ABORT: QueryError,
+    ResultCode.QUERY_NETIO_ERR: QueryError,
+    ResultCode.QUERY_DUPLICATE: QueryError,
+    # UDF
+    ResultCode.UDF_BAD_RESPONSE: UdfError,
+    # Batch subsystem (full queues are capacity, below)
+    ResultCode.BATCH_DISABLED: BatchError,
     # Record / key
     ResultCode.KEY_NOT_FOUND_ERROR: RecordNotFoundError,
     ResultCode.KEY_EXISTS_ERROR: RecordExistsError,
@@ -604,6 +713,8 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.SERVER_MEM_ERROR: CapacityError,
     ResultCode.DEVICE_OVERLOAD: CapacityError,
     ResultCode.QUERY_QUEUE_FULL: CapacityError,
+    ResultCode.BATCH_QUEUES_FULL: CapacityError,
+    ResultCode.BATCH_MAX_REQUESTS_EXCEEDED: CapacityError,
     ResultCode.KEY_BUSY: KeyBusyError,
     ResultCode.XDR_KEY_BUSY: KeyBusyError,
     # Secondary index
@@ -634,11 +745,12 @@ def _result_code_to_exception(
     sub_code: int | None = None,
     server_message: str | None = None,
     exp_trace: object | None = None,
+    node: str | None = None,
+    iteration: int | None = None,
+    sub_exceptions: tuple[AerospikeError, ...] = (),
+    base_message: str | None = None,
 ) -> AerospikeError:
-    """Map a ``ResultCode`` to the appropriate typed exception.
-
-    Map a server result code to the appropriate typed exception.
-    """
+    """Map a server result code to the appropriate typed exception."""
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
     return cls(
         message,
@@ -647,6 +759,10 @@ def _result_code_to_exception(
         sub_code=sub_code,
         server_message=server_message,
         exp_trace=exp_trace,
+        node=node,
+        iteration=iteration,
+        sub_exceptions=sub_exceptions,
+        base_message=base_message,
     )
 
 
@@ -654,12 +770,30 @@ def _result_code_to_exception(
 # Boundary converter: PAC exception -> PSDK exception
 # ---------------------------------------------------------------------------
 
+def _retry_context_kwargs(exc: Exception) -> dict:
+    """Extract the retry/diagnostic context a PAC exception carries.
+
+    ``getattr`` defaults keep this tolerant of PAC versions predating a
+    field. Prior-attempt exceptions are themselves converted, so
+    ``sub_exceptions`` is homogeneous in this hierarchy (PAC sub-errors
+    never nest further, so the recursion is single-level).
+    """
+    subs = getattr(exc, "sub_exceptions", None)
+    return {
+        "node": getattr(exc, "node", None),
+        "iteration": getattr(exc, "iteration", None),
+        "base_message": getattr(exc, "base_message", None),
+        "sub_exceptions": (
+            tuple(_convert_pac_exception(s) for s in subs) if subs else ()
+        ),
+    }
+
+
 def _convert_pac_exception(exc: Exception) -> AerospikeError:
     """Convert a PAC exception to the appropriate PSDK typed exception.
 
     The original exception is **not** set as ``__cause__`` here; callers
-    should use ``raise convert_pac_exception(e) from e``.
-        :func:`_result_code_to_exception`
+    should use ``raise _convert_pac_exception(e) from e``.
     """
     if isinstance(exc, AerospikeError):
         return exc
@@ -672,28 +806,48 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
             sub_code=getattr(exc, "sub_code", None),
             server_message=getattr(exc, "server_message", None),
             exp_trace=getattr(exc, "exp_trace", None),
+            **_retry_context_kwargs(exc),
         )
 
     if isinstance(exc, PacMaxErrorRate):
-        return MaxErrorRate(str(exc), in_doubt=getattr(exc, "in_doubt", False))
+        return MaxErrorRate(
+            str(exc), in_doubt=getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
 
     if isinstance(exc, PacTimeoutError):
-        return TimeoutError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
+        # PAC's TimeoutError is core's client-side deadline; a server-reported
+        # timeout arrives as a ServerError with the TIMEOUT result code and
+        # keeps the default client=False.
+        return TimeoutError(
+            str(exc), client=True, in_doubt=getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
 
     if isinstance(exc, PacConnectionError):
-        return ConnectionError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
+        return ConnectionError(
+            str(exc), in_doubt=getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
 
     if isinstance(exc, PacInvalidNodeError):
-        return InvalidNodeError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
+        return InvalidNodeError(
+            str(exc), in_doubt=getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
 
     if isinstance(exc, PacUDFBadResponse):
         return _result_code_to_exception(
             ResultCode.UDF_BAD_RESPONSE,
             str(exc),
             getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
         )
 
     if isinstance(exc, PacAerospikeError):
-        return AerospikeError(str(exc), in_doubt=getattr(exc, "in_doubt", False))
+        return AerospikeError(
+            str(exc), in_doubt=getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
 
     return AerospikeError(str(exc))

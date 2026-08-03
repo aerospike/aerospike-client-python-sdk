@@ -34,8 +34,13 @@ def pytest_runtest_call(item: pytest.Item) -> None:
         return
     client = resolve_ael_client_from_funcargs(item.funcargs)
     if client is None:
-        pytest.skip(
-            "AEL path marker present but no client/cluster/session fixture found"
+        pytest.fail(
+            "AEL path marker present but no client/cluster/session fixture "
+            "found — the test's mode cannot be determined. Name the fixture "
+            "client / cluster* / session / session_with_* (or extend "
+            "resolve_ael_client_from_funcargs); skipping here would silently "
+            "drop coverage for both modes.",
+            pytrace=False,
         )
     if need_server:
         skip_if_lacks_server_compiled_ael(client)

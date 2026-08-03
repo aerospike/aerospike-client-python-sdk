@@ -145,6 +145,19 @@ class TestFilterRecordsWithHandler:
         assert isinstance(captured[0], AerospikeError)
         assert captured[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
+    def test_synthesized_exception_carries_sub_code(self):
+        """The handler-synthesized exception keeps the row's sub_code —
+        matching what ``RecordResult.or_raise`` raises for the same row."""
+        row = RecordResult(
+            key=_key(1), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, index=0, sub_code=2,
+        )
+        captured: list = []
+        _filter_records_with_handler(
+            [row], lambda k, i, e: captured.append(e),
+        )
+        assert captured[0].sub_code == 2
+
 
 # ---------------------------------------------------------------------------
 # RecordResult with exception field

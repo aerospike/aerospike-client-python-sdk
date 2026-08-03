@@ -656,3 +656,40 @@ async def test_udf_client_timeout_marks_in_doubt(cluster_with_sleep_udf):
             .execute()
         )
     assert exc_info.value.in_doubt is True
+
+
+async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
+    """A retried client timeout surfaces the full retry context, SDK-typed.
+
+    Same deterministic shape as the in-doubt test above (client socket timer
+    racing a longer server-side UDF sleep, no server deadline), with retries
+    enabled so prior attempts are recorded. Asserts the Phase carried by the
+    boundary conversion: ``client`` provenance, ``node``, ``iteration``,
+    ``base_message``, and ``sub_exceptions`` converted into the SDK hierarchy.
+    """
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "udf_retry_context",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=2,
+        ),
+    )
+    session = cluster_with_sleep_udf.create_session(behavior)
+    k = DS.id("udf_retry_ctx_1")
+    with pytest.raises(TimeoutError) as exc_info:
+        await (
+            session.execute_udf(k)
+            .function(SLEEP_MODULE, "sleep")
+            .passing(1000)
+            .execute()
+        )
+    err = exc_info.value
+    assert err.in_doubt is True
+    assert err.client is True
+    assert err.node, "expected the attempted node on the exception"
+    assert err.iteration is not None and err.iteration >= 1
+    assert err.base_message
+    assert err.sub_exceptions, "expected prior attempts in sub_exceptions"
+    assert all(isinstance(s, TimeoutError) for s in err.sub_exceptions)
+    assert all(isinstance(s, AerospikeError) for s in err.sub_exceptions)
