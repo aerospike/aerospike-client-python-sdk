@@ -8,13 +8,11 @@ import _env
 from aerospike_sdk import Behavior, DataSet
 
 
-def main() -> None:
-    cluster = _env.sync_connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
-    users = DataSet.of("test", "users")
-    key = users.id("user123")
+class SyncExample:
+    def __init__(self):
+        
 
-    try:
+    def run(self):
         # PUT
         session.upsert(key).put({"name": "John", "age": 30}).execute()
         print("Put record")

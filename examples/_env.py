@@ -99,3 +99,17 @@ def sync_connect():
     if _services_alternate():
         cluster_def = cluster_def.using_services_alternate()
     return cluster_def
+
+
+from aerospike_sdk import Behavior, DataSet
+
+
+class Example:
+    async def __init__(self):
+        self.cluster = await connect().connect()
+        self.session = self.cluster.create_session(Behavior.DEFAULT)
+        self.users = DataSet.of("test", "users")
+        self.key = self.users.id("user123")
+
+    async def cleanup(self):
+        self.cluster.close()
