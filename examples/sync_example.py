@@ -4,42 +4,40 @@
 Covers: sync ClusterDefinition connection, put, get, exists, delete — no async/await.
 """
 
-import _env
-from aerospike_sdk import Behavior, DataSet
+from _env import _host_and_port
+from aerospike_sdk.sync import ClusterDefinition
+from aerospike_sdk import Behavior
 
 
 class SyncExample:
     def __init__(self):
-        
+        hostname, port = _host_and_port()
+        self.cluster_def = ClusterDefinition(hostname, port).connect()
+        self.session = self.cluster_def.create_session(Behavior.DEFAULT)
+        self.key = self.users.id("user123")
 
     def run(self):
         # PUT
-        session.upsert(key).put({"name": "John", "age": 30}).execute()
+        self.session.upsert(self.key).put({"name": "John", "age": 30}).execute()
         print("Put record")
 
         # GET
-        stream = session.query(key).execute()
+        stream = self.session.query(self.key).execute()
         first = stream.first_or_raise()
         print(f"Got record: {first.record.bins}")
 
         # GET with selected bins
-        stream = session.query(key).bins(["name"]).execute()
+        stream = self.session.query(self.key).bins(["name"]).execute()
         first = stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
 
         # EXISTS
-        stream = session.exists(key).execute()
+        stream = self.session.exists(self.key).execute()
         first = stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
 
         # DELETE
-        session.delete(key).execute()
+        self.session.delete(self.key).execute()
         print("Deleted record")
 
         print("\nAll operations completed successfully!")
-    finally:
-        cluster.close()
-
-
-if __name__ == "__main__":
-    main()
