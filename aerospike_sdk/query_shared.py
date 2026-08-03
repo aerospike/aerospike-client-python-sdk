@@ -909,12 +909,14 @@ class _QueryBuilderBase:
         if len(partition_ids) == 1:
             self._partition_filter = PartitionFilter.by_id(partition_ids[0])
         else:
-            # For multiple partitions, we need to use a range or multiple filters
-            # Since PartitionFilter.by_id only takes one ID, we'll use by_range
-            # for now. This is a limitation of the underlying client.
+            # PartitionFilter.by_id takes a single id and by_range a single
+            # contiguous (begin, count) span, so multiple ids collapse to the
+            # span [min, max]. Non-contiguous id sets therefore also scan the
+            # gap partitions in between — a limitation of the underlying
+            # filter model, not an off-by-one.
             min_id = min(partition_ids)
             max_id = max(partition_ids)
-            self._partition_filter = PartitionFilter.by_range(min_id, max_id + 1)
+            self._partition_filter = PartitionFilter.by_range(min_id, max_id - min_id + 1)
         return self
 
     def on_partition(self, part_id: int) -> Self:
@@ -978,7 +980,9 @@ class _QueryBuilderBase:
                 f"Start partition ({start_incl}) must be < end partition ({end_excl})"
             )
         
-        self._partition_filter = PartitionFilter.by_range(start_incl, end_excl)
+        # PartitionFilter.by_range takes (begin, count), not (begin, end):
+        # convert the exclusive end bound into a partition count.
+        self._partition_filter = PartitionFilter.by_range(start_incl, end_excl - start_incl)
         return self
 
     def chunk_size(self, chunk_size: int) -> Self:
