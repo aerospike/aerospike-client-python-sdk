@@ -15,13 +15,10 @@ SET = DataSet.of("test", "map_remove_test")
 
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
 
-    try:
         await run_examples(session)
-    finally:
-        await cluster.close()
 
 
 async def run_examples(session) -> None:

@@ -11,12 +11,11 @@ from aerospike_sdk import Behavior, DataSet
 
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
-    users = DataSet.of("test", "users")
-    key = users.id("user123")
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
+        users = DataSet.of("test", "users")
+        key = users.id("user123")
 
-    try:
         # PUT
         await session.upsert(key).put({"name": "John", "age": 30}).execute()
         print("Put record")
@@ -41,8 +40,6 @@ async def main() -> None:
         print("Deleted record")
 
         print("\nAll operations completed successfully!")
-    finally:
-        await cluster.close()
 
 
 if __name__ == "__main__":

@@ -344,3 +344,47 @@ class TestPositionalOperationResults:
 
     def test_typed_no_positional_results_returns_none(self):
         assert self._rr(None).typed_operation_result(0) is None
+
+
+# ---------------------------------------------------------------------------
+# __repr__ — compact, log-friendly (no doubled digest)
+# ---------------------------------------------------------------------------
+
+class TestRepr:
+
+    def test_success_row_is_compact(self):
+        rr = RecordResult(
+            key=_key(), record=_record(name="Fred", age=30),
+            result_code=ResultCode.OK, index=0,
+        )
+        text = repr(rr)
+        assert text.startswith("RecordResult(index=0, result_code=")
+        assert text.endswith("bins={'name': 'Fred', 'age': 30})")
+
+    def test_error_row_shows_record_none_and_slot_index(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.KEY_NOT_FOUND_ERROR, index=2,
+        )
+        text = repr(rr)
+        assert "index=2" in text
+        assert "record=None" in text
+        assert "bins=" not in text
+
+    def test_no_digest_noise_in_repr(self):
+        rr = RecordResult(
+            key=_key(), record=_record(name="Fred"),
+            result_code=ResultCode.OK, index=0,
+        )
+        text = repr(rr)
+        assert "digest" not in text
+        assert "user_key" not in text
+
+    def test_single_key_row_omits_sentinel_index(self):
+        rr = RecordResult(
+            key=_key(), record=_record(name="Fred"),
+            result_code=ResultCode.OK,
+        )
+        text = repr(rr)
+        assert "index" not in text
+        assert text.startswith("RecordResult(result_code=")

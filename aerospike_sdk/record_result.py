@@ -81,6 +81,32 @@ class RecordResult:
     udf_result: Any | None = None
     sub_code: int | None = None
 
+    def __repr__(self) -> str:
+        # Compact, log-friendly summary. The default dataclass repr embeds the
+        # full Record (and its digest) alongside the Key's digest, doubling a
+        # ~40-byte array into hundreds of characters of noise; show the payload
+        # and outcome instead. `index` is kept when set — it identifies which
+        # batch slot a failed row came from, which is exactly what an error log
+        # needs — but stays hidden for single-key results, where it is the
+        # "no batch slot" sentinel rather than a real position.
+        parts = []
+        if self.index >= 0:
+            parts.append(f"index={self.index}")
+        parts.append(f"result_code={self.result_code}")
+        if self.record is not None:
+            parts.append(f"bins={self.record.bins!r}")
+        elif not self.is_ok:
+            parts.append("record=None")
+        if self.sub_code is not None:
+            parts.append(f"sub_code={self.sub_code}")
+        if self.in_doubt:
+            parts.append("in_doubt=True")
+        if self.exception is not None:
+            parts.append(f"exception={self.exception!r}")
+        if self.udf_result is not None:
+            parts.append(f"udf_result={self.udf_result!r}")
+        return f"RecordResult({', '.join(parts)})"
+
     @property
     def is_ok(self) -> bool:
         """Whether :attr:`result_code` is ``ResultCode.OK``.

@@ -111,6 +111,46 @@ See the [Quick Start guide](https://aerospike.com/docs/develop/client/sdk/) for
 a deeper walkthrough; the [API reference](https://aerospike-python-sdk.readthedocs.io/)
 covers every public class and method in detail.
 
+## Examples
+
+Runnable, self-contained scripts live in [`examples/`](examples/) — one file per
+topic (`query_examples.py`, `string_operations_example.py`, `batch_example.py`,
+`common_example.py`, `multi_record_transaction_example.py`, the SDK-config set, and
+more). Each is a standalone program; run one directly or run them all:
+
+```bash
+python examples/query_examples.py     # a single example
+make examples                         # every example, in sequence
+```
+
+Every example opens its connection through the async context-manager convention
+shown in [Quick start](#quick-start) — `async with await _env.connect().connect()
+as cluster:` (sync examples use `with _env.sync_connect().connect() as cluster:`) —
+so the cluster is always closed cleanly on exit.
+
+`examples/_env.py` is a small **examples-only** helper (not part of the published
+package — the mirror of `benchmarks/_env.py`). It resolves connection settings from
+the environment so the scripts run with no edits and no manual exports: it loads
+`aerospike.env` if you made one, otherwise the committed `aerospike.env.example`,
+without clobbering variables you already exported. `_env.connect()` /
+`_env.sync_connect()` return a `ClusterDefinition` built from `AEROSPIKE_HOST`
+(default `localhost:3000`). A production application constructs `ClusterDefinition`
+directly — as the Quick start does — rather than importing `_env`.
+
+A few examples need more than a default AP cluster and degrade to a clean skip
+message when it is absent:
+
+- **Strong-consistency examples** (`multi_record_transaction_example.py`,
+  `roster_example.py`) connect via `_env.connect_sc()`, which reads
+  `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
+  `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).
+- **Server-version-gated examples** (e.g. `string_operations_example.py`, server
+  8.1.3+) check `_env.server_at_least(session, (8, 1, 3))` and skip if the cluster
+  is older.
+
+Connection variables are the same ones the test suite uses — see
+[Configuration](#configuration) for `aerospike.env`.
+
 ## Performance modes
 
 PSDK offers two API shapes — pick based on what your code needs.

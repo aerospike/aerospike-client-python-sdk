@@ -41,8 +41,7 @@ async def part1_named_behaviors() -> None:
     # The config file is resolved from this env var at connect() time.
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
 
-    cluster = await _env.connect().connect()
-    try:
+    async with await _env.connect().connect() as cluster:
         # The file's `system:` settings were applied to the connection during
         # connect(); its `behaviors:` profiles are now in the registry.
         for name in ("high-performance", "batch-optimized"):
@@ -59,8 +58,6 @@ async def part1_named_behaviors() -> None:
         record = (await stream.first_or_raise()).record
         print(f"  op via 'high-performance' session: {record.bins}")
         await session.delete(key).execute()
-    finally:
-        await cluster.close()
 
 
 async def part2_hot_reload() -> None:
@@ -73,8 +70,7 @@ async def part2_hot_reload() -> None:
         )
         os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(config)
 
-        cluster = await _env.connect().connect()
-        try:
+        async with await _env.connect().connect() as cluster:
             session = cluster.create_session(get_behavior("demo-fast"))
             print(f"  initial total_timeout: {_read_total_timeout(session.behavior)}s")
 
@@ -91,8 +87,6 @@ async def part2_hot_reload() -> None:
                     break
                 await asyncio.sleep(0.25)
             print(f"  live session total_timeout: {_read_total_timeout(session.behavior)}s")
-        finally:
-            await cluster.close()
 
 
 async def main() -> None:
