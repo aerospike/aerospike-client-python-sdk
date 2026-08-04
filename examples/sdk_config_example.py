@@ -45,10 +45,6 @@ class NamedBehaviors(Example):
         os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
 
     async def run(self):
-        """Load the shipped config file and use a file-defined behavior."""
-        print("=== Part 1: named behaviors from the config file ===")
-        # The config file is resolved from this env var at connect() time.
-        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
         # The file's `system:` settings were applied to the connection during
         # connect(); its `behaviors:` profiles are now in the registry.
         for name in ("high-performance", "batch-optimized"):

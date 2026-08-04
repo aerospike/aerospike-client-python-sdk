@@ -42,7 +42,7 @@ async def read_check(
         first = await stream.first()
         if first is None or not first.is_ok:
             failed_tests += 1
-            print(f"      ** FAIL ** — No record returned")
+            print("      ** FAIL ** — No record returned")
             return
 
         actual = first.record.bins.get("r")
@@ -278,15 +278,15 @@ async def test_type_casting(session) -> None:
     await filter_check("T03", session, 10, "$.a.get(type: INT) > $.b.get(type: INT)", False)
     await filter_check("T04", session, 10, "$.a.get(type: INT) == $.b.get(type: INT)", False)
     await read_print("T05", session, 10, "$.a + $.c",
-                     "Mixed type arithmetic (INT + FLOAT) without cast — server may reject")
+                     "Mixed-type arithmetic (INT + FLOAT)")
     await read_check("T06", session, 10, "$.a + $.c.asInt()", 40)
     await read_check("T07", session, 10, "$.a.asFloat() + $.c", 40.5)
     await read_print("T08", session, 1, "$.floatBin.asInt().asFloat()",
-                     "Expect 3.0 — chained casts not yet supported in PSDK grammar")
+                     "Chained casts: asInt then asFloat")
     await read_print("T09", session, 1, "$.intBin.asInt()",
-                     "Expect 42 — Rust core strict typed-bin-read: float_bin fails on INT bin")
+                     "Typed read of an integer bin")
     await read_print("T10", session, 1, "$.floatBin.asFloat()",
-                     "Expect 3.14 — Rust core strict typed-bin-read: int_bin fails on FLOAT bin")
+                     "Typed read of a float bin")
 
 
 # ======================================================================
@@ -405,7 +405,7 @@ async def test_nested_cdt(session) -> None:
     await read_check("N10", session, 4,
                      "$.data.users.[1].addresses.[0].city.get(type: STRING)", "SF")
     await read_print("N11", session, 3, "$.profile.scores.[0:3]",
-                     "Nested CDT list index range — may return OpNotApplicable")
+                     "Nested CDT list index range")
     await read_check("N13", session, 3, "$.profile.address.{}.count()", 3)
 
 
@@ -425,7 +425,7 @@ async def test_arithmetic(session) -> None:
     await read_check("A08", session, 7, "(($.price + $.qty) * 2) - 10", 200)
     await filter_check("A09", session, 7, "($.price * $.qty) > 400", True)
     await read_print("A10", session, 10, "$.c + $.d",
-                     "Expect 71.2 — Rust core strict typed-bin-read: untyped FLOAT bins default to int_bin")
+                     "Sum of two untyped float bins")
     await read_check("A11", session, 1, "$.intBin / 5", 8)
     await read_check("A12", session, 1, "$.intBin % 5", 2)
 
@@ -445,7 +445,7 @@ async def test_bitwise(session) -> None:
     await read_print("B07", session, 1, "$.negInt >> 1",
                      ">> is logical, not arithmetic. Expect -4 but may get large positive")
     await read_print("B08", session, 1, "$.negInt >>> 1",
-                     "Unsigned right shift — PSDK grammar supports this")
+                     "Unsigned right shift (>>>)")
     await filter_check("B09", session, 1, "($.intBin & 1) == 0", True)
     await filter_check("B10", session, 1, "(($.intBin >> 3) & 1) == 1", True)
 
@@ -538,7 +538,7 @@ async def test_control_structures(session) -> None:
     await filter_print("CS12", session, 7,
                        '$.status == (when ($.tier == 2 => "active", '
                        'default => "inactive"))',
-                       "String comparison with when result — server may reject ParameterError")
+                       "String comparison against a when() result")
     await read_print("CS13", session, 7,
                      'let (t = $.tier) then (when (${t} == 1 => "gold", '
                      '${t} == 2 => "silver", default => "bronze"))',
@@ -572,6 +572,137 @@ async def test_metadata(session) -> None:
 
 
 # ======================================================================
+# 12. Path Functions
+# ======================================================================
+
+async def test_path_functions(session) -> None:
+    section("12. PATH FUNCTIONS")
+    await read_check("PF01", session, 2, "$.m.alpha.get(type: INT)", 10)
+    await read_print("PF02", session, 2, "$.m.{alpha-delta}.get(return: COUNT)",
+                     "Count on key range")
+    await read_print("PF03", session, 9, "$.scores.{#-1}.get(return: KEY)",
+                     "Key at highest rank")
+    await read_print("PF04", session, 2, "$.m.alpha.get(return: INDEX)",
+                     "Index of key alpha")
+    await read_print("PF05", session, 9, "$.scores.math.get(return: RANK)",
+                     "Rank of key math")
+    await read_print("PF06", session, 2, "$.m.{alpha,beta}.get(return: ORDERED_MAP)",
+                     "Ordered map of key list")
+    await read_print("PF07", session, 2, "$.m.alpha.get(return: EXISTS)",
+                     "Existing key -> true")
+    await read_print("PF08", session, 2, "$.m.zzz.get(return: EXISTS)",
+                     "Missing key -> false")
+    await read_check("PF09", session, 2, "$.l.[].count()", 7)
+    await read_check("PF10", session, 2, "$.l.[=50].count()", 1)
+    await read_print("PF11", session, 1, "$.intBin.exists()",
+                     "exists() path function on a scalar bin")
+    await read_print("PF12", session, 6, "$.emptyList.exists()",
+                     "exists() path function on an empty list")
+
+
+# ======================================================================
+# 13. Transaction Scenario
+# ======================================================================
+
+async def test_transaction_scenario(session) -> None:
+    section("13. TRANSACTION SCENARIO")
+    await read_check("TX01", session, 8, "$.txns.{}.count()", 12)
+    await read_print("TX02", session, 8, "$.txns.{0}.get(return: KEY_VALUE)",
+                     "First transaction by key order")
+    await read_print("TX03", session, 8, "$.txns.{-1}.get(return: KEY_VALUE)",
+                     "Last transaction by key order")
+    await read_print("TX04", session, 8, '$.txns.{"1688169600000"-"1696118400000"}',
+                     "Transactions in Q3 2023 (Jul-Sep) -- expect 3 entries")
+    await read_print("TX05", session, 8,
+                     '$.txns.{"1688169600000"-"1696118400000"}.get(return: COUNT)',
+                     "Count in Q3 2023 -- expect 3")
+    await read_print("TX06", session, 8, '$.txns.{"1685577600000"-}',
+                     "All from Jun 2023 onwards -- expect 7 entries")
+    await read_print("TX07", session, 8, '$.txns.{-"1680307200000"}',
+                     "All before Apr 2023 -- expect 3 entries")
+    await read_print("TX08", session, 8, '$.txns.{"9999999999999"-}',
+                     "Empty range -- expect empty map")
+    await read_print("TX09", session, 8,
+                     '$.txns.{"1685577600000"-"1701388800000"}.get(return: COUNT)',
+                     "Count Jun-Nov -- expect 6")
+    await read_print("TX10", session, 8, "$.txns.{#-1}.get(return: KEY_VALUE)",
+                     "Highest value transaction (rank -1)")
+    await read_print("TX11", session, 8, "$.txns.{#0}.get(return: KEY_VALUE)",
+                     "Lowest value transaction (rank 0)")
+    await read_print("TX12", session, 8, "$.txns.{#-3:}", "Top 3 by value")
+    await read_print("TX13", session, 8, "$.txns.{#0:3}", "Bottom 3 by value")
+    await read_print("TX14", session, 8, "$.txns.{#-5:}", "Top 5 by value")
+    await read_print("TX15", session, 8,
+                     "let ('filtered' = $.txns.{\"1685577600000\"-\"1701388800000\"}"
+                     ".get(return: COUNT)) then (${filtered})",
+                     "Chained: time range -> count via let...then -- expect 6")
+    await filter_check("TX18", session, 8, "$.txns.{}.count() > 10", True)
+    await filter_check("TX19", session, 8,
+                       '$.txns.{"1688169600000"-"1696118400000"}.get(return: COUNT) > 0',
+                       True)
+    await read_print("TX20", session, 8, "$.txns.{#-1}.[0].get(type: INT)",
+                     "Amount of highest value transaction")
+
+
+# ======================================================================
+# 14. Rank-Based Access (Record 9)
+# ======================================================================
+
+async def test_rank_based(session) -> None:
+    section("14. RANK-BASED ACCESS")
+    print("  scores rank order: english(78) < math(85) < history(88) "
+          "< science(92) < art(95)")
+    print()
+    await read_print("R01", session, 9, "$.scores.{#0}.get(return: KEY)",
+                     "Key at rank 0 -- expect 'english'")
+    await read_print("R02", session, 9, "$.scores.{#0}.get(type: INT)",
+                     "Value at rank 0 -- expect 78")
+    await read_print("R03", session, 9, "$.scores.{#-1}.get(return: KEY)",
+                     "Key at rank -1 (highest) -- expect 'art'")
+    await read_print("R04", session, 9, "$.scores.{#-1}.get(type: INT)",
+                     "Value at rank -1 -- expect 95")
+    await read_print("R05", session, 9, "$.scores.{#-2:}",
+                     "Top 2 by rank -- expect science(92), art(95)")
+    await read_print("R06", session, 9, "$.scores.{#0:2}",
+                     "Bottom 2 by rank -- expect english(78), math(85)")
+    await read_print("R07", session, 9, "$.scores.{!#-2:}", "All except top 2")
+    await read_print("R08", session, 9, "$.scores.math.get(return: RANK)",
+                     "Rank of math -- expect 1 (second lowest)")
+    await read_print("R09", session, 9, "$.scores.{#-1}.get(return: KEY_VALUE)",
+                     "Key-value of highest -- expect {art: 95}")
+
+
+# ======================================================================
+# 15. Return Type Variations
+# ======================================================================
+
+async def test_return_types(session) -> None:
+    section("15. RETURN TYPE VARIATIONS")
+    print("  Using $.m.{alpha,beta,gamma} on Record 2")
+    print()
+    await read_print("RT01", session, 2, "$.m.{alpha,beta,gamma}",
+                     "Default (ORDERED_MAP)")
+    await read_print("RT02", session, 2, "$.m.{alpha,beta,gamma}.get(return: COUNT)",
+                     "COUNT -- expect 3")
+    await read_print("RT03", session, 2, "$.m.{alpha,beta,gamma}.get(return: KEY)",
+                     "KEY -- expect list of keys")
+    await read_print("RT04", session, 2, "$.m.{alpha,beta,gamma}.get(return: VALUE)",
+                     "VALUE -- expect list of values")
+    await read_print("RT05", session, 2, "$.m.{alpha,beta,gamma}.get(return: KEY_VALUE)",
+                     "KEY_VALUE")
+    await read_print("RT06", session, 2, "$.m.alpha.get(return: INDEX)",
+                     "INDEX -- expect 0")
+    await read_print("RT07", session, 2, "$.m.alpha.get(return: RANK)",
+                     "RANK -- expect 0 (value 10 is lowest)")
+    await read_print("RT08", session, 2, "$.m.alpha.get(return: EXISTS)",
+                     "EXISTS -- expect true")
+    await read_print("RT09", session, 2, "$.m.zzz.get(return: EXISTS)",
+                     "EXISTS (absent) -- expect false")
+    await read_print("RT10", session, 2, "$.m.alpha.get(return: NONE)",
+                     "NONE -- expect null")
+
+
+# ======================================================================
 # 16. Edge Cases
 # ======================================================================
 
@@ -601,10 +732,9 @@ async def test_edge_cases(session) -> None:
 # ======================================================================
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
 
-    try:
         await session.truncate(SET)
         await asyncio.sleep(0.2)
         await setup_test_data(session)
@@ -621,11 +751,13 @@ async def main() -> None:
         await test_logical(session)
         await test_control_structures(session)
         await test_metadata(session)
+        await test_path_functions(session)
+        await test_transaction_scenario(session)
+        await test_rank_based(session)
+        await test_return_types(session)
         await test_edge_cases(session)
 
         print_summary()
-    finally:
-        await cluster.close()
 
 
 if __name__ == "__main__":

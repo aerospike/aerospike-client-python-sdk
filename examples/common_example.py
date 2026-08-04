@@ -9,7 +9,10 @@ read/write, and query hints.
 import asyncio
 
 from _env import Example
-from aerospike_sdk import DataSet
+import _env
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.aio.operations.query import QueryHint
+from aerospike_sdk.exceptions import AerospikeError
 
 SET = DataSet.of("test", "set")
 
@@ -23,7 +26,7 @@ class CommonExample(Example):
         await asyncio.sleep(0.2)
 
         # ------------------------------------------------------------------
-        # Upsert single record
+        # Write a single record
         # ------------------------------------------------------------------
         print("Write 1 record")
         await (
@@ -34,16 +37,17 @@ class CommonExample(Example):
         )
 
         # ------------------------------------------------------------------
-        # Upsert multiple records (individual calls)
+        # Write multiple records — one batched call, not a call per record
         # ------------------------------------------------------------------
         print("Write 3 records")
-        for pk, name, age in [(1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46)]:
-            await (
-                self.session.upsert(SET.id(pk))
-                .bin("name").set_to(name)
-                .bin("age").set_to(age)
-                .execute()
-            )
+        await (
+            self.session.upsert(SET.id(1)).bin("name").set_to("Tim").bin("age").set_to(312)
+            .upsert(SET.id(2)).bin("name").set_to("Bob").bin("age").set_to(25)
+            .upsert(SET.id(3)).bin("name").set_to("Jane").bin("age").set_to(46)
+            .execute()
+        )
+
+        # Ten records is the same one call, built in a loop rather than spelled out.
 
         print("Write 10 records")
         for pk, name, age in [
@@ -136,10 +140,37 @@ class CommonExample(Example):
         await self.session.upsert(SET.id(13)).put({"name": "Tim", "age": 200}).execute()
         await self.session.upsert(SET.id(14)).put({"name": "User1", "age": 201}).execute()
 
+        stream = await (
+            self.session.query(SET.id(2))
+            .where("$.name == 'Fred'")
+            .execute()
+        )
+        first = await stream.first()
+        if first and first.is_ok:
+            print(f"  ERROR: Record for Fred exists, value: {first.record.bins}")
+        else:
+            print("  Record for Fred does not exist (expected)")
+        stream.close()
+
         # ------------------------------------------------------------------
-        # Query with AEL where (filter expression)
+        # include_missing_keys + AEL filter
         # ------------------------------------------------------------------
-        print("\nTest filtering out")
+        stream = await (
+            self.session.query(SET.id(2))
+            .where("$.name == 'Fred'")
+            .include_missing_keys()
+            .execute()
+        )
+        first = await stream.first()
+        if first:
+            print(f"  With include_missing_keys — Key: {first.key}, is_ok: {first.is_ok}")
+        else:
+            print("  ERROR: No result even with include_missing_keys")
+        stream.close()
+
+    # ------------------------------------------------------------------
+    # fail_on_filtered_out
+    # ------------------------------------------------------------------
         stream = await (
             self.session.query(SET.id(2))
             .where("$.name == 'Bob'")
@@ -181,9 +212,16 @@ class CommonExample(Example):
         stream.close()
 
         # ------------------------------------------------------------------
-        # fail_on_filtered_out
+        # Secondary index query with AEL where
         # ------------------------------------------------------------------
-        from aerospike_sdk.exceptions import AerospikeError
+        print("Foreground secondary index query")
+        stream = await self.session.query(SET).where("$.age > 200").execute()
+        count = 0
+        async for result in stream:
+            print(f"  {result.record.bins}")
+            count += 1
+        stream.close()
+        print(f"  Query count: {count}")
 
         try:
             stream = await (
@@ -222,25 +260,16 @@ class CommonExample(Example):
             pass  # Index may already exist
         await asyncio.sleep(0.3)
 
-        # ------------------------------------------------------------------
-        # Secondary index query with AEL where
-        # ------------------------------------------------------------------
-        print("Foreground secondary index query")
-        stream = await self.session.query(SET).where("$.age > 200").execute()
-        count = 0
-        async for result in stream:
-            print(f"  {result}")
-            count += 1
-        stream.close()
-        print(f"  Query count: {count}")
-
-        # ------------------------------------------------------------------
-        # Batch read after changes
-        # ------------------------------------------------------------------
-        stream = await self.session.query(SET.ids(10, 11)).execute()
-        async for result in stream:
-            rec = result.record_or_raise()
-            print(f"  Record = {rec.bins}")
+        # Upsert + select_from + upsert_from in one operate
+        stream = await (
+            self.session.upsert(SET.ids(1, 2, 3))
+            .bin("name").set_to("Tim")
+            .bin("readBin").select_from("$.age + 12")
+            .bin("writeBin").upsert_from("$.age + 30")
+            .execute()
+        )
+        async for rr in stream:
+            print(f"  Upsert with expressions: {rr.record.bins}")
         stream.close()
 
         # ------------------------------------------------------------------
@@ -263,21 +292,20 @@ class CommonExample(Example):
         stream.close()
 
         # ------------------------------------------------------------------
-        # Expression read and write operations
+        # Query hints
         # ------------------------------------------------------------------
-        print("\nRead and write operation example")
-
-        # Upsert + select_from + upsert_from in one operate
+        print("\nQuery with hint")
         stream = await (
-            self.session.upsert(SET.ids(1, 2, 3))
-            .bin("name").set_to("Tim")
-            .bin("readBin").select_from("$.age + 12")
-            .bin("writeBin").upsert_from("$.age + 30")
+            self.session.query(SET)
+            .where("$.age > 200")
+            .with_hint(QueryHint(index_name="ageidx"))
             .execute()
         )
-        async for rr in stream:
-            print(f"  Upsert with expressions: {rr}")
+        count = 0
+        async for _ in stream:
+            count += 1
         stream.close()
+        print(f"  Query count with hint: {count}")
 
         # Single read expression: compute $.age + 20
         stream = await (

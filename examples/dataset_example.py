@@ -4,7 +4,9 @@
 Covers: DataSet.of, .id(), .ids(), .id_from_digest(), key types.
 """
 
+import _env
 from _env import Example
+from aerospike_sdk import Behavior
 
 
 class DatasetExample(Example):
@@ -15,7 +17,7 @@ class DatasetExample(Example):
         key_str = self.users.id("user123")
         key_int = self.users.id(456)
         key_bytes = self.users.id(b"bytes_key")
-        print(f"\nSingle keys:")
+        print("\nSingle keys:")
         print(f"  String key: {key_str}")
         print(f"  Integer key: {key_int}")
         print(f"  Bytes key: {key_bytes}")
@@ -28,15 +30,19 @@ class DatasetExample(Example):
         original = self.users.id(123)
         digest = original.digest
         from_digest = self.users.id_from_digest(digest)
-        print(f"\nKey from digest:")
+        print("\nKey from digest:")
         print(f"  Original: {original}")
         print(f"  From digest: {from_digest}")
         print(f"  Equal: {original == from_digest}")
 
-        key = self.users.id("example_user")
-        await self.session.upsert(key).put({"name": "John Doe", "age": 30}).execute()
+        # Use with live server
+        async with await _env.connect().connect() as cluster:
+            session = cluster.create_session(Behavior.DEFAULT)
 
-        stream = await self.session.query(key).execute()
+            key = self.users.id("example_user")
+            await session.upsert(key).put({"name": "John Doe", "age": 30}).execute()
+
+        stream = await session.query(key).execute()
         first = await stream.first_or_raise()
         print(f"\nRetrieved record: {first.record.bins}")
 

@@ -9,6 +9,7 @@ from _env import Example
 
 class BasicExample(Example):
     async def run(self):
+        # PUT
         await self.session.upsert(self.key).put({"name": "John", "age": 30}).execute()
         print("Put record")
 
