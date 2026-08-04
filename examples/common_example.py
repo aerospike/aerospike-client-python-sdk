@@ -50,18 +50,15 @@ class CommonExample(Example):
         # Ten records is the same one call, built in a loop rather than spelled out.
 
         print("Write 10 records")
+        wb = self.session
         for pk, name, age in [
             (10, "Tim", 312), (11, "Bob", 25), (12, "Jane", 46),
             (13, "Tim", 200), (14, "User1", 201), (15, "User2", 202),
             (16, "User3", 203), (17, "User4", 204), (18, "User5", 205),
             (19, "User6", 206),
         ]:
-            await (
-                self.session.upsert(SET.id(pk))
-                .bin("name").set_to(name)
-                .bin("age").set_to(age)
-                .execute()
-            )
+            wb = wb.upsert(SET.id(pk)).bin("name").set_to(name).bin("age").set_to(age)
+        await wb.execute()
 
         # ------------------------------------------------------------------
         # Read 1 record (point read)

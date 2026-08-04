@@ -39,7 +39,7 @@ class MapRemoveExample(Example):
                 .execute()
             )
             first = await stream.first()
-            if first and first.is_ok:==================================================================
+            if first and first.is_ok:
                 print(f"Actual:   {first.record.bins.get('result')}")
             else:
                 print("Actual:   no result")
