@@ -243,9 +243,9 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             if kind == "recordset":
                 return RecordStream._from_pac_recordset(payload)
             if kind == "chunked":
-                recordset, reexecute = payload
+                recordset, reexecute, chunk_total_limit = payload
                 return RecordStream._from_chunked_pac_recordset(
-                    recordset, reexecute, limit=0,
+                    recordset, reexecute, limit=chunk_total_limit,
                 )
 
         raise NotImplementedError(

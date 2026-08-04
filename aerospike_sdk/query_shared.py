@@ -892,76 +892,53 @@ class _QueryBuilderBase:
         self._partition_filter = partition_filter
         return self
 
-    def on_partitions(self, *partition_ids: int) -> Self:
-        """
-        Set partitions to query by partition IDs.
-        
-        Args:
-            *partition_ids: One or more partition IDs to query.
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
-
-                query = session.query(dataset).on_partitions(1, 2, 3)
-        """
-        if len(partition_ids) == 1:
-            self._partition_filter = PartitionFilter.by_id(partition_ids[0])
-        else:
-            # PartitionFilter.by_id takes a single id and by_range a single
-            # contiguous (begin, count) span, so multiple ids collapse to the
-            # span [min, max]. Non-contiguous id sets therefore also scan the
-            # gap partitions in between — a limitation of the underlying
-            # filter model, not an off-by-one.
-            min_id = min(partition_ids)
-            max_id = max(partition_ids)
-            self._partition_filter = PartitionFilter.by_range(min_id, max_id - min_id + 1)
-        return self
-
     def on_partition(self, part_id: int) -> Self:
         """
         Target a specific partition for the query.
-        
+
         This method restricts the query to a single partition. This can be useful
         for load balancing or when you know the data distribution across partitions.
-        
+
         Args:
             part_id: The partition ID to target (0-4095)
-        
+
         Returns:
             self for method chaining
-            
+
         Raises:
             ValueError: If part_id is out of range
-            
+
         Example::
 
                 query = session.query(dataset).on_partition(5)
+
+        See Also:
+            :meth:`on_partition_range`: Target a contiguous span of partitions.
+            :meth:`partition`: Apply a pre-built partition filter.
         """
         return self.on_partition_range(part_id, part_id + 1)
 
     def on_partition_range(self, start_incl: int, end_excl: int) -> Self:
         """
         Target a range of partitions for the query.
-        
+
         This method restricts the query to a specific range of partitions. This
         can be useful for load balancing, parallel processing, or when you know
         the data distribution across partitions.
-        
+
         The partition range can only be set once per query. Subsequent calls
         with different ranges will overwrite the previous range.
-        
+
         Args:
             start_incl: Start partition (inclusive, 0-4095)
             end_excl: End partition (exclusive, 1-4096)
-        
+
         Returns:
             self for method chaining
-            
+
         Raises:
             ValueError: If partition range is invalid
-            
+
         Example::
 
                 # Query partitions 0-2047 (first half)
@@ -969,6 +946,10 @@ class _QueryBuilderBase:
 
                 # Query partitions 100-199
                 query = session.query(dataset).on_partition_range(100, 200)
+
+        See Also:
+            :meth:`on_partition`: Target a single partition.
+            :meth:`partition`: Apply a pre-built partition filter.
         """
         # Partition range validation
         if start_incl < 0 or start_incl >= 4096:
@@ -979,7 +960,7 @@ class _QueryBuilderBase:
             raise ValueError(
                 f"Start partition ({start_incl}) must be < end partition ({end_excl})"
             )
-        
+
         # PartitionFilter.by_range takes (begin, count), not (begin, end):
         # convert the exclusive end bound into a partition count.
         self._partition_filter = PartitionFilter.by_range(start_incl, end_excl - start_incl)

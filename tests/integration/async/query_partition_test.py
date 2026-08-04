@@ -26,7 +26,16 @@ from collections import Counter
 from aerospike_sdk import DataSet
 
 PART_SET = "query_partition"
+HOT_SET = "query_partition_hot"
 NUM_KEYS = 200
+
+# A single partition holding more records than the limit under test, so the
+# limit assertion is exact: one partition means one node, and max_records is
+# distributed across nodes.
+HOT_PARTITION = 10
+HOT_RECORDS = 30
+HOT_LIMIT = 18
+HOT_CHUNK = 7
 
 
 def _partition_id(key) -> int:
@@ -42,14 +51,46 @@ async def _count(stream) -> int:
     return n
 
 
+async def _drain_chunks(stream) -> tuple[int, int]:
+    """Drain every chunk; returns (records, chunks).
+
+    Plain iteration yields only the loaded chunk, so advancing the cursor is
+    the caller's job via has_more_chunks().
+    """
+    records = chunks = 0
+    while await stream.has_more_chunks():
+        chunks += 1
+        async for _ in stream:
+            records += 1
+    stream.close()
+    return records, chunks
+
+
 async def _seed(session, ds):
-    """Upsert NUM_KEYS records; return per-partition counts computed client-side."""
-    per_partition: Counter = Counter()
+    """Upsert NUM_KEYS records; return [(partition_id, v)] computed client-side."""
+    placed = []
     for i in range(NUM_KEYS):
         key = ds.id(f"pk{i}")
-        per_partition[_partition_id(key)] += 1
+        placed.append((_partition_id(key), i))
         await session.upsert(key).put({"v": i}).execute()
-    return per_partition
+    return placed
+
+
+def _per_partition(placed) -> Counter:
+    return Counter(pid for pid, _ in placed)
+
+
+async def _seed_hot_partition(session, ds):
+    """Upsert HOT_RECORDS records whose digests all map to HOT_PARTITION."""
+    inserted = 0
+    candidate = 0
+    while inserted < HOT_RECORDS:
+        key = ds.id(f"hot{candidate}")
+        candidate += 1
+        if _partition_id(key) != HOT_PARTITION:
+            continue
+        await session.upsert(key).put({"v": inserted}).execute()
+        inserted += 1
 
 
 async def test_on_partition_returns_exactly_that_partitions_records(cluster):
@@ -57,7 +98,7 @@ async def test_on_partition_returns_exactly_that_partitions_records(cluster):
     session = cluster.create_session()
     ds = DataSet.of("test", PART_SET)
     await session.truncate(ds)
-    per_partition = await _seed(session, ds)
+    per_partition = _per_partition(await _seed(session, ds))
 
     # The most-populated partition gives the strongest signal; a neighbor
     # with a different expected count guards against off-by-one widening.
@@ -95,7 +136,7 @@ async def test_on_partition_range_matches_computed_assignment(cluster):
     session = cluster.create_session()
     ds = DataSet.of("test", PART_SET)
     await session.truncate(ds)
-    per_partition = await _seed(session, ds)
+    per_partition = _per_partition(await _seed(session, ds))
 
     start, end = 1024, 2048
     expected = sum(n for pid, n in per_partition.items() if start <= pid < end)
@@ -105,17 +146,70 @@ async def test_on_partition_range_matches_computed_assignment(cluster):
     assert got == expected
 
 
-async def test_on_partitions_contiguous_matches_per_partition_sum(cluster):
-    """on_partitions over a contiguous trio equals the per-partition sum."""
+async def test_on_partition_with_chunking_returns_every_record(cluster):
+    """Chunked iteration inside a partition restriction covers the partition.
+
+    Each chunk re-executes the query against the advanced partition cursor,
+    so a cursor that failed to advance would silently truncate the results.
+    """
+    session = cluster.create_session()
+    ds = DataSet.of("test", HOT_SET)
+    await session.truncate(ds)
+    await _seed_hot_partition(session, ds)
+
+    records, chunks = await _drain_chunks(
+        await session.query(ds)
+        .on_partition(HOT_PARTITION)
+        .bins(["v"])
+        .chunk_size(HOT_CHUNK)
+        .execute()
+    )
+    assert records == HOT_RECORDS
+    assert chunks == -(-HOT_RECORDS // HOT_CHUNK)  # ceil division
+
+
+async def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
+    """A limit must survive chunk boundaries, capping the total returned.
+
+    HOT_LIMIT is deliberately not a multiple of HOT_CHUNK so the cap has to
+    take effect mid-chunk.
+    """
+    session = cluster.create_session()
+    ds = DataSet.of("test", HOT_SET)
+    await session.truncate(ds)
+    await _seed_hot_partition(session, ds)
+
+    records, _ = await _drain_chunks(
+        await session.query(ds)
+        .on_partition(HOT_PARTITION)
+        .bins(["v"])
+        .limit(HOT_LIMIT)
+        .chunk_size(HOT_CHUNK)
+        .execute()
+    )
+    assert records == HOT_LIMIT
+
+
+async def test_on_partition_range_with_where_returns_matching_subset(cluster):
+    """A filter expression and a partition range compose: exactly their intersection."""
     session = cluster.create_session()
     ds = DataSet.of("test", PART_SET)
     await session.truncate(ds)
-    per_partition = await _seed(session, ds)
+    placed = await _seed(session, ds)
 
-    anchor, _ = per_partition.most_common(1)[0]
-    ids = [anchor, (anchor + 1) % 4096, (anchor + 2) % 4096]
-    if max(ids) - min(ids) != 2:
-        ids = [1000, 1001, 1002]  # anchor wrapped; use a fixed interior trio
-    expected = sum(per_partition.get(pid, 0) for pid in ids)
-    got = await _count(await session.query(ds).on_partitions(*ids).execute())
+    start, end = 0, 2048
+    threshold = 100
+    expected = sum(1 for pid, v in placed if start <= pid < end and v >= threshold)
+    got = await _count(
+        await session.query(ds)
+        .on_partition_range(start, end)
+        .where(f"$.v >= {threshold}")
+        .execute()
+    )
     assert got == expected
+
+    # The intersection is a strict subset of what the filter alone matches.
+    filtered_total = await _count(
+        await session.query(ds).where(f"$.v >= {threshold}").execute()
+    )
+    assert got <= filtered_total

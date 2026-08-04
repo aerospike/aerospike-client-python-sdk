@@ -197,22 +197,24 @@ stream = await session.query(users).where(expr).execute()
 
 ## Partition Filtering
 
-Query specific partitions for parallel consumption:
+Query a single partition:
 
 ```python
 stream = await (
     session.query(users)
-    .on_partitions(0, 1, 2)
+    .on_partition(10)
     .execute()
 )
 ```
 
-Or a contiguous range:
+Or a contiguous range, given an inclusive start and an exclusive end. This is
+how you split a scan across parallel workers — here, the first quarter of the
+4096-partition space:
 
 ```python
 stream = await (
     session.query(users)
-    .on_partition_range(begin=0, count=1024)
+    .on_partition_range(0, 1024)
     .execute()
 )
 ```

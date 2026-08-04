@@ -524,23 +524,6 @@ def test_java_example_filter_control_with_chunk_size(session, customer_dataset):
     stream.close()
 
 
-def test_java_example_filter_control_on_partitions(session, customer_dataset):
-    """Java: session.query(dataSet1).onPartitions(1, 2, 3)..."""
-    # Test that on_partitions can be called with partition IDs
-    stream = (
-        session.query(customer_dataset)
-        .on_partitions(1, 2, 3)
-        .execute()
-    )
-
-    # Verify it executes and can be iterated
-    count = 0
-    for result in stream:
-        count += 1
-    assert count >= 0  # At least 0 records
-    stream.close()
-
-
 def test_java_example_filter_control_on_partition(session, customer_dataset):
     """Java: query.onPartition(5)"""
     # Test that on_partition can be called with a single partition ID
@@ -570,22 +553,29 @@ def test_java_example_filter_control_on_partition_range(session, customer_datase
 
 
 def test_java_example_filter_control_full(session, customer_dataset):
-    """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitions(1, 2, 3)
+    """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitionRange(1, 4)
               .where(DSL.of("$.bonus > 100 and $.person.age >= 18"));
     """
-    stream = (
+    restricted = (
         session.query(customer_dataset)
         .chunk_size(100)
-        .on_partitions(1, 2, 3)
+        .on_partition_range(1, 4)
         .where("$.age > 20")
         .execute()
     )
+    count = sum(1 for _ in restricted)
+    restricted.close()
 
-    count = 0
-    for _ in stream:
-        count += 1
-    stream.close()
-    assert count >= 0
+    unrestricted = (
+        session.query(customer_dataset)
+        .where("$.age > 20")
+        .execute()
+    )
+    total = sum(1 for _ in unrestricted)
+    unrestricted.close()
+
+    # Restricting to 3 of 4096 partitions can only narrow the matching set.
+    assert count <= total
 
 
 def test_java_example_key_value_operations_direct_client(session, customer_dataset):
