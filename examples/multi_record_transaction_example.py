@@ -16,7 +16,7 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 class MultiRecordTransactionExample(Example):
-    accounts = DataSet.of(_env.sc_namespace(), "accounts")
+    accounts = DataSet.of("test", "accounts")
 
     async def __init__(self):
         await super().__init__(sc=True)

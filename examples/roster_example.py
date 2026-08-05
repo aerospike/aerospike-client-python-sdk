@@ -32,7 +32,7 @@ class RosterExample(Example):
 
     async def run(self) -> None:
         info = InfoCommands(self.session)
-        ns = _env.sc_namespace()
+        ns = "test"
 
         details = await info.namespace_details(ns)
         if details is None:
