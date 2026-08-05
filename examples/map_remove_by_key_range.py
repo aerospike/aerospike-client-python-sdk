@@ -121,3 +121,98 @@ class MapRemoveExample(Example):
             print(f"Source map: {source_map}\n")
         except Exception as e:
             print(f"ERROR:    {type(e).__name__}: {e}")
+
+        # ==================================================================
+        # Test 6: Map key range read via chainable CDT
+        # ==================================================================
+        print("=== Test 6: Map key range 'b'..'d' count ===")
+        print("Expected: count of keys in range [b, d) = 2 (b, c)")
+        try:
+            stream = await (
+                self.session.query(SET.id(1))
+                .bin("m").on_map_key_range("b", "d").count()
+                .execute()
+            )
+            first = await stream.first()
+            if first and first.is_ok:
+                print(f"Actual:   {first.record.bins}")
+            else:
+                print("Actual:   no result")
+        except Exception as e:
+            print(f"ERROR:    {type(e).__name__}: {e}")
+        print()
+
+        # ==================================================================
+        # Test 7: Map key range count all others
+        # ==================================================================
+        print("=== Test 7: Map key range 'b'..'d' count all others ===")
+        print("Expected: count of keys NOT in range [b, d) = 3 (a, d, e)")
+        try:
+            stream = await (
+                self.session.query(SET.id(1))
+                .bin("m").on_map_key_range("b", "d").count_all_others()
+                .execute()
+            )
+            first = await stream.first()
+            if first and first.is_ok:
+                print(f"Actual:   {first.record.bins}")
+            else:
+                print("Actual:   no result")
+        except Exception as e:
+            print(f"ERROR:    {type(e).__name__}: {e}")
+        print()
+
+        # ==================================================================
+        # Test 8: Map clear via chainable CDT write
+        # ==================================================================
+        print("=== Test 8: Map clear ===")
+        print("Expected: map becomes empty {}")
+        # Use a copy so we don't destroy the original for the verification
+        await (
+            self.session.upsert(SET.id(2))
+            .bin("m").set_to(dict(source_map))
+            .execute()
+        )
+        try:
+            await (
+                self.session.upsert(SET.id(2))
+                .bin("m").map_clear()
+                .execute()
+            )
+            stream = await self.session.query(SET.id(2)).execute()
+            first = await stream.first()
+            if first and first.is_ok:
+                print(f"Actual:   {first.record.bins.get('m')}")
+            else:
+                print("Actual:   no result")
+        except Exception as e:
+            print(f"ERROR:    {type(e).__name__}: {e}")
+        print()
+
+        # ==================================================================
+        # Test 9: AEL comparison on map value
+        # ==================================================================
+        print("=== Test 9: AEL filter on map key value ===")
+        print("Filter: $.m.c.get(type: INT) > 2")
+        print("Expected: record passes filter (m.c = 3 > 2)")
+        try:
+            stream = await (
+                self.session.query(SET.id(1))
+                .where("$.m.c.get(type: INT) > 2")
+                .execute()
+            )
+            first = await stream.first()
+            found = first is not None and first.is_ok
+            print(f"Actual:   {'record returned (filter passed)' if found else 'filtered out'}")
+        except Exception as e:
+            print(f"ERROR:    {type(e).__name__}: {e}")
+        print()
+
+        # ==================================================================
+        # Verify original map is unchanged
+        # ==================================================================
+        print("=== Verify original map (record 1) is unchanged ===")
+        stream = await self.session.query(SET.id(1)).execute()
+        first = await stream.first()
+        if first and first.is_ok:
+            print(f"Original map after all tests: {first.record.bins.get('m')}")
