@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install -e ".[dev]" --only-binary aerospike-async \
+          pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
@@ -151,7 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install -e ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
