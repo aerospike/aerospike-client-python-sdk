@@ -15,7 +15,7 @@ Async examples connect in :meth:`Example.__init__` and disconnect in
 import asyncio
 from typing import Any, Literal
 
-from _env import Example, SyncExample
+from _env import Example
 
 from basic_example import BasicExample
 from batch_example import BatchExample
@@ -112,7 +112,6 @@ run_order: list[RunEntry] = [
     SessionExample,
     StringOperationsExample,
     StudentScoresExample,
-    SyncBasicExample,
     YamlConfigConnectionExample,
     YamlConfigExample,
 ]
@@ -125,13 +124,6 @@ async def _run_async(cls: type[Example]) -> None:
     finally:
         await example.cleanup()
 
-
-def _run_sync(cls: type[SyncExample]) -> None:
-    example = cls()
-    try:
-        example.run()
-    finally:
-        example.cleanup()
 
 
 async def _run_shared_sections(
@@ -159,16 +151,10 @@ async def run_all() -> None:
             continue
 
         print(f"=== {entry.__name__} ===")
-        if issubclass(entry, SyncExample):
-            _run_sync(entry)
-        else:
-            await _run_async(entry)
+        await _run_async(entry)
         print()
 
 
-async def main() -> None:
-    await run_all()
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_all())
+    SyncBasicExample().run()

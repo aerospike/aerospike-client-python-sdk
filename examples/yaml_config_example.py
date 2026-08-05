@@ -20,7 +20,7 @@ from aerospike_sdk.policy.sdk_config_loader import parse_sdk_config
 class YamlConfigExample(SdkConfigFileExample):
     async def run(self) -> None:
         # System settings resolve from the file's `system:` section.
-        profiles = parse_sdk_config(_CONFIG.read_text())
+        profiles = parse_sdk_config(self._CONFIG.read_text())
         print("System profiles:")
         for name, settings in profiles.items():
             print(f"  {name}: "
