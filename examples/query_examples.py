@@ -23,19 +23,21 @@ class QueryExample(Example):
     SET = DataSet.of("test", "person")
     ADDRESS = DataSet.of("test", "address")
 
-    @classmethod
-    async def connect(cls):
-        self = cls.__new__(cls)
-        behavior = Behavior.DEFAULT.derive_with_changes(
-            "newBehavior",
-            total_timeout=timedelta(seconds=2),
-        )
-        await Example.__init__(self, behavior)
-        return self
-
-    def bind(self, host: "QueryExample") -> None:
-        self.session = host.session
-        self.cluster = host.cluster
+    async def __init__(self, host: "QueryExample | None" = None):
+        if host is None:
+            await super().__init__(
+                Behavior.DEFAULT.derive_with_changes(
+                    "newBehavior",
+                    total_timeout=timedelta(seconds=2),
+                )
+            )
+        else:
+            self._behavior = host._behavior
+            self._sc = host._sc
+            self.cluster = host.cluster
+            self.session = host.session
+            self.users = host.users
+            self.key = host.key
 
     async def _print_stream(self, stream) -> int:
         count = 0
@@ -54,12 +56,6 @@ class QueryExample(Example):
         builder = getattr(self.session.query(key).bin(bin_name), op)()
         stream = await builder.execute()
         return (await stream.first()).record.bins[bin_name]
-
-    @classmethod
-    async def execute(cls, host: "QueryExample") -> None:
-        section = cls.__new__(cls)
-        section.bind(host)
-        await section.run()
 
 
 class DemonstrateClusterInfo(QueryExample):

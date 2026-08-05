@@ -22,7 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import _env
+from _env import Example
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy import OpKind, OpShape, get_behavior
 
@@ -35,20 +35,30 @@ def _read_total_timeout(behavior: Behavior) -> float | None:
     return td.total_seconds() if td is not None else None
 
 
-from _env import Example
+class SdkConfigExample(Example):
+    config_path: Path = _SHIPPED_CONFIG
 
-class NamedBehaviors(Example):
-    async def __init__(self):
-        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
-        await super().__init__(self)
+    async def __init__(self, host: "SdkConfigExample | None" = None):
+        if host is None:
+            os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(self.config_path)
+            await super().__init__()
+        else:
+            self._behavior = host._behavior
+            self._sc = host._sc
+            self.cluster = host.cluster
+            self.session = host.session
+            self.users = host.users
+            self.key = host.key
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
         await super().cleanup()
 
+
+class NamedBehaviors(SdkConfigExample):
     async def run(self):
         # The file's `system:` settings were applied to the connection during
-        # connect(); its `behaviors:` profiles are now in the registry.
+        # ``__init__``; its `behaviors:` profiles are now in the registry.
         for name in ("high-performance", "batch-optimized"):
             behavior = get_behavior(name)
             parent = behavior.parent.name if behavior and behavior.parent else "-"
@@ -65,7 +75,7 @@ class NamedBehaviors(Example):
         await session.delete(key).execute()
 
 
-class HotReload(Example):
+class HotReload(SdkConfigExample):
     async def run(self):
         """Edit the config file while connected; watch a live session update."""
         print("\n=== Part 2: hot-reload into a live session ===")

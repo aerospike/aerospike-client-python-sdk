@@ -5,12 +5,10 @@ Covers: session creation, upsert, query, update, delete, exists, touch,
 custom behavior derivation, DataSet key patterns.
 """
 
-import asyncio
 from datetime import timedelta
 
 from _env import Example
-from aerospike_sdk import Behavior, DataSet
-
+from aerospike_sdk import Behavior
 
 
 class SessionExample(Example):

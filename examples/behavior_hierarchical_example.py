@@ -7,14 +7,12 @@ This prints the resolved settings for a child behavior across that matrix,
 alongside its parent, so the inheritance is visible.
 """
 
-import asyncio
 import os
 from pathlib import Path
 
-import _env
+from _env import SdkConfigFileExample
+from aerospike_sdk import Behavior
 from aerospike_sdk.policy import Mode, OpKind, OpShape, get_behavior
-
-_CONFIG = Path(__file__).resolve().parent / "sdk-config-example.yaml"
 
 
 def _show(behavior) -> None:
@@ -28,20 +26,12 @@ def _show(behavior) -> None:
                       f"total_timeout={s.total_timeout} retries={s.max_retries}")
 
 
-async def main() -> None:
-    os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)
-    async with await _env.connect().connect():
-        try:
-            child = get_behavior("batch-optimized")
-            if child is None:
-                print("Skipped: expected behavior 'batch-optimized' not in config.")
-                return
-            if child.parent is not None:
-                _show(child.parent)
-            _show(child)
-        finally:
-            os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+class BehaviorHierarchicalExample(SdkConfigFileExample):
+    async def run(self) -> None:
+        child = get_behavior("batch-optimized")
+        if child is None:
+            print("Skipped: expected behavior 'batch-optimized' not in config.")
+            return
+        if child.parent is not None:
+            _show(child.parent)
+        _show(child)

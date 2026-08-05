@@ -11,10 +11,8 @@ cluster-admin action and is intentionally *not* performed here — this example
 only reads.
 """
 
-import asyncio
-
 import _env
-from aerospike_sdk import Behavior
+from _env import Example
 from aerospike_sdk.aio.info import InfoCommands
 
 
@@ -28,10 +26,12 @@ def _parse_roster(raw: str) -> dict[str, str]:
     return fields
 
 
-async def main() -> None:
-    async with await _env.connect_sc().connect() as cluster:
-        session = cluster.create_session(Behavior.DEFAULT)
-        info = InfoCommands(session)
+class RosterExample(Example):
+    async def __init__(self):
+        await super().__init__(sc=True)
+
+    async def run(self) -> None:
+        info = InfoCommands(self.session)
         ns = _env.sc_namespace()
 
         details = await info.namespace_details(ns)
@@ -63,8 +63,3 @@ async def main() -> None:
 
         if roster.get("roster") == roster.get("observed_nodes"):
             print("  Roster matches observed nodes — cluster is fully rostered.")
-
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

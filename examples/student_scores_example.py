@@ -8,11 +8,11 @@ students with at least one score of 90 or above, without reading every record
 back to the client.
 """
 
-import asyncio
 import random
 
 import _env
-from aerospike_sdk import Behavior, DataSet
+from _env import Example
+from aerospike_sdk import DataSet
 
 SUBJECTS = ("math", "english", "science", "history", "art")
 
@@ -22,42 +22,37 @@ def generate_scores(rng: random.Random) -> dict[str, int]:
     return {subject: 55 + rng.randrange(46) for subject in SUBJECTS}
 
 
-async def main() -> None:
-    async with await _env.connect().connect() as cluster:
-        session = cluster.create_session(Behavior.DEFAULT)
-        class10a = DataSet.of("test", "class10a")
+class StudentScoresExample(Example):
+    class10a = DataSet.of("test", "class10a")
 
-        try:
-            if not await _env.server_at_least(session, (8, 1, 3)):
-                print("Skipped: AEL path queries require Aerospike 8.1.3+.")
-                return
+    async def run(self) -> None:
+        if not await _env.server_at_least(self.session, (8, 1, 3)):
+            print("Skipped: AEL path queries require Aerospike 8.1.3+.")
+            return
 
-            await session.truncate(class10a)
+        await self.session.truncate(self.class10a)
 
-            # Write 30 student records with reproducible random scores.
-            rng = random.Random(42)
-            for i in range(1, 31):
-                await (
-                    session.upsert(class10a.id(f"student-{i}"))
-                    .bin("name").set_to(f"Student {i}")
-                    .bin("scores").set_to(generate_scores(rng))
-                    .execute()
-                )
-
-            # One server-side scan: keep students with any score >= 90.
-            # $.scores.{=90:} selects map values >= 90; .count() > 0 is the filter.
-            stream = await (
-                session.query(class10a)
-                .where("$.scores.{=90:}.count() > 0")
+        # Write 30 student records with reproducible random scores.
+        rng = random.Random(42)
+        for i in range(1, 31):
+            await (
+                self.session.upsert(self.class10a.id(f"student-{i}"))
+                .bin("name").set_to(f"Student {i}")
+                .bin("scores").set_to(generate_scores(rng))
                 .execute()
             )
-            async for result in stream:
-                record = result.record_or_raise()
-                print(f"{record.bins['name']}: {record.bins['scores']}")
 
-        finally:
-            await session.truncate(class10a)
+        # One server-side scan: keep students with any score >= 90.
+        # $.scores.{=90:} selects map values >= 90; .count() > 0 is the filter.
+        stream = await (
+            self.session.query(self.class10a)
+            .where("$.scores.{=90:}.count() > 0")
+            .execute()
+        )
+        async for result in stream:
+            record = result.record_or_raise()
+            print(f"{record.bins['name']}: {record.bins['scores']}")
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    async def cleanup(self):
+        await self.session.truncate(self.class10a)
+        super().cleanup()

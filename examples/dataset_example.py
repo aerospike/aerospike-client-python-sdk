@@ -4,9 +4,7 @@
 Covers: DataSet.of, .id(), .ids(), .id_from_digest(), key types.
 """
 
-import _env
 from _env import Example
-from aerospike_sdk import Behavior
 
 
 class DatasetExample(Example):
@@ -36,13 +34,10 @@ class DatasetExample(Example):
         print(f"  Equal: {original == from_digest}")
 
         # Use with live server
-        async with await _env.connect().connect() as cluster:
-            session = cluster.create_session(Behavior.DEFAULT)
+        key = self.users.id("example_user")
+        await self.session.upsert(key).put({"name": "John Doe", "age": 30}).execute()
 
-            key = self.users.id("example_user")
-            await session.upsert(key).put({"name": "John Doe", "age": 30}).execute()
-
-        stream = await session.query(key).execute()
+        stream = await self.session.query(key).execute()
         first = await stream.first_or_raise()
         print(f"\nRetrieved record: {first.record.bins}")
 

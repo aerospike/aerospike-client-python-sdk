@@ -4,18 +4,10 @@
 Covers: sync ClusterDefinition connection, put, get, exists, delete — no async/await.
 """
 
-from _env import _host_and_port
-from aerospike_sdk.sync import ClusterDefinition
-from aerospike_sdk import Behavior
+from _env import SyncExample
 
 
-class SyncExample:
-    def __init__(self):
-        hostname, port = _host_and_port()
-        self.cluster_def = ClusterDefinition(hostname, port).connect()
-        self.session = self.cluster_def.create_session(Behavior.DEFAULT)
-        self.key = self.users.id("user123")
-
+class SyncBasicExample(SyncExample):
     def run(self):
         # PUT
         self.session.upsert(self.key).put({"name": "John", "age": 30}).execute()

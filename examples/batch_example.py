@@ -14,7 +14,7 @@ SET = DataSet.of("test", "set")
 
 
 class BatchExample(Example):
-    async def __init__(self):
+    async def run(self):
         print("*************")
         print("* Batch tests")
         print("*************")

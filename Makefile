@@ -42,12 +42,7 @@ test-int:
 	pytest tests/integration
 
 examples:
-	@for f in examples/*.py; do \
-		case "$$f" in examples/_env.py|examples/__init__.py) continue;; esac; \
-		echo "=== $$f ==="; \
-		python "$$f" || exit 1; \
-		echo; \
-	done
+	@python examples/run_all_examples.py
 
 docs-clean:
 	@rm -rf docs/_build
