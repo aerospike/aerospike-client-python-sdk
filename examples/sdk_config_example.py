@@ -39,6 +39,7 @@ from _env import Example
 
 class NamedBehaviors(Example):
     async def __init__(self):
+        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
         await super().__init__(self)
 
     def cleanup(self):
