@@ -105,6 +105,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@bd168dedaa4fc0b17a560541779d815540eded2d # v3.7.0
+        id: setup-server
         with:
           oidc-provider: ${{ vars.OIDC_PROVIDER_NAME }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE }}
@@ -114,10 +115,12 @@ jobs:
       - name: Start Aerospike server
         run: |
           echo "Configuring namespace for TTL support..."
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
           echo "=== Server Build ==="
-          docker exec aerospike-server asinfo -v "build"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "build"
+        env:
+          SERVER_CONTAINER_NAME: ${{ steps.setup-server.outputs.container-names }}
 
       - name: Setup JFrog CLI
         id: jfrog
