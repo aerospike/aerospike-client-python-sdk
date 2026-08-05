@@ -2,7 +2,7 @@
 """Example demonstrating session usage with custom Behaviors.
 
 Covers: session creation, upsert, query, update, delete, exists, touch,
-custom behavior derivation, DataSet self.key patterns.
+custom behavior derivation, DataSet key patterns.
 """
 
 import asyncio
