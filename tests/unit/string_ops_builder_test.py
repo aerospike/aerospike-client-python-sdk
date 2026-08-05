@@ -127,6 +127,12 @@ class TestExpVal:
         e = Exp.string_find(Exp.val("needle"), Exp.string_bin("s"))
         assert isinstance(e, Exp)
 
+    def test_exp_to_string_compiles(self):
+        # X -> string coercion expression (dedicated TO_STRING opcode); renamed
+        # from the earlier ``string_to_string``.
+        e = Exp.to_string(Exp.int_bin("n"))
+        assert isinstance(e, Exp)
+
 
 # ---------------------------------------------------------------------------
 # Polish: add_operation returns self so calls chain

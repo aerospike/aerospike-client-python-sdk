@@ -20,10 +20,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import Filter, QueryPolicy
-from aerospike_async.exceptions import ResultCode
+from aerospike_async import QueryPolicy
 
-from aerospike_sdk import QueryHint
+from aerospike_sdk import Filter, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
@@ -291,7 +290,8 @@ class TestAsyncSessionSingleKeyCapabilityFlags:
     def test_fast_path_inherits_server_compiled_ael(self):
         from unittest.mock import MagicMock
 
-        from aerospike_async import ClientPolicy, Key
+        from aerospike_async import ClientPolicy
+        from aerospike_sdk import Key
 
         from aerospike_sdk.aio.client import Client
         from aerospike_sdk.aio.session import Session

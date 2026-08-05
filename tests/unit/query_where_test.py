@@ -15,11 +15,10 @@
 
 """Unit tests for QueryBuilder and SyncQueryBuilder where() overloads.
 
-Tests the two forms: where(str) and where(FilterExpression).
+Tests the two forms: where(str) and where(Exp).
 """
 
 import pytest
-from aerospike_async import FilterExpression
 
 from aerospike_sdk import Exp, parse_ael
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -65,7 +64,7 @@ class TestQueryBuilderWhere:
         assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
-        """where(FilterExpression) stores the expression directly."""
+        """where(Exp) stores the expression directly."""
         builder = _query_builder()
         exp = Exp.gt(Exp.int_bin("a"), Exp.int_val(100))
         result = builder.where(exp)
@@ -82,12 +81,12 @@ class TestQueryBuilderWhere:
 
     def test_where_server_compiled_when_supported(self) -> None:
         """where(str) uses server-compiled path when builder flag is set."""
-        if not callable(getattr(FilterExpression, "from_server_compiled_ael", None)):
-            pytest.skip("PAC does not expose FilterExpression.from_server_compiled_ael")
+        if not callable(getattr(Exp, "from_server_compiled_ael", None)):
+            pytest.skip("PAC does not expose Exp.from_server_compiled_ael")
         builder = _query_builder(supports_server_compiled_ael=True)
         builder.where("$.age > 20")
         assert builder._effective_filter_expression() == (
-            FilterExpression.from_server_compiled_ael("$.age > 20")
+            Exp.from_server_compiled_ael("$.age > 20")
         )
 
 
@@ -112,7 +111,7 @@ class TestSyncQueryBuilderWhere:
         assert builder._effective_filter_expression() == expected
 
     def test_where_filter_expression_sets_filter_expression(self):
-        """where(FilterExpression) stores the expression directly."""
+        """where(Exp) stores the expression directly."""
         builder = self._sync_builder()
         exp = Exp.gt(Exp.int_bin("a"), Exp.int_val(100))
         result = builder.where(exp)

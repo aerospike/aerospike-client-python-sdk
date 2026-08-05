@@ -187,7 +187,7 @@ async def create_index_quiet_async(
     index_type,
     collection_type=None,
 ) -> None:
-    from aerospike_async import ResultCode
+    from aerospike_sdk import ResultCode
 
     try:
         await pac.create_index(
@@ -207,7 +207,7 @@ def create_index_quiet_blocking(
     index_type,
     collection_type=None,
 ) -> None:
-    from aerospike_async import ResultCode
+    from aerospike_sdk import ResultCode
 
     try:
         pac.create_index_blocking(

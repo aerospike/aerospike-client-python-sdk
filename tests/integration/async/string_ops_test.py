@@ -157,6 +157,34 @@ async def test_str_projection_via_exp_on_query(cluster):
     assert rec.bins["sfind"] == 2
 
 
+async def test_to_string_projection_via_exp(cluster):
+    """``Exp.to_string`` coerces any type to its string representation.
+
+    Exercises the dedicated TO_STRING expression opcode (server 8.1.3+) through
+    the renamed ``Exp.to_string`` surface (was ``string_to_string``).
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_to_string_exp")
+    await sess.upsert(k).bin("n").set_to(42).execute()
+
+    rs = await sess.query(k) \
+        .bin("as_str").select_from(Exp.to_string(Exp.int_bin("n"))) \
+        .execute()
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["as_str"] == "42"
+
+
+async def test_str_to_string_op_via_query(cluster):
+    """Fluent ``str_to_string`` op coerces the bin value to its string form."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_str_to_string")
+    await sess.upsert(k).bin("n").set_to(42).execute()
+
+    rs = await sess.query(k).bin("n").str_to_string().execute()
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["n"] == "42"
+
+
 # ---------------------------------------------------------------------------
 # Spot tests — flag paths
 # ---------------------------------------------------------------------------
