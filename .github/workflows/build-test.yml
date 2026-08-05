@@ -157,6 +157,9 @@ jobs:
       - name: Generate ANTLR parser
         run: make generate-ael
 
+      - name: Run canonical code examples
+        run: make examples
+
       - name: Run integration tests
         env:
           AEROSPIKE_HOST: localhost:3000
@@ -170,9 +173,6 @@ jobs:
             echo "=== End of Server Log ==="
             exit 1
           fi
-
-      - name: Run canonical code examples
-        run: make examples
 
   # Free-threaded (PEP 703) Python builds.  Catches no-GIL regressions that
   # would otherwise land silently: anything that relies on the GIL for
