@@ -159,6 +159,9 @@ jobs:
 
       - name: Run canonical code examples
         run: make examples
+        env:
+          AEROSPIKE_HOST: localhost:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
 
       - name: Run integration tests
         env:
