@@ -42,8 +42,9 @@ class NamedBehaviors(Example):
         os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
         await super().__init__(self)
 
-    def cleanup(self):
+    async def cleanup(self):
         os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
+        await super().cleanup()
 
     async def run(self):
         # The file's `system:` settings were applied to the connection during
