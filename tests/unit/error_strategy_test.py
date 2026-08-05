@@ -213,6 +213,37 @@ class TestRecordResultException:
         with pytest.raises(TimeoutError):
             rr.record_or_raise()
 
+    def test_client_side_error_row_is_not_ok(self):
+        # Client-side failures never reach the server, so they carry no result
+        # code and the row's code reads OK. The attached exception is what
+        # makes the row a failure — reporting it as success would claim a
+        # write that never happened.
+        exc = AerospikeError("client rejected the command")
+        assert exc.result_code is None
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        assert rr.is_ok is False
+
+    def test_or_raise_raises_client_side_error_despite_ok_code(self):
+        exc = AerospikeError("client rejected the command")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        with pytest.raises(AerospikeError, match="client rejected"):
+            rr.or_raise()
+
+    def test_as_bool_raises_client_side_error_despite_ok_code(self):
+        exc = TimeoutError("client deadline expired", client=True)
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc,
+        )
+        with pytest.raises(TimeoutError, match="client deadline"):
+            rr.as_bool()
+
 
 # ---------------------------------------------------------------------------
 # Bucket 3: Builder flag wiring

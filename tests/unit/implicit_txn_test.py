@@ -22,7 +22,8 @@ import pytest
 
 from aerospike_sdk import Key, Txn
 from aerospike_async import BatchPolicy
-from aerospike_sdk.exceptions import ResultCode
+from aerospike_async.exceptions import AerospikeError as PacAerospikeError
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.implicit_txn import (
     implicit_txn_enabled,
@@ -265,6 +266,10 @@ class _RecordingBatchClient:
         self.batch_policies.append(batch_policy)
         return []
 
+    def batch_blocking(self, ops, batch_policy=None):
+        self.batch_policies.append(batch_policy)
+        return []
+
     def commit_blocking(self, txn):
         self.commits.append(txn)
 
@@ -344,3 +349,46 @@ class TestMultiKeyWriteChainWrap:
         builder.execute()
         assert pac.commits == []
         assert len(pac.batch_policies) == 1
+
+    def test_multi_namespace_batch_is_not_wrapped(self):
+        # A transaction cannot span namespaces. Wrapping is SDK-initiated, so
+        # the batch goes through unwrapped and the server answers per key,
+        # rather than the whole batch failing client-side.
+        pac = _RecordingBatchClient()
+        builder = _write_chain_builder(pac, self._sdk_client())
+        keys = [Key("test", "s", 1), Key("other", "s", 2)]
+        builder.upsert(keys).bin("a").set_to(1).execute()
+        assert pac.commits == []
+        assert pac.batch_policies[0] is None
+
+    def test_multi_namespace_write_chain_is_not_wrapped(self):
+        pac = _RecordingBatchClient()
+        builder = _write_chain_builder(pac, self._sdk_client())
+        (
+            builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
+            .upsert(Key("other", "s", 2)).bin("a").set_to(2)
+            .execute()
+        )
+        assert pac.commits == []
+        assert pac.batch_policies[0] is None
+
+    def test_failed_wrapped_batch_reports_every_row_as_failed(self):
+        # The transaction aborted, so nothing was written and no row may
+        # claim success. A client-side rejection carries no server result
+        # code, so the rows read OK — the attached exception is the signal.
+        pac = _RecordingBatchClient()
+
+        def failing_batch(keys, ops_per_key, batch_policy=None, write_policy=None):
+            raise PacAerospikeError("client rejected the command")
+
+        pac.batch_operate_blocking = failing_batch
+        builder = _write_chain_builder(pac, self._sdk_client())
+        rows = list(builder.upsert(self._keys()).bin("a").set_to(1).execute())
+
+        assert len(pac.aborts) == 1
+        assert pac.commits == []
+        assert len(rows) == 2
+        assert not any(row.is_ok for row in rows)
+        for row in rows:
+            with pytest.raises(AerospikeError, match="client rejected"):
+                row.or_raise()

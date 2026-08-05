@@ -570,19 +570,28 @@ class _QueryBuilderBase:
             policy.txn = self._txn
         return policy
 
-    def _implicit_txn_precheck(self) -> bool:
+    def _implicit_txn_precheck(self, keys: Sequence[Key]) -> bool:
         """Cheap synchronous half of the implicit batch-write txn gate.
 
         The multi-key write dispatchers are inherently write-bearing, so
         the has-writes condition is implied; this checks SC namespace, no
-        explicit txn (and no ``with_txn(None)`` opt-out), and the setting.
-        Callers confirm cluster MRT capability afterward — async paths
-        via ``await sdk_client._supports_mrt()``, so the coroutine is only
+        explicit txn (and no ``with_txn(None)`` opt-out), the setting, and
+        that every key shares the builder's namespace. Callers confirm
+        cluster MRT capability afterward — async paths via
+        ``await sdk_client._supports_mrt()``, so the coroutine is only
         created once the cheap conditions pass.
         """
-        return not self._txn_opted_out and implicit_txn_enabled(
+        if self._txn_opted_out or not implicit_txn_enabled(
             self._sdk_client, self._txn, self._namespace_mode
-        )
+        ):
+            return False
+        # A transaction cannot span namespaces. Wrapping is SDK-initiated,
+        # so decline it for a mixed-namespace batch instead of turning a
+        # request the server would answer per key into a whole-batch
+        # client-side rejection. Scanned last: the checks above reject the
+        # overwhelmingly common AP case before we touch the keys.
+        namespace = self._namespace
+        return all(key.namespace == namespace for key in keys)
 
     def _implicit_txn_settings(self) -> Any:
         """Live transaction settings from the owning SDK client."""
