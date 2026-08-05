@@ -206,10 +206,6 @@ async def test_touch(cluster):
 
     await session.upsert(k).put({"name": "John"}).execute()
 
-    result1 = await session.query(k).execute()
-    first1 = await result1.first_or_raise()
-    initial_ttl = first1.record_or_raise().ttl
-
     await session.touch(k).execute()
 
     result2 = await session.query(k).execute()

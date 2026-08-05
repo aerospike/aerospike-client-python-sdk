@@ -94,6 +94,14 @@ reportMissingImports = false
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint.per-file-ignores]
+# The CDT builders pass one-line lambda factories straight into a constructor;
+# most are inline keyword arguments, and these are the same thunks that an
+# if/else forced into a named binding. A `def` would add no clarity here.
+"aerospike_sdk/query_shared.py" = ["E731"]
+"aerospike_sdk/aio/operations/cdt_read.py" = ["E731"]
+"aerospike_sdk/aio/operations/cdt_write.py" = ["E731"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

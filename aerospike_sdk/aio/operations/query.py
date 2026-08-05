@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from time import perf_counter
 from typing import (
@@ -56,7 +55,6 @@ from aerospike_sdk.operations_shared import (
     _WriteVerbs,
 )
 
-log = logging.getLogger(SdkLoggers.QUERY)
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_query_policy,
@@ -97,6 +95,9 @@ from aerospike_sdk.query_shared import (  # noqa: F401
     _resize_flags_or_default,
     _resolve_hll_flags,
 )
+
+log = logging.getLogger(SdkLoggers.QUERY)
+
 
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.

@@ -53,10 +53,7 @@ from aerospike_sdk.operations_shared import (
     _to_expiration,
 )
 
-from aerospike_sdk.query_shared import _OperationSpec  # noqa: E402
-
-log = logging.getLogger(SdkLoggers.QUERY)
-
+from aerospike_sdk.query_shared import _OperationSpec
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_query_policy,
@@ -78,6 +75,8 @@ from aerospike_sdk.exceptions import (
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
+
+log = logging.getLogger(SdkLoggers.QUERY)
 
 
 class _BlockingQueryDispatch:

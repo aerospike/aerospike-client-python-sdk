@@ -15,7 +15,6 @@
 
 """Integration tests for HyperLogLog and bit-operation fluent builders."""
 
-import pytest
 import pytest_asyncio
 
 from aerospike_sdk.dataset import DataSet

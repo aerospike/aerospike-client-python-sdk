@@ -77,7 +77,11 @@ class TestCdtReadBuilderExists:
     def _build(self, *, is_map: bool = True):
         parent = _OpCollector()
         captured = []
-        factory = lambda rt: (captured.append(rt), f"op_{rt}")[1]
+
+        def factory(rt):
+            captured.append(rt)
+            return f"op_{rt}"
+
         rt_cls = MapReturnType if is_map else ListReturnType
         builder = CdtReadBuilder(parent, factory, rt_cls, is_map=is_map)
         return builder, parent, captured
@@ -106,8 +110,14 @@ class TestCdtWriteBuilder:
         parent = _OpCollector()
         get_captured = []
         rm_captured = []
-        get_factory = lambda rt: (get_captured.append(rt), f"get_{rt}")[1]
-        rm_factory = lambda rt: (rm_captured.append(rt), f"rm_{rt}")[1]
+        def get_factory(rt):
+            get_captured.append(rt)
+            return f"get_{rt}"
+
+        def rm_factory(rt):
+            rm_captured.append(rt)
+            return f"rm_{rt}"
+
         rt_cls = MapReturnType if is_map else ListReturnType
         builder = CdtWriteBuilder(
             parent, get_factory, rm_factory, rt_cls, is_map=is_map,
@@ -166,8 +176,14 @@ class TestCdtWriteInvertableBuilder:
         parent = _OpCollector()
         get_captured = []
         rm_captured = []
-        get_factory = lambda rt: (get_captured.append(rt), f"get_{rt}")[1]
-        rm_factory = lambda rt: (rm_captured.append(rt), f"rm_{rt}")[1]
+        def get_factory(rt):
+            get_captured.append(rt)
+            return f"get_{rt}"
+
+        def rm_factory(rt):
+            rm_captured.append(rt)
+            return f"rm_{rt}"
+
         rt_cls = MapReturnType if is_map else ListReturnType
         builder = CdtWriteInvertableBuilder(
             parent, get_factory, rm_factory, rt_cls, is_map=is_map,

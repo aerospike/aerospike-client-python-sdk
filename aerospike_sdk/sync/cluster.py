@@ -31,8 +31,10 @@ from aerospike_sdk.sync.client import SyncClient
 
 if typing.TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
-    from aerospike_sdk.sync.session import Session
-    from aerospike_sdk.sync.transactional_session import TransactionalSession
+    # These resolve the ClusterBase[_S, _TS] string forward-refs; ruff reads them as unused
+    # (F401) because it doesn't count string-subscript usage.
+    from aerospike_sdk.sync.session import Session  # noqa: F401
+    from aerospike_sdk.sync.transactional_session import TransactionalSession  # noqa: F401
 
 
 class Cluster(ClusterBase["Session", "TransactionalSession"]):

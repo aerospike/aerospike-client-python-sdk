@@ -50,7 +50,6 @@ from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.feature_gates import (
     PSDK_ENABLE_QUERY_SELECTION,
     PSDK_ENABLE_SERVER_COMPILED_AEL,
-    cached_ael_capability_kwargs,
 )
 from aerospike_sdk.query_selection import compute_query_selection_support_blocking
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
