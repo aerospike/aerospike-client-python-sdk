@@ -106,8 +106,8 @@ jobs:
 
       - uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@bd168dedaa4fc0b17a560541779d815540eded2d # v3.7.0
         with:
-          oidc-provider: ${{ vars.OIDC_AUDIENCE }}
-          oidc-audience: ${{ vars.OIDC_PROVIDER_NAME }}
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE }}
           features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
           enable-strong-consistency: "true"
 
