@@ -15,7 +15,6 @@
 
 """Integration tests for nested CDT navigation, ranges, create-if-missing, and value chaining."""
 
-import pytest
 import pytest_asyncio
 
 from aerospike_sdk import ListOrderType, MapOrder
@@ -292,18 +291,11 @@ class TestValueSelectorChaining:
 
 
 # ===================================================================
-# Optional: SpecialValue open range (requires PAC with SpecialValue)
+# SpecialValue open range (INFINITY / WILDCARD selectors)
 # ===================================================================
 
 
 class TestSpecialValueOpenRange:
-
-    @pytest.fixture(autouse=True)
-    def _require_special_value(self):
-        try:
-            from aerospike_async import SpecialValue  # noqa: F401
-        except ImportError:
-            pytest.skip("aerospike_async.SpecialValue not available")
 
     async def test_nested_map_key_range_to_infinity(self, cluster):
         from aerospike_sdk import SpecialValue

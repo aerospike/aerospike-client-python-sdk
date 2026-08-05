@@ -19,7 +19,7 @@ import pytest
 
 from aerospike_sdk import ListOrderType, MapOrder
 
-from aerospike_sdk import DataSet, ListReturnType, MapReturnType
+from aerospike_sdk import DataSet, MapReturnType
 
 
 NS = "test"
@@ -248,13 +248,6 @@ class TestValueSelectorChainingSync:
 
 
 class TestSpecialValueOpenRangeSync:
-
-    @pytest.fixture(autouse=True)
-    def _require_special_value(self):
-        try:
-            from aerospike_async import SpecialValue  # noqa: F401
-        except ImportError:
-            pytest.skip("aerospike_async.SpecialValue not available")
 
     def test_nested_map_key_range_to_infinity(self, cluster):
         from aerospike_sdk import SpecialValue

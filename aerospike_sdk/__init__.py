@@ -28,6 +28,7 @@ from aerospike_async import (
     CommitStatus,
     CTX,
     ErrorDetailVerbosity,
+    ExecuteTask,
     ExpressionTrace,
     ExpType,
     Filter,
@@ -56,6 +57,7 @@ from aerospike_async import (
     Txn,
     TxnState,
     UDFLang,
+    UdfRemoveTask,
 )
 
 from aerospike_sdk.aio import AsyncPool, Session, TransactionalSession, ClusterDefinition, Host
@@ -187,6 +189,7 @@ __all__ = [
     "ErrorHandler",
     "ErrorDetailVerbosity",
     "ErrorStrategy",
+    "ExecuteTask",
     "Exp",
     "ExpressionTrace",
     "ExpType",
@@ -255,6 +258,7 @@ __all__ = [
     "Txn",
     "TxnState",
     "UDFLang",
+    "UdfRemoveTask",
     "map_keys",
     "map_values",
     "refresh_log_levels",
