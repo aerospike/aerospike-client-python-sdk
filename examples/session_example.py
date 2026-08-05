@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Example demonstrating self.session usage with custom Behaviors.
+"""Example demonstrating session usage with custom Behaviors.
 
-Covers: self.session creation, upsert, query, update, delete, exists, touch,
+Covers: session creation, upsert, query, update, delete, exists, touch,
 custom behavior derivation, DataSet self.key patterns.
 """
 
@@ -49,12 +49,12 @@ class SessionExample(Example):
             max_retries=1,
         )
         fast_session = self.cluster.create_session(fast_behavior)
-        print(f"Created self.session with custom behavior: {fast_session.behavior.name}")
+        print(f"Created session with custom behavior: {fast_session.behavior.name}")
 
         # Operations with DataSet + key_value
         key2 = self.users.id("user456")
         await fast_session.upsert(key2).put({"name": "Bob", "age": 25}).execute()
-        print("Upserted using fast self.session")
+        print("Upserted using fast session")
 
         # Query all records in set
         stream = await fast_session.query(self.users).execute()
