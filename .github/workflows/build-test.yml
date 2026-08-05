@@ -90,6 +90,9 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/unit -v
 
+      - name: Run canonical code examples
+        run: make examples
+
   integration:
     runs-on: ubuntu-latest
     strategy:
