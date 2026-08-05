@@ -592,7 +592,7 @@ class _BlockingQueryDispatch:
             ``(kind, payload)`` where ``kind`` is ``"recordset"`` for
             non-chunked or ``"chunked"`` for chunk-resumable queries. The
             payload for ``"recordset"`` is the PAC ``Recordset``; for
-            ``"chunked"`` it is ``(recordset, reexecute_callable)``.
+            ``"chunked"`` it is ``(recordset, reexecute_callable, total_limit)``.
             Returns ``None`` when the spec shape isn't a keyless dataset
             query (caller falls back).
         """
@@ -608,9 +608,9 @@ class _BlockingQueryDispatch:
         if not is_keyless:
             return None
 
-        recordset, reexecute = self._execute_dataset_query_blocking()
+        recordset, reexecute, chunk_total_limit = self._execute_dataset_query_blocking()
         if reexecute is not None:
-            return ("chunked", (recordset, reexecute))
+            return ("chunked", (recordset, reexecute, chunk_total_limit))
         return ("recordset", recordset)
 
     def _execute_batch_read_blocking(
@@ -753,7 +753,12 @@ class _BlockingQueryDispatch:
                     OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
         else:
             policy = self._apply_txn(QueryPolicy())
+        chunk_total_limit = 0
         if self._chunk_size is not None and self._chunk_size > 0:
+            # Capture the caller's limit()/max_records() before chunk_size
+            # overwrites the field with the per-chunk fetch size; the total cap
+            # is enforced client-side by the stream's _chunk_limit below.
+            chunk_total_limit = policy.max_records or 0
             policy.max_records = self._chunk_size
         hint = self._query_hint
         use_server_query_selection = self._use_server_query_selection(hint)
@@ -802,9 +807,9 @@ class _BlockingQueryDispatch:
                 def _reexecute_blocking(pf: PartitionFilter) -> Any:
                     return client.query_blocking(statement, pf, policy=policy)
 
-            return (recordset, _reexecute_blocking)
+            return (recordset, _reexecute_blocking, chunk_total_limit)
 
-        return (recordset, None)
+        return (recordset, None, 0)
     def _handle_error_blocking_singlekey(
         self,
         key: Key,

@@ -373,10 +373,11 @@ class RecordStream:
         if 0 < self._chunk_limit <= self._chunk_count:  # type: ignore[attr-defined]
             return False
 
-        # PAC Recordset's partition_filter() is currently async. For the
-        # sync path we rely on the recordset object to expose a
-        # `partition_filter_sync()` method, OR the reexecute callable to
-        # handle the cursor advance internally and return None when done.
+        # PAC's async `partition_filter()` can't be awaited on the blocking
+        # path, so the sync cursor is read via `partition_filter_sync()` (it
+        # blocks on PAC's per-thread runtime). The getattr guard keeps this
+        # degrading cleanly — rather than raising — against a PAC too old to
+        # expose it; the pin requires a build that does.
         pf_getter = getattr(self._chunk_recordset, "partition_filter_sync", None)  # type: ignore[attr-defined]
         if pf_getter is None:
             return False

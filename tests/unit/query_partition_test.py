@@ -92,28 +92,10 @@ class TestOnPartition:
             _query_builder().on_partition(4096)
 
 
-class TestOnPartitions:
-    """on_partitions(*ids) → by_id for one id, contiguous by_range otherwise."""
+class TestPartitionHelperSurface:
+    """The builder exposes exactly one single-partition and one range helper."""
 
-    def test_single_id_uses_by_id(self):
-        builder = _query_builder().on_partitions(7)
-        pf = builder._partition_filter
-        assert (pf.begin, pf.count) == (7, 1)
-
-    def test_contiguous_ids(self):
-        builder = _query_builder().on_partitions(1000, 1001, 1002)
-        pf = builder._partition_filter
-        assert (pf.begin, pf.count) == (1000, 3)
-
-    def test_contiguous_ids_order_independent(self):
-        builder = _query_builder().on_partitions(3, 1, 2)
-        pf = builder._partition_filter
-        assert (pf.begin, pf.count) == (1, 3)
-
-    def test_non_contiguous_ids_span_min_to_max(self):
-        """Non-contiguous ids collapse to the [min, max] span (documented
-        limitation of the single-span filter model): the gap partitions are
-        included, but nothing outside the requested min/max is."""
-        builder = _query_builder().on_partitions(4, 6, 8)
-        pf = builder._partition_filter
-        assert (pf.begin, pf.count) == (4, 5)
+    def test_no_plural_partition_helper(self):
+        """A plural helper would imply discrete ids, which a single (begin, count)
+        span cannot express; callers use on_partition or on_partition_range."""
+        assert not hasattr(_query_builder(), "on_partitions")
