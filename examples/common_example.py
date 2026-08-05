@@ -327,7 +327,6 @@ class CommonExample(Example):
         # ------------------------------------------------------------------
         # Query hints
         # ------------------------------------------------------------------
-        from aerospike_sdk.aio.operations.query import QueryHint
 
         print("\nQuery with hint")
         stream = await (
