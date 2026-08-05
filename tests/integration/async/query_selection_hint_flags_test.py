@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter, ResultCode
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import DataSet, QueryHint
+from aerospike_sdk import DataSet, Filter, QueryHint, ResultCode
 
 from tests.integration.query_selection_helpers import (
     BIN_AGE,

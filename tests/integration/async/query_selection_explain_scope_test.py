@@ -18,9 +18,9 @@
 from __future__ import annotations
 
 import pytest_asyncio
-from aerospike_async import CollectionIndexType, IndexType
+from aerospike_async import IndexType
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import CollectionIndexType, DataSet
 
 from tests.integration.query_selection_helpers import (
     NS,

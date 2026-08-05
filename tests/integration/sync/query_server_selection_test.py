@@ -20,9 +20,8 @@ from __future__ import annotations
 import time
 
 import pytest
-from aerospike_async import Filter, QueryDuration, ResultCode
 
-from aerospike_sdk import DataSet, Exp, QueryHint, val
+from aerospike_sdk import DataSet, Exp, Filter, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (

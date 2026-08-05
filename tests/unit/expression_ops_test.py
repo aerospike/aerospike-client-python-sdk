@@ -17,7 +17,7 @@
 
 Covers:
 - _build_exp_write_flags bitmask construction
-- parse_ael -> FilterExpression conversion
+- parse_ael -> Exp conversion
 - QueryBinBuilder.select_from
 - OP_NOT_APPLICABLE guard on dataset queries with expression ops
 - WriteBinBuilder expression methods
@@ -26,8 +26,8 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 
-from aerospike_sdk import Key
-from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
+from aerospike_sdk import Exp, Key
+from aerospike_async import ExpReadFlags, ExpWriteFlags
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.aio.operations.query import (
@@ -115,7 +115,7 @@ class TestParseAel:
 
     def test_string_converted_via_parse_ael(self):
         result = parse_ael("$.age + 1")
-        assert isinstance(result, FilterExpression)
+        assert isinstance(result, Exp)
 
 
 # ===================================================================

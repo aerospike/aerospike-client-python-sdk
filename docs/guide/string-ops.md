@@ -171,7 +171,7 @@ assert rec.bins["name_length"] == 17
 ## Operating on Nested Strings (CTX)
 
 String operations apply to any string-typed value reachable via a CDT
-path. Use the low-level :class:`~aerospike_async.StringOperation` with
+path. Use the low-level :class:`~aerospike_sdk.StringOperation` with
 ``ctx=[...]`` and ``add_operation`` for nested targets:
 
 ```python
@@ -207,7 +207,7 @@ its wire format carries no payload to hold the wrapper.
 ## Write Flags
 
 Modify operations accept a ``flags`` keyword argument carrying a
-:class:`~aerospike_async.StringWriteFlags` bitmask. The only meaningful
+:class:`~aerospike_sdk.StringWriteFlags` bitmask. The only meaningful
 flag today is ``NO_FAIL``, which suppresses **missing-bin** errors so an
 op against an absent bin becomes a no-op success instead of a
 ``BIN_NOT_FOUND`` error.
@@ -295,9 +295,9 @@ count = row.typed_operation_result(2).get_long()   # 11
 
 ## See Also
 
-- {class}`~aerospike_async.StringOperation` — low-level operation factory
-- {class}`~aerospike_async.StringWriteFlags` — write-side flag bitmask
-- {class}`~aerospike_async.StringRegexFlags` — regex flag bitmask
-- {class}`~aerospike_async.StringNumericType` — numeric-type filter for ``str_is_numeric``
+- {class}`~aerospike_sdk.StringOperation` — low-level operation factory
+- {class}`~aerospike_sdk.StringWriteFlags` — write-side flag bitmask
+- {class}`~aerospike_sdk.StringRegexFlags` — regex flag bitmask
+- {class}`~aerospike_sdk.StringNumericType` — numeric-type filter for ``str_is_numeric``
 - [CDT Operations](cdt-operations.md) — list/map structural ops
 - [AEL Filter Expressions](expression-ael.md) — string predicates in AEL
