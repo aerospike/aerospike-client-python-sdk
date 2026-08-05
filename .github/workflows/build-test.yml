@@ -104,7 +104,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - uses: ./.github/actions/setup-aerospike-server
+      - uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@bd168dedaa4fc0b17a560541779d815540eded2d # v3.7.0
         with:
           oidc-provider: ${{ vars.JFROG_OIDC_PROVIDER }}
           oidc-audience: ${{ vars.JFROG_OIDC_AUDIENCE }}
