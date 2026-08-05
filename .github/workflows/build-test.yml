@@ -104,27 +104,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - uses: ./.github/actions/setup-aerospike-server
+        with:
+          oidc-provider: ${{ vars.JFROG_OIDC_PROVIDER }}
+          oidc-audience: ${{ vars.JFROG_OIDC_AUDIENCE }}
+          features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
+          enable-strong-consistency: "true"
+
       - name: Start Aerospike server
         run: |
-          # Server image must be >= 8.1.1 so path-expression / ops-projection
-          # tests run instead of skipping. 8.1.2+ unlocks the additional
-          # native-ExpOp coverage that consumes ``client_with_cdt_data_812``
-          # / ``client_812``; tests that need 8.1.2 and don't see an
-          # 8.1.2-routing seed (``AEROSPIKE_HOST_8_1_2``) will skip cleanly.
-          docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
-          for i in {1..10}; do
-            if docker exec aerospike-server asinfo -v "statistics" > /dev/null 2>&1; then
-              echo "Aerospike server is ready after $i seconds"
-              break
-            fi
-            if [ $i -eq 10 ]; then
-              echo "Aerospike server failed to start after 10 seconds"
-              docker logs aerospike-server
-              exit 1
-            fi
-            echo "Waiting for Aerospike server... ($i/10)"
-            sleep 1
-          done
           echo "Configuring namespace for TTL support..."
           docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
           docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
