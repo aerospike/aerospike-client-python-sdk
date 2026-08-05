@@ -14,7 +14,7 @@ class DatasetExample(Example):
         print(f"DataSet: namespace={self.users.namespace}, set={self.users.set_name}")
 
         # Single keys (various types)
-        key_str = self.users.id("user123")
+        key_str = self.key
         key_int = self.users.id(456)
         key_bytes = self.users.id(b"bytes_key")
         print("\nSingle keys:")
