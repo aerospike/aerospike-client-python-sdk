@@ -95,6 +95,10 @@ jobs:
     strategy:
       matrix:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        test: [
+          code-examples,
+          integration-tests
+        ]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -149,12 +153,14 @@ jobs:
         run: make generate-ael
 
       - name: Run canonical code examples
+        if: ${{ matrix.test == 'code-examples' }}
         run: make examples
         env:
           AEROSPIKE_HOST: localhost:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
 
       - name: Run integration tests
+        if: ${{ matrix.test == 'integration-tests' }}
         env:
           AEROSPIKE_HOST: localhost:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
