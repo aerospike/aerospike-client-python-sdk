@@ -90,9 +90,6 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/unit -v
 
-      - name: Run canonical code examples
-        run: make examples
-
   integration:
     runs-on: ubuntu-latest
     strategy:
@@ -173,6 +170,9 @@ jobs:
             echo "=== End of Server Log ==="
             exit 1
           fi
+
+      - name: Run canonical code examples
+        run: make examples
 
   # Free-threaded (PEP 703) Python builds.  Catches no-GIL regressions that
   # would otherwise land silently: anything that relies on the GIL for
