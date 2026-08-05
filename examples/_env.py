@@ -165,8 +165,7 @@ class Example:
         self._sc = sc
         self.cluster = await connect(sc=sc).connect()
         self.session = self.cluster.create_session(behavior)
-        namespace = sc_namespace() if sc else "test"
-        self.users = DataSet.of(namespace, "users")
+        self.users = DataSet.of("test", "users")
         self.key = self.users.id("user123")
 
     async def cleanup(self) -> None:
