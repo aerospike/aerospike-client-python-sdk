@@ -89,4 +89,4 @@ class StringOperationsExample(Example):
 
     async def cleanup(self):
         await self.session.delete(self.key).execute()
-        super().cleanup()
+        await super().cleanup()

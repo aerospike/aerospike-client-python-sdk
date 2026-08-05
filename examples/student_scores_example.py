@@ -55,4 +55,4 @@ class StudentScoresExample(Example):
 
     async def cleanup(self):
         await self.session.truncate(self.class10a)
-        super().cleanup()
+        await super().cleanup()
