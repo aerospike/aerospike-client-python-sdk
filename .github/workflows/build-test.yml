@@ -47,6 +47,27 @@ jobs:
             echo "::warning title=PAC pin not found in dev repo::aerospike-async==${version} has no wheels in ${{ vars.JFROG_PROJECT }}-pypi-dev-local. Fix the pin in pyproject.toml or publish the version from PAC."
           fi
 
+  # Lint gate: fails the build on any ruff error, so the tree-wide cleanup can't
+  # regress. Pure static check — no server, PAC dev-index, or ANTLR generation
+  # needed (generated/ is gitignored, so ruff lints the same tracked files as
+  # local dev). Ruff is pinned so a new release adding rules can't spuriously break CI.
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff==0.15.12
+
+      - name: Ruff check
+        run: ruff check .
+
   unit:
     runs-on: ubuntu-latest
     strategy:
