@@ -59,6 +59,7 @@ class CdtPathExpressionExample(Example):
         if not await _env.server_at_least(self.session, (8, 1, 1)):
             print("Skipped: CDT path operations require Aerospike 8.1.1+.")
             self._skipped = True
+            return
 
     async def _bins(self, key) -> dict:
         return (await (await self.session.query(key).execute()).first_or_raise()).record.bins

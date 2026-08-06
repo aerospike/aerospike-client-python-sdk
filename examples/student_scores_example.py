@@ -28,6 +28,7 @@ class StudentScoresExample(Example):
     async def run(self) -> None:
         if not await _env.server_at_least(self.session, (8, 1, 3)):
             print("Skipped: AEL path queries require Aerospike 8.1.3+.")
+            self._skipped = True
             return
 
         await self.session.truncate(self.class10a)

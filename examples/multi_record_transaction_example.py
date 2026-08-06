@@ -35,6 +35,8 @@ class MultiRecordTransactionExample(Example):
             if exc.result_code == ResultCode.UNSUPPORTED_FEATURE:
                 print("Skipped: multi-record transactions require a "
                       "strong-consistency namespace (this namespace is AP).")
+                self._skipped = True
+                return
             else:
                 raise
 

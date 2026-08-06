@@ -25,6 +25,7 @@ class StringOperationsExample(Example):
         if not await _env.server_at_least(self.session, (8, 1, 3)):
             print("Skipped: server-side string operations require Aerospike 8.1.3+.")
             self._skipped = True
+            return
 
     async def cleanup(self) -> None:
         if not self._skipped and self.session is not None:
