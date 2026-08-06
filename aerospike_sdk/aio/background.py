@@ -22,10 +22,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
-from aerospike_sdk.loggers import SdkLoggers
-
-log = logging.getLogger(SdkLoggers.BACKGROUND)
-
 from aerospike_async import (
     Client,
     ExecuteTask,
@@ -34,6 +30,7 @@ from aerospike_async import (
     RecordExistsAction,
 )
 
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.background_shared import (
     dataset_statement,
     make_background_write_policy,
@@ -46,6 +43,8 @@ from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_un
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
+
+log = logging.getLogger(SdkLoggers.BACKGROUND)
 
 
 class _OpType(enum.Enum):

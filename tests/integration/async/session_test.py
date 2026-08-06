@@ -16,13 +16,13 @@
 """Tests for Session wrapper."""
 
 import logging
-
-import pytest
 from datetime import timedelta
 
-log = logging.getLogger(__name__)
+import pytest
 
 from aerospike_sdk import Behavior, DataSet
+
+log = logging.getLogger(__name__)
 
 
 @pytest.fixture

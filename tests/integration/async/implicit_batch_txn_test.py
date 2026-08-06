@@ -225,3 +225,24 @@ async def test_single_key_write_is_not_wrapped(session, ds, txn_spy):
     await session.upsert(key).put({"n": 1}).execute()
 
     assert txn_spy == []
+
+
+async def test_multi_namespace_batch_is_not_wrapped(session, ds, txn_spy):
+    """A batch spanning namespaces cannot be a transaction, so it goes
+    unwrapped and each key is answered on its own merits."""
+    good = ds.id(80)
+    bad = DataSet.of("no_such_namespace", ds.set_name).id(80)
+    await _reset(session, [good])
+
+    stream = await (
+        session.upsert(key=good).bin("n").set_to(9)
+        .upsert(bad).bin("n").set_to(9)
+        .execute()
+    )
+    rows = await stream.collect()
+
+    assert txn_spy == []
+    assert len(rows) == 2
+    assert rows[0].is_ok
+    assert not rows[1].is_ok
+    assert await _bin_values(session, [good], "n") == {80: 9}

@@ -24,11 +24,8 @@ Covers:
 - BinBuilder -> QueryBuilder transitions
 """
 
-import pytest
-from unittest.mock import MagicMock
-
 from aerospike_sdk import Exp, Key
-from aerospike_async import Operation, RecordExistsAction, WritePolicy
+from aerospike_async import RecordExistsAction, WritePolicy
 
 from aerospike_sdk.aio.operations.query import (
     _OperationSpec,
@@ -514,7 +511,7 @@ class TestChainLevelDefaults:
         qb._single_key = _make_key(1)
         qb.default_expire_record_after_seconds(600)
 
-        wsb = qb.upsert(_make_key(2))
+        qb.upsert(_make_key(2))
         qb._finalize_current_spec()
 
         assert qb._specs[1].ttl_seconds == 600

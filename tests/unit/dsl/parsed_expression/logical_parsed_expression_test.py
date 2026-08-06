@@ -15,7 +15,6 @@
 
 """Unit tests for logical parsed expressions (filter + exp from AEL)."""
 
-import pytest
 from aerospike_sdk import (
     Exp,
     Index,

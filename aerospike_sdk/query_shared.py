@@ -128,6 +128,34 @@ from aerospike_sdk.operations_shared import (
     _to_expiration,
     _WriteVerbs,
 )
+from aerospike_sdk.policy.policy_mapper import (
+    resolve_durable_delete,
+    to_batch_policy,
+    to_read_policy,
+    to_write_policy,
+)
+from aerospike_sdk.background_shared import (
+    make_background_write_policy,
+    reject_unsupported_background_write_ops,
+)
+from aerospike_sdk.ael.parser import parse_ael_with_index
+from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.error_strategy import (
+    ErrorHandler,
+    OnError,
+    _ErrorDisposition,
+)
+from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.implicit_txn import (
+    implicit_txn_enabled,
+)
+from aerospike_sdk.exceptions import (
+    _convert_pac_exception,
+    _result_code_to_exception,
+)
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
+from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:
     # Leaf classes, referenced here only in annotations (safe circular
@@ -185,37 +213,6 @@ def _resolve_hll_flags(
         flags |= int(HLLWriteFlags.ALLOW_FOLD)
     return flags
 
-
-
-from aerospike_sdk.policy.policy_mapper import (
-    resolve_durable_delete,
-    to_batch_policy,
-    to_read_policy,
-    to_write_policy,
-)
-
-from aerospike_sdk.background_shared import (
-    make_background_write_policy,
-    reject_unsupported_background_write_ops,
-)
-from aerospike_sdk.ael.parser import parse_ael, parse_ael_with_index
-from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
-from aerospike_sdk.error_strategy import (
-    ErrorHandler,
-    OnError,
-    _ErrorDisposition,
-)
-from aerospike_sdk.hll_config import HllConfig
-from aerospike_sdk.implicit_txn import (
-    implicit_txn_enabled,
-)
-from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
-    _result_code_to_exception,
-)
-from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
-from aerospike_sdk.record_stream import RecordStream
 
 @dataclass(frozen=True)
 class QueryHint:
@@ -573,19 +570,28 @@ class _QueryBuilderBase:
             policy.txn = self._txn
         return policy
 
-    def _implicit_txn_precheck(self) -> bool:
+    def _implicit_txn_precheck(self, keys: Sequence[Key]) -> bool:
         """Cheap synchronous half of the implicit batch-write txn gate.
 
         The multi-key write dispatchers are inherently write-bearing, so
         the has-writes condition is implied; this checks SC namespace, no
-        explicit txn (and no ``with_txn(None)`` opt-out), and the setting.
-        Callers confirm cluster MRT capability afterward — async paths
-        via ``await sdk_client._supports_mrt()``, so the coroutine is only
+        explicit txn (and no ``with_txn(None)`` opt-out), the setting, and
+        that every key shares the builder's namespace. Callers confirm
+        cluster MRT capability afterward — async paths via
+        ``await sdk_client._supports_mrt()``, so the coroutine is only
         created once the cheap conditions pass.
         """
-        return not self._txn_opted_out and implicit_txn_enabled(
+        if self._txn_opted_out or not implicit_txn_enabled(
             self._sdk_client, self._txn, self._namespace_mode
-        )
+        ):
+            return False
+        # A transaction cannot span namespaces. Wrapping is SDK-initiated,
+        # so decline it for a mixed-namespace batch instead of turning a
+        # request the server would answer per key into a whole-batch
+        # client-side rejection. Scanned last: the checks above reject the
+        # overwhelmingly common AP case before we touch the keys.
+        namespace = self._namespace
+        return all(key.namespace == namespace for key in keys)
 
     def _implicit_txn_settings(self) -> Any:
         """Live transaction settings from the owning SDK client."""

@@ -46,6 +46,9 @@ class RecordResult:
         record: :class:`~aerospike_async.Record` payload, or ``None`` if not
             returned (errors, not found, or UDF error rows).
         result_code: Server :class:`~aerospike_async.exceptions.ResultCode`.
+            Reads ``OK`` on client-side failure rows too, since those never
+            reach the server to earn a code — test :attr:`is_ok` rather than
+            this field when deciding whether a row succeeded.
         in_doubt: ``True`` when a write may have completed despite an error.
         index: Batch position, or ``0`` / ``-1`` depending on origin.
         exception: Embedded :class:`~aerospike_sdk.exceptions.AerospikeError`
@@ -109,10 +112,16 @@ class RecordResult:
 
     @property
     def is_ok(self) -> bool:
-        """Whether :attr:`result_code` is ``ResultCode.OK``.
+        """Whether this row succeeded.
+
+        ``True`` only when :attr:`result_code` is ``ResultCode.OK`` *and* no
+        :attr:`exception` is attached. Client-side failures carry no server
+        result code, so a row reporting one is a failure even though its
+        code reads ``OK``.
 
         Returns:
-            ``True`` on success; ``False`` for any other result code.
+            ``True`` on success; ``False`` for any other result code, and for
+            client-side failures carrying an :attr:`exception`.
 
         Example::
 
@@ -120,7 +129,7 @@ class RecordResult:
             if row is not None and row.is_ok and row.record:
                 bins = row.record.bins
         """
-        return self.result_code == ResultCode.OK
+        return self.exception is None and self.result_code == ResultCode.OK
 
     def or_raise(self) -> RecordResult:
         """Return ``self`` if successful, else raise from :attr:`exception` or result code.

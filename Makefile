@@ -1,4 +1,4 @@
-.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare
+.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin
 
 # ANTLR JAR location - download if not present
 ANTLR_JAR ?= antlr-4.13.0-complete.jar
@@ -40,6 +40,9 @@ test-unit:
 
 test-int:
 	pytest tests/integration
+
+check-pin:
+	pytest tests/unit/pin_drift_test.py -q
 
 examples:
 	@python examples/run_all_examples.py

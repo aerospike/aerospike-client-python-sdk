@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import threading
 import time
@@ -65,9 +66,8 @@ _SELF_TEST_VAL = 0x5AFEC0DE
 # phase — without this, a PAC retry loop on an unroutable partition keeps
 # the bench process alive forever even though no real op makes progress.
 # Override via `BENCH_SELFTEST_TIMEOUT_SEC` env var (positive float seconds).
-import os as _os  # local import — only the workers module needs it for this
 def _selftest_timeout_default() -> float:
-    raw = _os.environ.get("BENCH_SELFTEST_TIMEOUT_SEC", "").strip()
+    raw = os.environ.get("BENCH_SELFTEST_TIMEOUT_SEC", "").strip()
     if raw:
         try:
             v = float(raw)
@@ -1688,8 +1688,6 @@ def run_legacy_sync(
     if cfg.batch_size > 1:
         raise NotImplementedError("legacy-sync mode does not support --batch-size > 1.")
 
-    import os as _os
-
     try:
         import aerospike
     except ImportError as e:
@@ -1711,7 +1709,7 @@ def run_legacy_sync(
     use_services_alt = (
         cli_alt
         if cli_alt is not None
-        else _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
+        else os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
     )
     config: dict = {"hosts": hosts}
     if use_services_alt:

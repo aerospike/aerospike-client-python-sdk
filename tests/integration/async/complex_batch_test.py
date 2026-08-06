@@ -723,7 +723,7 @@ class TestMultiKeyBatchWrite:
             .upsert([k1, k2, k3]).bin("status").set_to("batch_written")
             .execute()
         )
-        results = await rs.collect()
+        await rs.collect()
 
         for k in (k1, k2, k3):
             rec_result = await (await session.query(k).execute()).first_or_raise()

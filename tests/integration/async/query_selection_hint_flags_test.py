@@ -32,7 +32,6 @@ from tests.integration.query_selection_helpers import (
     BIN_SCORE,
     HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
-    HINT_KEY_PREFIX,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
     NS,

@@ -66,15 +66,22 @@ def test_query_with_dataset(session):
         if count >= 5:
             break
 
-def test_query_with_single_key(cluster):
+def test_query_with_single_key(session):
     """Test query using a single Key."""
     users = DataSet.of("test", "query_test")
-    key = users.id(5)
+    result = session.query(users.id(5)).execute().first_or_raise()
+    assert result.is_ok
+    assert result.record.bins == {"id": 5, "age": 25, "name": "User5"}
 
-def test_query_with_multiple_keys(cluster):
+def test_query_with_multiple_keys(session):
     """Test query using multiple Keys."""
     users = DataSet.of("test", "query_test")
-    keys = users.ids(6, 7)
+    results = session.query(users.ids(6, 7)).execute().collect()
+    assert all(r.is_ok for r in results)
+    by_idx = {r.index: r for r in results}
+    assert set(by_idx) == {0, 1}
+    assert by_idx[0].record.bins["id"] == 6
+    assert by_idx[1].record.bins["id"] == 7
 
 def test_query_with_bins(session):
     """Test query with specific bin selection."""

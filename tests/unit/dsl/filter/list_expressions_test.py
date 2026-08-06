@@ -15,9 +15,7 @@
 
 """Unit tests for list expressions in filter context."""
 
-import pytest
-
-from aerospike_sdk import CollectionIndexType, CTX, Exp, Filter, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
+from aerospike_sdk import CollectionIndexType, CTX, Filter, Index, IndexContext, IndexTypeEnum, parse_ael_with_index
 
 NAMESPACE = "test1"
 

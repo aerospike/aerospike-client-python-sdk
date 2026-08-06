@@ -53,10 +53,7 @@ from aerospike_sdk.operations_shared import (
     _to_expiration,
 )
 
-from aerospike_sdk.query_shared import _OperationSpec  # noqa: E402
-
-log = logging.getLogger(SdkLoggers.QUERY)
-
+from aerospike_sdk.query_shared import _OperationSpec
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_query_policy,
@@ -79,13 +76,18 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
+log = logging.getLogger(SdkLoggers.QUERY)
+
 
 class _BlockingQueryDispatch:
     """Sync blocking dispatchers; see module docstring."""
 
-    def _implicit_txn_gate_blocking(self) -> bool:
+    def _implicit_txn_gate_blocking(self, keys: Sequence[Key]) -> bool:
         """Full gate for blocking dispatchers (precheck + MRT capability)."""
-        return self._implicit_txn_precheck() and self._sdk_client._supports_mrt_blocking()
+        return (
+            self._implicit_txn_precheck(keys)
+            and self._sdk_client._supports_mrt_blocking()
+        )
 
     def _ensure_namespace_mode_blocking(self) -> None:
         """Sync counterpart of :meth:`_ensure_namespace_mode`.
@@ -171,7 +173,7 @@ class _BlockingQueryDispatch:
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_apply_blocking(
@@ -202,7 +204,7 @@ class _BlockingQueryDispatch:
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate_blocking(
@@ -560,7 +562,7 @@ class _BlockingQueryDispatch:
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
             if (
-                self._implicit_txn_precheck()
+                self._implicit_txn_precheck(all_keys)
                 and any(not isinstance(op, BatchReadOp) for op in all_ops)
                 and self._sdk_client._supports_mrt_blocking()
             ):
@@ -657,7 +659,7 @@ class _BlockingQueryDispatch:
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate_blocking(
@@ -701,7 +703,7 @@ class _BlockingQueryDispatch:
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_delete_blocking(

@@ -15,7 +15,9 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_sdk.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.aio.session import _parse_namespace_info_body
+from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -92,9 +94,29 @@ def pytest_configure(config):
 
     host = os.environ.get("AEROSPIKE_HOST", "localhost:3000").strip()
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
+    pinned = os.environ.get("AEROSPIKE_SC_NAMESPACE", "").strip()
+    # State the routing unconditionally. The SC suites silently fall back to
+    # AEROSPIKE_HOST when AEROSPIKE_HOST_SC is unset, which otherwise makes a
+    # green run indistinguishable from one that never reached an SC namespace.
+    # The namespace half is confirmed later, on a live connection, by
+    # :func:`_report_sc_routing`.
+    sc_seed_note = (
+        "(AEROSPIKE_HOST_SC)" if sc
+        else "(AEROSPIKE_HOST_SC unset - fell back to AEROSPIKE_HOST)"
+    )
+    ns_note = (
+        f"{pinned!r} (pinned via AEROSPIKE_SC_NAMESPACE)" if pinned
+        else "auto-select (AEROSPIKE_SC_NAMESPACE unset)"
+    )
+    print(
+        "\nIntegration routing:\n"
+        f"  general suites -> {host!r}\n"
+        f"  SC suites      -> {(sc or host)!r} {sc_seed_note}\n"
+        f"  SC namespace   -> {ns_note}\n",
+    )
     if sc and host == sc:
         print(
-            f"\nIntegration routing: AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
+            f"AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
             f"{host!r}, so general tests hit the same seed as SC suites. Point "
             "AEROSPIKE_HOST at your AP/default cluster and AEROSPIKE_HOST_SC at SC only.\n",
         )
@@ -230,8 +252,89 @@ def aerospike_host():
     return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
 
 
+def _terminal_emit(config):
+    """Return a writer that bypasses pytest's per-test output capture.
+
+    SC routing lines are emitted from session-scoped fixtures, where a bare
+    ``print`` is captured and only surfaces under ``-s`` or on failure. The
+    terminal reporter writes straight to the console; fall back to ``print``
+    when it is absent (``-p no:terminal``).
+    """
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    return reporter.write_line if reporter is not None else print
+
+
+def _report_sc_routing(client, config) -> None:
+    """Report which namespace the SC suites will use, and whether it is really SC.
+
+    Positive confirmation, so a green SC run cannot be mistaken for one that
+    quietly skipped or landed on an AP namespace. Mirrors
+    ``resolve_sc_namespace``'s choice (a pinned ``AEROSPIKE_SC_NAMESPACE`` wins,
+    otherwise the lone SC namespace) and reports the same ``namespace/<name>``
+    verdict the suites gate on, rather than a second opinion. Diagnostic only —
+    it never fails a run.
+    """
+    emit = _terminal_emit(config)
+
+    pinned = os.environ.get("AEROSPIKE_SC_NAMESPACE", "").strip()
+    try:
+        verdicts = {}
+        for ns in sorted(SyncInfoCommands(client).namespaces()):
+            # Same multi-node scan as ``Session.namespace_sc_status``: a node
+            # reporting the namespace as unknown wins, otherwise the last node
+            # to report ``strong-consistency`` decides.
+            missing = False
+            sc_val = None
+            for body in client.info_blocking(f"namespace/{ns}").values():
+                if not body:
+                    continue
+                exists, sc_opt = _parse_namespace_info_body(body)
+                if not exists:
+                    missing = True
+                    break
+                if sc_opt is not None:
+                    sc_val = sc_opt
+            verdicts[ns] = not missing and bool(sc_val)
+    except Exception as exc:
+        emit("")
+        emit(f"SC routing: namespace check unavailable ({exc})")
+        return
+
+    table = ", ".join(f"{ns}(is_sc={v})" for ns, v in verdicts.items()) or "(none reported)"
+    emit("")
+    emit(f"SC routing: namespaces on SC seed: {table}")
+
+    sc_names = [ns for ns, is_sc in verdicts.items() if is_sc]
+    if pinned:
+        chosen, why = pinned, "pinned"
+    elif len(sc_names) == 1:
+        chosen, why = sc_names[0], "auto-selected"
+    else:
+        reason = (
+            "several SC namespaces - set AEROSPIKE_SC_NAMESPACE"
+            if sc_names else
+            "no namespace has strong-consistency"
+        )
+        emit(f"SC routing: unresolved ({reason}) -> SC suites will SKIP")
+        return
+
+    is_sc = verdicts.get(chosen)
+    if is_sc:
+        emit(f"SC routing: SC suites will use namespace {chosen!r} ({why}) -> is_sc=True")
+    elif is_sc is False:
+        emit(
+            f"SC routing: namespace {chosen!r} ({why}) is AP mode (is_sc=False) "
+            "-> SC suites will SKIP",
+        )
+    else:
+        emit(
+            f"SC routing: namespace {chosen!r} ({why}) is not present on this seed "
+            "-> SC suites will SKIP",
+        )
+
+
 @pytest.fixture(scope="session")
-def aerospike_host_sc():
+def aerospike_host_sc(pytestconfig):
     """Seed for SC / MRT / durable-delete integration tests.
 
     Uses ``AEROSPIKE_HOST_SC`` when set; otherwise the same seed as
@@ -240,7 +343,8 @@ def aerospike_host_sc():
     Probes the seed once at session scope and ``pytest.skip``s every
     dependent test when the SC cluster is unreachable, rather than
     surfacing a connect error per test. Uses :func:`new_client_blocking`
-    so we don't need an asyncio loop just to probe.
+    so we don't need an asyncio loop just to probe — and therefore catches
+    PAC's ``ConnectionError``, not the SDK-level one it converts to.
     """
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
     seed = sc if sc else os.environ.get("AEROSPIKE_HOST", "localhost:3000")
@@ -257,6 +361,14 @@ def aerospike_host_sc():
     try:
         client = new_client_blocking(probe_policy, seed)
     except PacConnectionError as exc:
+        # Announce it as well as skipping: a bare skip is a single 's' unless the
+        # run asked for -rs, which makes "no SC cluster" look like a green SC run.
+        emit = _terminal_emit(pytestconfig)
+        emit("")
+        emit(
+            f"SC routing: SC seed {seed!r} is UNREACHABLE "
+            "-> every SC suite will SKIP",
+        )
         pytest.skip(
             f"SC cluster at {seed!r} is unreachable "
             f"(AEROSPIKE_HOST_SC={os.environ.get('AEROSPIKE_HOST_SC', '')!r}). "
@@ -264,6 +376,7 @@ def aerospike_host_sc():
             f"AEROSPIKE_HOST. Underlying error: {exc}"
         )
     else:
+        _report_sc_routing(client, pytestconfig)
         client.close_blocking()
 
     return seed

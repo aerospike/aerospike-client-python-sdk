@@ -2146,7 +2146,7 @@ class TestAdvancedExpFilters:
     async def test_filter_lscan(self, session_with_filter_exp):
         """Left scan: findBitLeft($.A, true) == 63 for key A."""
         key = DS.id("A")
-        expr = f"findBitLeft($.A, true) == 63"
+        expr = "findBitLeft($.A, true) == 63"
         await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
         await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
 

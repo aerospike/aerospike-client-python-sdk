@@ -15,7 +15,6 @@
 
 """Tests for IndexBuilder SDK API."""
 
-import asyncio
 import os
 
 import pytest

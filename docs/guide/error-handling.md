@@ -74,8 +74,14 @@ async for result in stream:
     if result.is_ok:
         print(result.record.bins)
     else:
-        print(f"Key failed: {result.result_code}")
+        print(f"Key failed: {result.exception or result.result_code}")
 ```
+
+Always branch on `is_ok`, not on `result_code`. A row that failed client-side —
+before the request reached the server — has no server result code, so its
+`result_code` reads `OK` and the failure is carried by `exception` instead.
+`is_ok` accounts for both, which is why the snippet above reports `exception`
+first.
 
 Or raise on any failure:
 

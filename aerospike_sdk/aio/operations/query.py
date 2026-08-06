@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from time import perf_counter
 from typing import (
@@ -56,7 +55,6 @@ from aerospike_sdk.operations_shared import (
     _WriteVerbs,
 )
 
-log = logging.getLogger(SdkLoggers.QUERY)
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_query_policy,
@@ -97,6 +95,9 @@ from aerospike_sdk.query_shared import (  # noqa: F401
     _resize_flags_or_default,
     _resolve_hll_flags,
 )
+
+log = logging.getLogger(SdkLoggers.QUERY)
+
 
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
@@ -353,7 +354,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 if (
-                    self._implicit_txn_precheck()
+                    self._implicit_txn_precheck(all_keys)
                     and any(not isinstance(op, BatchReadOp) for op in all_ops)
                     and await self._sdk_client._supports_mrt()
                 ):
@@ -614,7 +615,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
+            if (
+                self._implicit_txn_precheck(spec.keys)
+                and await self._sdk_client._supports_mrt()
+            ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_apply(
@@ -843,7 +847,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
+            if (
+                self._implicit_txn_precheck(spec.keys)
+                and await self._sdk_client._supports_mrt()
+            ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate(
@@ -865,7 +872,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
+            if (
+                self._implicit_txn_precheck(spec.keys)
+                and await self._sdk_client._supports_mrt()
+            ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_delete(
@@ -904,7 +914,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            if self._implicit_txn_precheck() and await self._sdk_client._supports_mrt():
+            if (
+                self._implicit_txn_precheck(spec.keys)
+                and await self._sdk_client._supports_mrt()
+            ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate(
