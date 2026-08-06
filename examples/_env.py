@@ -159,7 +159,21 @@ async def server_at_least(session, version: tuple[int, ...]) -> bool:
 from aerospike_sdk import Behavior, DataSet
 
 
-class Example:
+class ExampleMeta(type):
+    """Make ``await Example(...)`` run the async ``__init__``."""
+
+    def __call__(cls, *args, **kwargs):
+        async def _construct():
+            self = cls.__new__(cls)
+            await self.__init__(*args, **kwargs)
+            return self
+
+        return _construct()
+
+
+class Example(metaclass=ExampleMeta):
+    _skipped = False
+
     async def __init__(self, behavior: Behavior = Behavior.DEFAULT, *, sc: bool = False):
         self._behavior = behavior
         self._sc = sc
@@ -179,6 +193,8 @@ class Example:
 
 
 class SyncExample:
+    _skipped = False
+
     def __init__(self, behavior: Behavior = Behavior.DEFAULT):
         self._behavior = behavior
         self.cluster = sync_connect().connect()
@@ -200,9 +216,17 @@ class SdkConfigFileExample(Example):
     _CONFIG = Path(__file__).resolve().parent / "sdk-config-example.yaml"
     config_path: Path = _CONFIG
 
-    async def __init__(self):
-        os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(self.config_path)
-        await super().__init__()
+    async def __init__(self, host: "SdkConfigFileExample | None" = None):
+        if host is None:
+            os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(self.config_path)
+            await super().__init__()
+        else:
+            self._behavior = host._behavior
+            self._sc = host._sc
+            self.cluster = host.cluster
+            self.session = host.session
+            self.users = host.users
+            self.key = host.key
 
     async def cleanup(self) -> None:
         os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)

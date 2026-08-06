@@ -7,11 +7,8 @@ per-operation settings a behavior resolves. Connects with the config applied and
 runs one operation through a configured session.
 """
 
-import os
-from pathlib import Path
-
 from _env import SdkConfigFileExample
-from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk import DataSet
 from aerospike_sdk.policy import (
     OpKind,
     OpShape,
@@ -21,10 +18,8 @@ from aerospike_sdk.policy import (
 from aerospike_sdk.policy.sdk_config_loader import parse_sdk_config
 
 
-
-class CompleteYamlConfigExample(SdkConfigFileExample):
+class CompleteYamlSystemSettings(SdkConfigFileExample):
     async def run(self) -> None:
-        # 1. System settings (per-cluster connection + transaction config).
         print("=== System settings ===")
         for name, s in parse_sdk_config(self._CONFIG.read_text()).items():
             txns = s.transactions
@@ -33,7 +28,9 @@ class CompleteYamlConfigExample(SdkConfigFileExample):
                   f"tend_interval={s.tend_interval} "
                   f"implicit_batch_txns={txns.implicit_batch_write_transactions}")
 
-        # 2. Behaviors + inheritance.
+
+class CompleteYamlBehaviors(SdkConfigFileExample):
+    async def run(self) -> None:
         print("\n=== Behaviors ===")
         for name, behavior in sorted(get_all_behaviors().items()):
             if behavior.parent is None and name not in ("high-performance",):
@@ -43,7 +40,9 @@ class CompleteYamlConfigExample(SdkConfigFileExample):
             print(f"  {name:18s} parent={parent:14s} "
                   f"read.total_timeout={read.total_timeout}")
 
-        # 3. A live operation through a configured session.
+
+class CompleteYamlConfiguredOperation(SdkConfigFileExample):
+    async def run(self) -> None:
         print("\n=== Operation via configured session ===")
         session = self.cluster.create_session(get_behavior_or_default("batch-optimized"))
         key = DataSet.of("test", "cfg_complete").id("k1")

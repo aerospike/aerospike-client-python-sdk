@@ -10,50 +10,48 @@ import asyncio
 from _env import Example
 from aerospike_sdk import DataSet
 
-SET = DataSet.of("test", "set")
-
 
 class BatchExample(Example):
-    async def run(self):
-        print("*************")
-        print("* Batch tests")
-        print("*************")
-
-        await self.session.truncate(SET)
+    SET = DataSet.of("test", "set")
+    async def __init__(self):
+        await super().__init__()
+        await self.session.truncate(self.SET)
         await asyncio.sleep(0.2)
 
-        # ------------------------------------------------------------------
-        # Batch Insert — 5 keys with same bin values
-        # ------------------------------------------------------------------
+    async def cleanup(self):
+        if self.stream:
+            self.stream.close()
+
+
+class BatchInsert(BatchExample):
+    async def run(self) -> None:
         print("Batch Insert:")
         await (
-            self.session.insert(SET.ids(1, 2, 3, 4, 5))
+            self.session.insert(self.SET.ids(1, 2, 3, 4, 5))
             .bin("name").set_to("Fred")
             .bin("age").set_to(30)
             .bin("value").set_to(10)
             .execute()
         )
 
-        stream = await self.session.query(SET).execute()
-        async for rec in stream:
+        self.stream = await self.session.query(self.SET).execute()
+        async for rec in self.stream:
             print(f"  {rec.record_or_raise().bins}")
-        stream.close()
 
-        # ------------------------------------------------------------------
-        # Batch Modify — insert 3 + update 1 + delete 1 in one execute
-        # ------------------------------------------------------------------
+
+class BatchModify(BatchExample):
+    async def run(self) -> None:
         print("Batch Modify:")
         await (
-            self.session.insert(SET.ids(6, 7, 8))
+            self.session.insert(self.SET.ids(6, 7, 8))
             .bin("name").set_to("Wilma")
             .bin("age").set_to(33)
             .bin("value").set_to(20)
-            .update(SET.id(2)).bin("value").add(5)
-            .delete(SET.id(1))
+            .update(self.SET.id(2)).bin("value").add(5)
+            .delete(self.SET.id(1))
             .execute()
         )
 
-        stream = await self.session.query(SET).execute()
-        async for rec in stream:
+        self.stream = await self.session.query(self.SET).execute()
+        async for rec in self.stream:
             print(f"  {rec.record_or_raise().bins}")
-        stream.close()

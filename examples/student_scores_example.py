@@ -54,5 +54,6 @@ class StudentScoresExample(Example):
             print(f"{record.bins['name']}: {record.bins['scores']}")
 
     async def cleanup(self):
-        await self.session.truncate(self.class10a)
+        if self.session:
+            await self.session.truncate(self.class10a)
         await super().cleanup()

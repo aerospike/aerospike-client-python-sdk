@@ -54,14 +54,18 @@ def _price_at_most(limit: float) -> Exp:
 class CdtPathExpressionExample(Example):
     demo = DataSet.of("test", "cdt_path_demo")
 
+    async def __init__(self):
+        await super().__init__()
+        if not await _env.server_at_least(self.session, (8, 1, 1)):
+            print("Skipped: CDT path operations require Aerospike 8.1.1+.")
+            self._skipped = True
+
     async def _bins(self, key) -> dict:
         return (await (await self.session.query(key).execute()).first_or_raise()).record.bins
 
-    async def run(self) -> None:
-        if not await _env.server_at_least(self.session, (8, 1, 1)):
-            print("Skipped: CDT path operations require Aerospike 8.1.1+.")
-            return
 
+class CdtPathModifyElements(CdtPathExpressionExample):
+    async def run(self) -> None:
         # --- 1) Bin-root list: modify every element (add 10 to each) ---
         k1 = self.demo.id(1)
         await self.session.delete(k1).execute()
@@ -72,6 +76,9 @@ class CdtPathExpressionExample(Example):
         ).execute()
         print(f"1) +10 to each element -> {(await self._bins(k1))['nums']}")
 
+
+class CdtPathRemoveElements(CdtPathExpressionExample):
+    async def run(self) -> None:
         # --- 2) Bin-root list: remove elements matching a predicate (value > 5) ---
         k2 = self.demo.id(2)
         await self.session.delete(k2).execute()
@@ -82,6 +89,9 @@ class CdtPathExpressionExample(Example):
         ).execute()
         print(f"2) remove values > 5 -> {(await self._bins(k2))['nums']}")
 
+
+class CdtPathCheapTitles(CdtPathExpressionExample):
+    async def run(self) -> None:
         # --- 3) Nested map/list: collect titles of books priced <= 10 ---
         k3 = self.demo.id(3)
         await self.session.delete(k3).execute()
@@ -89,10 +99,19 @@ class CdtPathExpressionExample(Example):
         cheap_titles = CdtOperation.select_by_path(
             "catalog", SelectFlags.VALUE,
             [CTX.map_key("book"), CTX.all_children_with_filter(_price_at_most(10.0)),
-                CTX.map_key("title")],
+             CTX.map_key("title")],
         )
-        result = await (await self.session.query(k3).add_operation(cheap_titles).execute()).first_or_raise()
+        result = await (
+            await self.session.query(k3).add_operation(cheap_titles).execute()
+        ).first_or_raise()
         print(f"3) titles priced <= 10 -> {result.record.bins['catalog']}")
+
+
+class CdtPathBumpPrices(CdtPathExpressionExample):
+    async def run(self) -> None:
+        k3 = self.demo.id(3)
+        await self.session.delete(k3).execute()
+        await self.session.upsert(k3).bin("catalog").set_to(CATALOG).execute()
 
         # --- 4) Nested: multiply every book price by 1.10 (modify each) ---
         bump = Exp.num_mul([Exp.float_loop_var(LoopVarPart.VALUE), Exp.val(1.10)])
@@ -105,15 +124,19 @@ class CdtPathExpressionExample(Example):
         prices = [round(b["price"], 2) for b in (await self._bins(k3))["catalog"]["book"]]
         print(f"4) prices after 10% bump -> {prices}")
 
+
+class CdtPathAllTitles(CdtPathExpressionExample):
+    async def run(self) -> None:
+        k3 = self.demo.id(3)
+        await self.session.delete(k3).execute()
+        await self.session.upsert(k3).bin("catalog").set_to(CATALOG).execute()
+
         # --- 5) Expression read: project all titles into a result bin ---
         all_titles = CdtOperation.select_by_path(
             "catalog", SelectFlags.VALUE,
             [CTX.map_key("book"), CTX.all_children(), CTX.map_key("title")],
         )
-        result = await (await self.session.query(k3).add_operation(all_titles).execute()).first_or_raise()
+        result = await (
+            await self.session.query(k3).add_operation(all_titles).execute()
+        ).first_or_raise()
         print(f"5) all titles -> {result.record.bins['catalog']}")
-
-    async def cleanup(self):
-        for pk in (1, 2, 3):
-            await self.session.delete(self.demo.id(pk)).execute()
-        await super().cleanup()

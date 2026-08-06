@@ -18,14 +18,22 @@ from aerospike_sdk import DataSet, Exp, StringOperation
 
 class StringOperationsExample(Example):
     docs = DataSet.of("test", "string_ops_demo")
-    key = docs.id("row1")
 
-    async def run(self) -> None:
-
+    async def __init__(self):
+        await super().__init__()
+        self.key = self.docs.id("row1")
         if not await _env.server_at_least(self.session, (8, 1, 3)):
             print("Skipped: server-side string operations require Aerospike 8.1.3+.")
-            return
+            self._skipped = True
 
+    async def cleanup(self) -> None:
+        if not self._skipped and self.session is not None:
+            await self.session.delete(self.key).execute()
+        await super().cleanup()
+
+
+class StringOpsFluentBuilder(StringOperationsExample):
+    async def run(self) -> None:
         # --- 1) Fluent bin builder: strlen, substr, find, upper, get in one call ---
         # Each op contributes one positional result slot in request order,
         # read back by index with operation_result(i).
@@ -49,6 +57,9 @@ class StringOperationsExample(Example):
         print(f"  upper (modify)   -> {result.operation_result(4)!r}")
         print(f"  get after upper  -> {result.operation_result(5)!r}")
 
+
+class StringOpsFactories(StringOperationsExample):
+    async def run(self) -> None:
         # --- 2) Low-level StringOperation factories: same reads on a fresh value ---
         await self.session.upsert(self.key).bin("message").set_to("hello").execute()
 
@@ -66,6 +77,9 @@ class StringOperationsExample(Example):
             f"{result.operation_result(2)}"
         )
 
+
+class StringOpsQueryProjection(StringOperationsExample):
+    async def run(self) -> None:
         # --- 3) Query: select_from(Exp.string_*) projection into result bins ---
         await self.session.upsert(self.key).bin("message").set_to("hello").execute()
 
@@ -86,7 +100,3 @@ class StringOperationsExample(Example):
             f"stail={record.bins['stail']!r}, "
             f"find(ll)={record.bins['atLl']}"
         )
-
-    async def cleanup(self):
-        await self.session.delete(self.key).execute()
-        await super().cleanup()

@@ -9,32 +9,33 @@ builder API and AEL expressions to exercise map operations.
 import asyncio
 
 from _env import Example
-from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk import DataSet
 
-SET = DataSet.of("test", "map_remove_test")
+SOURCE_MAP = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+
 
 class MapRemoveExample(Example):
-    async def run(self):
-        await self.session.truncate(SET)
+    SET = DataSet.of("test", "map_remove_test")
+    async def __init__(self):
+        await super().__init__()
+        await self.session.truncate(self.SET)
         await asyncio.sleep(0.2)
 
-        source_map = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
-
         await (
-            self.session.upsert(SET.id(1))
-            .bin("m").set_to(source_map)
+            self.session.upsert(self.SET.id(1))
+            .bin("m").set_to(SOURCE_MAP)
             .execute()
         )
-        print(f"Source map: {source_map}\n")
+        print(f"Source map: {SOURCE_MAP}\n")
 
-        # 
-        # Test 1: Read map key by AEL
-        # ==================================================================
+
+class MapRemoveReadKeyViaAel(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 1: Read map key 'c' via AEL ===")
         print("Expected: 3")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("result").select_from("$.m.c.get(type: INT)")
                 .execute()
             )
@@ -47,14 +48,14 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 2: Read map key range via chainable CDT builder
-        # ==================================================================
+
+class MapRemoveReadKeyViaBuilder(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 2: Read map key 'b' values via chainable builder ===")
         print("Expected: value for key 'b' = 2")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("m").on_map_key("b").get_values()
                 .execute()
             )
@@ -67,14 +68,14 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 3: Count map elements
-        # ==================================================================
+
+class MapRemoveCountElements(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 3: Count map elements ===")
         print("Expected: 5")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("m").map_size()
                 .execute()
             )
@@ -87,14 +88,14 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 4: Read map index 0
-        # ==================================================================
+
+class MapRemoveReadIndexZero(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 4: Read map index 0 values ===")
         print("Expected: value at index 0 of key-ordered map")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("m").on_map_index(0).get_values()
                 .execute()
             )
@@ -107,29 +108,29 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 5: Remove map key via chainable CDT write builder
-        # ==================================================================
+
+class MapRemoveResetSourceMap(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 5: Remove map key 'c' via chainable write builder ===")
         print("Expected: map becomes {a: 1, b: 2, d: 4, e: 5}")
         try:
             await (
-                self.session.upsert(SET.id(1))
-                .bin("m").set_to(source_map)
+                self.session.upsert(self.SET.id(1))
+                .bin("m").set_to(SOURCE_MAP)
                 .execute()
             )
-            print(f"Source map: {source_map}\n")
+            print(f"Source map: {SOURCE_MAP}\n")
         except Exception as e:
             print(f"ERROR:    {type(e).__name__}: {e}")
 
-        # ==================================================================
-        # Test 6: Map key range read via chainable CDT
-        # ==================================================================
+
+class MapRemoveKeyRangeCount(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 6: Map key range 'b'..'d' count ===")
         print("Expected: count of keys in range [b, d) = 2 (b, c)")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("m").on_map_key_range("b", "d").count()
                 .execute()
             )
@@ -142,14 +143,14 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 7: Map key range count all others
-        # ==================================================================
+
+class MapRemoveKeyRangeCountOthers(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 7: Map key range 'b'..'d' count all others ===")
         print("Expected: count of keys NOT in range [b, d) = 3 (a, d, e)")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .bin("m").on_map_key_range("b", "d").count_all_others()
                 .execute()
             )
@@ -162,24 +163,23 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 8: Map clear via chainable CDT write
-        # ==================================================================
+
+class MapRemoveMapClear(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 8: Map clear ===")
         print("Expected: map becomes empty {}")
-        # Use a copy so we don't destroy the original for the verification
         await (
-            self.session.upsert(SET.id(2))
-            .bin("m").set_to(dict(source_map))
+            self.session.upsert(self.SET.id(2))
+            .bin("m").set_to(dict(SOURCE_MAP))
             .execute()
         )
         try:
             await (
-                self.session.upsert(SET.id(2))
+                self.session.upsert(self.SET.id(2))
                 .bin("m").map_clear()
                 .execute()
             )
-            stream = await self.session.query(SET.id(2)).execute()
+            stream = await self.session.query(self.SET.id(2)).execute()
             first = await stream.first()
             if first and first.is_ok:
                 print(f"Actual:   {first.record.bins.get('m')}")
@@ -189,15 +189,15 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Test 9: AEL comparison on map value
-        # ==================================================================
+
+class MapRemoveAelFilter(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Test 9: AEL filter on map key value ===")
         print("Filter: $.m.c.get(type: INT) > 2")
         print("Expected: record passes filter (m.c = 3 > 2)")
         try:
             stream = await (
-                self.session.query(SET.id(1))
+                self.session.query(self.SET.id(1))
                 .where("$.m.c.get(type: INT) > 2")
                 .execute()
             )
@@ -208,11 +208,11 @@ class MapRemoveExample(Example):
             print(f"ERROR:    {type(e).__name__}: {e}")
         print()
 
-        # ==================================================================
-        # Verify original map is unchanged
-        # ==================================================================
+
+class MapRemoveVerifyOriginal(MapRemoveExample):
+    async def run(self) -> None:
         print("=== Verify original map (record 1) is unchanged ===")
-        stream = await self.session.query(SET.id(1)).execute()
+        stream = await self.session.query(self.SET.id(1)).execute()
         first = await stream.first()
         if first and first.is_ok:
             print(f"Original map after all tests: {first.record.bins.get('m')}")

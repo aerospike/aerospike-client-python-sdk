@@ -23,21 +23,48 @@ class QueryExample(Example):
     SET = DataSet.of("test", "person")
     ADDRESS = DataSet.of("test", "address")
 
-    async def __init__(self, host: "QueryExample | None" = None):
-        if host is None:
-            await super().__init__(
-                Behavior.DEFAULT.derive_with_changes(
-                    "newBehavior",
-                    total_timeout=timedelta(seconds=2),
-                )
+    async def __init__(self):
+        await super().__init__(
+            Behavior.DEFAULT.derive_with_changes(
+                "newBehavior",
+                total_timeout=timedelta(seconds=2),
             )
-        else:
-            self._behavior = host._behavior
-            self._sc = host._sc
-            self.cluster = host.cluster
-            self.session = host.session
-            self.users = host.users
-            self.key = host.key
+        )
+
+        # Bump a "holdings" counter on a handful of records with a single batch add.
+        await self.session.upsert(self.SET.ids(1, 2, 3, 4, 5)).bin("holdings").add(1).execute()
+
+        # Named/aged customers used by the batch, filter, sort, and hint sections.
+        customers = [
+            (1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46),
+            (20, "Jordan", 36), (21, "Alex", 27), (22, "Betty", 27),
+            (23, "Bob", 33), (24, "Fred", 6), (25, "Alex", 28),
+            (26, "Alex", 26), (27, "Jordan", 19), (28, "Gruper", 28),
+            (29, "Bree", 24), (30, "Perry", 44), (31, "Alex", 27),
+            (32, "Betty", 27), (33, "Wilma", 18), (34, "Joran", 82),
+            (35, "Alex", 27), (36, "Fred", 99), (37, "Sydney", 22),
+            (38, "Ita", 99), (39, "Rupert", 83), (40, "Dominic", 53),
+            (41, "Tim", 27), (42, "Tim", 29), (43, "Tim", 31),
+            (44, "Tim", 30), (45, "Tim", 33), (46, "Tim", 35),
+        ]
+        for pk, name, age in customers:
+            await (
+                self.session.upsert(self.SET.id(pk))
+                .bin("name").set_to(name)
+                .bin("age").set_to(age)
+                .execute()
+            )
+
+        # A second block used by the point-read and multi-operation sections.
+        for i in range(15):
+            await (
+                self.session.upsert(self.SET.id(1000 + i))
+                .bin("name").set_to(f"Tim-{i}")
+                .bin("age").set_to(312 + i)
+                .bin("hair").set_to("brown")
+                .execute()
+            )
+        print("Seeded customer records")
 
     async def _print_stream(self, stream) -> int:
         count = 0
@@ -98,44 +125,6 @@ class DemonstrateBasicWritesAndErrors(QueryExample):
         stream = await self.session.query(self.SET.id("bob")).bins(["A"]).execute()
         rr = await stream.first()
         print(f"Projected read of id('bob'): {rr.record.bins if rr and rr.is_ok else None}")
-
-
-class SeedData(QueryExample):
-    async def run(self) -> None:
-        # Bump a "holdings" counter on a handful of records with a single batch add.
-        await self.session.upsert(self.SET.ids(1, 2, 3, 4, 5)).bin("holdings").add(1).execute()
-
-        # Named/aged customers used by the batch, filter, sort, and hint sections.
-        customers = [
-            (1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46),
-            (20, "Jordan", 36), (21, "Alex", 27), (22, "Betty", 27),
-            (23, "Bob", 33), (24, "Fred", 6), (25, "Alex", 28),
-            (26, "Alex", 26), (27, "Jordan", 19), (28, "Gruper", 28),
-            (29, "Bree", 24), (30, "Perry", 44), (31, "Alex", 27),
-            (32, "Betty", 27), (33, "Wilma", 18), (34, "Joran", 82),
-            (35, "Alex", 27), (36, "Fred", 99), (37, "Sydney", 22),
-            (38, "Ita", 99), (39, "Rupert", 83), (40, "Dominic", 53),
-            (41, "Tim", 27), (42, "Tim", 29), (43, "Tim", 31),
-            (44, "Tim", 30), (45, "Tim", 33), (46, "Tim", 35),
-        ]
-        for pk, name, age in customers:
-            await (
-                self.session.upsert(self.SET.id(pk))
-                .bin("name").set_to(name)
-                .bin("age").set_to(age)
-                .execute()
-            )
-
-        # A second block used by the point-read and multi-operation sections.
-        for i in range(15):
-            await (
-                self.session.upsert(self.SET.id(1000 + i))
-                .bin("name").set_to(f"Tim-{i}")
-                .bin("age").set_to(312 + i)
-                .bin("hair").set_to("brown")
-                .execute()
-            )
-        print("Seeded customer records")
 
 
 class DemonstrateConditionalUpdates(QueryExample):
