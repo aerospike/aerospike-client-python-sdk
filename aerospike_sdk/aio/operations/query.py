@@ -149,6 +149,28 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
 
+    async def _ensure_batch_namespace_modes(self) -> None:
+        """Resolve modes for every namespace the finalized specs touch.
+
+        Call after :meth:`_ensure_namespace_mode` on batch dispatch paths.
+        Single-namespace batches (the overwhelmingly common case) exit after
+        one scan of the keys; only genuinely multi-namespace batches resolve
+        further modes, enabling per-row policy scoping and SC escalation of
+        the parent batch policy (see ``_resolved_batch_mode``).
+        """
+        if self._namespace_mode == Mode.SC:
+            self._batch_any_sc = True
+        extra = self._collect_extra_batch_namespaces()
+        if not extra:
+            return
+        resolver = self._namespace_mode_resolver
+        modes: dict[str, Mode] = {}
+        for ns in extra:
+            modes[ns] = (await resolver(ns)) if resolver is not None else Mode.AP
+        self._batch_namespace_modes = modes
+        if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
+            self._batch_any_sc = True
+
 
 
 
@@ -285,6 +307,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
+        await self._ensure_batch_namespace_modes()
 
         if self._specs:
             # Fast path for the common single-spec case: skip the
@@ -410,6 +433,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         """
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
+        await self._ensure_batch_namespace_modes()
 
         # Dataset/index queries and scans already stream lazily from the
         # server; the order-sensitive sequential-spec case can't collapse to
@@ -613,6 +637,27 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        if self._spec_modes_mixed(spec):
+            # The batch UDF entry takes one policy for every key, and the
+            # mixed-batch API has no per-row UDF op — group keys by mode,
+            # apply per group, and merge results back into request order.
+            groups: dict[Mode, list[tuple[int, Any]]] = {}
+            for i, key in enumerate(spec.keys):
+                groups.setdefault(
+                    self._mode_for_namespace(key.namespace), []).append((i, key))
+            merged: list = [None] * len(spec.keys)
+            try:
+                for mode, pairs in groups.items():
+                    recs = await self._client.batch_apply(
+                        [k for _, k in pairs], pkg, fn, spec.udf_args,
+                        batch_policy=batch_policy,
+                        udf_policy=self._make_batch_udf_policy(spec, mode),
+                    )
+                    for (i, _), rec in zip(pairs, recs):
+                        merged[i] = rec
+            except Exception as e:
+                return self._handle_batch_error(spec.keys, e, disp, handler)
+            return self._filtered_batch_stream(merged, disp, handler, op_type="udf")
         udf_policy = self._make_batch_udf_policy(spec)
         try:
             if (
@@ -850,10 +895,34 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return RecordStream.from_error(key, rc)
         return RecordStream.from_list([])
 
+    async def _execute_spec_mixed_mode_batch(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+        op_type: str | None = None,
+    ) -> RecordStream:
+        """Dispatch one spec whose keys span AP and SC namespaces.
+
+        The single-policy PAC entries (``batch_operate`` / ``batch_delete``)
+        apply one write policy to every key, which cannot express per-row
+        durable-delete defaults; route through the mixed-batch API instead,
+        which carries a policy per row (``_spec_to_batch_ops`` resolves it
+        per key's mode).
+        """
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops = self._spec_to_batch_ops(spec)
+        try:
+            batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return self._handle_batch_error(spec.keys, e, disp, handler)
+        return self._filtered_batch_stream(batch_records, disp, handler, op_type=op_type)
+
     async def _execute_batch_write(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
+        if spec.contains_record_delete_op and self._spec_modes_mixed(spec):
+            return await self._execute_spec_mixed_mode_batch(
+                spec, disp, handler, op_type=spec.op_type)
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
@@ -880,6 +949,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
+        if self._spec_modes_mixed(spec):
+            return await self._execute_spec_mixed_mode_batch(
+                spec, disp, handler, op_type="delete")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:

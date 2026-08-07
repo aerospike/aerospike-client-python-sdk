@@ -105,6 +105,26 @@ class _BlockingQueryDispatch:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
 
+    def _ensure_batch_namespace_modes_blocking(self) -> None:
+        """Sync counterpart of the async ``_ensure_batch_namespace_modes``.
+
+        Resolves modes for every namespace the finalized specs touch so
+        per-row batch policies scope to each key's mode and the parent
+        policy SC-escalates. Single-namespace batches exit after one scan.
+        """
+        if self._namespace_mode == Mode.SC:
+            self._batch_any_sc = True
+        extra = self._collect_extra_batch_namespaces()
+        if not extra:
+            return
+        resolver = self._namespace_mode_resolver_blocking
+        modes: dict = {}
+        for ns in extra:
+            modes[ns] = resolver(ns) if resolver is not None else Mode.AP
+        self._batch_namespace_modes = modes
+        if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
+            self._batch_any_sc = True
+
     def _execute_background_task_blocking(self) -> ExecuteTask:
         """Sync counterpart of :meth:`execute_background_task`.
 
@@ -171,6 +191,27 @@ class _BlockingQueryDispatch:
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        if self._spec_modes_mixed(spec):
+            # One UDF policy per call and no per-row UDF op in the mixed
+            # API — group keys by mode, apply per group, merge back into
+            # request order (mirrors the async counterpart).
+            groups: dict = {}
+            for i, key in enumerate(spec.keys):
+                groups.setdefault(
+                    self._mode_for_namespace(key.namespace), []).append((i, key))
+            merged: list = [None] * len(spec.keys)
+            try:
+                for mode, pairs in groups.items():
+                    recs = self._client.batch_apply_blocking(
+                        [k for _, k in pairs], pkg, fn, spec.udf_args,
+                        batch_policy=batch_policy,
+                        udf_policy=self._make_batch_udf_policy(spec, mode),
+                    )
+                    for (i, _), rec in zip(pairs, recs):
+                        merged[i] = rec
+            except Exception as e:
+                return self._handle_batch_error_list(spec.keys, e, disp, handler)
+            return self._filtered_batch_list(merged, disp, handler, op_type="udf")
         udf_policy = self._make_batch_udf_policy(spec)
         try:
             if self._implicit_txn_gate_blocking(spec.keys):
@@ -433,6 +474,7 @@ class _BlockingQueryDispatch:
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         if not self._specs or len(self._specs) != 1:
             return None
@@ -541,6 +583,7 @@ class _BlockingQueryDispatch:
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         if not self._specs or len(self._specs) <= 1:
             return None
@@ -649,12 +692,34 @@ class _BlockingQueryDispatch:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(batch_records, disp, handler)
 
+    def _execute_spec_mixed_mode_batch_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+        op_type: Optional[str] = None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_spec_mixed_mode_batch`.
+
+        Routes a spec whose keys span AP and SC namespaces through the
+        mixed-batch API so each row carries a policy scoped to its own
+        namespace mode (the single-policy blocking entries cannot).
+        """
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops = self._spec_to_batch_ops(spec)
+        try:
+            batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(batch_records, disp, handler, op_type=op_type)
+
     def _execute_batch_write_blocking(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_write` — uses
         ``batch_operate_blocking``."""
+        if spec.contains_record_delete_op and self._spec_modes_mixed(spec):
+            return self._execute_spec_mixed_mode_batch_blocking(
+                spec, disp, handler, op_type=spec.op_type)
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
@@ -700,6 +765,9 @@ class _BlockingQueryDispatch:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_delete` — uses
         ``batch_delete_blocking``."""
+        if self._spec_modes_mixed(spec):
+            return self._execute_spec_mixed_mode_batch_blocking(
+                spec, disp, handler, op_type="delete")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:

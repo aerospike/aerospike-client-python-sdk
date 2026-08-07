@@ -35,6 +35,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     Generic,
     List,
     Optional,
@@ -418,6 +419,11 @@ class _QueryBuilderBase:
     _default_where_ael: Optional[str] = None
     _supports_server_compiled_ael: bool = False
     _supports_query_selection: bool = False
+    # Mixed-mode batch state: modes for key namespaces beyond the builder's
+    # own (populated only when a batch actually spans namespaces), and
+    # whether any key in the batch lands in an SC namespace.
+    _batch_namespace_modes: Optional[Dict[str, Mode]] = None
+    _batch_any_sc: bool = False
 
     def __init__(
         self,
@@ -600,6 +606,63 @@ class _QueryBuilderBase:
     def _resolved_namespace_mode(self) -> Mode:
         assert self._namespace_mode is not None
         return self._namespace_mode
+
+    # -- Mixed-mode batch resolution ------------------------------------------
+    # A batch may span namespaces whose consistency modes differ (AP vs SC).
+    # Mode-scoped settings must resolve per key — durable-delete defaults on
+    # SC are the sharp edge — while batch-level knobs resolve with SC
+    # escalation: if any key is SC, the parent policy uses SC-scoped settings.
+
+    def _collect_extra_batch_namespaces(self) -> Optional[set]:
+        """Distinct key namespaces beyond the builder's own, or ``None``.
+
+        ``None`` (the overwhelmingly common single-namespace case) means no
+        further resolution work is needed.
+        """
+        extra: Optional[set] = None
+        namespace = self._namespace
+        for spec in self._specs:
+            for key in spec.keys:
+                ns = key.namespace
+                if ns != namespace:
+                    if extra is None:
+                        extra = set()
+                    extra.add(ns)
+        return extra
+
+    def _mode_for_namespace(self, namespace: str) -> Mode:
+        """Resolved mode for one key's namespace (falls back to the builder's)."""
+        modes = self._batch_namespace_modes
+        if modes is not None and namespace != self._namespace:
+            mode = modes.get(namespace)
+            if mode is not None:
+                return mode
+        return self._resolved_namespace_mode()
+
+    def _resolved_batch_mode(self) -> Mode:
+        """Mode for batch-level (parent) policy resolution.
+
+        SC-escalated: when any key in the batch lands in an SC namespace,
+        the parent policy resolves with SC-scoped settings, mirroring the
+        per-record/parent split the batch wire protocol itself has.
+        """
+        if self._batch_any_sc:
+            return Mode.SC
+        return self._resolved_namespace_mode()
+
+    def _spec_modes_mixed(self, spec: "_OperationSpec") -> bool:
+        """Whether one spec's keys span both consistency modes."""
+        modes = self._batch_namespace_modes
+        if modes is None:
+            return False
+        first: Optional[Mode] = None
+        for key in spec.keys:
+            mode = self._mode_for_namespace(key.namespace)
+            if first is None:
+                first = mode
+            elif mode is not first:
+                return True
+        return False
 
     def _make_batch_policy(
         self, settings: Optional[Any],
@@ -1443,12 +1506,14 @@ class _QueryBuilderBase:
     def _specs_require_sequential_run(self) -> bool:
         return any(spec.op_type == "udf" for spec in self._specs)
 
-    def _make_batch_udf_policy(self, spec: _OperationSpec) -> Optional[BatchUDFPolicy]:
+    def _make_batch_udf_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchUDFPolicy]:
         settings = (
             self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE,
                 OpShape.BATCH,
-                self._resolved_namespace_mode(),
+                mode if mode is not None else self._resolved_namespace_mode(),
             )
             if self._behavior is not None else None
         )
@@ -1709,15 +1774,21 @@ class _QueryBuilderBase:
             wp.durable_delete = False
         return wp
 
-    def _make_batch_write_policy(self, spec: _OperationSpec) -> Optional[BatchWritePolicy]:
+    def _make_batch_write_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` for multi-key batch writes.
 
         Carries ``record_exists_action`` so write verbs enforce record
         existence on the wire for the buffered single-spec path exactly as
-        the mixed-spec and streaming paths do.
+        the mixed-spec and streaming paths do. *mode* scopes the
+        durable-delete default to the row's namespace mode.
         """
         rea = _OP_TYPE_TO_REA.get(spec.op_type or "upsert")
-        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
+        eff = (
+            self._batch_write_effective_dd(spec, mode)
+            if spec.contains_record_delete_op else False
+        )
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -1972,10 +2043,15 @@ class _QueryBuilderBase:
     def _batch_policy_for(
         self, op_kind: "OpKind", op_shape: "OpShape",
     ) -> Optional[BatchPolicy]:
-        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings."""
+        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings.
+
+        Resolves with :meth:`_resolved_batch_mode` — SC-escalated when the
+        batch spans an SC namespace — since the parent policy applies to
+        every key in the batch.
+        """
         settings = (
             self._behavior.get_settings(
-                op_kind, op_shape, self._resolved_namespace_mode())
+                op_kind, op_shape, self._resolved_batch_mode())
             if self._behavior is not None else None
         )
         return self._make_batch_policy(settings)
@@ -2212,7 +2288,14 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
-    def _batch_write_effective_dd(self, spec: _OperationSpec) -> bool:
+    def _batch_write_effective_dd(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> bool:
+        """Effective durable-delete for one batch row.
+
+        *mode* is the row's namespace mode; ``None`` falls back to the
+        builder's resolved mode (single-namespace batches).
+        """
         if self._behavior is None:
             return resolve_durable_delete(
                 None,
@@ -2221,7 +2304,7 @@ class _QueryBuilderBase:
             )
         bset = self._behavior.get_settings(
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
-            self._resolved_namespace_mode(),
+            mode if mode is not None else self._resolved_namespace_mode(),
         )
         return resolve_durable_delete(
             bset.durable_delete,
@@ -2229,9 +2312,14 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
-    def _make_batch_delete_policy(self, spec: _OperationSpec) -> Optional[BatchDeletePolicy]:
-        """Build a ``BatchDeletePolicy`` for multi-key batch deletes."""
-        eff = self._batch_write_effective_dd(spec)
+    def _make_batch_delete_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchDeletePolicy]:
+        """Build a ``BatchDeletePolicy`` for multi-key batch deletes.
+
+        *mode* scopes the durable-delete default to the row's namespace mode.
+        """
+        eff = self._batch_write_effective_dd(spec, mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
@@ -2253,9 +2341,16 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> list:
         """Convert one spec into a list of ``BatchReadOp`` / ``BatchWriteOp``
-        / ``BatchDeleteOp`` objects for the PAC mixed-batch API."""
+        / ``BatchDeleteOp`` objects for the PAC mixed-batch API.
+
+        Write-family row policies are mode-scoped (SC defaults durable
+        delete), so when the batch spans namespaces the policy is resolved
+        per row's mode — at most one policy object per mode per spec. The
+        single-namespace case keeps the one-policy-shared-by-all-rows shape.
+        """
         ops: list = []
         op_type = spec.op_type
+        mixed = self._batch_namespace_modes is not None
 
         if op_type is None:
             brp = self._make_batch_read_policy(spec)
@@ -2265,22 +2360,50 @@ class _QueryBuilderBase:
                 else:
                     ops.append(BatchReadOp(key, bins=spec.bins, policy=brp))
         elif op_type == "delete":
-            bdp = self._make_batch_delete_policy(spec)
-            for key in spec.keys:
-                ops.append(BatchDeleteOp(key, policy=bdp))
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_delete_policy(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bdp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchDeleteOp(key, policy=bdp))
+            else:
+                bdp = self._make_batch_delete_policy(spec)
+                for key in spec.keys:
+                    ops.append(BatchDeleteOp(key, policy=bdp))
         elif op_type == "touch":
-            bwp = self._make_batch_write_policy_mixed(spec)
             touch_ops = [Operation.touch()]
-            for key in spec.keys:
-                ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_write_policy_mixed(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bwp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
+            else:
+                bwp = self._make_batch_write_policy_mixed(spec)
+                for key in spec.keys:
+                    ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
         elif op_type == "exists":
             brp = self._make_batch_read_policy(spec)
             for key in spec.keys:
                 ops.append(BatchReadOp(key, bins=[], policy=brp))
         else:
-            bwp = self._make_batch_write_policy_mixed(spec)
-            for key in spec.keys:
-                ops.append(BatchWriteOp(key, list(spec.operations), policy=bwp))
+            write_ops = list(spec.operations)
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_write_policy_mixed(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bwp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
+            else:
+                bwp = self._make_batch_write_policy_mixed(spec)
+                for key in spec.keys:
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
         return ops
 
     @staticmethod
@@ -2297,12 +2420,19 @@ class _QueryBuilderBase:
     def _make_batch_write_policy_mixed(
         self,
         spec: _OperationSpec,
+        mode: Optional[Mode] = None,
     ) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` that includes ``record_exists_action``
-        for use in mixed-batch calls."""
+        for use in mixed-batch calls.
+
+        *mode* scopes the durable-delete default to the row's namespace mode.
+        """
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
+        eff = (
+            self._batch_write_effective_dd(spec, mode)
+            if spec.contains_record_delete_op else False
+        )
         has_settings = (
             rea is not None
             or spec.filter_expression is not None

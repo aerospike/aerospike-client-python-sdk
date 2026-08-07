@@ -281,6 +281,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         # Dataset/scan queries already stream lazily (Recordset); the
         # order-sensitive sequential-spec case can't collapse to one batch.
