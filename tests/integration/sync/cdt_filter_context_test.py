@@ -24,8 +24,9 @@ from aerospike_sdk import CTX, Filter
 from aerospike_async import IndexType
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
-_NS = "test"
+_NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
 _INDEX = "pfc_cdt_fctx_map_num"
 _BIN = "mapbin"
@@ -39,7 +40,7 @@ def _require_filter_context() -> None:
         pytest.skip("aerospike_async Filter.context is required; upgrade the native async client.")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
         yield cluster

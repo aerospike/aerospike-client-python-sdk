@@ -36,36 +36,46 @@ from aerospike_sdk.exceptions import ResultCode, ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.integration.namespace import general_namespace
 
-NS = "test"
+NS = general_namespace()
 SET = "exp_ops"
 KEY_A = "exp_A"
 KEY_B = "exp_B"
 
 
-@pytest.fixture
-async def cluster(aerospike_host, make_cluster_definition):
-    """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
     async with await make_cluster_definition(aerospike_host).connect() as c:
-        session = c.create_session()
-        # Clean slate
-        try:
-            await session.delete(_key(KEY_A)).execute()
-        except Exception:
-            pass
-        try:
-            await session.delete(_key(KEY_B)).execute()
-        except Exception:
-            pass
-
-        # Seed: keyA has A=1, D=2; keyB has B=2, D=2
-        await session.upsert(_key(KEY_A)).put({"A": 1, "D": 2}).execute()
-        await session.upsert(_key(KEY_B)).put({"B": 2, "D": 2}).execute()
-
-        # Brief pause so the query scan index reflects the committed writes under CI load
-        await asyncio.sleep(0.1)
-
         yield c
+
+
+@pytest.fixture
+async def cluster(shared_cluster):
+    """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
+    c = shared_cluster
+    session = c.create_session()
+    # Clean slate
+    try:
+        await session.delete(_key(KEY_A)).execute()
+    except Exception:
+        pass
+    try:
+        await session.delete(_key(KEY_B)).execute()
+    except Exception:
+        pass
+
+    # Seed: keyA has A=1, D=2; keyB has B=2, D=2
+    await session.upsert(_key(KEY_A)).put({"A": 1, "D": 2}).execute()
+    await session.upsert(_key(KEY_B)).put({"B": 2, "D": 2}).execute()
+
+    # Brief pause so the query scan index reflects the committed writes under CI load
+    await asyncio.sleep(0.1)
+
+    yield c
 
 
 @pytest.fixture

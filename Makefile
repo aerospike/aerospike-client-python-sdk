@@ -1,4 +1,4 @@
-.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin
+.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin test-sc
 
 # ANTLR JAR location - download if not present
 ANTLR_JAR ?= antlr-4.13.0-complete.jar
@@ -40,6 +40,16 @@ test-unit:
 
 test-int:
 	pytest tests/integration
+
+# run the integration suite against a SC namespace instead of the AP default.
+# AEROSPIKE_GENERAL_AUTH turns the default policy auth-aware
+# AEROSPIKE_NAMESPACE aims general_namespace() at the SC namespace
+# SC seed and AEROSPIKE_AUTH_* come from aerospike.env
+# point aerospike.env's AEROSPIKE_HOST at an SC-capable cluster if it isn't already.
+# Override the namespace name with `make test-sc SC_NAMESPACE=<name>`.
+SC_NAMESPACE ?= test_sc
+test-sc:
+	AEROSPIKE_GENERAL_AUTH=1 AEROSPIKE_NAMESPACE=$(SC_NAMESPACE) pytest tests/integration
 
 check-pin:
 	pytest tests/unit/pin_drift_test.py -q

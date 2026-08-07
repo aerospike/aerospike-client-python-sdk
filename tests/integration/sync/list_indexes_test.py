@@ -20,8 +20,10 @@ from __future__ import annotations
 import time
 
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
-NS = "test"
+NS = general_namespace()
 SET = "list_indexes_integ_sync"
 BIN = "age"
 IDX = "psdk_list_indexes_age_sync"
@@ -45,7 +47,7 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
     else:
         hostname, port = aerospike_host, 3000
 
-    cluster = ClusterDefinition(hostname, port).connect()
+    cluster = apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         session = cluster.create_session()
 
@@ -98,7 +100,7 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
         hostname, port = aerospike_host, 3000
 
     idx = "psdk_exp_idx_sync"
-    cluster = ClusterDefinition(hostname, port).connect()
+    cluster = apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         session = cluster.create_session()
         if not _build_at_least(session, (8, 1, 2)):

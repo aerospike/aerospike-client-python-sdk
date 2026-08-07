@@ -703,12 +703,23 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
                         self._resolved_namespace_mode())))
             if self._base_write_policy is not None:
+                # A record-delete op inside the operate must honor the mode-resolved
+                # durable-delete default (Scope.WRITES_SC sets it True) plus any explicit
+                # spec override — a hardcoded False here made non-durable delete_record()
+                # FailForbidden on SC. Non-delete operates keep durable_delete=False.
+                durable_delete = False
+                if spec.contains_record_delete_op and self._behavior is not None:
+                    durable_delete = self._effective_point_durable_delete(
+                        spec,
+                        self._behavior.get_settings(
+                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                            self._resolved_namespace_mode()))
                 try:
                     record = await self._client.operate(
                         key, spec.operations,
                         policy=self._base_write_policy,
                         record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                        durable_delete=False,
+                        durable_delete=durable_delete,
                         txn=self._txn,
                     )
                 except Exception as e:
@@ -1234,8 +1245,15 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # Durable-delete state requires the slow path: bypasses don't carry
         # _dd_override / _dd_command_default through to the per-call policy,
         # and SC namespaces require the right durable_delete flag (FailForbidden
-        # otherwise). Promote and defer to QueryBuilder.execute().
-        if self._dd_override is not None or self._dd_command_default is not None:
+        # otherwise). A record-delete op counts as durable-delete state too —
+        # the fast operate below hardcodes durable_delete=False, which would
+        # stomp the SC policy's default. Promote and defer to
+        # QueryBuilder.execute().
+        if (
+            self._dd_override is not None
+            or self._dd_command_default is not None
+            or self._record_delete_in_fast_ops
+        ):
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
 

@@ -29,6 +29,8 @@ import pytest
 
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 from aerospike_sdk.policy import get_behavior
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
 _IMPLICIT_TRUE = """
 system:
@@ -81,13 +83,13 @@ async def test_config_reaches_client_and_operates(aerospike_host, tmp_path):
     """File settings land on the async client and the client operates."""
     host, port = _host_port(aerospike_host)
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", _IMPLICIT_FALSE)):
-        async with await ClusterDefinition(host, port).connect() as cluster:
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
             assert client._policy.max_conns_per_node == 88
 
             session = cluster.create_session(Behavior.DEFAULT)
-            key = DataSet.of("test", "sdkconf_it_async").id("k1")
+            key = DataSet.of(general_namespace(), "sdkconf_it_async").id("k1")
             await session.upsert(key).put({"n": 1}).execute()
             stream = await session.query(key).execute()
             result = await stream.first_or_raise()
@@ -99,7 +101,7 @@ async def test_hot_reload_swaps_on_async_client(aerospike_host, tmp_path):
     host, port = _host_port(aerospike_host)
     path = _write(tmp_path, "sdk.yaml", _IMPLICIT_TRUE)
     with _sdk_config_env(path):
-        async with await ClusterDefinition(host, port).connect() as cluster:
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is True
 
@@ -127,7 +129,7 @@ async def test_behaviors_section_defines_usable_behavior(aerospike_host, tmp_pat
         "      maximumNumberOfCallAttempts: 2\n"
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
-        async with await ClusterDefinition(host, port).connect() as cluster:
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             behavior = get_behavior("cfg-reads")
             assert behavior is not None
 
@@ -135,7 +137,7 @@ async def test_behaviors_section_defines_usable_behavior(aerospike_host, tmp_pat
             assert session._cached_read_policy.total_timeout == 5_000
             assert session._cached_read_policy.max_retries == 1
 
-            key = DataSet.of("test", "sdkconf_bhv_async").id("k1")
+            key = DataSet.of(general_namespace(), "sdkconf_bhv_async").id("k1")
             await session.upsert(key).put({"n": 1}).execute()
             stream = await session.query(key).execute()
             result = await stream.first_or_raise()
@@ -148,7 +150,7 @@ async def test_behaviors_hot_reload_updates_live_session(aerospike_host, tmp_pat
     yaml_text = "behaviors:\n  cfg-hot:\n    allOperations:\n      abandonCallAfter: 5s\n"
     path = _write(tmp_path, "sdk.yaml", yaml_text)
     with _sdk_config_env(path):
-        async with await ClusterDefinition(host, port).connect() as cluster:
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             session = cluster.create_session(get_behavior("cfg-hot"))
             assert session._cached_read_policy.total_timeout == 5_000
 
@@ -172,7 +174,7 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
     wire by ``validate_cluster_name_is``); skips when the server has none.
     """
     host, port = _host_port(aerospike_host)
-    async with await ClusterDefinition(host, port).connect() as probe:
+    async with await apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
         by_node = await probe._sdk_client.underlying_client.info("cluster-name")
     names = {v for v in by_node.values() if v and v != "null"}
     if not names:
@@ -190,7 +192,7 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         async with await (
-            ClusterDefinition(host, port)
+            apply_general_auth(ClusterDefinition(host, port))
             .validate_cluster_name_is(cluster_name)
             .connect()
         ) as cluster:

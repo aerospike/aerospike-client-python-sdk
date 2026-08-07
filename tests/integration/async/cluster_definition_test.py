@@ -18,6 +18,7 @@
 import pytest
 
 from aerospike_sdk import ClusterDefinition, Host, Behavior
+from tests.integration.general_auth import apply_general_auth
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ async def cluster(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = await cluster_def.connect()
     yield cluster
     await cluster.close()
@@ -57,7 +58,7 @@ async def test_cluster_definition_with_hosts(aerospike_host):
         port = 3000
 
     hosts = [Host(hostname, port)]
-    cluster_def = ClusterDefinition(hosts=hosts)
+    cluster_def = apply_general_auth(ClusterDefinition(hosts=hosts))
     cluster = await cluster_def.connect()
 
     try:
@@ -77,8 +78,11 @@ async def test_cluster_definition_with_credentials(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    # Test with empty credentials (should work if no auth)
-    cluster_def = ClusterDefinition(hostname, port).with_native_credentials("", "")
+    # Test with empty credentials (should work if no auth). The general-auth
+    # wrap goes outside the chain: on an auth-required leg the env credentials
+    # must land last, or the empty pair would overwrite them.
+    cluster_def = apply_general_auth(
+        ClusterDefinition(hostname, port).with_native_credentials("", ""))
     cluster = await cluster_def.connect()
 
     try:
@@ -96,7 +100,7 @@ async def test_cluster_definition_services_alternate(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port).using_services_alternate()
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port)).using_services_alternate()
     cluster = await cluster_def.connect()
 
     try:
@@ -117,7 +121,7 @@ async def test_cluster_definition_preferring_racks(aerospike_host, enterprise):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port).preferring_racks(1, 2)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port)).preferring_racks(1, 2)
     cluster = await cluster_def.connect()
 
     try:
@@ -135,7 +139,7 @@ async def test_cluster_definition_context_manager(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     async with await cluster_def.connect() as cluster:
         assert cluster.is_connected()
         session = cluster.create_session()
@@ -190,7 +194,7 @@ async def test_host_of():
 
 async def test_fail_if_not_connected_default_bad_host():
     """Default fail_if_not_connected=True raises on unreachable host."""
-    cd = ClusterDefinition("127.0.0.1", 19999)
+    cd = apply_general_auth(ClusterDefinition("127.0.0.1", 19999))
     with pytest.raises(Exception):
         await cd.connect()
 
@@ -204,7 +208,7 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cd = ClusterDefinition(hostname, port).fail_if_not_connected(True)
+    cd = apply_general_auth(ClusterDefinition(hostname, port)).fail_if_not_connected(True)
     cluster = await cd.connect()
     try:
         assert cluster.is_connected()
@@ -221,7 +225,7 @@ async def test_with_index_refresh_interval_threads_through(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cd = ClusterDefinition(hostname, port).with_index_refresh_interval(2.5)
+    cd = apply_general_auth(ClusterDefinition(hostname, port)).with_index_refresh_interval(2.5)
     assert cd._index_refresh_interval == 2.5
     cluster = await cd.connect()
     try:

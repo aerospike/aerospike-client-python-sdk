@@ -18,58 +18,53 @@
 import pytest
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import GenerationError
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def test_set():
     """DataSet fixture for generation tests."""
-    return DataSet.of("test", "generation_test")
+    return DataSet.of(general_namespace(), "generation_test")
 
 
 class TestGeneration:
     """Test generation-based optimistic locking."""
 
-    async def test_generation_basic(self, cluster, test_set: DataSet):
+    async def test_generation_basic(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test that generation increments with each update."""
         session = cluster.create_session()
         key = test_set.id("generation_basic")
         bin_name = "genbin"
 
-        # Delete record if it already exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        # Start from a known-clean record (durable on SC)
+        await sc_aware_delete(session, key)
 
-        # First write - generation should be 1
+        # First write
         await session.upsert(key).bin(bin_name).set_to("genvalue1").execute()
-
         record = await (await session.query(key).execute()).first_or_raise()
         assert record.record is not None
-        assert record.record.generation == 1
+        gen1 = record.record.generation
 
-        # Second write - generation should be 2
+        # Second write increments generation by one. Assert the *delta*, not the
+        # absolute value: on SC a durable delete leaves a tombstone that retains
+        # generation, so the count carries over rather than resetting to 1.
         await session.upsert(key).bin(bin_name).set_to("genvalue2").execute()
-
         record = await (await session.query(key).execute()).first_or_raise()
         assert record.record is not None
-        assert record.record.generation == 2
+        assert record.record.generation == gen1 + 1
         assert record.record.bins[bin_name] == "genvalue2"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_generation_check_success(self, cluster, test_set: DataSet):
+    async def test_generation_check_success(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test successful update with correct generation."""
         session = cluster.create_session()
         key = test_set.id("generation_check_success")
         bin_name = "genbin"
 
-        # Delete and create fresh record
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        # Delete and create fresh record (durable on SC)
+        await sc_aware_delete(session, key)
 
         await session.upsert(key).bin(bin_name).set_to("genvalue1").execute()
         await session.upsert(key).bin(bin_name).set_to("genvalue2").execute()
@@ -90,20 +85,17 @@ class TestGeneration:
         record = await (await session.query(key).execute()).first_or_raise()
         assert record.record.bins[bin_name] == "genvalue3"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_generation_check_failure(self, cluster, test_set: DataSet):
+    async def test_generation_check_failure(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test that update fails with incorrect generation."""
         session = cluster.create_session()
         key = test_set.id("generation_check_failure")
         bin_name = "genbin"
 
-        # Delete and create fresh record
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        # Delete and create fresh record (durable on SC)
+        await sc_aware_delete(session, key)
 
         await session.upsert(key).bin(bin_name).set_to("genvalue1").execute()
 
@@ -120,20 +112,17 @@ class TestGeneration:
         record = await (await session.query(key).execute()).first_or_raise()
         assert record.record.bins[bin_name] == "genvalue1"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_generation_concurrent_update(self, cluster, test_set: DataSet):
+    async def test_generation_concurrent_update(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test optimistic locking pattern for concurrent updates."""
         session = cluster.create_session()
         key = test_set.id("generation_concurrent")
         bin_name = "counter"
 
-        # Delete and create fresh record
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        # Delete and create fresh record (durable on SC)
+        await sc_aware_delete(session, key)
 
         # Initialize counter
         await session.upsert(key).bin(bin_name).set_to(0).execute()
@@ -157,5 +146,5 @@ class TestGeneration:
         assert record.record.bins[bin_name] == 10
         assert record.record.generation == current_gen + 1
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)

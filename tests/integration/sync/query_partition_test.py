@@ -25,6 +25,7 @@ from collections import Counter
 import pytest
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 PART_SET = "query_partition_sync"
 HOT_SET = "query_partition_hot_sync"
@@ -36,7 +37,7 @@ HOT_LIMIT = 18
 HOT_CHUNK = 7
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     """Connected sync cluster for partition-parity tests."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
@@ -87,7 +88,7 @@ def _seed_hot_partition(session, ds):
 def test_partition_range_halves_partition_the_keyspace(cluster):
     """The two half-ranges are disjoint and together cover every record."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     session.truncate(ds)
     _seed(session, ds)
 
@@ -101,7 +102,7 @@ def test_partition_range_halves_partition_the_keyspace(cluster):
 def test_on_partition_returns_exactly_that_partitions_records(cluster):
     """on_partition(p) returns exactly the records whose digest maps to p."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     session.truncate(ds)
     per_partition = _seed(session, ds)
 
@@ -117,7 +118,7 @@ def test_on_partition_with_chunking_returns_every_record(cluster):
     cursor synchronously, so it cannot rely on the async coverage.
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", HOT_SET)
+    ds = DataSet.of(general_namespace(), HOT_SET)
     session.truncate(ds)
     _seed_hot_partition(session, ds)
 
@@ -141,7 +142,7 @@ def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
     take effect mid-chunk.
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", HOT_SET)
+    ds = DataSet.of(general_namespace(), HOT_SET)
     session.truncate(ds)
     _seed_hot_partition(session, ds)
 

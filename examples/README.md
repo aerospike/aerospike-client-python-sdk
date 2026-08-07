@@ -61,7 +61,7 @@ Some Java examples have no faithful Python counterpart until a feature ships. Do
 
 (`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it via the
 low-level `CdtOperation.select_by_path`/`modify_by_path`/`remove` + `CTX.all_children[_with_filter]`
-factories. PSDK only lacks the *fluent* `.on_each_child()` ergonomics, tracked in the pre-GA backlog.)
+factories. PSDK only lacks the *fluent* `.on_each_child()` ergonomics.)
 
 See `.cursor/plans/examples-parity.md` for the full status map and the live JSDK-vs-PSDK
 output comparison.

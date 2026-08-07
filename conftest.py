@@ -92,6 +92,12 @@ def pytest_configure(config):
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
 
+    config.addinivalue_line(
+        "markers",
+        "requires_mode(mode): run only when the general namespace's server-derived mode "
+        "('ap' or 'sc') matches; enforced by the _enforce_requires_mode fixture.",
+    )
+
     host = os.environ.get("AEROSPIKE_HOST", "localhost:3000").strip()
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
     pinned = os.environ.get("AEROSPIKE_SC_NAMESPACE", "").strip()
@@ -100,6 +106,16 @@ def pytest_configure(config):
     # green run indistinguishable from one that never reached an SC namespace.
     # The namespace half is confirmed later, on a live connection, by
     # :func:`_report_sc_routing`.
+    # Mode-axis SC leg (AEROSPIKE_GENERAL_AUTH): the *general* suites are auth-aware and
+    # routed to the SC seed + AEROSPIKE_NAMESPACE, so report that, not the AP seed —
+    # otherwise a green SC-leg run looks like it ran against the AP default.
+    sc_leg = _general_auth_enabled()
+    general_seed = (sc or host) if sc_leg else host
+    general_ns = os.environ.get("AEROSPIKE_NAMESPACE", "").strip() or "test"
+    general_note = (
+        f" [SC leg: auth on, namespace {general_ns!r}]" if sc_leg
+        else f" [namespace {general_ns!r}]"
+    )
     sc_seed_note = (
         "(AEROSPIKE_HOST_SC)" if sc
         else "(AEROSPIKE_HOST_SC unset - fell back to AEROSPIKE_HOST)"
@@ -110,11 +126,11 @@ def pytest_configure(config):
     )
     print(
         "\nIntegration routing:\n"
-        f"  general suites -> {host!r}\n"
+        f"  general suites -> {general_seed!r}{general_note}\n"
         f"  SC suites      -> {(sc or host)!r} {sc_seed_note}\n"
         f"  SC namespace   -> {ns_note}\n",
     )
-    if sc and host == sc:
+    if sc and host == sc and not sc_leg:
         print(
             f"AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
             f"{host!r}, so general tests hit the same seed as SC suites. Point "
@@ -159,18 +175,28 @@ def _apply_auth_to_definition(cluster_def) -> None:
 
     Mirror of :func:`_apply_auth_from_env` for the ``ClusterDefinition``
     entry path (async or sync — both expose the same credential methods).
+    Delegates to :mod:`tests.integration.general_auth`, the single source
+    for the definition-path auth contract (raw-definition test sites import
+    it directly).
     """
-    mode_str = os.environ.get('AEROSPIKE_AUTH_MODE', '').strip().upper()
-    if not mode_str or mode_str not in _AUTH_MODES:
-        return
-    user = os.environ.get('AEROSPIKE_AUTH_USER', '')
-    password = os.environ.get('AEROSPIKE_AUTH_PASSWORD', '')
-    if mode_str == "INTERNAL":
-        cluster_def.with_native_credentials(user, password)
-    elif mode_str == "EXTERNAL":
-        cluster_def.with_external_credentials(user, password)
-    else:  # PKI
-        cluster_def.with_certificate_credentials()
+    from tests.integration.general_auth import apply_auth_to_definition
+    apply_auth_to_definition(cluster_def)
+
+
+def _general_auth_enabled() -> bool:
+    """Whether the *general* (default) suites should authenticate — opt-in only.
+
+    Controlled by ``AEROSPIKE_GENERAL_AUTH`` (the ``make test-sc`` leg sets it). The
+    default AP fast path stays **no-auth** (unset): sending credentials to a cluster
+    that does not require them costs ~1s per ``new_client`` on some configs, which is
+    exactly what :func:`client_policy`'s no-auth contract protects. When set, the
+    default :func:`client_policy` / :func:`make_cluster_definition` apply
+    ``AEROSPIKE_AUTH_*`` just like the SC/SEC fixtures, so the general suites can reach
+    an auth-required SC seed for the Mode axis. New env var, so it
+    is not clobbered by ``aerospike.env`` (which loads ``override=True``).
+    """
+    from tests.integration.general_auth import general_auth_enabled
+    return general_auth_enabled()
 
 
 @pytest.fixture(scope="session")
@@ -182,6 +208,11 @@ def make_cluster_definition():
     :func:`client_policy`); ``auth=True`` applies ``AEROSPIKE_AUTH_*`` (the
     :func:`client_policy_sc` / :func:`client_policy_sec` contract);
     ``sync=True`` returns the ``aerospike_sdk.sync`` cluster_def.
+
+    The default (``auth=False``) path *also* applies ``AEROSPIKE_AUTH_*`` when the
+    :func:`_general_auth_enabled` opt-in (``AEROSPIKE_GENERAL_AUTH``) is set, so the
+    general suites can reach an auth-required SC seed on the Mode-axis ``make test-sc``
+    leg without disturbing the no-auth AP fast path.
     """
     from aerospike_sdk import ClusterDefinition, Host
     from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
@@ -194,7 +225,7 @@ def make_cluster_definition():
             cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
         if _use_services_alternate_from_env():
             cluster_def.using_services_alternate()
-        if auth:
+        if auth or _general_auth_enabled():
             _apply_auth_to_definition(cluster_def)
         return cluster_def
 
@@ -206,12 +237,19 @@ def client_policy():
     """Default ClientPolicy for the AP test seed (``AEROSPIKE_HOST``).
 
     Reads only ``AEROSPIKE_USE_SERVICES_ALTERNATE``. Does **not** apply
-    ``AEROSPIKE_AUTH_*`` env vars; the AP/default cluster is expected
+    ``AEROSPIKE_AUTH_*`` env vars by default; the AP/default cluster is expected
     to allow unauthenticated access. SC / SEC fixtures use their own
     auth-aware policies instead.
+
+    Exception: the :func:`_general_auth_enabled` opt-in (``AEROSPIKE_GENERAL_AUTH``,
+    set by the Mode-axis ``make test-sc`` leg) makes this default policy apply
+    ``AEROSPIKE_AUTH_*`` too, so the general suites can reach an auth-required SC seed.
+    The no-auth AP fast path is unchanged whenever the opt-in is unset.
     """
     policy = ClientPolicy()
     policy.use_services_alternate = _use_services_alternate_from_env()
+    if _general_auth_enabled():
+        _apply_auth_from_env(policy)
     return policy
 
 
@@ -248,8 +286,118 @@ def aerospike_host():
 
     Reads ``AEROSPIKE_HOST`` (default ``localhost:3000``). SC-only suites use
     :func:`aerospike_host_sc` instead.
+
+    On the Mode-axis SC leg (:func:`_general_auth_enabled` / ``AEROSPIKE_GENERAL_AUTH``
+    set, via ``make test-sc``) the general suites target ``AEROSPIKE_HOST_SC`` when it
+    is set, so they reach the SC seed. This reuses the established SC-seed var and
+    sidesteps ``aerospike.env``'s ``override=True`` (which would ignore an inline
+    ``AEROSPIKE_HOST``); it falls back to ``AEROSPIKE_HOST`` on single-cluster setups
+    where ``AEROSPIKE_HOST_SC`` is unset.
     """
-    return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    from tests.integration.general_auth import general_seed
+    return general_seed()
+
+
+@pytest.fixture(scope="session")
+def general_namespace_is_sc(aerospike_host, pytestconfig):
+    """Server-derived: is the general suites' target namespace strong-consistency?
+
+    Probes the general seed once and runs the same ``namespace/<ns>`` info scan as
+    :func:`_report_sc_routing` on ``general_namespace()``. Drives ``@requires_mode`` and
+    :func:`sc_aware_delete` off the *server's* verdict rather than the
+    ``AEROSPIKE_NAMESPACE`` string (which would misclassify a differently-named SC
+    namespace). Returns ``False`` (treat as AP) on any probe failure.
+    """
+    from tests.integration.namespace import general_namespace
+
+    ns = general_namespace()
+    probe = ClientPolicy()
+    probe.use_services_alternate = _use_services_alternate_from_env()
+    if _general_auth_enabled():
+        _apply_auth_from_env(probe)
+    probe.timeout = 2000
+
+    def _degraded(reason: str) -> bool:
+        # Announce, never infer. Silently failing open to AP would turn the SC leg into an
+        # AP-shaped run — sc_aware_delete stops issuing durable deletes (FailForbidden,
+        # swallowed → cleanup stops), @requires_mode('sc') skips and @requires_mode('ap')
+        # runs on SC — the exact invisible coverage loss this axis exists to prevent.
+        emit = _terminal_emit(pytestconfig)
+        emit("")
+        if _general_auth_enabled():
+            emit(
+                f"Mode axis: SC-mode probe FAILED for {ns!r} on {aerospike_host!r} ({reason}). "
+                f"The SC leg is DEGRADED to AP-shaped behavior — treat this run's SC results as "
+                f"INVALID until the probe succeeds.",
+            )
+        else:
+            emit(f"Mode axis: {ns!r} treated as AP (SC probe unavailable: {reason}).")
+        return False
+
+    try:
+        client = new_client_blocking(probe, aerospike_host)
+    except Exception as exc:
+        return _degraded(f"connect error: {exc}")
+    try:
+        missing = False
+        sc_val = None
+        for body in client.info_blocking(f"namespace/{ns}").values():
+            if not body:
+                continue
+            exists, sc_opt = _parse_namespace_info_body(body)
+            if not exists:
+                missing = True
+                break
+            if sc_opt is not None:
+                sc_val = sc_opt
+        if missing:
+            return _degraded("namespace not present on the seed")
+        return bool(sc_val)
+    except Exception as exc:
+        return _degraded(f"info scan error: {exc}")
+    finally:
+        client.close_blocking()
+
+
+@pytest.fixture(scope="session")
+def sc_aware_delete(general_namespace_is_sc):
+    """Best-effort cleanup delete that is durable when the target namespace is SC.
+
+    Non-durable delete is ``FailForbidden`` on strong-consistency namespaces; issuing a
+    durable delete there keeps setup/teardown working in both modes without marking the
+    test AP-only. Errors are swallowed — this is teardown, not an assertion. Reserve
+    ``@requires_mode`` for tests whose *assertion* is mode-specific.
+    """
+    async def _del(session, *keys):
+        for k in keys:
+            builder = session.delete(k)
+            if general_namespace_is_sc:
+                builder = builder.with_durable_delete()
+            try:
+                await builder.execute()
+            except Exception:
+                pass
+
+    return _del
+
+
+@pytest.fixture(autouse=True)
+def _enforce_requires_mode(request):
+    """Skip a ``@requires_mode(...)`` test when the general namespace's mode doesn't match.
+
+    Resolves the server-derived mode lazily (only for marked tests), so unmarked tests
+    never pay the probe.
+    """
+    marker = request.node.get_closest_marker("requires_mode")
+    if marker is None:
+        return
+    from tests.integration.namespace import requires_mode_skip_reason
+
+    reason = requires_mode_skip_reason(
+        marker.args[0], request.getfixturevalue("general_namespace_is_sc"),
+    )
+    if reason:
+        pytest.skip(reason)
 
 
 def _terminal_emit(config):

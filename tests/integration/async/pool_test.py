@@ -31,6 +31,7 @@ from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk import index_monitor as _index_monitor_module
+from tests.integration.namespace import general_namespace
 
 
 class TestAsyncPoolLifecycle:
@@ -82,7 +83,7 @@ class TestAsyncPoolDispatch:
         real test: if the pool wired up loops incorrectly, the operation
         would fail with the owning-loop RuntimeError.
         """
-        ds = DataSet.of("test", "asyncpool_run")
+        ds = DataSet.of(general_namespace(), "asyncpool_run")
         async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
             async def roundtrip(cluster: Cluster) -> int:
                 session = cluster.create_session()
@@ -98,7 +99,7 @@ class TestAsyncPoolDispatch:
         self, aerospike_host, make_cluster_definition
     ):
         """map() returns results in input order even though dispatch is round-robin."""
-        ds = DataSet.of("test", "asyncpool_map")
+        ds = DataSet.of(general_namespace(), "asyncpool_map")
         async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=3) as pool:
             async def put_and_read(cluster: Cluster, i: int) -> int:
                 session = cluster.create_session()

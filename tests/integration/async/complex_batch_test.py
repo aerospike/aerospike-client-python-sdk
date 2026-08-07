@@ -23,11 +23,12 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "complex_batch")
+    return DataSet.of(general_namespace(), "complex_batch")
 
 
 @pytest.fixture

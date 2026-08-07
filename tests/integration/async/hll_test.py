@@ -37,28 +37,38 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
-NAMESPACE = "test"
+NAMESPACE = general_namespace()
 SET = "hll_psdk"
 
 
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        yield c
+
+
 @pytest.fixture
-async def hll_cluster(aerospike_host, make_cluster_definition, enterprise):
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of(NAMESPACE, SET)
-        for k in ("a", "b", "c"):
-            try:
-                await session.delete(ds.id(k)).execute()
-            except Exception:
-                pass
-        yield cluster
-        for k in ("a", "b", "c"):
-            try:
-                await session.delete(ds.id(k)).execute()
-            except Exception:
-                pass
+async def hll_cluster(shared_cluster, enterprise):
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(NAMESPACE, SET)
+    for k in ("a", "b", "c"):
+        try:
+            await session.delete(ds.id(k)).execute()
+        except Exception:
+            pass
+    yield cluster
+    for k in ("a", "b", "c"):
+        try:
+            await session.delete(ds.id(k)).execute()
+        except Exception:
+            pass
 
 
 class TestHllWritesAndCount:

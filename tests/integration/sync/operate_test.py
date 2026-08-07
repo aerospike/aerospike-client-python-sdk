@@ -24,13 +24,14 @@ Covers:
 import pytest
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "operate_record_sync"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c

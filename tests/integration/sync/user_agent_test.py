@@ -26,7 +26,6 @@ skips cleanly on older servers.
 """
 
 import base64
-import os
 import socket
 import time
 
@@ -34,11 +33,13 @@ import pytest
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth, general_seed
 
 
 def _host_port() -> tuple[str, int]:
-    host, port = os.environ.get("AEROSPIKE_HOST", "127.0.0.1:3100").split(":", 1)
-    return host, int(port)
+    host, _, port = general_seed().partition(":")
+    return host, int(port or 3000)
 
 
 def _server_user_agents(host: str, port: int) -> list[str]:
@@ -93,11 +94,11 @@ def test_psdk_user_agent_reaches_server():
     """
     host, port = _host_port()
     app_id = "psdk-itest-app"
-    cluster = ClusterDefinition(host, port).app_id(app_id).connect()
+    cluster = apply_general_auth(ClusterDefinition(host, port)).app_id(app_id).connect()
     try:
         # Force a real node connection so the user-agent is sent and registered.
         session = cluster.create_session(Behavior.DEFAULT)
-        session.upsert(DataSet.of("test", "user_agent").id("k1")).put({"n": 1}).execute()
+        session.upsert(DataSet.of(general_namespace(), "user_agent").id("k1")).put({"n": 1}).execute()
 
         def _match(ua: str) -> bool:
             fields = ua.split(",")

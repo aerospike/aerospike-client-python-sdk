@@ -31,36 +31,46 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
 KEY_PREFIX = "qbops_"
-NS = "test"
+NS = general_namespace()
 SET = "query_bin_ops_sync"
 
 
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
+        yield c
+
+
 @pytest.fixture
-def cluster(aerospike_host, make_cluster_definition):
-    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of(NS, SET)
+def cluster(shared_cluster):
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(NS, SET)
 
-        for i in range(1, 4):
-            settings = {"theme": "dark", "volume": i * 10, "notifications": True}
-            scores = [i * 10, i * 20, i * 30]
-            nested = {
-                "level1": {"a": i * 100, "b": i * 200},
-                "level2": {"x": i, "y": i + 1},
-            }
-            session.upsert(ds.id(f"{KEY_PREFIX}{i}")).put({
-                "name": f"user{i}",
-                "age": 20 + i,
-                "score": i * 100,
-                "settings": settings,
-                "scores": scores,
-                "nested": nested,
-            }).execute()
+    for i in range(1, 4):
+        settings = {"theme": "dark", "volume": i * 10, "notifications": True}
+        scores = [i * 10, i * 20, i * 30]
+        nested = {
+            "level1": {"a": i * 100, "b": i * 200},
+            "level2": {"x": i, "y": i + 1},
+        }
+        session.upsert(ds.id(f"{KEY_PREFIX}{i}")).put({
+            "name": f"user{i}",
+            "age": 20 + i,
+            "score": i * 100,
+            "settings": settings,
+            "scores": scores,
+            "nested": nested,
+        }).execute()
 
-        yield cluster
+    yield cluster
 
 
 def _key(i: int) -> Key:

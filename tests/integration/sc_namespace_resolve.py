@@ -13,7 +13,13 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Pick the strong-consistency namespace name for integration tests."""
+"""Pick the strong-consistency namespace name for integration tests.
+
+Companion: :mod:`tests.integration.namespace` (``general_namespace()``) is the *general* op-suite
+namespace-argument knob (AP by default, or ``AEROSPIKE_NAMESPACE`` for the Mode axis). This module
+resolves the *SC-specific* namespace for the dedicated SC suites. Keep the two concerns split
+between these files rather than adding a third helper.
+"""
 
 from __future__ import annotations
 

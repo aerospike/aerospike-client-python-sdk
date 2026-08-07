@@ -26,8 +26,10 @@ from aerospike_sdk import Behavior, UDFLang
 from aerospike_sdk.exceptions import AerospikeError, ResultCode, TimeoutError
 from aerospike_sdk import ClusterDefinition, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 DS = DataSet.of(NS, SET)
 LUA_FILE = os.path.normpath(
@@ -37,7 +39,7 @@ SERVER_PATH = "record_example.lua"
 MODULE = "record_example"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_with_udf(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
@@ -500,7 +502,7 @@ async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     with open(LUA_FILE, "rb") as f:
         body = f.read()
 
-    cluster = await ClusterDefinition(hostname, port).connect()
+    cluster = await apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         try:
             rm = await cluster.remove_udf(path)
@@ -607,7 +609,7 @@ SLEEP_SERVER_PATH = "sleep_example.lua"
 SLEEP_MODULE = "sleep_example"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()

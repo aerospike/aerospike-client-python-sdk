@@ -16,11 +16,12 @@
 """Tests for DataSet integration through the Cluster entry point."""
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
 async def test_key_value_with_dataset(aerospike_host, make_cluster_definition):
     """Test key_value operation using DataSet."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
@@ -40,7 +41,7 @@ async def test_key_value_with_dataset(aerospike_host, make_cluster_definition):
 
 async def test_key_value_with_key_object(aerospike_host, make_cluster_definition):
     """Test key_value operation using Key object."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("user2")
 
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
@@ -60,7 +61,7 @@ async def test_key_value_with_key_object(aerospike_host, make_cluster_definition
 
 async def test_query_with_dataset(aerospike_host, make_cluster_definition):
     """Test query operation using DataSet."""
-    users = DataSet.of("test", "query_test")
+    users = DataSet.of(general_namespace(), "query_test")
 
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
@@ -86,7 +87,7 @@ async def test_query_with_dataset(aerospike_host, make_cluster_definition):
 
 async def test_query_with_single_key(aerospike_host, make_cluster_definition):
     """Test query operation using a single Key."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("user3")
 
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
@@ -110,7 +111,7 @@ async def test_query_with_single_key(aerospike_host, make_cluster_definition):
 
 async def test_query_with_multiple_keys(aerospike_host, make_cluster_definition):
     """Test query operation using multiple Keys."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     keys = users.ids("user4", "user5")
 
     async with await make_cluster_definition(aerospike_host).connect() as cluster:

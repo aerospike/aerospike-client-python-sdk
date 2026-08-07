@@ -19,9 +19,10 @@ import pytest_asyncio
 from aerospike_sdk import MapOrder, MapReturnType
 from aerospike_async import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 BIN = "mapbin"
 DS = DataSet.of(NS, SET)

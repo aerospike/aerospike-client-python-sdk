@@ -80,7 +80,7 @@ def sc_namespace(aerospike_host_sc, make_cluster_definition):
             pytest.skip(skip_reason_no_sc_namespace(e.namespace_names))
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster_sc(aerospike_host_sc, make_cluster_definition):
     """Sync Cluster against the SC test seed (``AEROSPIKE_HOST_SC`` or ``AEROSPIKE_HOST``)."""
     try:

@@ -26,9 +26,10 @@ from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
 from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.integration.namespace import general_namespace
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition, enterprise):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
@@ -36,7 +37,7 @@ def cluster(aerospike_host, make_cluster_definition, enterprise):
 
 @pytest.fixture
 def users():
-    return DataSet.of("test", "sync_batch_test")
+    return DataSet.of(general_namespace(), "sync_batch_test")
 
 
 class TestSyncBatchOperations:

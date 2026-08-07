@@ -17,18 +17,19 @@
 
 import pytest
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def test_set():
     """DataSet fixture for delete bin tests."""
-    return DataSet.of("test", "delete_bin_test")
+    return DataSet.of(general_namespace(), "delete_bin_test")
 
 
 class TestDeleteBin:
     """Test deleting individual bins from records."""
 
-    async def test_delete_bin(self, cluster, test_set: DataSet):
+    async def test_delete_bin(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test deleting a single bin from a record."""
         session = cluster.create_session()
         key = test_set.id("deleteBin")
@@ -58,10 +59,10 @@ class TestDeleteBin:
         assert bin_name1 not in record.record.bins or record.record.bins.get(bin_name1) is None
         assert record.record.bins[bin_name2] == "value2"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_delete_multiple_bins(self, cluster, test_set: DataSet):
+    async def test_delete_multiple_bins(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test deleting multiple bins from a record."""
         session = cluster.create_session()
         key = test_set.id("deleteMultipleBins")
@@ -90,10 +91,10 @@ class TestDeleteBin:
         assert "bin2" not in record.record.bins or record.record.bins.get("bin2") is None
         assert record.record.bins["bin3"] == "value3"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_delete_bin_nonexistent(self, cluster, test_set: DataSet):
+    async def test_delete_bin_nonexistent(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test removing a bin that doesn't exist (should not error)."""
         session = cluster.create_session()
         key = test_set.id("deleteNonexistentBin")
@@ -109,10 +110,10 @@ class TestDeleteBin:
         assert record.record is not None
         assert record.record.bins["bin1"] == "value1"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_delete_and_set_bin(self, cluster, test_set: DataSet):
+    async def test_delete_and_set_bin(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test deleting one bin while setting another in same operation."""
         session = cluster.create_session()
         key = test_set.id("deleteAndSetBin")
@@ -139,5 +140,5 @@ class TestDeleteBin:
         assert "bin1" not in record.record.bins or record.record.bins.get("bin1") is None
         assert record.record.bins["bin2"] == "new_value2"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)

@@ -21,9 +21,10 @@ from aerospike_async import BasePolicy, QueryPolicy, Replica
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.policy.behavior import Behavior
+from tests.integration.namespace import general_namespace
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     """Setup sync SDK cluster for testing."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
@@ -38,7 +39,7 @@ def session(cluster):
 
 def test_records_per_second(session):
     """Test records_per_second method on SyncQueryBuilder."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called
     query_builder = session.query(users).records_per_second(1000)
@@ -47,7 +48,7 @@ def test_records_per_second(session):
 
 def test_max_records(session):
     """Test max_records method on SyncQueryBuilder."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called
     query_builder = session.query(users).max_records(10000)
@@ -56,7 +57,7 @@ def test_max_records(session):
 
 def test_expected_duration(session):
     """Test expected_duration method on SyncQueryBuilder."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called with QueryDuration enum
     query_builder = session.query(users).expected_duration(QueryDuration.SHORT)
@@ -65,7 +66,7 @@ def test_expected_duration(session):
 
 def test_replica(session):
     """Test replica method on SyncQueryBuilder."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called with Replica enum
     query_builder = session.query(users).replica(Replica.SEQUENCE)
@@ -74,7 +75,7 @@ def test_replica(session):
 
 def test_base_policy(session):
     """Test base_policy method on SyncQueryBuilder."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called
     base = BasePolicy()
@@ -84,7 +85,7 @@ def test_base_policy(session):
 
 def test_chaining_policy_fields(session):
     """Test that multiple policy fields can be chained."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Test chaining multiple policy methods
     query_builder = (
@@ -99,7 +100,7 @@ def test_chaining_policy_fields(session):
 
 def test_policy_fields_with_existing_policy(session):
     """Test that policy fields work with an existing QueryPolicy."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     # Create a policy and set it
     policy = QueryPolicy()

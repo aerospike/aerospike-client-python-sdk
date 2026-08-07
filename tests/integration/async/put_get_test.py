@@ -22,22 +22,32 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from .durable_delete_support import delete_keys_durable
+from tests.integration.namespace import general_namespace
+
+
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        yield c
 
 
 @pytest.fixture
-async def cluster(aerospike_host, make_cluster_definition):
+async def cluster(shared_cluster):
     """Function-scoped: many tests reuse ``test/test`` user key ``1`` and assume a fresh record."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
-        session = c.create_session()
-        test_ds = DataSet.of("test", "test")
-        await session.delete(test_ds.id(1)).execute()
-        yield c
+    c = shared_cluster
+    session = c.create_session()
+    test_ds = DataSet.of(general_namespace(), "test")
+    await session.delete(test_ds.id(1)).execute()
+    yield c
 
 
 async def test_put_get_basic(cluster):
     """Test basic put and get operations."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "John", "age": 30}).execute()
 
@@ -50,7 +60,7 @@ async def test_put_get_basic(cluster):
 async def test_put_get_int(cluster):
     """Test putting and getting integer values."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin": 42}).execute()
 
@@ -63,7 +73,7 @@ async def test_put_get_int(cluster):
 async def test_put_get_float(cluster):
     """Test putting and getting float values."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin": 3.14159}).execute()
 
@@ -76,7 +86,7 @@ async def test_put_get_float(cluster):
 async def test_put_get_string(cluster):
     """Test putting and getting string values."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin": "hello world"}).execute()
 
@@ -89,7 +99,7 @@ async def test_put_get_string(cluster):
 async def test_put_get_bool(cluster):
     """Test putting and getting boolean values."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bint": True, "binf": False}).execute()
 
@@ -102,7 +112,7 @@ async def test_put_get_bool(cluster):
 async def test_get_specific_bins(cluster):
     """Test getting only specific bins."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "John", "age": 30, "city": "NYC"}).execute()
 
@@ -117,7 +127,7 @@ async def test_get_specific_bins(cluster):
 async def test_delete(cluster):
     """Test delete operation."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "John"}).execute()
 
@@ -134,7 +144,7 @@ async def test_delete(cluster):
 async def test_delete_nonexistent(cluster):
     """Test deleting a non-existent record."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(999)
+    k = DataSet.of(general_namespace(), "test").id(999)
 
     result = await session.delete(k).execute()
     first = await result.first()
@@ -144,7 +154,7 @@ async def test_delete_nonexistent(cluster):
 async def test_exists(cluster):
     """Test exists operation."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     exists_result = await session.exists(k).execute()
     first = await exists_result.first()
@@ -160,7 +170,7 @@ async def test_exists(cluster):
 async def test_add(cluster):
     """Test add (increment) operation."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"counter": 10}).execute()
     await session.upsert(k).bin("counter").add(5).execute()
@@ -174,7 +184,7 @@ async def test_add(cluster):
 async def test_append(cluster):
     """Test append operation."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "John"}).execute()
     await session.upsert(k).bin("name").append(" Doe").execute()
@@ -188,7 +198,7 @@ async def test_append(cluster):
 async def test_prepend(cluster):
     """Test prepend operation."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Doe"}).execute()
     await session.upsert(k).bin("name").prepend("John ").execute()
@@ -202,7 +212,7 @@ async def test_prepend(cluster):
 async def test_touch(cluster):
     """Test touch operation (update TTL without modifying data)."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "John"}).execute()
 
@@ -217,7 +227,7 @@ async def test_touch(cluster):
 async def test_get_nonexistent(cluster):
     """Test getting a non-existent record."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(999)
+    k = DataSet.of(general_namespace(), "test").id(999)
 
     result = await session.query(k).execute()
     first = await result.first()
@@ -227,7 +237,7 @@ async def test_get_nonexistent(cluster):
 async def test_string_key(cluster):
     """Test using string keys."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id("user123")
+    k = DataSet.of(general_namespace(), "test").id("user123")
 
     await session.upsert(k).put({"name": "John"}).execute()
 
@@ -240,7 +250,7 @@ async def test_string_key(cluster):
 async def test_chaining(cluster):
     """Test that method chaining works correctly."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"counter": 0, "name": "test"}).execute()
 
@@ -256,7 +266,7 @@ async def test_operate_put_and_get(cluster):
     """Test operate with Put and Get operations."""
     session = cluster.create_session()
     pac = cluster._client.underlying_client
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin1": 7, "bin2": "string value"}).execute()
 
@@ -278,7 +288,7 @@ async def test_operate_put_and_get(cluster):
 async def test_operate_get_only(cluster):
     """Test operate with Get operation only."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin1": "value1", "bin2": 42}).execute()
 
@@ -294,7 +304,7 @@ async def test_operate_list_append(cluster):
     """Test operate with ListOperation.append."""
     session = cluster.create_session()
     pac = cluster._client.underlying_client
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"listbin": [1, 2, 3]}).execute()
 
@@ -320,7 +330,7 @@ async def test_operate_map_put_and_get(cluster):
     """Test operate with MapOperation.put and get_by_key."""
     session = cluster.create_session()
     pac = cluster._client.underlying_client
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"mapbin": {"key1": "value1"}}).execute()
 
@@ -346,7 +356,7 @@ async def test_operate_map_clear(cluster):
     """Test operate with MapOperation.clear."""
     session = cluster.create_session()
     pac = cluster._client.underlying_client
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"mapbin": {"key1": "value1", "key2": "value2"}}).execute()
 
@@ -368,7 +378,7 @@ async def test_operate_map_clear(cluster):
 async def test_bin_chaining_set_to(cluster):
     """Test bin chaining API with set_to."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).bin("name").set_to("Tim").bin("age").set_to(1).bin("gender").set_to("male").execute()
 
@@ -381,7 +391,7 @@ async def test_bin_chaining_set_to(cluster):
 async def test_bin_chaining_add(cluster):
     """Test bin chaining API with add."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"age": 30}).execute()
     await session.upsert(k).bin("age").add(1).execute()
@@ -395,7 +405,7 @@ async def test_bin_chaining_add(cluster):
 async def test_bin_chaining_mixed_operations(cluster):
     """Test bin chaining with both set_to and add."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Tim", "age": 1}).execute()
     await session.upsert(k).bin("name").set_to("Tim Updated").bin("age").add(1).execute()
@@ -409,7 +419,7 @@ async def test_bin_chaining_mixed_operations(cluster):
 async def test_and_remove_other_bins(cluster):
     """Test and_remove_other_bins functionality."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Tim", "age": 30, "gender": "male", "city": "NYC"}).execute()
     await session.replace(k).put({"name": "Tim Updated", "age": 26}).execute()
@@ -423,7 +433,7 @@ async def test_and_remove_other_bins(cluster):
 async def test_set_bins_execute(cluster):
     """Test set_bins with execute method."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Tim", "age": 1, "gender": "male"}).execute()
 
@@ -438,7 +448,7 @@ async def test_with_durable_delete(cluster, enterprise):
     if not enterprise:
         pytest.skip("Requires Enterprise Edition")
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Tim"}).execute()
     gen_before_delete = (
@@ -470,7 +480,7 @@ async def test_with_durable_delete(cluster, enterprise):
 async def test_insert_creates_new_record(cluster):
     """Test that insert() creates a new record successfully."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.insert(k).put({"name": "Alice", "age": 25}).execute()
 
@@ -483,7 +493,7 @@ async def test_insert_creates_new_record(cluster):
 async def test_insert_fails_if_record_exists(cluster):
     """Test that insert() fails if record already exists."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.insert(k).put({"name": "Alice"}).execute()
 
@@ -494,7 +504,7 @@ async def test_insert_fails_if_record_exists(cluster):
 async def test_update_succeeds_if_record_exists(cluster):
     """Test that update() succeeds if record exists."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Alice", "age": 25}).execute()
     await session.update(k).put({"age": 26}).execute()
@@ -508,7 +518,7 @@ async def test_update_succeeds_if_record_exists(cluster):
 async def test_update_fails_if_record_not_exists(cluster):
     """Test that update() raises KEY_NOT_FOUND_ERROR if record does not exist."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(88888)
+    k = DataSet.of(general_namespace(), "test").id(88888)
 
     try:
         await session.delete(k).execute()
@@ -523,7 +533,7 @@ async def test_update_fails_if_record_not_exists(cluster):
 async def test_replace_succeeds_if_record_exists(cluster):
     """Test that replace() succeeds if record exists and replaces all bins."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Alice", "age": 25, "city": "NYC"}).execute()
     await session.replace(k).put({"name": "Bob"}).execute()
@@ -540,7 +550,7 @@ async def test_replace_succeeds_if_record_exists(cluster):
 async def test_replace_if_exists_fails_if_record_not_exists(cluster):
     """Test that replace_if_exists() raises KEY_NOT_FOUND_ERROR if record does not exist."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(99999)
+    k = DataSet.of(general_namespace(), "test").id(99999)
 
     try:
         await session.delete(k).execute()
@@ -555,7 +565,7 @@ async def test_replace_if_exists_fails_if_record_not_exists(cluster):
 async def test_upsert_updates_existing_record(cluster):
     """Upsert on an existing record overwrites the specified bins."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).bin("name").set_to("original").execute()
     await session.upsert(k).bin("name").set_to("updated").execute()
@@ -568,7 +578,7 @@ async def test_upsert_updates_existing_record(cluster):
 async def test_update_preserves_other_bins(cluster):
     """Update modifies specified bins but preserves unspecified ones."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"name": "Alice", "counter": 10}).execute()
     await session.update(k).bin("name").set_to("Bob").execute()
@@ -583,7 +593,7 @@ async def test_update_preserves_other_bins(cluster):
 async def test_get_header(cluster):
     """Query with no bins returns header (generation, TTL) without bin data."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).bin("mybin").set_to("myvalue").execute()
 
@@ -598,7 +608,7 @@ async def test_get_header(cluster):
 async def test_touch_updates_generation(cluster):
     """Touch increments the record's generation without modifying data."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).bin("name").set_to("touchable").execute()
 
@@ -616,7 +626,7 @@ async def test_touch_updates_generation(cluster):
 async def test_touch_nonexistent_record(cluster):
     """Touch on a non-existent record yields a not-OK result."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(77777)
+    k = DataSet.of(general_namespace(), "test").id(77777)
 
     try:
         await session.delete(k).execute()
@@ -632,7 +642,7 @@ async def test_touch_nonexistent_record(cluster):
 async def test_touch_with_ttl(cluster):
     """Touch with expire_record_after_seconds sets the TTL."""
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id(1)
+    k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).bin("name").set_to("ttl_test").execute()
 

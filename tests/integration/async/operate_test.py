@@ -24,12 +24,13 @@ Coverage:
 
 import pytest
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def test_set():
     """DataSet fixture for operate tests."""
-    return DataSet.of("test", "operate_test")
+    return DataSet.of(general_namespace(), "operate_test")
 
 
 class TestOperate:
@@ -123,7 +124,12 @@ class TestOperate:
         await session.delete(key).execute()
 
     async def test_delete_record_reads_then_deletes(self, cluster, test_set: DataSet):
-        """Read a bin and atomically delete the record in one operate call."""
+        """Read a bin and atomically delete the record in one operate call.
+
+        On SC namespaces the record delete must resolve to a durable delete from
+        the mode-resolved behavior defaults — a plain ``.delete_record()`` here is
+        the regression guard for that (a non-durable delete is rejected on SC).
+        """
         session = cluster.create_session()
         key = test_set.id("del_read")
         await session.upsert(key).put({"name": "Alice", "age": 30}).execute()

@@ -20,9 +20,10 @@ import pytest_asyncio
 from aerospike_sdk import ListOrderType, MapOrder
 
 from aerospike_sdk import DataSet, ListReturnType, MapReturnType
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "cdt_navigation"
 DS = DataSet.of(NS, SET)
 

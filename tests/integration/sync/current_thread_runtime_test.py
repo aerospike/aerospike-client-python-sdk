@@ -38,18 +38,20 @@ from aerospike_sdk import Behavior, DataSet
 # deprecation shim would fire on import and add noise unrelated to this file.
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
+from tests.integration.namespace import general_namespace
 
 SET_NAME = "sync_ct_runtime"
 
 
 @pytest.fixture
-def ct_client(aerospike_host):
+def ct_client(aerospike_host, client_policy):
     """A client whose sync ops use a per-thread runtime.
 
     Built directly rather than through ``ClusterDefinition``: the opt-in has
-    no public builder equivalent, by design.
+    no public builder equivalent, by design. ``client_policy`` carries auth
+    when the general leg targets an auth-required seed.
     """
-    with SyncClient(aerospike_host, current_thread_runtime=True) as client:
+    with SyncClient(aerospike_host, policy=client_policy, current_thread_runtime=True) as client:
         yield client
 
 
@@ -65,7 +67,7 @@ def test_key_value_surface_round_trips_across_threads(ct_client):
     cross-connection round-trip rather than a single-client echo.
     """
     session = ct_client.create_session(Behavior.DEFAULT)
-    ds = DataSet.of("test", SET_NAME)
+    ds = DataSet.of(general_namespace(), SET_NAME)
     keys = [ds.id(f"t{i}") for i in range(4)]
 
     def _write(index: int) -> None:
@@ -91,7 +93,7 @@ def test_dataset_query_is_unsupported(ct_client):
     """Scans have no per-thread equivalent — must fail, not silently misbehave."""
     session = ct_client.create_session(Behavior.DEFAULT)
     with pytest.raises(Exception, match="query_blocking"):
-        list(session.query(DataSet.of("test", SET_NAME)).execute())
+        list(session.query(DataSet.of(general_namespace(), SET_NAME)).execute())
 
 
 def test_cluster_wide_info_is_unsupported(ct_client):
