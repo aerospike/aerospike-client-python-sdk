@@ -18,12 +18,13 @@
 import pytest
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def users():
     """DataSet fixture for replace tests."""
-    return DataSet.of("test", "replace_test")
+    return DataSet.of(general_namespace(), "replace_test")
 
 
 class TestReplaceOperations:

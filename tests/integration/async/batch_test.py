@@ -28,12 +28,13 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def users():
     """DataSet fixture for batch tests."""
-    return DataSet.of("test", "batch_test")
+    return DataSet.of(general_namespace(), "batch_test")
 
 
 class TestBatchOperations:

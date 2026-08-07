@@ -27,9 +27,10 @@ from aerospike_sdk import (
     StringWriteFlags,
 )
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
-_TEST_DS = DataSet.of("test", "test")
+_TEST_DS = DataSet.of(general_namespace(), "test")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")

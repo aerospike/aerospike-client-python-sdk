@@ -18,25 +18,35 @@
 import pytest
 from aerospike_sdk.exceptions import AerospikeError, RecordNotFoundError, ResultCode
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
+
+
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
+        yield c
 
 
 @pytest.fixture
-def cluster(aerospike_host, make_cluster_definition):
+def cluster(shared_cluster):
     """Setup sync SDK cluster for testing."""
-    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "test")
-        try:
-            session.delete(ds.id(1)).execute()
-        except Exception:
-            pass
-        yield cluster
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "test")
+    try:
+        session.delete(ds.id(1)).execute()
+    except Exception:
+        pass
+    yield cluster
 
 
 def test_put_get_basic(cluster):
     """Test basic put and get operations."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John", "age": 30}).execute()
 
@@ -50,7 +60,7 @@ def test_put_get_basic(cluster):
 def test_put_get_with_dataset(cluster):
     """Test put and get using DataSet."""
     session = cluster.create_session()
-    users = DataSet.of("test", "test")
+    users = DataSet.of(general_namespace(), "test")
     key = users.id(2)
     session.upsert(key).put({"name": "Jane", "age": 28}).execute()
 
@@ -63,7 +73,7 @@ def test_put_get_with_dataset(cluster):
 def test_put_get_with_key_object(cluster):
     """Test put and get using Key object."""
     session = cluster.create_session()
-    users = DataSet.of("test", "test")
+    users = DataSet.of(general_namespace(), "test")
     key = users.id(3)
     session.upsert(key).put({"name": "Bob", "age": 35}).execute()
 
@@ -76,7 +86,7 @@ def test_put_get_with_key_object(cluster):
 def test_exists(cluster):
     """Test exists operation."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
 
     exists_stream = session.exists(key).execute()
@@ -88,7 +98,7 @@ def test_exists(cluster):
 def test_delete(cluster):
     """Test delete operation."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John"}).execute()
 
@@ -103,7 +113,7 @@ def test_delete(cluster):
 def test_get_with_bins(cluster):
     """Test get with specific bin selection."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "John", "age": 30, "city": "NYC"}).execute()
 
@@ -124,7 +134,7 @@ def test_truncate(cluster):
     cutoff) are immediately readable.
     """
     session = cluster.create_session()
-    users = DataSet.of("test", "trunc_test_sync")
+    users = DataSet.of(general_namespace(), "trunc_test_sync")
 
     key1 = users.id("trunc_old1")
     key2 = users.id("trunc_old2")
@@ -145,7 +155,7 @@ def test_truncate(cluster):
 def test_bin_chaining_set_to(cluster):
     """Test bin chaining API with set_to."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).bin("name").set_to("Tim").bin("age").set_to(1).bin("gender").set_to("male").execute()
 
@@ -158,7 +168,7 @@ def test_bin_chaining_set_to(cluster):
 def test_bin_chaining_add(cluster):
     """Test bin chaining API with add."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"age": 30}).execute()
 
@@ -173,7 +183,7 @@ def test_bin_chaining_add(cluster):
 def test_bin_chaining_mixed_operations(cluster):
     """Test bin chaining with both set_to and add."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim", "age": 1}).execute()
 
@@ -188,7 +198,7 @@ def test_bin_chaining_mixed_operations(cluster):
 def test_and_remove_other_bins(cluster):
     """Test replace removes other bins (equivalent to and_remove_other_bins)."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim", "age": 30, "gender": "male", "city": "NYC"}).execute()
 
@@ -203,7 +213,7 @@ def test_and_remove_other_bins(cluster):
 def test_set_bins_execute(cluster):
     """Test set_bins with execute method."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).set_bins({"name": "Tim", "age": 1, "gender": "male"}).execute()
 
@@ -216,7 +226,7 @@ def test_set_bins_execute(cluster):
 def test_with_durable_delete(cluster):
     """Test delete operations."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Tim"}).execute()
 
@@ -231,7 +241,7 @@ def test_with_durable_delete(cluster):
 def test_insert_creates_new_record(cluster):
     """Test that insert() creates a new record successfully."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.insert(key).put({"name": "Alice", "age": 25}).execute()
 
@@ -244,7 +254,7 @@ def test_insert_creates_new_record(cluster):
 def test_insert_fails_if_record_exists(cluster):
     """Test that insert() fails if record already exists."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.insert(key).put({"name": "Alice"}).execute()
 
@@ -255,7 +265,7 @@ def test_insert_fails_if_record_exists(cluster):
 def test_update_succeeds_if_record_exists(cluster):
     """Test that update() succeeds if record exists."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Alice", "age": 25}).execute()
     session.update(key).put({"age": 26}).execute()
@@ -269,7 +279,7 @@ def test_update_succeeds_if_record_exists(cluster):
 def test_update_fails_if_record_not_exists(cluster):
     """Test that update() raises KEY_NOT_FOUND_ERROR if record does not exist."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(88888)
     try:
         session.delete(key).execute()
@@ -283,7 +293,7 @@ def test_update_fails_if_record_not_exists(cluster):
 def test_replace_succeeds_if_record_exists(cluster):
     """Test that replace() succeeds if record exists and replaces all bins."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     session.upsert(key).put({"name": "Alice", "age": 25, "city": "NYC"}).execute()
     session.replace(key).put({"name": "Bob"}).execute()
@@ -299,7 +309,7 @@ def test_replace_succeeds_if_record_exists(cluster):
 def test_replace_if_exists_fails_if_record_not_exists(cluster):
     """Test that replace_if_exists() raises KEY_NOT_FOUND_ERROR if record does not exist."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(88888)
     try:
         session.delete(key).execute()
@@ -318,7 +328,7 @@ def test_fast_path_get_missing_key_raises_sdk_type(cluster):
     subclass, not as the underlying client's type.
     """
     session = cluster.create_session()
-    key = DataSet.of("test", "test").id("fastpath-missing-key")
+    key = DataSet.of(general_namespace(), "test").id("fastpath-missing-key")
     try:
         session.delete(key).execute()
     except Exception:

@@ -19,22 +19,32 @@ import time
 
 import pytest
 from aerospike_sdk import DataSet, Exp
+from tests.integration.namespace import general_namespace
+
+
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
+        yield c
 
 
 @pytest.fixture
-def cluster(aerospike_host, make_cluster_definition, enterprise):
+def cluster(shared_cluster, enterprise):
     """Setup sync SDK cluster and test data for query tests."""
-    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
-        for i in range(10):
-            session.delete(ds.id(i)).execute()
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "query_test")
+    for i in range(10):
+        session.delete(ds.id(i)).execute()
 
-        for i in range(10):
-            session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()
+    for i in range(10):
+        session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()
 
-        time.sleep(0.25 if not enterprise else 0.01)
-        yield cluster
+    time.sleep(0.25 if not enterprise else 0.01)
+    yield cluster
 
 
 @pytest.fixture
@@ -43,7 +53,7 @@ def session(cluster):
 
 def test_query_basic(session):
     """Test basic query operation without filters."""
-    stream = session.query("test", "query_test").execute()
+    stream = session.query(general_namespace(), "query_test").execute()
     count = 0
     for result in stream:
         record = result.record
@@ -55,7 +65,7 @@ def test_query_basic(session):
 
 def test_query_with_dataset(session):
     """Test query using DataSet."""
-    users = DataSet.of("test", "query_test")
+    users = DataSet.of(general_namespace(), "query_test")
     stream = session.query(dataset=users).execute()
     count = 0
     for result in stream:
@@ -68,14 +78,14 @@ def test_query_with_dataset(session):
 
 def test_query_with_single_key(session):
     """Test query using a single Key."""
-    users = DataSet.of("test", "query_test")
+    users = DataSet.of(general_namespace(), "query_test")
     result = session.query(users.id(5)).execute().first_or_raise()
     assert result.is_ok
     assert result.record.bins == {"id": 5, "age": 25, "name": "User5"}
 
 def test_query_with_multiple_keys(session):
     """Test query using multiple Keys."""
-    users = DataSet.of("test", "query_test")
+    users = DataSet.of(general_namespace(), "query_test")
     results = session.query(users.ids(6, 7)).execute().collect()
     assert all(r.is_ok for r in results)
     by_idx = {r.index: r for r in results}
@@ -85,7 +95,7 @@ def test_query_with_multiple_keys(session):
 
 def test_query_with_bins(session):
     """Test query with specific bin selection."""
-    stream = session.query("test", "query_test").bins(["name", "age"]).execute()
+    stream = session.query(general_namespace(), "query_test").bins(["name", "age"]).execute()
     count = 0
     for result in stream:
         record = result.record
@@ -105,7 +115,7 @@ def test_query_with_filter_expression(session):
     filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = (
-        session.query("test", "query_test")
+        session.query(general_namespace(), "query_test")
         .filter_expression(filter_exp)
         .execute()
     )
@@ -135,7 +145,7 @@ class TestSyncStreamAcrossBuilders:
         """Multi-key read: stream yields the same rows (by index)
         as buffered execute()."""
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         keys = ds.ids(0, 1, 2)
 
         lazy = session.query(keys).stream().collect()
@@ -151,7 +161,7 @@ class TestSyncStreamAcrossBuilders:
         it, the read spec (indices 0, 1) was silently overwritten by the
         upsert."""
         session = cluster.create_session()
-        ds = DataSet.of("test", "sestream_qmix")
+        ds = DataSet.of(general_namespace(), "sestream_qmix")
         keys = [ds.id(i) for i in range(4)]
         try:
             for i, k in enumerate(keys):
@@ -183,7 +193,7 @@ class TestSyncStreamAcrossBuilders:
     def test_single_key_write_segment_stream(self, cluster):
         """A single-key write segment exposes stream (one record)."""
         session = cluster.create_session()
-        ds = DataSet.of("test", "sestream_qsingle")
+        ds = DataSet.of(general_namespace(), "sestream_qsingle")
         k = ds.id(0)
         try:
             results = session.upsert(k).put({"v": 1}).stream().collect()
@@ -201,7 +211,7 @@ class TestSyncPopVsFirst:
 
     def test_pop_keeps_stream_open(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream = session.query(ds.ids(0, 1, 2)).stream()
         head = stream.pop()
         assert head is not None
@@ -210,7 +220,7 @@ class TestSyncPopVsFirst:
 
     def test_first_closes_stream(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream = session.query(ds.ids(0, 1, 2)).stream()
         head = stream.first()
         assert head is not None
@@ -218,7 +228,7 @@ class TestSyncPopVsFirst:
 
     def test_pop_or_raise_and_first_or_raise(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
 
         open_stream = session.query(ds.ids(0, 1)).stream()
         assert open_stream.pop_or_raise().is_ok
@@ -236,7 +246,7 @@ class TestSyncStreamClose:
 
     def test_close_mid_stream_stops_iteration(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         keys = ds.ids(*range(10))
 
         stream = session.query(keys).stream()
@@ -252,7 +262,7 @@ class TestSyncStreamClose:
 
     def test_close_is_idempotent(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream = session.query(ds.ids(0, 1, 2)).stream()
         stream.close()
         stream.close()
@@ -261,7 +271,7 @@ class TestSyncStreamClose:
 
     def test_reiterate_after_close_yields_nothing(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream = session.query(ds.ids(0, 1, 2, 3)).stream()
         stream.close()
         assert list(stream) == []
@@ -269,7 +279,7 @@ class TestSyncStreamClose:
 
     def test_client_usable_after_early_close(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream = session.query(ds.ids(*range(10))).stream()
         for _ in stream:
             stream.close()
@@ -279,7 +289,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_normal_exit(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         seen = []
         with session.query(ds.ids(0, 1, 2)).stream() as stream:
             for r in stream:
@@ -289,7 +299,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_early_break(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         with session.query(ds.ids(*range(10))).stream() as stream:
             for _ in stream:
                 break
@@ -299,7 +309,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_exception(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of("test", "query_test")
+        ds = DataSet.of(general_namespace(), "query_test")
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
             with session.query(ds.ids(*range(10))).stream() as stream:
@@ -319,7 +329,7 @@ def test_query_with_filter_expression_and(session):
     )
 
     stream = (
-        session.query("test", "query_test")
+        session.query(general_namespace(), "query_test")
         .filter_expression(filter_exp)
         .execute()
     )

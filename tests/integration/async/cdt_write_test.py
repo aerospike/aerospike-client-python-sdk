@@ -21,9 +21,10 @@ from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "cdt_write"
 DS = DataSet.of(NS, SET)
 
@@ -77,11 +78,11 @@ def _assert_list_get_relative_batch(raw_bin):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def cluster(aerospike_host, make_cluster_definition):
+async def cluster(aerospike_host, make_cluster_definition, sc_aware_delete):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         for key_id in range(1, 130):
-            await session.delete(DS.id(key_id)).execute()
+            await sc_aware_delete(session, DS.id(key_id))
         yield c
 
 
@@ -1049,10 +1050,10 @@ class TestRelativeRangeBatchOrdering:
     Remove coverage uses a trailing ``.get()`` and asserts final bin state.
     """
 
-    async def test_operate_map_get_relative_batch(self, cluster):
+    async def test_operate_map_get_relative_batch(self, cluster, sc_aware_delete):
         session = cluster.create_session()
         k = DS.id(70)
-        await session.delete(k).execute()
+        await sc_aware_delete(session, k)
         await session.upsert(k).put({"p": 1}).execute()
         await session.update(k).bin("mapbin").map_create(MapOrder.KEY_ORDERED).execute()
         await session.update(k).bin("mapbin").map_upsert_items(
@@ -1078,10 +1079,10 @@ class TestRelativeRangeBatchOrdering:
         raw = (await rs.first_or_raise()).record.bins["mapbin"]
         _assert_map_get_relative_batch(raw)
 
-    async def test_operate_list_get_relative_batch(self, cluster):
+    async def test_operate_list_get_relative_batch(self, cluster, sc_aware_delete):
         session = cluster.create_session()
         k = DS.id(71)
-        await session.delete(k).execute()
+        await sc_aware_delete(session, k)
         await session.upsert(k).put({"x": 1}).execute()
         b = session.update(k)
         b = b.bin("lst").list_add_items([0, 4, 5, 9, 11, 15])
@@ -1101,10 +1102,10 @@ class TestRelativeRangeBatchOrdering:
         raw = (await rs.first_or_raise()).record.bins["lst"]
         _assert_list_get_relative_batch(raw)
 
-    async def test_operate_map_remove_relative_final_state(self, cluster):
+    async def test_operate_map_remove_relative_final_state(self, cluster, sc_aware_delete):
         session = cluster.create_session()
         k = DS.id(72)
-        await session.delete(k).execute()
+        await sc_aware_delete(session, k)
         await session.upsert(k).put({"p": 1}).execute()
         await session.update(k).bin("mapbin").map_create(MapOrder.KEY_ORDERED).execute()
         await session.update(k).bin("mapbin").map_upsert_items(
@@ -1122,7 +1123,7 @@ class TestRelativeRangeBatchOrdering:
         m = (await rs.first_or_raise()).record.bins["mapbin"]
         assert m == {0: 17}
 
-        await session.delete(k).execute()
+        await sc_aware_delete(session, k)
         await session.upsert(k).put({"p": 1}).execute()
         await session.update(k).bin("mapbin").map_create(MapOrder.KEY_ORDERED).execute()
         await session.update(k).bin("mapbin").map_upsert_items(
@@ -1139,10 +1140,10 @@ class TestRelativeRangeBatchOrdering:
         m2 = (await rs2.first_or_raise()).record.bins["mapbin"]
         assert m2 == {4: 2, 5: 15}
 
-    async def test_operate_list_remove_relative_final_state(self, cluster):
+    async def test_operate_list_remove_relative_final_state(self, cluster, sc_aware_delete):
         session = cluster.create_session()
         k = DS.id(73)
-        await session.delete(k).execute()
+        await sc_aware_delete(session, k)
         await session.upsert(k).put({"x": 1}).execute()
         await session.update(k).bin("lst").list_add_items(
             [0, 4, 5, 9, 11, 15],

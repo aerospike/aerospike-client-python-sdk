@@ -24,6 +24,7 @@ digest → partition assignments.
 from collections import Counter
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 PART_SET = "query_partition"
 HOT_SET = "query_partition_hot"
@@ -96,7 +97,7 @@ async def _seed_hot_partition(session, ds):
 async def test_on_partition_returns_exactly_that_partitions_records(cluster):
     """on_partition(p) returns exactly the records whose digest maps to p."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     await session.truncate(ds)
     per_partition = _per_partition(await _seed(session, ds))
 
@@ -116,7 +117,7 @@ async def test_on_partition_returns_exactly_that_partitions_records(cluster):
 async def test_partition_range_halves_partition_the_keyspace(cluster):
     """The two half-ranges are disjoint and together cover every record."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     await session.truncate(ds)
     await _seed(session, ds)
 
@@ -134,7 +135,7 @@ async def test_partition_range_halves_partition_the_keyspace(cluster):
 async def test_on_partition_range_matches_computed_assignment(cluster):
     """An interior range returns exactly the records assigned to it."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     await session.truncate(ds)
     per_partition = _per_partition(await _seed(session, ds))
 
@@ -153,7 +154,7 @@ async def test_on_partition_with_chunking_returns_every_record(cluster):
     so a cursor that failed to advance would silently truncate the results.
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", HOT_SET)
+    ds = DataSet.of(general_namespace(), HOT_SET)
     await session.truncate(ds)
     await _seed_hot_partition(session, ds)
 
@@ -175,7 +176,7 @@ async def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
     take effect mid-chunk.
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", HOT_SET)
+    ds = DataSet.of(general_namespace(), HOT_SET)
     await session.truncate(ds)
     await _seed_hot_partition(session, ds)
 
@@ -193,7 +194,7 @@ async def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
 async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     """A filter expression and a partition range compose: exactly their intersection."""
     session = cluster.create_session()
-    ds = DataSet.of("test", PART_SET)
+    ds = DataSet.of(general_namespace(), PART_SET)
     await session.truncate(ds)
     placed = await _seed(session, ds)
 

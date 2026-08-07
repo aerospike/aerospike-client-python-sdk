@@ -23,14 +23,15 @@ import pytest
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
+from tests.integration.namespace import general_namespace
 
 BIN_NAME = "expirebin"
 EXPIRE_SET = "expire"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster(aerospike_host, make_cluster_definition):
-    """Function-scoped: each test owns its key and starts from a clean slate."""
+    """Shared connection; each test owns its key, so isolation needs no reconnect."""
     async with await make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
@@ -38,7 +39,7 @@ async def cluster(aerospike_host, make_cluster_definition):
 async def test_expire(cluster):
     """A 1-second TTL: record reads immediately, is gone after a short wait."""
     session = cluster.create_session()
-    k = DataSet.of("test", EXPIRE_SET).id("expire")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("expire")
     await session.delete(k).execute()
 
     await (
@@ -62,7 +63,7 @@ async def test_expire(cluster):
 async def test_no_expire(cluster):
     """never_expire() keeps a record past any wall-clock check."""
     session = cluster.create_session()
-    k = DataSet.of("test", EXPIRE_SET).id("noExpire")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("noExpire")
     await session.delete(k).execute()
 
     await (
@@ -85,7 +86,7 @@ async def test_no_expire(cluster):
 
 async def test_reset_read_ttl(cluster):
     """read_touch_ttl_percent=80 extends TTL on read when remaining < threshold."""
-    k = DataSet.of("test", EXPIRE_SET).id("resetReadTtl")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("resetReadTtl")
     await cluster.create_session().delete(k).execute()
 
     await (
@@ -130,7 +131,7 @@ async def test_reset_read_ttl(cluster):
 async def test_expire_record_after_timedelta(cluster):
     """expire_record_after(timedelta) sets TTL via duration object."""
     session = cluster.create_session()
-    k = DataSet.of("test", EXPIRE_SET).id("afterTimedelta")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("afterTimedelta")
     await session.delete(k).execute()
 
     await (
@@ -149,7 +150,7 @@ async def test_expire_record_after_timedelta(cluster):
 async def test_expire_record_at_datetime(cluster):
     """expire_record_at(datetime) sets TTL via absolute timestamp."""
     session = cluster.create_session()
-    k = DataSet.of("test", EXPIRE_SET).id("atDatetime")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("atDatetime")
     await session.delete(k).execute()
 
     target = datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -169,7 +170,7 @@ async def test_expire_record_at_datetime(cluster):
 async def test_expire_record_at_rejects_past_datetime(cluster):
     """A datetime in the past raises ValueError before any wire IO."""
     session = cluster.create_session()
-    k = DataSet.of("test", EXPIRE_SET).id("atDatetimePast")
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("atDatetimePast")
 
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
     with pytest.raises(ValueError, match="must be in the future"):

@@ -20,6 +20,7 @@ import os
 import pytest
 from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
+from tests.integration.namespace import general_namespace
 
 
 async def test_client_policy_use_services_alternate_from_env(client_policy, aerospike_host):
@@ -35,16 +36,16 @@ async def test_create_numeric_index(cluster):
     index_name = "test_numeric_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create numeric index
-    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
 
     # Clean up
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -53,16 +54,16 @@ async def test_create_string_index(cluster):
     index_name = "test_string_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create string index
-    await cluster.create_session().index("test", "test").on_bin("name").named(index_name).string().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("name").named(index_name).string().create()
 
     # Clean up
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -71,13 +72,13 @@ async def test_create_index_with_collection_type(cluster):
     index_name = "test_collection_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create index with collection type
     await (
-        cluster.create_session().index("test", "test")
+        cluster.create_session().index(general_namespace(), "test")
         .on_bin("roles")
         .named(index_name)
         .string()
@@ -87,7 +88,7 @@ async def test_create_index_with_collection_type(cluster):
 
     # Clean up
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -96,33 +97,33 @@ async def test_drop_index(cluster):
     index_name = "test_drop_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create index first
-    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
 
     # Drop the index
-    await cluster.create_session().index("test", "test").named(index_name).drop()
+    await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
 
 async def test_drop_nonexistent_index(cluster):
     """Test dropping a non-existent index (should not raise error)."""
     # Dropping non-existent index should not raise error
-    await cluster.create_session().index("test", "test").named("non_existent_idx").drop()
+    await cluster.create_session().index(general_namespace(), "test").named("non_existent_idx").drop()
 
 async def test_index_chaining(cluster):
     """Test method chaining on index builder."""
     index_name = "test_chain_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Test chaining
     await (
-        cluster.create_session().index("test", "test")
+        cluster.create_session().index(general_namespace(), "test")
         .on_bin("age")
         .named(index_name)
         .numeric()
@@ -130,42 +131,42 @@ async def test_index_chaining(cluster):
     )
 
     # Verify we can chain drop too
-    await cluster.create_session().index("test", "test").named(index_name).drop()
+    await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
 
 async def test_create_index_missing_bin_name(cluster):
     """Test that creating index without bin name raises error."""
     with pytest.raises(ValueError, match="bin_name"):
-        await cluster.create_session().index("test", "test").named("test_idx").numeric().create()
+        await cluster.create_session().index(general_namespace(), "test").named("test_idx").numeric().create()
 
 async def test_create_index_missing_index_name(cluster):
     """Test that creating index without index name raises error."""
     with pytest.raises(ValueError, match="index_name"):
-        await cluster.create_session().index("test", "test").on_bin("age").numeric().create()
+        await cluster.create_session().index(general_namespace(), "test").on_bin("age").numeric().create()
 
 async def test_create_index_missing_index_type(cluster):
     """Test that creating index without index type raises error."""
     with pytest.raises(ValueError, match="index_type"):
-        await cluster.create_session().index("test", "test").on_bin("age").named("test_idx").create()
+        await cluster.create_session().index(general_namespace(), "test").on_bin("age").named("test_idx").create()
 
 async def test_create_duplicate_index_fails(cluster):
     """Test that creating duplicate index names fails."""
     index_name = "test_duplicate_idx"
     # Clean up any existing index
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
     # Create first index
-    await cluster.create_session().index("test", "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
 
     # Try to create another index with same name should fail
     with pytest.raises(AerospikeError):
-        await cluster.create_session().index("test", "test").on_bin("name").named(index_name).string().create()
+        await cluster.create_session().index(general_namespace(), "test").on_bin("name").named(index_name).string().create()
 
     # Clean up
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -174,11 +175,11 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
     """Create a numeric index on a nested map element via chainable .context()."""
     index_name = "test_ctx_idx"
     bin_name = "payload"
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     session = cluster.create_session()
 
     try:
-        await cluster.create_session().index("test", "test").named(index_name).drop()
+        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
@@ -197,7 +198,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
     )
 
     await (
-        cluster.create_session().index("test", "test")
+        cluster.create_session().index(general_namespace(), "test")
         .on_bin(bin_name)
         .named(index_name)
         .numeric()
@@ -206,10 +207,10 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
     )
 
     flt = Filter.equal(bin_name, 10).context([CTX.map_key("inner")])
-    await wait_for_index(cluster, "test", "test", flt)
+    await wait_for_index(cluster, general_namespace(), "test", flt)
 
     try:
-        stream = await session.query("test", "test").filter(flt).bins([bin_name]).execute()
+        stream = await session.query(general_namespace(), "test").filter(flt).bins([bin_name]).execute()
         results = []
         try:
             async for res in stream:
@@ -222,7 +223,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
     finally:
         await session.delete(k1, k2).execute()
         try:
-            await cluster.create_session().index("test", "test").named(index_name).drop()
+            await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
         except Exception:
             pass
 
@@ -235,11 +236,11 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
 
     set_name = "exp_idx_set"
     index_name = "psdk_exp_age_idx"
-    ds = DataSet.of("test", set_name)
+    ds = DataSet.of(general_namespace(), set_name)
     session = cluster.create_session()
 
     try:
-        await session.index("test", set_name).named(index_name).drop()
+        await session.index(general_namespace(), set_name).named(index_name).drop()
     except Exception:
         pass
 
@@ -250,7 +251,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
     expr = Exp.int_bin("age")
     try:
         await (
-            session.index("test", set_name)
+            session.index(general_namespace(), set_name)
             .on_expression(expr)
             .named(index_name)
             .numeric()
@@ -259,13 +260,13 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
 
         listed = [i for i in await session.list_indexes() if i["name"] == index_name]
         assert listed, "expression index not visible in list_indexes"
-        assert listed[0]["namespace"] == "test"
+        assert listed[0]["namespace"] == general_namespace()
         assert listed[0]["set"] == set_name
 
         flt = Filter.range("age", 31, 33).expression(expr)
-        await wait_for_index(cluster, "test", set_name, flt)
+        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
-        stream = await session.query("test", set_name).filter(flt).bins(["age"]).execute()
+        stream = await session.query(general_namespace(), set_name).filter(flt).bins(["age"]).execute()
         ages = sorted(
             [r.record.bins["age"] async for r in stream if r.is_ok and r.record],
         )
@@ -273,7 +274,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
     finally:
         await session.delete(keys).execute()
         try:
-            await session.index("test", set_name).named(index_name).drop()
+            await session.index(general_namespace(), set_name).named(index_name).drop()
         except Exception:
             pass
     assert not any(
@@ -287,11 +288,11 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
 
     set_name = "blob_idx_set"
     index_name = "psdk_blob_payload_idx"
-    ds = DataSet.of("test", set_name)
+    ds = DataSet.of(general_namespace(), set_name)
     session = cluster.create_session()
 
     try:
-        await session.index("test", set_name).named(index_name).drop()
+        await session.index(general_namespace(), set_name).named(index_name).drop()
     except Exception:
         pass
 
@@ -305,7 +306,7 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
 
     try:
         await (
-            session.index("test", set_name)
+            session.index(general_namespace(), set_name)
             .on_bin("payload")
             .named(index_name)
             .blob()
@@ -313,15 +314,15 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         )
 
         flt = Filter.equal("payload", needle)
-        await wait_for_index(cluster, "test", set_name, flt)
+        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
-        stream = await session.query("test", set_name).filter(flt).bins(["payload"]).execute()
+        stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payload"]).execute()
         matches = [r.record.bins["payload"] async for r in stream if r.is_ok and r.record]
         assert matches == [needle]
     finally:
         await session.delete(keys).execute()
         try:
-            await session.index("test", set_name).named(index_name).drop()
+            await session.index(general_namespace(), set_name).named(index_name).drop()
         except Exception:
             pass
 
@@ -332,11 +333,11 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
 
     set_name = "blob_list_idx_set"
     index_name = "psdk_blob_list_payloads_idx"
-    ds = DataSet.of("test", set_name)
+    ds = DataSet.of(general_namespace(), set_name)
     session = cluster.create_session()
 
     try:
-        await session.index("test", set_name).named(index_name).drop()
+        await session.index(general_namespace(), set_name).named(index_name).drop()
     except Exception:
         pass
 
@@ -354,7 +355,7 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
 
     try:
         await (
-            session.index("test", set_name)
+            session.index(general_namespace(), set_name)
             .on_bin("payloads")
             .named(index_name)
             .blob()
@@ -363,14 +364,14 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
         )
 
         flt = Filter.contains("payloads", needle, CollectionIndexType.LIST)
-        await wait_for_index(cluster, "test", set_name, flt)
+        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
-        stream = await session.query("test", set_name).filter(flt).bins(["payloads"]).execute()
+        stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payloads"]).execute()
         matches = [r.record.bins["payloads"] async for r in stream if r.is_ok and r.record]
         assert matches == [[b"\x0a", needle]]
     finally:
         await session.delete(keys).execute()
         try:
-            await session.index("test", set_name).named(index_name).drop()
+            await session.index(general_namespace(), set_name).named(index_name).drop()
         except Exception:
             pass

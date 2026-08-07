@@ -20,8 +20,10 @@ from __future__ import annotations
 import asyncio
 
 from aerospike_sdk import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
-NS = "test"
+NS = general_namespace()
 SET = "list_indexes_integ"
 BIN = "age"
 IDX = "psdk_list_indexes_age"
@@ -50,7 +52,7 @@ async def test_list_indexes_via_cluster_and_session(aerospike_host):
     else:
         hostname, port = aerospike_host, 3000
 
-    cluster = await ClusterDefinition(hostname, port).connect()
+    cluster = await apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         session = cluster.create_session()
 

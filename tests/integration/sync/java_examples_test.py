@@ -23,9 +23,11 @@ import time
 import pytest
 from aerospike_sdk import Behavior, DataSet, Key
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host):
     """Setup cluster for testing."""
     if ":" in aerospike_host:
@@ -35,7 +37,7 @@ def cluster(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = cluster_def.connect()
     yield cluster
     cluster.close()
@@ -74,7 +76,7 @@ def customer_dataset(session, enterprise):
     sweeps any leftover Customers-set indexes from prior runs so AEL's
     auto-index path stays consistent.
     """
-    customers = DataSet.of("test", "Customers")
+    customers = DataSet.of(general_namespace(), "Customers")
     _drop_orphan_customer_indexes(session, customers)
 
     for i, data in [(1, {"name": "Tim", "age": 25, "country": "US"}),
@@ -114,7 +116,7 @@ def test_java_example_connecting_basic(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = cluster_def.connect()
     assert cluster.is_connected()
     cluster.close()
@@ -133,7 +135,7 @@ def test_java_example_connecting_with_credentials(aerospike_host):
         port = 3000
 
     # Note: Only test if credentials are actually needed
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = cluster_def.connect()
     assert cluster.is_connected()
     cluster.close()
@@ -152,7 +154,7 @@ def test_java_example_connecting_with_ip_map(aerospike_host):
         port = 3000
 
     cluster = (
-        ClusterDefinition(hostname, port)
+        apply_general_auth(ClusterDefinition(hostname, port))
         .using_services_alternate()
         .with_ip_map({"10.0.0.1": "3.72.54.187"})
         .connect()
@@ -170,7 +172,7 @@ def test_java_example_connecting_context_manager(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    with ClusterDefinition(hostname, port).connect() as cluster:
+    with apply_general_auth(ClusterDefinition(hostname, port)).connect() as cluster:
         assert cluster.is_connected()
         session = cluster.create_session(Behavior.DEFAULT)
         assert session is not None
@@ -202,9 +204,9 @@ def test_java_example_sessions(cluster):
 # DataSet Examples # ============================================================================
 
 def test_java_example_dataset_creation():
-    """Java: DataSet customerDataSet = DataSet.of("test", "Customers");"""
-    customer_dataset = DataSet.of("test", "Customers")
-    assert customer_dataset.namespace == "test"
+    """Java: DataSet customerDataSet = DataSet.of(general_namespace(), "Customers");"""
+    customer_dataset = DataSet.of(general_namespace(), "Customers")
+    assert customer_dataset.namespace == general_namespace()
     assert customer_dataset.set_name == "Customers"
 
 
@@ -240,7 +242,7 @@ def test_java_example_dataset_id_from_digest(customer_dataset):
 
     assert isinstance(cust_by_digest, Key)
     assert cust_by_digest == original_key
-    assert cust_by_digest.namespace == "test"
+    assert cust_by_digest.namespace == general_namespace()
     assert cust_by_digest.set_name == "Customers"
 
 
@@ -304,8 +306,8 @@ def test_java_example_query_varargs_keys(session, customer_dataset):
 
 
 def test_java_example_query_namespace_set(session, customer_dataset):
-    """Java: session.query("test", "users")"""
-    stream = session.query("test", "Customers").execute()
+    """Java: session.query(general_namespace(), "users")"""
+    stream = session.query(general_namespace(), "Customers").execute()
     count = 0
     for result in stream:
         count += 1
@@ -580,7 +582,7 @@ def test_java_example_filter_control_full(session, customer_dataset):
 
 def test_java_example_key_value_operations_direct_client(session, customer_dataset):
     """Java: session.upsert(key).put(...).execute(); Record rec = session.query(key).execute().first_or_raise().record;"""
-    ds = DataSet.of("test", "Customers")
+    ds = DataSet.of(general_namespace(), "Customers")
     key = ds.id("user123")
     session.upsert(key).put({"name": "John", "age": 30}).execute()
     result = session.query(key).execute().first_or_raise()

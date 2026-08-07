@@ -32,10 +32,11 @@ import pytest_asyncio
 
 from aerospike_sdk import DataSet, Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from tests.integration.namespace import general_namespace
 
 
 KEY_PREFIX = "qbops_"
-NS = "test"
+NS = general_namespace()
 SET = "query_bin_ops"
 
 

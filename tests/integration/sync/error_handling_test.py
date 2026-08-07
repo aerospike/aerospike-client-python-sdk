@@ -19,9 +19,10 @@ import pytest
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
@@ -29,7 +30,7 @@ def cluster(aerospike_host, make_cluster_definition):
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "sync_error_handling")
+    return DataSet.of(general_namespace(), "sync_error_handling")
 
 
 def _cleanup(session, *keys):

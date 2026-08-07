@@ -41,6 +41,7 @@ from aerospike_sdk import DataSet
 # the PAC alias the exceptions module binds.
 from aerospike_sdk.exceptions import AerospikeError as SdkAerospikeError
 from aerospike_sdk.exceptions import PacAerospikeError
+from tests.integration.namespace import general_namespace
 
 # Errors raised by the core's wire encoder during stream iteration surface as
 # raw PAC ``AerospikeError`` (not yet wrapped by the SDK command pipeline).
@@ -48,7 +49,7 @@ from aerospike_sdk.exceptions import PacAerospikeError
 _AnyAerospikeError = (SdkAerospikeError, PacAerospikeError)
 
 
-_NS = "test"
+_NS = general_namespace()
 _SET = "qopproj"
 _KEY_PREFIX = "qopproj_"
 _BIN1 = "tqobin1"
@@ -111,7 +112,7 @@ async def cluster(aerospike_host, make_cluster_definition, wait_for_index, wait_
         await _drop_qopproj_index(c)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_812(
     aerospike_host_812_required, make_cluster_definition, wait_for_index, wait_for_set_visible,
 ):

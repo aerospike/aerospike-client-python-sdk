@@ -22,6 +22,7 @@ from aerospike_sdk import (
     DataSet,
     QueryHint,
 )
+from tests.integration.namespace import general_namespace
 
 
 SET_NAME = "query_hint_test"
@@ -38,7 +39,7 @@ async def cluster(
     cluster_def.with_index_refresh_interval(0.25)
     async with await cluster_def.connect() as c:
         session = c.create_session()
-        ds = DataSet.of("test", SET_NAME)
+        ds = DataSet.of(general_namespace(), SET_NAME)
 
         for i in range(10):
             try:
@@ -57,11 +58,11 @@ async def cluster(
         # the SI — otherwise a still-populating index can be flagged "readable"
         # before all records have indexed entries, causing range queries to
         # return short and flaky-fail tests that assert exact counts.
-        await wait_for_set_visible(session, "test", SET_NAME, 10)
+        await wait_for_set_visible(session, general_namespace(), SET_NAME, 10)
 
         try:
             await (
-                session.index("test", SET_NAME)
+                session.index(general_namespace(), SET_NAME)
                 .on_bin("age")
                 .named(INDEX_NAME)
                 .numeric()
@@ -70,12 +71,12 @@ async def cluster(
         except Exception:
             pass
 
-        await wait_for_index(c, "test", SET_NAME, Filter.range("age", 20, 29))
+        await wait_for_index(c, general_namespace(), SET_NAME, Filter.range("age", 20, 29))
 
         yield c
 
         try:
-            await session.index("test", SET_NAME).named(INDEX_NAME).drop()
+            await session.index(general_namespace(), SET_NAME).named(INDEX_NAME).drop()
         except Exception:
             pass
 
@@ -90,7 +91,7 @@ class TestQueryDurationHint:
 
     async def test_query_duration_short(self, session):
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
             .execute()
         )
@@ -105,7 +106,7 @@ class TestQueryDurationHint:
 
     async def test_query_duration_long(self, session):
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .with_hint(QueryHint(query_duration=QueryDuration.LONG))
             .execute()
         )
@@ -125,7 +126,7 @@ class TestIndexNameHint:
     async def test_filter_with_index_name_hint(self, session):
         """Filter.range + index_name hint on a named numeric index."""
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .filter(Filter.range_by_index(INDEX_NAME, 22, 26))
             .execute()
         )
@@ -140,7 +141,7 @@ class TestIndexNameHint:
     async def test_index_name_via_ael(self, session):
         """AEL where() + index_name hint with auto-discovered index."""
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .where("$.age >= 25")
             .with_hint(QueryHint(index_name=INDEX_NAME))
             .execute()
@@ -156,7 +157,7 @@ class TestIndexNameHint:
     async def test_index_name_with_query_duration(self, session):
         """Combine index_name and query_duration in a single hint."""
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .where("$.age == 27")
             .with_hint(QueryHint(
                 index_name=INDEX_NAME,
@@ -178,7 +179,7 @@ class TestBinNameHint:
     async def test_bin_name_via_ael(self, session):
         """AEL referencing $.age with bin_name hint and auto-discovered index."""
         stream = await (
-            session.query("test", SET_NAME)
+            session.query(general_namespace(), SET_NAME)
             .where("$.age == 25")
             .with_hint(QueryHint(bin_name="age"))
             .execute()

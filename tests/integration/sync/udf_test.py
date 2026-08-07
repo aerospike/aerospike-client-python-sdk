@@ -26,8 +26,10 @@ from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 DS = DataSet.of(NS, SET)
 LUA_FILE = os.path.normpath(
@@ -42,7 +44,7 @@ def _wait_task(cluster, task) -> bool:
     return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster_with_udf(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
         udf_session = cluster.create_session()
@@ -116,7 +118,7 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     with open(LUA_FILE, "rb") as f:
         body = f.read()
 
-    cluster = ClusterDefinition(hostname, port).connect()
+    cluster = apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         try:
             rm = cluster.remove_udf(path)

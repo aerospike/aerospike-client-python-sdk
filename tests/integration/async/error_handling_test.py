@@ -31,11 +31,12 @@ from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from .durable_delete_support import delete_keys_durable
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "error_handling")
+    return DataSet.of(general_namespace(), "error_handling")
 
 
 @pytest.fixture

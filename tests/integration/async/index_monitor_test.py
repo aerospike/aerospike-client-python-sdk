@@ -21,13 +21,12 @@ import uuid
 import pytest_asyncio
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
 SET_NAME = "idx_monitor_integ"
 INDEX_NAME = "pfc_auto_idx_age"
-NAMESPACE = "test"
-
-
+NAMESPACE = general_namespace()
 async def _wait_for_monitor_cache(
     cluster, namespace: str, index_name: str, *, present: bool,
     timeout: float = 5.0, interval: float = 0.1,

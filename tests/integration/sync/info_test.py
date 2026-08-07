@@ -19,7 +19,7 @@ import pytest
 from aerospike_sdk import Behavior
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     """Setup sync SDK cluster for testing."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:

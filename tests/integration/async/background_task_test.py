@@ -21,8 +21,9 @@ from aerospike_sdk import UDFLang
 from aerospike_async import Operation
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
-NS = "test"
+NS = general_namespace()
 SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"

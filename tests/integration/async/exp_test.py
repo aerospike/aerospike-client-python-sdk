@@ -31,6 +31,7 @@ from tests.pac_compat import (
     requires_client_side_ael,
     requires_server_compiled_ael,
 )
+from tests.integration.namespace import general_namespace
 
 class TestExpAlias:
     """Test that Exp is properly aliased to FilterExpression."""
@@ -334,32 +335,41 @@ class TestBinExpressions:
 
 # Integration tests with actual database operations
 
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        yield c
+
+
 @pytest.fixture
-async def session_with_data(aerospike_host, make_cluster_definition, enterprise, wait_for_set_visible):
+async def session_with_data(shared_cluster, enterprise, wait_for_set_visible):
     """Setup test data for expression tests."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "exp_test")
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "exp_test")
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-        await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-        await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
+    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
 
-        await wait_for_set_visible(session, "test", "exp_test", 3)
+    await wait_for_set_visible(session, general_namespace(), "exp_test", 3)
 
-        yield cluster.create_session()
+    yield cluster.create_session()
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestExpWithQuery:
@@ -370,7 +380,7 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.int_bin("A"), val(1))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -387,7 +397,7 @@ class TestExpWithQuery:
         filter_exp = Exp.gt(Exp.int_bin("A"), val(1))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -404,7 +414,7 @@ class TestExpWithQuery:
         filter_exp = Exp.and_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("D"), val(1))])
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -422,7 +432,7 @@ class TestExpWithQuery:
         filter_exp = Exp.or_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("A"), val(2))])
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -438,7 +448,7 @@ class TestExpWithQuery:
         filter_exp = Exp.not_(Exp.eq(Exp.int_bin("A"), val(0)))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -456,7 +466,7 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]), val(2))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -473,7 +483,7 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.string_bin("C"), val("abcde"))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -490,7 +500,7 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.int_bin("A"), val(999))
 
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -513,7 +523,7 @@ class TestExpWithAel:
     async def test_where_eq_int(self, session_with_data):
         """Test AEL equality with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.A == 1")
             .execute()
         )
@@ -528,7 +538,7 @@ class TestExpWithAel:
     async def test_where_gt_int(self, session_with_data):
         """Test AEL greater-than with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.A > 1")
             .execute()
         )
@@ -543,7 +553,7 @@ class TestExpWithAel:
     async def test_where_and_int(self, session_with_data):
         """Test AEL AND expression with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.A == 1 and $.D == 1")
             .execute()
         )
@@ -558,7 +568,7 @@ class TestExpWithAel:
     async def test_where_or_int(self, session_with_data):
         """Test AEL OR expression with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.A == 1 or $.A == 2")
             .execute()
         )
@@ -572,7 +582,7 @@ class TestExpWithAel:
     async def test_where_not_int(self, session_with_data):
         """Test AEL NOT expression with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("not ($.A == 0)")
             .execute()
         )
@@ -586,7 +596,7 @@ class TestExpWithAel:
     async def test_where_arithmetic_int(self, session_with_data):
         """Test AEL arithmetic expression with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("($.A + $.D) == 2")
             .execute()
         )
@@ -600,7 +610,7 @@ class TestExpWithAel:
     async def test_where_string(self, session_with_data):
         """Test AEL string comparison with automatic string inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.C == 'abcde'")
             .execute()
         )
@@ -615,7 +625,7 @@ class TestExpWithAel:
     async def test_where_complex_int(self, session_with_data):
         """Test complex AEL expression with automatic int inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("($.A > 0 and $.D == 1) or $.A == 0")
             .execute()
         )
@@ -629,7 +639,7 @@ class TestExpWithAel:
     async def test_where_explicit_cast_still_works(self, session_with_data):
         """Test that asInt() casts a float bin to int for comparison."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.B.asInt() == 1")
             .execute()
         )
@@ -644,7 +654,7 @@ class TestExpWithAel:
     async def test_where_float_comparison(self, session_with_data):
         """Test AEL float comparison with automatic float inference."""
         stream = await (
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("$.B > 1.0")
             .execute()
         )
@@ -663,7 +673,7 @@ class TestExpWithAel:
 
         with pytest.raises(AelParseException):
             await (
-                session_with_data.query("test", "exp_test")
+                session_with_data.query(general_namespace(), "exp_test")
                 .where("this is not valid AEL !!!")
                 .execute()
             )
@@ -672,7 +682,7 @@ class TestExpWithAel:
     async def test_where_invalid_ael_server_compiled(self, session_with_data):
         """Invalid AEL on server path surfaces as ``PARAMETER_ERROR`` from the server."""
         await assert_dataset_invalid_ael_rejected(
-            session_with_data.query("test", "exp_test")
+            session_with_data.query(general_namespace(), "exp_test")
             .where("this is not valid AEL !!!")
             .execute()
         )
@@ -689,7 +699,7 @@ async def _seed_cdt_data(cluster, *, wait_for_set_visible):
 
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", "cdt_test")
+    ds = DataSet.of(general_namespace(), "cdt_test")
 
     for key in ["rec1", "rec2", "rec3"]:
         try:
@@ -716,7 +726,7 @@ async def _seed_cdt_data(cluster, *, wait_for_set_visible):
         "nested": [{"id": 4, "value": 400}, {"id": 5, "value": 500}],
     }).execute()
 
-    await wait_for_set_visible(session, "test", "cdt_test", 3)
+    await wait_for_set_visible(session, general_namespace(), "cdt_test", 3)
     return session, ds
 
 
@@ -728,7 +738,7 @@ async def _drop_cdt_data(session, ds):
             pass
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_definition, wait_for_set_visible):
     """Connected cluster + CDT dataset on the default 8.1.2+ seed.
 
@@ -744,7 +754,7 @@ async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_de
         await _drop_cdt_data(session, ds)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def session_with_cdt_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Connected cluster + CDT dataset on the broad-surface seed.
 
@@ -779,7 +789,7 @@ class TestCdtPathWithExp:
         )
 
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -808,7 +818,7 @@ class TestCdtPathWithExp:
         )
 
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -830,7 +840,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.[0] == 10")
             .execute()
         )
@@ -848,7 +858,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[-1] not [-1]
         """
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.[-1] == 50")
             .execute()
         )
@@ -863,7 +873,7 @@ class TestCdtPathWithAel:
     async def test_map_key_access(self, session_with_cdt_data):
         """Test AEL map key access: $.info.age == 30"""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.info.age == 30")
             .execute()
         )
@@ -878,7 +888,7 @@ class TestCdtPathWithAel:
     async def test_map_key_string_comparison(self, session_with_cdt_data):
         """Test AEL map key access with string comparison: $.info.city == 'NYC'"""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.info.city == 'NYC'")
             .execute()
         )
@@ -897,7 +907,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.[0] > 50")
             .execute()
         )
@@ -912,7 +922,7 @@ class TestCdtPathWithAel:
     async def test_map_key_with_and(self, session_with_cdt_data):
         """Test AEL map key with AND: $.info.age > 25 and $.info.city == 'NYC'"""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.info.age > 25 and $.info.city == 'NYC'")
             .execute()
         )
@@ -934,7 +944,7 @@ class TestExistsAndCount:
         """Test $.binName.exists() for checking bin existence."""
         # All records have "numbers" bin
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.exists()")
             .execute()
         )
@@ -961,7 +971,7 @@ class TestExistsAndCount:
         """Test $.listBin.count() for getting list size."""
         # rec1 has 5 numbers, rec2 has 5 numbers, rec3 has 3 numbers
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where(ael)
 
             .execute()
@@ -991,7 +1001,7 @@ class TestExistsAndCount:
         """Test $.listBin.count() == value."""
         # rec3 has exactly 3 numbers
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where(ael)
 
             .execute()
@@ -1020,7 +1030,7 @@ class TestExistsAndCount:
         """Test count on names list."""
         # rec1: 3 names, rec2: 2 names, rec3: 1 name
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where(ael)
 
             .execute()
@@ -1037,7 +1047,7 @@ class TestExistsAndCount:
     async def test_exists_with_and(self, session_with_cdt_data):
         """Test exists() combined with other conditions."""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.exists() and $.info.age > 30")
             .execute()
         )
@@ -1067,7 +1077,7 @@ class TestExistsAndCount:
         # Count of numbers + count of names > 5
         # rec1: 5+3=8, rec2: 5+2=7, rec3: 3+1=4
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where(ael)
 
             .execute()
@@ -1081,44 +1091,44 @@ class TestExistsAndCount:
 
 
 @pytest.fixture
-async def session_with_list_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
+async def session_with_list_data(shared_cluster, wait_for_set_visible):
     """Setup test data with various lists for advanced list AEL tests."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "list_ael_test")
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "list_ael_test")
 
-        for key in ["rec1", "rec2", "rec3", "rec4"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3", "rec4"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "values": [10, 20, 30, 40, 50],
-            "tags": ["alpha", "beta", "gamma"],
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "values": [5, 15, 25, 35, 45],
-            "tags": ["alpha", "delta"],
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "values": [100, 30, 200],
-            "tags": ["beta", "epsilon"],
-        }).execute()
-        await session.upsert(ds.id("rec4")).put({
-            "values": [1, 2, 3, 4, 5],
-            "tags": ["zeta"],
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "values": [10, 20, 30, 40, 50],
+        "tags": ["alpha", "beta", "gamma"],
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "values": [5, 15, 25, 35, 45],
+        "tags": ["alpha", "delta"],
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "values": [100, 30, 200],
+        "tags": ["beta", "epsilon"],
+    }).execute()
+    await session.upsert(ds.id("rec4")).put({
+        "values": [1, 2, 3, 4, 5],
+        "tags": ["zeta"],
+    }).execute()
 
-        await wait_for_set_visible(session, "test", "list_ael_test", 4)
+    await wait_for_set_visible(session, general_namespace(), "list_ael_test", 4)
 
-        yield cluster.create_session()
+    yield cluster.create_session()
 
-        for key in ["rec1", "rec2", "rec3", "rec4"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3", "rec4"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedListAel:
@@ -1129,7 +1139,7 @@ class TestAdvancedListAel:
         # [#-1] gets the largest value
         # rec1: 50, rec2: 45, rec3: 200, rec4: 5
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where("$.values.[#-1] > 100")
             .execute()
         )
@@ -1146,7 +1156,7 @@ class TestAdvancedListAel:
         # [#0] gets the smallest value
         # rec1: 10, rec2: 5, rec3: 30, rec4: 1
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where("$.values.[#0] < 5")
             .execute()
         )
@@ -1174,7 +1184,7 @@ class TestAdvancedListAel:
         """Test $.list.[=value] to find items containing specific value."""
         # rec1 and rec3 have 30 in their values list
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1207,7 +1217,7 @@ class TestAdvancedListAel:
         # We can't directly compare the returned list in AEL,
         # but we can verify it parses and executes without error
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1241,7 +1251,7 @@ class TestAdvancedListAel:
         # rec3: [200] (1 item - only 3 elements total)
         # rec4: [3, 4, 5] (3 items)
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1272,7 +1282,7 @@ class TestAdvancedListAel:
         # rec1: [10, 20, 30, 40, 50] -> [10, 20, 30] (3 items)
         # rec2: [5, 15, 25, 35, 45] -> [15, 25, 35] (3 items)
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1300,7 +1310,7 @@ class TestAdvancedListAel:
         """Test $.list.[#0:2] to get smallest 2 items by rank."""
         # [#0:2] gets rank 0 and 1 (2 smallest items)
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1329,7 +1339,7 @@ class TestAdvancedListAel:
         """Test $.list.[=a,b,c] to find items matching value list."""
         # Find records where tags contain "alpha"
         stream = await (
-            session_with_list_data.query("test", "list_ael_test")
+            session_with_list_data.query(general_namespace(), "list_ael_test")
             .where(ael)
 
             .execute()
@@ -1345,40 +1355,40 @@ class TestAdvancedListAel:
 
 
 @pytest.fixture
-async def session_with_map_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
+async def session_with_map_data(shared_cluster, wait_for_set_visible):
     """Setup test data with maps for advanced map AEL tests."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "map_ael_test")
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "map_ael_test")
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "scores": {"alice": 90, "bob": 85, "charlie": 95},
-            "metadata": {"type": "premium", "level": 3},
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "scores": {"dave": 75, "eve": 80},
-            "metadata": {"type": "basic", "level": 1},
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "scores": {"frank": 100, "grace": 70, "heidi": 88},
-            "metadata": {"type": "premium", "level": 2},
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "scores": {"alice": 90, "bob": 85, "charlie": 95},
+        "metadata": {"type": "premium", "level": 3},
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "scores": {"dave": 75, "eve": 80},
+        "metadata": {"type": "basic", "level": 1},
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "scores": {"frank": 100, "grace": 70, "heidi": 88},
+        "metadata": {"type": "premium", "level": 2},
+    }).execute()
 
-        await wait_for_set_visible(session, "test", "map_ael_test", 3)
+    await wait_for_set_visible(session, general_namespace(), "map_ael_test", 3)
 
-        yield cluster.create_session()
+    yield cluster.create_session()
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedMapAel:
@@ -1400,7 +1410,7 @@ class TestAdvancedMapAel:
         """Test $.map.{=value} to find entries with specific value."""
         # Find records where scores contains value 100
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1429,7 +1439,7 @@ class TestAdvancedMapAel:
         """Test $.map.{0:2} to get first 2 entries by index."""
         # Get first 2 entries (count=2)
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1462,7 +1472,7 @@ class TestAdvancedMapAel:
         # rec2: eve=80 (1 item)
         # rec3: heidi=88 (1 item)
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1490,7 +1500,7 @@ class TestAdvancedMapAel:
         """Test $.map.{#0:2} to get smallest 2 values by rank."""
         # Get 2 smallest values
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1508,44 +1518,44 @@ class TestAdvancedMapAel:
 # =============================================================================
 
 @pytest.fixture
-async def session_with_nested_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
+async def session_with_nested_data(shared_cluster, wait_for_set_visible):
     """Setup test data with deeply nested structures."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "nested_ael_test")
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "nested_ael_test")
 
-        for key in ["rec1", "rec2"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
-            "nested_map": {
-                "a": {"aa": 100, "ab": 200},
-                "b": {"ba": 300, "bb": 400},
-            },
-            "simple_list": [1, 2, 3, 4, 5],
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "nested_list": [[5, 10], [15, 20], [25, 30]],
-            "nested_map": {
-                "a": {"aa": 50, "ab": 60},
-                "b": {"ba": 70, "bb": 80},
-            },
-            "simple_list": [10, 20, 30],
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "nested_list": [[10, 20, 30], [40, 50, 60], [70, 80, 90]],
+        "nested_map": {
+            "a": {"aa": 100, "ab": 200},
+            "b": {"ba": 300, "bb": 400},
+        },
+        "simple_list": [1, 2, 3, 4, 5],
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "nested_list": [[5, 10], [15, 20], [25, 30]],
+        "nested_map": {
+            "a": {"aa": 50, "ab": 60},
+            "b": {"ba": 70, "bb": 80},
+        },
+        "simple_list": [10, 20, 30],
+    }).execute()
 
-        await wait_for_set_visible(session, "test", "nested_ael_test", 2)
+    await wait_for_set_visible(session, general_namespace(), "nested_ael_test", 2)
 
-        yield cluster.create_session()
+    yield cluster.create_session()
 
-        for key in ["rec1", "rec2"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestNestedCdtAel:
@@ -1555,7 +1565,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].[1] - nested list index access."""
         # nested_list[0][1] = 20 for rec1, 10 for rec2
         stream = await (
-            session_with_nested_data.query("test", "nested_ael_test")
+            session_with_nested_data.query(general_namespace(), "nested_ael_test")
             .where("$.nested_list.[0].[1] == 20")
             .execute()
         )
@@ -1571,7 +1581,7 @@ class TestNestedCdtAel:
         """Test $.map.a.aa - nested map key access."""
         # nested_map.a.aa = 100 for rec1, 50 for rec2
         stream = await (
-            session_with_nested_data.query("test", "nested_ael_test")
+            session_with_nested_data.query(general_namespace(), "nested_ael_test")
             .where("$.nested_map.a.aa == 100")
             .execute()
         )
@@ -1599,7 +1609,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].count() - count of nested list."""
         # nested_list[0] has 3 elements for rec1, 2 for rec2
         stream = await (
-            session_with_nested_data.query("test", "nested_ael_test")
+            session_with_nested_data.query(general_namespace(), "nested_ael_test")
             .where(ael)
 
             .execute()
@@ -1627,7 +1637,7 @@ class TestNestedCdtAel:
     async def test_list_size_simple(self, session_with_nested_data, ael):
         """Test $.list.count() - basic list size."""
         stream = await (
-            session_with_nested_data.query("test", "nested_ael_test")
+            session_with_nested_data.query(general_namespace(), "nested_ael_test")
             .where(ael)
 
             .execute()
@@ -1643,7 +1653,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].[#-1] - rank in nested list."""
         # nested_list[0] largest: 30 for rec1, 10 for rec2
         stream = await (
-            session_with_nested_data.query("test", "nested_ael_test")
+            session_with_nested_data.query(general_namespace(), "nested_ael_test")
             .where("$.nested_list.[0].[#-1] == 30")
             .execute()
         )
@@ -1674,7 +1684,7 @@ class TestMapKeyOperationsAel:
         """Test $.map.{a,b,c} - get entries by key list."""
         # Get entries for keys alice and bob from scores
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1703,7 +1713,7 @@ class TestMapKeyOperationsAel:
         """Test $.map.{@a:b} - map key range (server AEL; bare {a:b} is index-only)."""
         # Get entries with keys from 'a' to 'd' (alice, bob, charlie)
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -1719,40 +1729,40 @@ class TestMapKeyOperationsAel:
 
 
 @pytest.fixture
-async def session_with_relative_range_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
+async def session_with_relative_range_data(shared_cluster, wait_for_set_visible):
     """Setup test data for relative range operations."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        ds = DataSet.of("test", "rel_range_test")
+    cluster = shared_cluster
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), "rel_range_test")
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(ds.id("rec1")).put({
-            "numbers": [0, 4, 5, 9, 11, 15],
-            "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
-        }).execute()
-        await session.upsert(ds.id("rec2")).put({
-            "numbers": [1, 3, 7, 12, 20],
-            "scores": {"alice": 60, "bob": 75, "charlie": 85},
-        }).execute()
-        await session.upsert(ds.id("rec3")).put({
-            "numbers": [2, 6, 10, 14, 18],
-            "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
-        }).execute()
+    await session.upsert(ds.id("rec1")).put({
+        "numbers": [0, 4, 5, 9, 11, 15],
+        "scores": {"alice": 70, "bob": 80, "charlie": 90, "dave": 100},
+    }).execute()
+    await session.upsert(ds.id("rec2")).put({
+        "numbers": [1, 3, 7, 12, 20],
+        "scores": {"alice": 60, "bob": 75, "charlie": 85},
+    }).execute()
+    await session.upsert(ds.id("rec3")).put({
+        "numbers": [2, 6, 10, 14, 18],
+        "scores": {"alice": 55, "bob": 65, "charlie": 95, "dave": 105},
+    }).execute()
 
-        await wait_for_set_visible(session, "test", "rel_range_test", 3)
+    await wait_for_set_visible(session, general_namespace(), "rel_range_test", 3)
 
-        yield cluster.create_session()
+    yield cluster.create_session()
 
-        for key in ["rec1", "rec2", "rec3"]:
-            try:
-                await session.delete(ds.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["rec1", "rec2", "rec3"]:
+        try:
+            await session.delete(ds.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestRelativeRangeAel:
@@ -1776,7 +1786,7 @@ class TestRelativeRangeAel:
         # Get items with rank 0 to 2 (count=2) relative to value 5
         # For rec1 [0, 4, 5, 9, 11, 15]: value 5 is at index 2, rank 0-2 relative gets [5,9]
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1805,7 +1815,7 @@ class TestRelativeRangeAel:
         """Test $.list.[#rank:~value] - list value-relative rank range without end count."""
         # Get all items from rank 0 relative to value 5
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1834,7 +1844,7 @@ class TestRelativeRangeAel:
         """Test $.list.[!#rank:end~value] - inverted list value-relative rank range."""
         # Get items NOT in rank range
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1863,7 +1873,7 @@ class TestRelativeRangeAel:
         """Test $.map.{#rank:end~value} - map value-relative rank range."""
         # Get map entries with rank relative to value 80
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1890,7 +1900,7 @@ class TestRelativeRangeAel:
     async def test_map_rank_range_relative_no_count(self, session_with_relative_range_data, ael):
         """Test $.map.{#rank:~value} - map value-relative rank range without end count."""
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1917,7 +1927,7 @@ class TestRelativeRangeAel:
     async def test_map_rank_range_relative_inverted(self, session_with_relative_range_data, ael):
         """Test $.map.{!#rank:end~value} - inverted map value-relative rank range."""
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1945,7 +1955,7 @@ class TestRelativeRangeAel:
         """Test $.map.{start:end~key} - map key-relative index range."""
         # Get map entries at index 0 to 1 relative to key "bob"
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1972,7 +1982,7 @@ class TestRelativeRangeAel:
     async def test_map_index_range_relative_no_count(self, session_with_relative_range_data, ael):
         """Test $.map.{start:~key} - map key-relative index range without end count."""
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -1999,7 +2009,7 @@ class TestRelativeRangeAel:
     async def test_map_index_range_relative_inverted(self, session_with_relative_range_data, ael):
         """Test $.map.{!start:end~key} - inverted map key-relative index range."""
         stream = await (
-            session_with_relative_range_data.query("test", "rel_range_test")
+            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
             .where(ael)
 
             .execute()
@@ -2020,7 +2030,7 @@ class TestAelErrorHandling:
         """Invalid AEL raises :class:`AelParseException` when parsed client-side."""
         with pytest.raises(AelParseException):
             await (
-                session_with_cdt_data.query("test", "cdt_test")
+                session_with_cdt_data.query(general_namespace(), "cdt_test")
                 .where("this is not valid AEL !!!")
                 .execute()
             )
@@ -2029,7 +2039,7 @@ class TestAelErrorHandling:
     async def test_invalid_ael_syntax_server_path(self, session_with_cdt_data):
         """Invalid AEL on server path surfaces as ``PARAMETER_ERROR`` from the server."""
         await assert_dataset_invalid_ael_rejected(
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("this is not valid AEL !!!")
             .execute()
         )
@@ -2039,7 +2049,7 @@ class TestAelErrorHandling:
         """Invalid list path raises :class:`AelParseException` when parsed client-side."""
         with pytest.raises(AelParseException):
             await (
-                session_with_cdt_data.query("test", "cdt_test")
+                session_with_cdt_data.query(general_namespace(), "cdt_test")
                 .where("$.numbers.[invalidSyntax] == 100")
                 .execute()
             )
@@ -2048,7 +2058,7 @@ class TestAelErrorHandling:
     async def test_invalid_list_syntax_server_path(self, session_with_cdt_data):
         """Invalid list path on server path surfaces as ``PARAMETER_ERROR`` from the server."""
         await assert_dataset_invalid_ael_rejected(
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("$.numbers.[invalidSyntax] == 100")
             .execute()
         )
@@ -2058,12 +2068,12 @@ class TestAelErrorHandling:
 # Advanced expression filter tests (JFC FilterExpTest equivalents)
 # =============================================================================
 
-DS = DataSet.of("test", "filter_exp_test")
+DS = DataSet.of(general_namespace(), "filter_exp_test")
 
 
 @pytest.fixture
 async def session_with_filter_exp(
-    aerospike_host, make_cluster_definition, wait_for_set_visible,
+    shared_cluster, wait_for_set_visible,
 ):
     """Session with test data matching JFC FilterExpTest setUp.
 
@@ -2071,28 +2081,28 @@ async def session_with_filter_exp(
     Key "B": A=2, B=2.2, C="abcdeabcde",  D=1, E=-2
     Key "C": A=0, B=-1.0, C="1"
     """
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
+    cluster = shared_cluster
+    session = cluster.create_session()
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(DS.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(DS.id(key)).execute()
+        except Exception:
+            pass
 
-        await session.upsert(DS.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-        await session.upsert(DS.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-        await session.upsert(DS.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
+    await session.upsert(DS.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+    await session.upsert(DS.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+    await session.upsert(DS.id("C")).put({"A": 0, "B": -1.0, "C": "1"}).execute()
 
-        await wait_for_set_visible(session, "test", "filter_exp_test", 3)
+    await wait_for_set_visible(session, general_namespace(), "filter_exp_test", 3)
 
-        yield session
+    yield session
 
-        for key in ["A", "B", "C"]:
-            try:
-                await session.delete(DS.id(key)).execute()
-            except Exception:
-                pass
+    for key in ["A", "B", "C"]:
+        try:
+            await session.delete(DS.id(key)).execute()
+        except Exception:
+            pass
 
 
 class TestAdvancedExpFilters:
@@ -2212,7 +2222,7 @@ class TestInExpression:
             [],
         )
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .filter_expression(filter_exp)
             .execute()
         )
@@ -2226,7 +2236,7 @@ class TestInExpression:
     async def test_string_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: "bob" in $.names — should match rec1 only."""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where('"bob" in $.names')
             .execute()
         )
@@ -2240,7 +2250,7 @@ class TestInExpression:
     async def test_int_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: 20 in $.numbers — matches rec1 only (numbers=[10,20,30,40,50])."""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where("20 in $.numbers")
             .execute()
         )
@@ -2254,7 +2264,7 @@ class TestInExpression:
     async def test_in_combined_with_and(self, session_with_cdt_data):
         """Filter: "alice" in $.names and $.info.age == 30 — rec1 only."""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where('"alice" in $.names and $.info.age == 30')
             .execute()
         )
@@ -2269,7 +2279,7 @@ class TestInExpression:
     async def test_in_no_match(self, session_with_cdt_data):
         """Filter: "nonexistent" in $.names — should match nothing."""
         stream = await (
-            session_with_cdt_data.query("test", "cdt_test")
+            session_with_cdt_data.query(general_namespace(), "cdt_test")
             .where('"nonexistent" in $.names')
             .execute()
         )
@@ -2301,7 +2311,7 @@ class TestConvenienceWrappers:
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query("test", "cdt_test")
+            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2317,7 +2327,7 @@ class TestConvenienceWrappers:
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query("test", "cdt_test")
+            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2333,7 +2343,7 @@ class TestConvenienceWrappers:
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query("test", "cdt_test")
+            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2348,7 +2358,7 @@ class TestConvenienceWrappers:
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query("test", "cdt_test")
+            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2363,7 +2373,7 @@ class TestConvenienceWrappers:
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query("test", "cdt_test")
+            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
             .filter_expression(filt)
             .execute()
         )
@@ -2381,7 +2391,7 @@ def _b64_blob_expr(payload: bytes) -> str:
     return f'$.payload.get(type: BLOB) == "{enc}"'
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_ael_blob(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
         yield cluster
@@ -2393,7 +2403,7 @@ class TestAelMapBlobIntegrationQueries:
     async def test_map_ael_numeric_field_filters_tier(self, session_with_map_data):
         """Map value filter on ``level`` (``type`` is reserved in the AEL grammar)."""
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where("$.metadata.level != 1")
             .execute()
         )
@@ -2420,7 +2430,7 @@ class TestAelMapBlobIntegrationQueries:
     async def test_map_ael_key_list_count_on_server(self, session_with_map_data, ael):
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
-            session_with_map_data.query("test", "map_ael_test")
+            session_with_map_data.query(general_namespace(), "map_ael_test")
             .where(ael)
 
             .execute()
@@ -2456,7 +2466,7 @@ class TestAelMapBlobIntegrationQueries:
     ):
         """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
         session = cluster_ael_blob.create_session()
-        k = DataSet.of("test", "ael_blob_srv_it").id("blob_row")
+        k = DataSet.of(general_namespace(), "ael_blob_srv_it").id("blob_row")
         payload = bytes([1, 2, 254])
 
         try:
@@ -2465,10 +2475,10 @@ class TestAelMapBlobIntegrationQueries:
             pass
 
         await session.upsert(k).put({"payload": payload}).execute()
-        await wait_for_set_visible(session, "test", "ael_blob_srv_it", 1)
+        await wait_for_set_visible(session, general_namespace(), "ael_blob_srv_it", 1)
 
         stream = await (
-            session.query("test", "ael_blob_srv_it")
+            session.query(general_namespace(), "ael_blob_srv_it")
             .where(make_expr(payload))
             .execute()
         )

@@ -30,6 +30,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
+from tests.integration.namespace import general_namespace
 
 
 def _bad_expression():
@@ -41,7 +42,7 @@ def _bad_expression():
 _SUB_CDT_INDEX_OUT_OF_BOUNDS = 1
 _SUB_CDT_RANK_OUT_OF_BOUNDS = 2
 
-_DS = DataSet("test", "error_detail")
+_DS = DataSet(general_namespace(), "error_detail")
 
 
 def _session(cluster, verbosity):
