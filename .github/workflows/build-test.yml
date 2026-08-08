@@ -116,6 +116,10 @@ jobs:
     strategy:
       matrix:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        test: [
+          code-examples,
+          integration-tests
+        ]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -125,32 +129,23 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@bd168dedaa4fc0b17a560541779d815540eded2d # v3.7.0
+        id: setup-server
+        with:
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE }}
+          features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
+          enable-strong-consistency: "true"
+
       - name: Start Aerospike server
         run: |
-          # Server image must be >= 8.1.1 so path-expression / ops-projection
-          # tests run instead of skipping. 8.1.2+ unlocks the additional
-          # native-ExpOp coverage that consumes ``client_with_cdt_data_812``
-          # / ``client_812``; tests that need 8.1.2 and don't see an
-          # 8.1.2-routing seed (``AEROSPIKE_HOST_8_1_2``) will skip cleanly.
-          docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
-          for i in {1..10}; do
-            if docker exec aerospike-server asinfo -v "statistics" > /dev/null 2>&1; then
-              echo "Aerospike server is ready after $i seconds"
-              break
-            fi
-            if [ $i -eq 10 ]; then
-              echo "Aerospike server failed to start after 10 seconds"
-              docker logs aerospike-server
-              exit 1
-            fi
-            echo "Waiting for Aerospike server... ($i/10)"
-            sleep 1
-          done
           echo "Configuring namespace for TTL support..."
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
           echo "=== Server Build ==="
-          docker exec aerospike-server asinfo -v "build"
+          docker exec "$SERVER_CONTAINER_NAME" asinfo -v "build"
+        env:
+          SERVER_CONTAINER_NAME: ${{ steps.setup-server.outputs.container-names }}
 
       - name: Setup JFrog CLI
         id: jfrog
@@ -172,13 +167,21 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install -e ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Generate ANTLR parser
         run: make generate-ael
 
+      - name: Run canonical code examples
+        if: ${{ matrix.test == 'code-examples' }}
+        run: make examples
+        env:
+          AEROSPIKE_HOST: localhost:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+
       - name: Run integration tests
+        if: ${{ matrix.test == 'integration-tests' }}
         env:
           AEROSPIKE_HOST: localhost:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"

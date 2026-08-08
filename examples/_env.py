@@ -66,12 +66,15 @@ def _configure_logging() -> None:
 _configure_logging()
 
 
-def _host_and_port() -> tuple[str, int]:
-    host = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+def _parse_host(host: str) -> tuple[str, int]:
     if ":" in host:
         hostname, port_str = host.split(":", 1)
         return hostname, int(port_str)
     return host, 3000
+
+
+def _host_and_port() -> tuple[str, int]:
+    return _parse_host(os.environ.get("AEROSPIKE_HOST", "localhost:3000"))
 
 
 def _services_alternate() -> bool:
@@ -80,14 +83,25 @@ def _services_alternate() -> bool:
     ).lower() in ("true", "1", "yes")
 
 
-def connect():
-    """Build an async ClusterDefinition from environment variables."""
+def connect(*, sc: bool = False):
+    """Build an async ClusterDefinition from environment variables.
+
+    When ``sc`` is True, uses ``AEROSPIKE_HOST_SC`` (falling back to
+    ``AEROSPIKE_HOST``) and applies ``AEROSPIKE_AUTH_*`` credentials if set.
+    """
     from aerospike_sdk import ClusterDefinition
 
-    hostname, port = _host_and_port()
+    if sc:
+        host = sc_host() or os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    else:
+        host = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+
+    hostname, port = _parse_host(host)
     cluster_def = ClusterDefinition(hostname, port)
     if _services_alternate():
         cluster_def = cluster_def.using_services_alternate()
+    if sc:
+        cluster_def = _apply_auth(cluster_def)
     return cluster_def
 
 
@@ -128,23 +142,6 @@ def sc_namespace() -> str:
     return os.environ.get("AEROSPIKE_SC_NAMESPACE", "test_sc")
 
 
-def connect_sc():
-    """Async ClusterDefinition for the strong-consistency seed + auth.
-
-    Falls back to the default seed when ``AEROSPIKE_HOST_SC`` is unset, so
-    SC-requiring examples degrade to a clean capability skip rather than a
-    connection error.
-    """
-    from aerospike_sdk import ClusterDefinition
-
-    host = sc_host() or os.environ.get("AEROSPIKE_HOST", "localhost:3000")
-    hostname, port_str = host.split(":", 1) if ":" in host else (host, "3000")
-    cluster_def = ClusterDefinition(hostname, int(port_str))
-    if _services_alternate():
-        cluster_def = cluster_def.using_services_alternate()
-    return _apply_auth(cluster_def)
-
-
 async def server_at_least(session, version: tuple[int, ...]) -> bool:
     """True if every node's build is >= ``version`` (e.g. ``(8, 1, 3)``)."""
     from aerospike_sdk.aio.info import InfoCommands
@@ -158,3 +155,79 @@ async def server_at_least(session, version: tuple[int, ...]) -> bool:
         return tuple(parts)
 
     return all(parse(b) >= version for b in builds)
+
+from aerospike_sdk import Behavior, DataSet
+
+
+class ExampleMeta(type):
+    """Make ``await Example(...)`` run the async ``__init__``."""
+
+    def __call__(cls, *args, **kwargs):
+        async def _construct():
+            self = cls.__new__(cls)
+            await self.__init__(*args, **kwargs)
+            return self
+
+        return _construct()
+
+
+class Example(metaclass=ExampleMeta):
+    _skipped = False
+
+    async def __init__(self, behavior: Behavior = Behavior.DEFAULT, *, sc: bool = False):
+        self._behavior = behavior
+        self._sc = sc
+        self.cluster = await connect(sc=sc).connect()
+        self.session = self.cluster.create_session(behavior)
+        self.users = DataSet.of("test", "users")
+        self.key = self.users.id("user123")
+
+    async def cleanup(self) -> None:
+        if self.cluster is not None:
+            await self.cluster.close()
+            self.cluster = None
+            self.session = None
+
+    async def run(self) -> None:
+        raise NotImplementedError
+
+
+class SyncExample:
+    _skipped = False
+
+    def __init__(self, behavior: Behavior = Behavior.DEFAULT):
+        self._behavior = behavior
+        self.cluster = sync_connect().connect()
+        self.session = self.cluster.create_session(behavior)
+        self.users = DataSet.of("test", "users")
+        self.key = self.users.id("user123")
+
+    def cleanup(self) -> None:
+        if self.cluster is not None:
+            self.cluster.close()
+            self.cluster = None
+            self.session = None
+
+    def run(self) -> None:
+        raise NotImplementedError
+
+
+class SdkConfigFileExample(Example):
+    _CONFIG = Path(__file__).resolve().parent / "sdk-config-example.yaml"
+    config_path: Path = _CONFIG
+
+    async def __init__(self, host: "SdkConfigFileExample | None" = None):
+        if host is None:
+            os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(self.config_path)
+            await super().__init__()
+        else:
+            self._behavior = host._behavior
+            self._sc = host._sc
+            self.cluster = host.cluster
+            self.session = host.session
+            self.users = host.users
+            self.key = host.key
+
+    async def cleanup(self) -> None:
+        os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
+        await super().cleanup()

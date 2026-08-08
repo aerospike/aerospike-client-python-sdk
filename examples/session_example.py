@@ -1,50 +1,43 @@
 #!/usr/bin/env python3
-"""Example demonstrating Session usage with custom Behaviors.
+"""Example demonstrating session usage with custom Behaviors.
 
 Covers: session creation, upsert, query, update, delete, exists, touch,
 custom behavior derivation, DataSet key patterns.
 """
 
-import asyncio
 from datetime import timedelta
 
-import _env
-from aerospike_sdk import Behavior, DataSet
+from _env import Example
+from aerospike_sdk import Behavior
 
 
-async def main() -> None:
-    async with await _env.connect().connect() as cluster:
-        users = DataSet.of("test", "users")
-
-        # Default session
-        session = cluster.create_session(Behavior.DEFAULT)
-        key = users.id("user123")
-
+class SessionExample(Example):
+    async def run(self):
         # Upsert
-        await session.upsert(key).put({"name": "John", "age": 30, "city": "New York"}).execute()
+        await self.session.upsert(self.key).put({"name": "John", "age": 30, "city": "New York"}).execute()
         print("Upserted record")
 
         # Query (point read)
-        stream = await session.query(key).execute()
+        stream = await self.session.query(self.key).execute()
         async for rec in stream:
             print(f"Read record: {rec.record.bins}")
         stream.close()
 
         # Update
-        await session.update(key).bin("age").set_to(31).execute()
+        await self.session.update(self.key).bin("age").set_to(31).execute()
         print("Updated age to 31")
 
         # Touch (refresh TTL)
-        await session.touch(key).execute()
+        await self.session.touch(self.key).execute()
         print("Touched record")
 
         # Exists
-        stream = await session.exists(key).execute()
+        stream = await self.session.exists(self.key).execute()
         first = await stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
 
         # Delete
-        await session.delete(key).execute()
+        await self.session.delete(self.key).execute()
         print("Deleted record")
 
         # Custom behavior
@@ -53,16 +46,16 @@ async def main() -> None:
             total_timeout=timedelta(seconds=5),
             max_retries=1,
         )
-        fast_session = cluster.create_session(fast_behavior)
+        fast_session = self.cluster.create_session(fast_behavior)
         print(f"Created session with custom behavior: {fast_session.behavior.name}")
 
         # Operations with DataSet + key_value
-        key2 = users.id("user456")
+        key2 = self.users.id("user456")
         await fast_session.upsert(key2).put({"name": "Bob", "age": 25}).execute()
         print("Upserted using fast session")
 
         # Query all records in set
-        stream = await fast_session.query(users).execute()
+        stream = await fast_session.query(self.users).execute()
         count = 0
         async for record in stream:
             count += 1
@@ -71,9 +64,5 @@ async def main() -> None:
         print(f"Total records: {count}")
 
         # Cleanup
-        await session.delete(key2).execute()
+        await self.session.delete(key2).execute()
         print("\nAll operations completed successfully!")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
