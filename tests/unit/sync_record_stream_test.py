@@ -90,7 +90,7 @@ def _br(idx: int, ok: bool = True):
     return SimpleNamespace(
         key=_key(idx), record=_record() if ok else None,
         result_code=ResultCode.OK if ok else ResultCode.KEY_NOT_FOUND_ERROR,
-        in_doubt=False, sub_code=None,
+        in_doubt=False, sub_code=None, server_message=None, exp_trace=None,
     )
 
 
@@ -100,11 +100,14 @@ class TestSyncSubCodePropagation:
         br_fail = SimpleNamespace(
             key=_key(1), record=None,
             result_code=ResultCode.OP_NOT_APPLICABLE, in_doubt=False, sub_code=4,
+            server_message="index out of bounds", exp_trace=None,
         )
 
         stream = SyncRecordStream._from_pac_batch_stream(_FakeBatchStream([(0, br_fail)]))
         results = list(stream)
         assert results[0].sub_code == 4
+        assert results[0].server_message == "index out of bounds"
+        assert results[0].exp_trace is None
 
         captured: list = []
         stream = SyncRecordStream._from_pac_batch_stream(
@@ -113,6 +116,7 @@ class TestSyncSubCodePropagation:
         )
         list(stream)
         assert captured[0].sub_code == 4
+        assert captured[0].server_message == "index out of bounds"
 
 
 class TestSyncCloseReleasesProducer:

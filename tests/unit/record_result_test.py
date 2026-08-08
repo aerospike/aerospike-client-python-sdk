@@ -40,11 +40,15 @@ def _batch_record(
     result_code: ResultCode = ResultCode.OK,
     in_doubt: bool = False,
     sub_code: int | None = None,
+    server_message: str | None = None,
+    exp_trace: object = None,
 ):
     return SimpleNamespace(
         key=_key(key_val), record=record,
         result_code=result_code, in_doubt=in_doubt,
         sub_code=sub_code,
+        server_message=server_message,
+        exp_trace=exp_trace,
     )
 
 
@@ -232,6 +236,32 @@ class TestBatchRecordsToResults:
         with pytest.raises(AerospikeError) as exc_info:
             rr.or_raise()
         assert exc_info.value.sub_code is None
+
+    def test_server_message_and_exp_trace_propagated(self):
+        br = _batch_record(
+            result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=1,
+            server_message="index 99 out of bounds for element count 3",
+        )
+        results = batch_records_to_results([br])
+        assert results[0].server_message == (
+            "index 99 out of bounds for element count 3")
+        assert results[0].exp_trace is None
+
+    def test_server_message_defaults_to_none(self):
+        results = batch_records_to_results([_batch_record()])
+        assert results[0].server_message is None
+        assert results[0].exp_trace is None
+
+    def test_or_raise_carries_server_message(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=1,
+            server_message="index out of bounds",
+        )
+        with pytest.raises(AerospikeError) as exc_info:
+            rr.or_raise()
+        assert exc_info.value.server_message == "index out of bounds"
+        assert exc_info.value.exp_trace is None
 
     def test_empty_list_returns_empty(self):
         assert batch_records_to_results([]) == []

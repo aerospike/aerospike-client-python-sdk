@@ -133,9 +133,11 @@ unique, so always interpret the `(result_code, sub_code)` pair together. The
 or later; older servers ignore the request and leave the attributes `None`.
 
 Batches report failures per record rather than raising, so the same detail
-travels as data instead: a failed batch row carries the subcode on
-`RecordResult.sub_code` (`None` for successful rows or when detail was not
-requested), and `RecordResult.or_raise()` attaches it to the raised error.
+travels as data instead: a failed batch row carries the full surface on
+`RecordResult` — `sub_code`, `server_message`, and `exp_trace` (each `None`
+for successful rows or when detail was not requested) — and
+`RecordResult.or_raise()` attaches all three to the raised error, matching
+the single-key exception shape.
 
 ## In-Doubt Writes
 

@@ -415,3 +415,9 @@ class TestSyncBatchErrorDetail:
         assert results[0].sub_code == 1
         assert results[1].is_ok
         assert results[1].sub_code is None
+        # MESSAGE verbosity: the failed row also carries the server's
+        # explanation; the sync stream is an independent implementation, so
+        # assert the full surface here too.
+        assert results[0].server_message and "out of bounds" in results[0].server_message
+        assert results[0].exp_trace is None
+        assert results[1].server_message is None

@@ -67,6 +67,8 @@ class _FakeBatchRecord:
         self.result_code = 0
         self.in_doubt = False
         self.sub_code = None
+        self.server_message = None
+        self.exp_trace = None
 
 
 class _CapturedDeleteOp:
