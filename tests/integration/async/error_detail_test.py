@@ -35,7 +35,7 @@ from tests.integration.namespace import general_namespace
 
 def _bad_expression():
     """A type-mismatched comparison (int vs float) that the server rejects at
-    expression *build* time — the inducer JSDK uses for the trace tests."""
+    expression *build* time — a reliable inducer for expression-trace tests."""
     return Exp.eq(Exp.int_val(5), Exp.float_val(6.0))
 
 # Subcode values under OP_NOT_APPLICABLE, from the server's per-status enum.
@@ -237,3 +237,30 @@ class TestBatchErrorDetail:
         assert results[0].sub_code == _SUB_CDT_INDEX_OUT_OF_BOUNDS
         assert results[1].is_ok
         assert results[1].sub_code is None
+
+    async def test_batch_row_carries_server_message(self, cluster, supports_error_detail):
+        """At MESSAGE verbosity a failed row carries the server's explanation
+        (and, via or_raise, the raised exception carries it too)."""
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        k_bad = _DS.id("batch-msg-bad")
+        k_good = _DS.id("batch-msg-good")
+        for k in (k_bad, k_good):
+            await session.upsert(k).put({"nums": [1, 2, 3]}).execute()
+
+        rs = await (
+            session
+            .query(k_bad).bin("nums").on_list_index(99).get_values()
+            .query(k_good).bins(["nums"])
+            .execute()
+        )
+        results = await rs.collect()
+
+        failed, ok = results[0], results[1]
+        assert failed.server_message and "out of bounds" in failed.server_message
+        assert failed.exp_trace is None  # no expression involved
+        assert ok.server_message is None
+        with pytest.raises(Exception) as exc_info:
+            failed.or_raise()
+        assert exc_info.value.server_message == failed.server_message
