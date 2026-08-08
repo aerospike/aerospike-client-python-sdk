@@ -37,15 +37,22 @@ async def main() -> None:
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)
     async with await _env.connect().connect() as cluster:
         try:
-            # 2. Behaviors + inheritance.
+            # 2. Behaviors + inheritance. Settings resolve per operation
+            # shape: batch-optimized overrides only batch/query-shaped fields,
+            # so it matches its parent for a point read but diverges once the
+            # batch/query shape is resolved — print both to show the override.
             print("\n=== Behaviors ===")
             for name, behavior in sorted(get_all_behaviors().items()):
                 if behavior.parent is None and name not in ("high-performance",):
                     continue  # skip framework defaults; show config-defined ones
                 parent = behavior.parent.name if behavior.parent else "(none)"
-                read = behavior.get_settings(OpKind.READ, OpShape.POINT)
+                point = behavior.get_settings(OpKind.READ, OpShape.POINT)
+                batch = behavior.get_settings(OpKind.READ, OpShape.BATCH)
+                query = behavior.get_settings(OpKind.READ, OpShape.QUERY)
                 print(f"  {name:18s} parent={parent:14s} "
-                      f"read.total_timeout={read.total_timeout}")
+                      f"point.total_timeout={point.total_timeout} "
+                      f"batch.max_concurrent_nodes={batch.max_concurrent_nodes} "
+                      f"query.record_queue_size={query.record_queue_size}")
 
             # 3. A live operation through a configured session.
             print("\n=== Operation via configured session ===")
