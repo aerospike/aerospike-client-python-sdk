@@ -56,10 +56,10 @@ class _SingleResultIter:
 class RecordStream:
     """Async iterator of :class:`~aerospike_sdk.record_result.RecordResult` rows.
 
-    Produced by ``await session.query(...).execute()`` and similar APIs. Prefer
-    ``async for row in stream``, or helpers such as :meth:`collect` and
-    :meth:`first`. Do not call ``RecordStream(...)`` directly; use factories
-    like :meth:`from_list` or :meth:`from_batch_records`.
+    Produced by ``await session.query(...).execute()`` / ``.stream()`` and
+    similar APIs — you receive a stream from an operation rather than
+    constructing one. Prefer ``async for row in stream``, or helpers such as
+    :meth:`collect` and :meth:`first`.
 
     Example::
 
@@ -103,13 +103,8 @@ class RecordStream:
     # -- factory constructors ------------------------------------------------
 
     @classmethod
-    def from_list(cls, results: Sequence[RecordResult]) -> RecordStream:
-        """Wrap an already-materialised list of results.
-
-        Example::
-            stream = RecordStream.from_list([row1, row2])
-            rows = await stream.collect()
-        """
+    def _from_list(cls, results: Sequence[RecordResult]) -> RecordStream:
+        """Wrap an already-materialised list of results (internal plumbing)."""
         async def _iter() -> AsyncIterator[RecordResult]:
             for r in results:
                 yield r
@@ -129,13 +124,9 @@ class RecordStream:
         return cls(_iter())
 
     @classmethod
-    def from_batch_records(cls, batch_records: Sequence) -> RecordStream:
-        """Wrap a sequence of async-client ``BatchRecord`` objects.
-
-        Example::
-            stream = RecordStream.from_batch_records(batch_records)
-        """
-        return cls.from_list(batch_records_to_results(list(batch_records)))
+    def _from_batch_records(cls, batch_records: Sequence) -> RecordStream:
+        """Wrap a sequence of async-client ``BatchRecord`` objects (internal plumbing)."""
+        return cls._from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
     def _from_pac_batch_stream(
@@ -275,12 +266,8 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_single(cls, key: Key, record: Record | None) -> RecordStream:
-        """Wrap a single-key result.
-
-        Example::
-            stream = RecordStream.from_single(key, record)
-        """
+    def _from_single(cls, key: Key, record: Record | None) -> RecordStream:
+        """Wrap a single-key result (internal plumbing)."""
         rc = ResultCode.OK if record is not None else ResultCode.KEY_NOT_FOUND_ERROR
         result = RecordResult(key=key, record=record, result_code=rc, index=0)
         # Skip the _SingleResultIter allocation; __anext__ short-circuits via
@@ -295,19 +282,15 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_error(
+    def _from_error(
         cls,
         key: Key,
         result_code: ResultCode,
         in_doubt: bool = False,
         exception: AerospikeError | None = None,
     ) -> RecordStream:
-        """Wrap a single-key error as a one-element stream.
-
-        Example::
-            stream = RecordStream.from_error(key, ResultCode.TIMEOUT)
-        """
-        return cls.from_list([RecordResult(
+        """Wrap a single-key error as a one-element stream (internal plumbing)."""
+        return cls._from_list([RecordResult(
             key=key,
             record=None,
             result_code=result_code,
@@ -331,7 +314,7 @@ class RecordStream:
         """
         if self._closed:
             raise StopAsyncIteration
-        # Single-result fast path: from_single skips iterator allocation
+        # Single-result fast path: _from_single skips iterator allocation
         # and stashes the result in _single_result. Drain it here without
         # hitting an underlying iterator.
         r = self._single_result

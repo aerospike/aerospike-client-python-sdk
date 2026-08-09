@@ -154,12 +154,12 @@ class TestSyncCloseReleasesProducer:
         assert fake.close_calls >= 1
 
     def test_close_on_single_key_stream_is_safe(self):
-        stream = SyncRecordStream.from_single(_key(1), _record())
+        stream = SyncRecordStream._from_single(_key(1), _record())
         stream.close()
         assert list(stream) == []
 
     def test_close_on_materialized_stream_is_safe(self):
-        stream = SyncRecordStream.from_list([_ok_result(0), _ok_result(1)])
+        stream = SyncRecordStream._from_list([_ok_result(0), _ok_result(1)])
         stream.close()
         assert list(stream) == []
 
@@ -193,7 +193,7 @@ class TestSyncContextManager:
         assert fake.close_calls >= 1
 
     def test_enter_returns_self(self):
-        stream = SyncRecordStream.from_list([_ok_result(0)])
+        stream = SyncRecordStream._from_list([_ok_result(0)])
         with stream as entered:
             assert entered is stream
 
@@ -202,30 +202,30 @@ class TestSyncPopKeepsOpen:
     """pop() / pop_or_raise() advance one row and leave the stream open."""
 
     def test_pop_returns_head_and_keeps_open(self):
-        stream = SyncRecordStream.from_list([_ok_result(0), _ok_result(1), _ok_result(2)])
+        stream = SyncRecordStream._from_list([_ok_result(0), _ok_result(1), _ok_result(2)])
         head = stream.pop()
         assert head.index == 0
         assert [r.index for r in stream.collect()] == [1, 2]
 
     def test_pop_empty_returns_none(self):
-        assert SyncRecordStream.from_list([]).pop() is None
+        assert SyncRecordStream._from_list([]).pop() is None
 
     def test_pop_returns_error_as_data(self):
-        row = SyncRecordStream.from_list([_fail_result()]).pop()
+        row = SyncRecordStream._from_list([_fail_result()]).pop()
         assert row is not None and not row.is_ok
 
     def test_pop_or_raise_ok_keeps_open(self):
-        stream = SyncRecordStream.from_list([_ok_result(0), _ok_result(1)])
+        stream = SyncRecordStream._from_list([_ok_result(0), _ok_result(1)])
         assert stream.pop_or_raise().index == 0
         assert [r.index for r in stream.collect()] == [1]
 
     def test_pop_or_raise_empty(self):
         with pytest.raises(StopIteration):
-            SyncRecordStream.from_list([]).pop_or_raise()
+            SyncRecordStream._from_list([]).pop_or_raise()
 
     def test_pop_or_raise_error(self):
         with pytest.raises(AerospikeError):
-            SyncRecordStream.from_list([_fail_result()]).pop_or_raise()
+            SyncRecordStream._from_list([_fail_result()]).pop_or_raise()
 
     def test_pop_does_not_close_producer(self):
         fake = _FakeBatchStream([(i, _br(i)) for i in range(3)])

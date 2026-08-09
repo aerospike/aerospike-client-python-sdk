@@ -20,8 +20,8 @@ typically a PAC :class:`Recordset`, a list of ``BatchRecord``, or a
 materialized list of :class:`RecordResult`.
 
 Factory classmethods mirror :class:`aerospike_sdk.record_stream.RecordStream`
-so callers that already use ``from_list`` / ``from_batch_records`` /
-``from_single`` / ``from_error`` / ``chain`` keep the same shape. The
+so callers that already use ``_from_list`` / ``_from_batch_records`` /
+``_from_single`` / ``_from_error`` / ``chain`` keep the same shape. The
 producer adapters that wrap a live PAC recordset / batch stream are private
 plumbing (``_from_pac_recordset`` / ``_from_chunked_pac_recordset`` /
 ``_from_pac_batch_stream``), driven by the query/batch dispatch code.
@@ -85,14 +85,14 @@ class RecordStream:
     # -- factory constructors ------------------------------------------------
 
     @classmethod
-    def from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
+    def _from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
         """Wrap an already-materialized list of results."""
         return cls(iter(results))
 
     @classmethod
-    def from_batch_records(cls, batch_records: Sequence) -> "RecordStream":
+    def _from_batch_records(cls, batch_records: Sequence) -> "RecordStream":
         """Wrap a list of PAC ``BatchRecord`` objects."""
-        return cls.from_list(batch_records_to_results(list(batch_records)))
+        return cls._from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
     def _from_pac_batch_stream(
@@ -199,7 +199,7 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_single(
+    def _from_single(
         cls, key: Key, record: Optional["Record"],
     ) -> "RecordStream":
         """Wrap a single-key result.
@@ -214,7 +214,7 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_error(
+    def _from_error(
         cls,
         key: Key,
         result_code: ResultCode,
@@ -222,7 +222,7 @@ class RecordStream:
         exception: "Optional[AerospikeError]" = None,
     ) -> "RecordStream":
         """Wrap a single-key error as a one-element stream."""
-        return cls.from_list([RecordResult(
+        return cls._from_list([RecordResult(
             key=key,
             record=None,
             result_code=result_code,

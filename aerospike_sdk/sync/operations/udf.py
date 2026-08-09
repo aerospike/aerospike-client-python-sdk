@@ -100,12 +100,12 @@ class UdfBuilder(_UdfBuilderBase[QueryBuilder]):
         # land here via "udf" op_type → execute_udf_blocking / batch_apply_blocking).
         fast = qb._execute_blocking_fast_path(on_error)
         if fast is not None:
-            return RecordStream.from_list(fast)
+            return RecordStream._from_list(fast)
 
         # Tier 1b: multi-spec blocking dispatch.
         multispec = qb._execute_multispec_blocking(on_error)
         if multispec is not None:
-            return RecordStream.from_list(multispec)
+            return RecordStream._from_list(multispec)
 
         # Every reachable shape is handled by Tier 1 or 1b. If we land here
         # a new code path slipped through without a blocking dispatcher —

@@ -301,7 +301,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                         None, key.namespace, key.set_name, 1, cmd_t0,
                         self._client,
                     )
-                return RecordStream.from_single(key, record)
+                return RecordStream._from_single(key, record)
             # Fall through when an AP-only policy is cached (e.g. txn nulled
             # them): legacy path with explicit mode resolution.
 
@@ -616,7 +616,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 key, pkg, fn, spec.udf_args, policy=wp)
         except Exception as e:
             return self._handle_error(key, e, disp, handler, op_type="udf")
-        return RecordStream.from_list([
+        return RecordStream._from_list([
             RecordResult(
                 key=key,
                 record=None,
@@ -729,14 +729,14 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     )
                 except Exception as e:
                     return self._handle_error(key, e, _ErrorDisposition.THROW, None)
-                return RecordStream.from_single(key, record)
+                return RecordStream._from_single(key, record)
             # No base policy — fall back to the legacy build-in-Python path.
             rp = self._apply_txn(ReadPolicy())
             try:
                 record = await self._client.get(key, spec.bins, policy=rp)
             except Exception as e:
                 return self._handle_error(key, e, _ErrorDisposition.THROW, None)
-            return RecordStream.from_single(key, record)
+            return RecordStream._from_single(key, record)
 
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
             # Write via operate — fast path via PAC's operate when the
@@ -771,7 +771,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     return self._handle_error(
                         key, e, _ErrorDisposition.THROW, None,
                         op_type=spec.op_type)
-                return RecordStream.from_single(key, record)
+                return RecordStream._from_single(key, record)
             # No base policy — fall back to the legacy build-in-Python path.
             rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
             wp = self._apply_txn(WritePolicy())
@@ -783,7 +783,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 return self._handle_error(
                     key, e, _ErrorDisposition.THROW, None,
                     op_type=spec.op_type)
-            return RecordStream.from_single(key, record)
+            return RecordStream._from_single(key, record)
 
         # Not a simple case — fall back to normal chain.
         return None
@@ -804,7 +804,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             record = await self._client.get(key, spec.bins, policy=read_policy)
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
-        return RecordStream.from_single(key, record)
+        return RecordStream._from_single(key, record)
 
     async def _execute_single_key_operate(
         self, spec: _OperationSpec,
@@ -818,7 +818,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             record = await self._client.operate(key, spec.operations, policy=policy)
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
-        return RecordStream.from_single(key, record)
+        return RecordStream._from_single(key, record)
 
     async def _execute_batch_read(
         self, spec: _OperationSpec,
@@ -878,7 +878,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             record = await self._client.operate(key, spec.operations, policy=wp)
         except Exception as e:
             return self._handle_error(key, e, disp, handler, op_type=spec.op_type)
-        return RecordStream.from_single(key, record)
+        return RecordStream._from_single(key, record)
 
     async def _execute_single_key_delete(
         self, spec: _OperationSpec,
@@ -892,8 +892,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return self._handle_error(key, e, disp, handler, op_type="delete")
         rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
         if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream.from_error(key, rc)
-        return RecordStream.from_list([])
+            return RecordStream._from_error(key, rc)
+        return RecordStream._from_list([])
 
     async def _execute_spec_mixed_mode_batch(
         self, spec: _OperationSpec,
@@ -985,8 +985,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if self._should_include_result(
             ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out
         ):
-            return RecordStream.from_error(key, ResultCode.OK)
-        return RecordStream.from_list([])
+            return RecordStream._from_error(key, ResultCode.OK)
+        return RecordStream._from_list([])
 
     async def _execute_batch_touch(
         self, spec: _OperationSpec,
@@ -1036,8 +1036,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return self._handle_error(key, e, disp, handler, op_type="exists")
         rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
         if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream.from_error(key, rc)
-        return RecordStream.from_list([])
+            return RecordStream._from_error(key, rc)
+        return RecordStream._from_list([])
 
     async def _execute_batch_exists(
         self, spec: _OperationSpec,
@@ -1055,7 +1055,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
             if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
                 results.append(RecordResult(key, None, rc))
-        return RecordStream.from_list(results)
+        return RecordStream._from_list(results)
 
     # -- Mixed-batch execution (multi-spec chains) ----------------------------
     async def _execute_dataset_query(self) -> RecordStream:
@@ -1360,7 +1360,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 _cmd_done(
                     op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
                     self._client_fast)
-            return RecordStream.from_single(key, record)
+            return RecordStream._from_single(key, record)
 
         # Fallback (delete/touch/exists + txn-bound cells): resolve mode
         # explicitly, then dispatch to the right primitive.
@@ -1385,8 +1385,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             if cmd_t0:
                 _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             if existed:
-                return RecordStream.from_error(key, ResultCode.OK)
-            return RecordStream.from_list([])
+                return RecordStream._from_error(key, ResultCode.OK)
+            return RecordStream._from_list([])
 
         # -- touch (no record returned) --
         if op_type == "touch":
@@ -1398,7 +1398,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 return self._handle_fast_error(exc, "touch")
             if cmd_t0:
                 _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
-            return RecordStream.from_error(key, ResultCode.OK)
+            return RecordStream._from_error(key, ResultCode.OK)
 
         # -- exists (uses ReadPolicy, returns bool) --
         if op_type == "exists":
@@ -1417,8 +1417,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             if cmd_t0:
                 _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             if found:
-                return RecordStream.from_error(key, ResultCode.OK)
-            return RecordStream.from_list([])
+                return RecordStream._from_error(key, ResultCode.OK)
+            return RecordStream._from_list([])
 
         # -- operate-based fallback when only one cached policy is set
         # (e.g. txn-bound segment nulled both policies). cached_wp here
@@ -1440,7 +1440,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 _cmd_done(
                     op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
                     self._client_fast)
-            return RecordStream.from_single(key, record)
+            return RecordStream._from_single(key, record)
 
         # Fall back to the legacy build-policy-in-Python path.
         rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
@@ -1463,7 +1463,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         if cmd_t0:
             _cmd_done(op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
                       self._client_fast)
-        return RecordStream.from_single(key, record)
+        return RecordStream._from_single(key, record)
 
 # Bind the async write-segment class onto the shared base's factory hook so
 # `_start_write_segment` on an async QueryBuilder chains into the async

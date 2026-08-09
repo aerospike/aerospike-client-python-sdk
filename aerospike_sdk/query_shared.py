@@ -1600,7 +1600,7 @@ class _QueryBuilderBase:
         Thin wrapper over :meth:`_filtered_batch_list` for async callers
         that hand the result back to streaming code.
         """
-        return RecordStream.from_list(
+        return RecordStream._from_list(
             self._filtered_batch_list(batch_records, disp, handler, op_type),
         )
 
@@ -1644,12 +1644,12 @@ class _QueryBuilderBase:
                 raise pfc_exc from exc
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, index, pfc_exc)
-                return RecordStream.from_list([])
+                return RecordStream._from_list([])
 
         if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream.from_list([])
+            return RecordStream._from_list([])
 
-        return RecordStream.from_error(key, rc, in_doubt, exception=pfc_exc)
+        return RecordStream._from_error(key, rc, in_doubt, exception=pfc_exc)
 
     def _handle_batch_error_list(
         self,
@@ -1696,7 +1696,7 @@ class _QueryBuilderBase:
         When the entire batch call fails (e.g. timeout, connection error),
         we create one error result per key.
         """
-        return RecordStream.from_list(
+        return RecordStream._from_list(
             self._handle_batch_error_list(keys, exc, disp, handler),
         )
 

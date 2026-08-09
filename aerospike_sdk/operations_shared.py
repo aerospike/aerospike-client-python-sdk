@@ -1037,7 +1037,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                 raise pfc_exc from exc
         elif rc != ResultCode.FILTERED_OUT:
             raise pfc_exc from exc
-        return RecordStream.from_list([])
+        return RecordStream._from_list([])
 
     def _get_write_policy(self) -> WritePolicy:
         wp = self._write_policy
