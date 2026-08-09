@@ -186,6 +186,39 @@ async def test_str_to_string_op_via_query(cluster):
     assert rec.bins["n"] == "42"
 
 
+async def _survives_filter(sess, key, filter_exp) -> bool:
+    """Whether *key* survives *filter_exp* (evaluated server-side)."""
+    rs = await sess.query(key).filter_expression(filter_exp).execute()
+    return len([r async for r in rs]) == 1
+
+
+async def test_string_to_integer_evaluates_in_filter(cluster):
+    """``Exp.string_to_integer`` parses a string bin to an int server-side.
+
+    Sibling of ``to_string`` but on the ``CALL_STRING`` path (not
+    ``CALL_REPR``); a positive match plus a negative control prove the
+    coercion actually evaluated rather than being ignored (no ParameterError).
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_to_int_exp")
+    await sess.upsert(k).bin("snum").set_to("123").execute()
+
+    coerced = Exp.string_to_integer(Exp.string_bin("snum"))
+    assert await _survives_filter(sess, k, Exp.eq(coerced, Exp.val(123)))
+    assert not await _survives_filter(sess, k, Exp.eq(coerced, Exp.val(999)))
+
+
+async def test_string_to_double_evaluates_in_filter(cluster):
+    """``Exp.string_to_double`` parses a string bin to a double server-side."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_to_double_exp")
+    await sess.upsert(k).bin("sf").set_to("1.5").execute()
+
+    coerced = Exp.string_to_double(Exp.string_bin("sf"))
+    assert await _survives_filter(sess, k, Exp.eq(coerced, Exp.val(1.5)))
+    assert not await _survives_filter(sess, k, Exp.eq(coerced, Exp.val(9.9)))
+
+
 # ---------------------------------------------------------------------------
 # Spot tests — flag paths
 # ---------------------------------------------------------------------------
