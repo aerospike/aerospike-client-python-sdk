@@ -190,6 +190,19 @@ class SyncClient:
             )
         return self._supports_mrt_cache
 
+    def _cluster_versions_blocking(self) -> list:
+        """Per-node ``Version`` list for capability probes (fresh, uncached).
+
+        Sync sibling of the async ``_cluster_versions``: read live so a probe
+        reflects current cluster membership. The ``current_thread_runtime``
+        proxy has no node-listing surface, so it yields an empty list (every
+        probe then reports unsupported), matching the MRT-probe behavior.
+        """
+        nodes_fn = getattr(self._client, "nodes_blocking", None)
+        if nodes_fn is None:
+            return []
+        return [node.version for node in nodes_fn()]
+
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = SyncSdkConfigMonitor(

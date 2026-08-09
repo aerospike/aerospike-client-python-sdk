@@ -58,6 +58,7 @@ from aerospike_async import (
     TxnState,
     UDFLang,
     UdfRemoveTask,
+    Version,
 )
 
 from aerospike_sdk.aio import AsyncPool, Session, TransactionalSession, ClusterDefinition, Host
@@ -259,6 +260,7 @@ __all__ = [
     "TxnState",
     "UDFLang",
     "UdfRemoveTask",
+    "Version",
     "map_keys",
     "map_values",
     "refresh_log_levels",

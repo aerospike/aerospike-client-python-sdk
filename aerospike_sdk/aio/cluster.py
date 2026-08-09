@@ -21,8 +21,9 @@ import types
 import typing
 from typing import Optional
 
-from aerospike_async import ClientPolicy, UDFLang
+from aerospike_async import ClientPolicy, UDFLang, Version
 
+from aerospike_sdk import capabilities
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
@@ -243,6 +244,54 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             :meth:`aerospike_sdk.aio.session.Session.list_indexes`
         """
         return await self._sdk_client._list_indexes()
+
+    # -- Server-capability probes ---------------------------------------------
+    # Guard feature use against the cluster's least-capable node before
+    # calling a feature that a mixed-version cluster may not fully support.
+    # Each folds the per-node version, so a single lagging node reports the
+    # feature unsupported. Read live, so the answer tracks current membership.
+
+    async def server_version(self) -> Optional[Version]:
+        """The minimum server version across connected nodes.
+
+        Returns:
+            The least-capable node's :class:`~aerospike_async.Version`, or
+            ``None`` when the cluster reports no nodes. Guarding against the
+            *minimum* is what makes a feature check safe on a mixed-version
+            or mid-upgrade cluster.
+
+        Example::
+
+            v = await cluster.server_version()
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 1, 3):
+                ...
+        """
+        return capabilities.min_version(await self._sdk_client._cluster_versions())
+
+    async def supports_ael(self) -> bool:
+        """Whether every node parses server-compiled AEL (filters, exp reads/writes)."""
+        return capabilities.supports_ael(await self._sdk_client._cluster_versions())
+
+    async def supports_query_operations(self) -> bool:
+        """Whether every node supports read operations inside an index query."""
+        return capabilities.supports_query_operations(
+            await self._sdk_client._cluster_versions())
+
+    async def supports_string_operations(self) -> bool:
+        """Whether every node supports the server-side string operations.
+
+        Example::
+
+            if await cluster.supports_string_operations():
+                await session.upsert(key).bin("s").str_append("!").execute()
+        """
+        return capabilities.supports_string_operations(
+            await self._sdk_client._cluster_versions())
+
+    async def supports_query_selection(self) -> bool:
+        """Whether every node supports server-led index selection (>= 8.1.3)."""
+        return capabilities.supports_query_selection(
+            await self._sdk_client._cluster_versions())
 
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.

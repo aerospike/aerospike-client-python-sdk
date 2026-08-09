@@ -146,6 +146,33 @@ operation-policy behaviors can also come from a YAML file (the
 `AEROSPIKE_SDK_CONFIG_URL` environment variable), read at `connect()` and
 hot-reloaded on change. See [Dynamic SDK Configuration](dynamic-sdk-config.md).
 
+## Checking Server Capabilities
+
+Some features require a minimum server version. On a mixed-version or
+mid-upgrade cluster you can guard a feature before using it, rather than
+letting a call fail at runtime. The `Cluster` reports a feature as supported
+only when *every* connected node supports it, so you always guard against the
+cluster's least-capable node.
+
+```python
+async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    if await cluster.supports_string_operations():
+        await session.upsert(key).bin("s").str_append("!").execute()
+    else:
+        ...  # fall back
+
+    version = await cluster.server_version()   # minimum Version across the cluster
+    if version is not None and (version.major, version.minor, version.patch) >= (8, 1, 3):
+        ...
+```
+
+The probes are `supports_ael()`, `supports_query_operations()`,
+`supports_string_operations()`, `supports_query_selection()`, and
+`server_version()` (the minimum version across all nodes, or `None` if the
+cluster reports no nodes). They are `async` on the async `Cluster` and plain
+methods on the sync
+`Cluster`; each reads live, so the answer reflects current cluster membership.
+
 ## Sessions
 
 A **Session** binds a connected cluster to a set of policy defaults via a

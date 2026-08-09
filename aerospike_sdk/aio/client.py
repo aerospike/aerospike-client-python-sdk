@@ -199,6 +199,18 @@ class Client:
             )
         return self._supports_mrt_cache
 
+    async def _cluster_versions(self) -> list:
+        """Per-node ``Version`` list for capability probes (fresh, uncached).
+
+        Read live rather than cached so a probe reflects the current cluster
+        membership — a lower-version node joining after connect changes the
+        minimum. Cold path (user-facing introspection), so the extra
+        ``nodes()`` round is not a concern.
+        """
+        if self._client is None:
+            return []
+        return [node.version for node in await self._client.nodes()]
+
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = AsyncSdkConfigMonitor(

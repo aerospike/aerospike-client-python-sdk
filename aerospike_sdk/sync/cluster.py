@@ -21,8 +21,9 @@ import types
 import typing
 from typing import Optional
 
-from aerospike_async import ClientPolicy, UDFLang
+from aerospike_async import ClientPolicy, UDFLang, Version
 
+from aerospike_sdk import capabilities
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
 from aerospike_sdk.policy.system_settings import SystemSettings
@@ -230,6 +231,44 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             :meth:`aerospike_sdk.aio.session.Session.list_indexes`
         """
         return self._sdk_client._list_indexes()
+
+    # -- Server-capability probes ---------------------------------------------
+    # Guard feature use against the cluster's least-capable node. Sync
+    # counterparts of the async Cluster probes; see there for detail.
+
+    def server_version(self) -> Optional[Version]:
+        """The minimum server version across connected nodes.
+
+        Returns:
+            The least-capable node's :class:`~aerospike_async.Version`, or
+            ``None`` when the cluster reports no nodes.
+
+        Example::
+
+            v = cluster.server_version()
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 1, 3):
+                ...
+        """
+        return capabilities.min_version(self._sdk_client._cluster_versions_blocking())
+
+    def supports_ael(self) -> bool:
+        """Whether every node parses server-compiled AEL (filters, exp reads/writes)."""
+        return capabilities.supports_ael(self._sdk_client._cluster_versions_blocking())
+
+    def supports_query_operations(self) -> bool:
+        """Whether every node supports read operations inside an index query."""
+        return capabilities.supports_query_operations(
+            self._sdk_client._cluster_versions_blocking())
+
+    def supports_string_operations(self) -> bool:
+        """Whether every node supports the server-side string operations."""
+        return capabilities.supports_string_operations(
+            self._sdk_client._cluster_versions_blocking())
+
+    def supports_query_selection(self) -> bool:
+        """Whether every node supports server-led index selection (>= 8.1.3)."""
+        return capabilities.supports_query_selection(
+            self._sdk_client._cluster_versions_blocking())
 
     def close(self) -> None:
         """
