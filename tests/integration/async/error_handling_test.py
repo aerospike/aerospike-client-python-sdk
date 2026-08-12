@@ -35,6 +35,7 @@ from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
 
 
 @pytest.fixture
@@ -584,11 +585,24 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    async def test_operate_read_with_matching_where(self, session, ds):
-        """Keyed operate: select_from() + where() both as server AEL.
+    @pytest.mark.parametrize("read_ael", [
+        pytest.param(
+            "$.v",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.v:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_operate_read_with_matching_where(self, session, ds, read_ael):
+        """Keyed operate: select_from() + where() on matching filter.
 
-        Read AEL must pin bin types on field-43 keyed paths; filter compiles
-        ``$.v == 1`` in isolation but does not type an untyped ``select_from("$.v")``.
+        Client-side AEL uses untyped ``$.v``. Server-compiled field-43 paths
+        must pin bin types (``$.v:INT``); filter compiles ``$.v == 1`` in
+        isolation and does not type an untyped read AEL string.
         """
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
@@ -596,7 +610,7 @@ class TestOperateWithFilter:
 
         rs = await (
             session.upsert(k)
-            .bin("result").select_from("$.v:INT")
+            .bin("result").select_from(read_ael)
             .where("$.v == 1")
             .execute()
         )
@@ -606,7 +620,19 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    async def test_operate_read_filtered_out_raises(self, session, ds):
+    @pytest.mark.parametrize("read_ael", [
+        pytest.param(
+            "$.v",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.v:INT",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_operate_read_filtered_out_raises(self, session, ds, read_ael):
         """Upsert + bin.select_from() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT."""
         k = ds.id("op_rd_fo")
@@ -616,7 +642,7 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                .bin("result").select_from("$.v:INT")
+                .bin("result").select_from(read_ael)
                 .where("$.v == 999")
                 .fail_on_filtered_out()
                 .execute()
