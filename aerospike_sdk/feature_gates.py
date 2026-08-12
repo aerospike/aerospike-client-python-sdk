@@ -26,8 +26,8 @@ from typing import Optional
 # indexed dataset queries run the client index planner over the raw AEL
 # string, which cannot parse server-dialect forms (e.g. ``:INT`` suffixes) —
 # queries that field 44 would plan and serve instead fail client-side.
-PSDK_ENABLE_QUERY_SELECTION: bool = False
-PSDK_ENABLE_SERVER_COMPILED_AEL: bool = False
+PSDK_ENABLE_QUERY_SELECTION: bool = True
+PSDK_ENABLE_SERVER_COMPILED_AEL: bool = True
 
 
 def cached_ael_capability_kwargs(
