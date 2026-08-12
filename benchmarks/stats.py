@@ -541,16 +541,22 @@ class StatsCollector:
         r_tps = [x.reads for x in mid]
         w_tps = [x.writes for x in mid]
         t_tps = [x.reads + x.writes for x in mid]
-        r_err = sum(x.read_errors for x in mid)
-        w_err = sum(x.write_errors for x in mid)
-        r_to = sum(x.read_timeouts for x in mid)
-        w_to = sum(x.write_timeouts for x in mid)
-        total_succ = sum(t_tps)
+        # Errors / timeouts are correctness signals, not steady-state metrics:
+        # count them over the FULL run (including warmup/cooldown), so a real
+        # failure that happens during ramp-up can never hide behind the
+        # windowing that TPS / latency legitimately use.
+        r_err = sum(x.read_errors for x in ivs)
+        w_err = sum(x.write_errors for x in ivs)
+        r_to = sum(x.read_timeouts for x in ivs)
+        w_to = sum(x.write_timeouts for x in ivs)
         total_err = r_err + w_err
         total_to = r_to + w_to
-        # Denominator for error / timeout rates is attempted ops, not
-        # successes — otherwise an all-error run reports 0% errors.
-        attempted = total_succ + total_err + total_to
+        # Denominator for error / timeout rates is full-run attempted ops
+        # (successes + errors + timeouts), not successes — otherwise an
+        # all-error run reports 0% errors.
+        attempted = (
+            sum(x.reads + x.writes for x in ivs) + total_err + total_to
+        )
         err_pct = (100.0 * total_err / attempted) if attempted else 0.0
         to_pct = (100.0 * total_to / attempted) if attempted else 0.0
 
@@ -573,8 +579,10 @@ class StatsCollector:
             f"  Read  TPS: avg={avg(r_tps):.0f}  median={median(r_tps):.0f}",
             f"  Write TPS: avg={avg(w_tps):.0f}  median={median(w_tps):.0f}",
             f"  Total TPS: avg={avg(t_tps):.0f}  median={median(t_tps):.0f}",
-            f"  Errors:    {total_err} ({err_pct:.2f}% of ops) — reads={r_err} writes={w_err}",
-            f"  Timeouts:  {total_to} ({to_pct:.2f}% of ops) — reads={r_to} writes={w_to}",
+            f"  Errors:    {total_err} ({err_pct:.2f}% of ops, full run) "
+            f"— reads={r_err} writes={w_err}",
+            f"  Timeouts:  {total_to} ({to_pct:.2f}% of ops, full run) "
+            f"— reads={r_to} writes={w_to}",
             *pct_lines,
             f"  Peak RSS: {self.rss_mb_macos_linux():.1f} MB",
         ]

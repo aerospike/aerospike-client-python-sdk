@@ -212,6 +212,44 @@ async def _truncate_set(cfg) -> None:
     print("Truncation complete.")
 
 
+async def _populate(cfg) -> None:
+    """Load phase: write keys ``1..key_count`` once, before a read workload,
+    so no read hits an unwritten key.
+
+    Uses the same ``Key.from_int_user_key`` construction and bin spec as the
+    read path (see ``_build_op_sync``/``_build_op_async``), so every key a
+    read can pick already exists with a representative record. This is the
+    load-then-run model: without it, an RU/RR workload self-populates the
+    keyspace as it runs, and early reads legitimately miss.
+    """
+    import time
+
+    from aerospike_async import Key
+    from aerospike_sdk.aio.client import Client
+    from aerospike_sdk.policy.behavior import Behavior
+
+    from benchmarks._env import client_policy_from_config
+    from benchmarks.record_spec import full_bins
+
+    k = cfg.key_count
+    ns, st = cfg.namespace, cfg.set_name
+    fields = list(cfg.bin_fields)
+    kfi = Key.from_int_user_key
+    policy = client_policy_from_config(cfg)
+    conc = 256  # bounded in-flight puts
+
+    print(f"Loading {k} keys into {ns}.{st} ...")
+    t0 = time.perf_counter()
+    async with Client(cfg.seeds, policy=policy) as client:
+        session = client.create_session(Behavior.DEFAULT)
+        for lo in range(1, k + 1, conc):
+            hi = min(lo + conc, k + 1)
+            await asyncio.gather(
+                *(session.put(kfi(ns, st, kid), full_bins(fields)) for kid in range(lo, hi))
+            )
+    print(f"Load complete: {k} keys in {time.perf_counter() - t0:.1f}s.")
+
+
 async def async_main() -> int:
     parser = build_arg_parser()
     ns = parser.parse_args()
@@ -230,6 +268,8 @@ async def async_main() -> int:
         return 2
     if cfg.truncate_before_run:
         await _truncate_set(cfg)
+    if cfg.load_before_run and cfg.workload != WorkloadKind.INSERT:
+        await _populate(cfg)
 
     if cfg.tracemalloc_enabled:
         tracemalloc.start()

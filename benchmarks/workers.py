@@ -34,6 +34,7 @@ from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
+from aerospike_sdk.exceptions import RecordNotFoundError as _SdkRecordNotFound
 from aerospike_sdk.exceptions import TimeoutError as AsTimeoutError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
@@ -207,11 +208,21 @@ async def _self_test_pac_async(client: Any, dataset: DataSet) -> None:
 
 def _is_not_found(exc: BaseException) -> bool:
     """A cache miss on a point read — counted as success-with-no-record,
-    not as an error. PAC/PSDK fast-path raise ``RecordNotFound``; the
-    legacy ``aerospike`` C client raises its own ``RecordNotFound``
-    (checked separately inside ``run_legacy_sync``).
+    not as an error. PAC's blocking/async get raises
+    ``aerospike_async.exceptions.RecordNotFound``; PSDK's fast-path
+    ``session.get`` raises ``aerospike_sdk.exceptions.RecordNotFoundError``
+    (a distinct type — both must be recognized here). The legacy
+    ``aerospike`` C client raises its own ``RecordNotFound`` (checked
+    separately inside ``run_legacy_sync``).
     """
-    return isinstance(exc, _AsRecordNotFound)
+    if isinstance(exc, (_AsRecordNotFound, _SdkRecordNotFound)):
+        return True
+    # Robust cross-type fallback: match on the server result code name so a
+    # not-found never masquerades as a hard error regardless of which layer
+    # raised it. Real exceptions (connection/timeout/server errors) still flow
+    # through to the error counters unchanged.
+    rc = getattr(exc, "result_code", None)
+    return getattr(rc, "name", str(rc)) == "KeyNotFoundError"
 
 
 def _classify_exc(exc: BaseException) -> Tuple[bool, bool]:
