@@ -9,6 +9,25 @@ throughput and latency against a live Aerospike cluster.
 - Installed ``aerospike-sdk`` with its async client dependency.
 - A reachable cluster seed (defaults to ``AEROSPIKE_HOST`` from ``aerospike.env``).
 
+## Install / update (standalone bench checkout)
+
+The benchmarks run against your **installed** ``aerospike-sdk`` (and its
+``aerospike-async`` dependency) — they are not shipped in the wheel, so check
+out just this directory. Updating the bench never touches your installed PSDK.
+
+```bash
+# First install: sparse, blobless checkout of benchmarks/ only
+git clone --depth 1 --branch dev --filter=blob:none --sparse \
+  https://github.com/aerospike/aerospike-client-python-sdk.git psdk-bench
+cd psdk-bench && git sparse-checkout set benchmarks
+
+# Update to the latest bench (from inside the existing checkout)
+git pull
+```
+
+Run from the checkout root so ``benchmarks`` is importable
+(``python -m benchmarks.benchmark``).
+
 ## Running
 
 ```bash
@@ -18,18 +37,19 @@ python -m benchmarks.benchmark --help
 Common examples:
 
 ```bash
-# Async read/update 50/50 on key space 100k, 32 concurrent tasks, 10 seconds
-python -m benchmarks.benchmark -k 100000 -z 32 -w RU,50 -d 10
+# Async read/update 50/50, 100k keys, 32 tasks, 10s.
+# RECOMMENDED DEFAULT for any read workload (RU/RR/RM*): --truncate --load
+# populates the keyspace first, so reads fetch real records (representative)
+# and never hit an unwritten key. --load is a no-op for -w I.
+python -m benchmarks.benchmark -k 100000 -z 32 -w RU,50 -d 10 --truncate --load
 
-# Populate keys 1..N with insert workload then benchmark reads
-python -m benchmarks.benchmark -w I -k 100000 -c 100000 -z 32 --truncate
-python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
+# --load replaces the old manual "insert then read" two-step in one command.
 
 # Multi-bin read/write mix (80% reads; 60% read-all; 30% write-all)
-python -m benchmarks.benchmark -o I1,S128 -w RU,80,60,30 -d 10
+python -m benchmarks.benchmark -o I1,S128 -w RU,80,60,30 -d 10 --truncate --load
 
 # PSDK sync client (delegates to PAC `_blocking` per op, no per-op event loop)
-python -m benchmarks.benchmark --mode sync -w RU,50 --threads 4 -d 10
+python -m benchmarks.benchmark --mode sync -w RU,50 --threads 4 -d 10 --truncate --load
 
 # Batch commands (each operation touches 20 keys)
 python -m benchmarks.benchmark --batch-size 20 -w RU,50 -d 10
@@ -61,6 +81,7 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``--current-thread-runtime`` | (sync) per-thread PAC ``LocalClient`` on its own current-thread Tokio runtime |
 | ``--with-telemetry`` | Per-second TPS ticker, sampled latency histograms, and warmup/cooldown windowing |
 | ``--warmup`` / ``--cooldown`` | Full-second intervals dropped from the summary |
+| ``--load`` | Populate keys ``1..K`` before a read workload so reads fetch real records and never miss (mirrors a separate insert phase). No-op for ``-w I``. **Recommended for all read workloads; pair with ``--truncate``.** |
 | ``--truncate`` | Truncate the set before running |
 | ``--truncate-after`` | Truncate the set after running |
 | ``--tls-ca-file`` | CA certificate for TLS connections |
