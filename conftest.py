@@ -597,14 +597,14 @@ def wait_for_index():
 
 @pytest.fixture(scope="session")
 def wait_for_set_visible():
-    """Return an async helper that polls a set scan until ``expected`` records are visible.
+    """Return an async helper that polls a set scan until exactly ``expected`` records are visible.
 
     Point writes ack as soon as they are committed, but set scans / SI queries
     can lag a few milliseconds behind the ack as the partition map and any
     secondary-index entries catch up. Fixtures that insert N records and then
     expect a scan to see them should call this before yielding to tests so the
-    suite is robust to CI runner load. Replaces fixed ``asyncio.sleep`` waits
-    that previously guessed a wall-clock value.
+    suite is robust to CI runner load. Uses ``seen == expected`` (not ``>=``) so
+    truncate lag or leftover rows from a prior run cannot satisfy the check early.
 
     Usage::
 
@@ -622,7 +622,7 @@ def wait_for_set_visible():
             async for _ in stream:
                 seen += 1
             stream.close()
-            if seen >= expected:
+            if seen == expected:
                 # Brief settle pause — scan-count visibility precedes CDT-bin
                 # storage / filter-expression readiness by a few tens of ms
                 # on busier CI runners. Without this, AEL CDT-path filters
@@ -636,8 +636,8 @@ def wait_for_set_visible():
             last_seen = seen
             await asyncio.sleep(interval)
         raise TimeoutError(
-            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
-            f"to set scan within {timeout}s"
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
         )
 
     return _wait
@@ -645,10 +645,10 @@ def wait_for_set_visible():
 
 @pytest.fixture(scope="session")
 def sync_wait_for_set_visible():
-    """Return a sync helper that polls a set scan until ``expected`` records are visible.
+    """Return a sync helper that polls a set scan until exactly ``expected`` records are visible.
 
-    Sync counterpart of :func:`wait_for_set_visible`. See that fixture's docstring
-    for why seed fixtures call this before index waits or yielding to tests.
+    Sync counterpart of :func:`wait_for_set_visible`. Uses ``seen == expected`` so
+    truncate lag or leftover rows cannot satisfy the check early.
     """
     def _wait(
         session, ns, set_name, expected,
@@ -662,15 +662,15 @@ def sync_wait_for_set_visible():
             for _ in stream:
                 seen += 1
             stream.close()
-            if seen >= expected:
+            if seen == expected:
                 if settle > 0:
                     time.sleep(settle)
                 return
             last_seen = seen
             time.sleep(interval)
         raise TimeoutError(
-            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
-            f"to set scan within {timeout}s"
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
         )
 
     return _wait
