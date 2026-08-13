@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tests.pac_compat import requires_client_ttl_writes
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
@@ -27,6 +28,8 @@ from tests.integration.namespace import general_namespace
 
 BIN_NAME = "expirebin"
 EXPIRE_SET = "expire"
+
+pytestmark = requires_client_ttl_writes
 
 
 @pytest.fixture(scope="module")

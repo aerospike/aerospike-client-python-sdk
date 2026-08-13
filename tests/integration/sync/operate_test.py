@@ -25,6 +25,7 @@ import pytest
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_client_ttl_writes
 
 
 NS = general_namespace()
@@ -90,6 +91,7 @@ def test_delete_record_then_write_recreates(session, ds):
     assert len(read_rec.bins) == 1
 
 
+@requires_client_ttl_writes
 def test_touch_record_resets_ttl(session, ds):
     """Touch the record to reset its TTL within an atomic operate call."""
     key = ds.id("touch_ttl")

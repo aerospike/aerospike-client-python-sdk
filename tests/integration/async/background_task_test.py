@@ -17,7 +17,7 @@
 
 import pytest
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pac_compat import requires_client_ttl_writes, requires_server_compiled_ael
 import pytest_asyncio
 from aerospike_sdk import UDFLang
 from aerospike_async import Operation
@@ -159,6 +159,7 @@ async def test_background_delete(cluster):
             assert rr.is_ok
 
 
+@requires_client_ttl_writes
 async def test_background_touch(cluster):
     session = cluster.create_session()
     for i in range(1, 11):

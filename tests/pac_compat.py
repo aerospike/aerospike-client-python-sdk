@@ -70,3 +70,4 @@ def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
 
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
 requires_query_selection = pytest.mark.requires_query_selection
+requires_client_ttl_writes = pytest.mark.requires_client_ttl_writes

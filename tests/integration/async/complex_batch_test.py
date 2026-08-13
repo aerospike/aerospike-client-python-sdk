@@ -19,7 +19,7 @@ import asyncio
 
 import pytest
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pac_compat import requires_client_ttl_writes, requires_server_compiled_ael
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
@@ -304,6 +304,7 @@ class TestDeleteInChain:
 class TestPerSpecSettings:
     """Per-spec write settings: where, TTL, generation."""
 
+    @requires_client_ttl_writes
     async def test_expire_record_after_seconds(self, session, ds):
         k = ds.id("cb_ttl_1")
         await _cleanup(session, k)
@@ -381,6 +382,7 @@ class TestPerSpecSettings:
         await _cleanup(session, k)
 
 
+@requires_client_ttl_writes
 class TestChainLevelDefaults:
     """Chain-level default_where and default_expire_record_after_seconds."""
 
@@ -763,6 +765,7 @@ class TestMultiKeyBatchWrite:
         assert not (first2.as_bool() if first2 else False)
 
 
+@requires_client_ttl_writes
 class TestBatchReadTTL:
     """Verify that read_touch_ttl_percent controls TTL reset on batch reads."""
 

@@ -100,7 +100,7 @@ def resolve_sdk_client_from_funcargs(
                 return client
 
     for name, value in funcargs.items():
-        if name == "cluster" or name.startswith("cluster_"):
+        if name == "cluster" or name.startswith("cluster_") or name.endswith("_cluster"):
             client = _unwrap_sdk_client(value)
             if client is not None:
                 return client
