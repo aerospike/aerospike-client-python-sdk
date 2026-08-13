@@ -26,6 +26,7 @@ from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 async def _wait_for_set_count(
@@ -61,10 +62,12 @@ async def _wait_for_set_count(
 
 
 def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
+    sdk = cluster._sdk_client
     return QueryBuilder(
-        client=cluster._client.underlying_client,
+        client=sdk.underlying_client,
         namespace=namespace,
         set_name=None,
+        sdk_client=sdk,
     )
 
 
@@ -449,6 +452,7 @@ async def test_query_record_size(session):
     assert count == 10
 
 
+@requires_server_compiled_ael
 async def test_query_ael_set_name_matches_no_set_records(cluster):
     """Test AEL filtering for records written without a set name."""
     namespace = general_namespace()
@@ -506,7 +510,9 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
+            lambda: _namespace_query(cluster, namespace).filter_expression(
+                Exp.eq(Exp.string_bin("probe"), val(probe)),
+            ),
             {"no-set", "named-set"},
         )
 

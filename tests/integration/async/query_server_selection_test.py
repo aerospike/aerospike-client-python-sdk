@@ -342,27 +342,6 @@ class TestQueryExecute:
 
 
 class TestQuerySelectionRouting:
-    async def test_for_bin_hint_uses_legacy_execute_path(self, qsel_client):
-        where = "$.age >= 14 and $.age <= 18"
-
-        default_stream = await (
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .execute()
-        )
-        for_bin_stream = await (
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .with_hint(QueryHint(bin_name=BIN_AGE))
-            .execute()
-        )
-
-        default_ages = await collect_ages_async(default_stream)
-        for_bin_ages = await collect_ages_async(for_bin_stream)
-        assert default_ages == for_bin_ages == [14, 15, 16, 17, 18]
-
     async def test_for_index_hint_probes_and_executes(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -416,29 +395,6 @@ class TestQuerySelectionRouting:
             .execute()
         )
         assert await collect_ages_async(stream) == [14, 15, 16, 17, 18]
-
-    async def test_server_led_matches_legacy_for_bin(self, qsel_client):
-        where = "$.age > 30 and $.country == 'US'"
-
-        server_stream = await (
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .execute()
-        )
-        server_ages = await collect_ages_async(server_stream)
-
-        legacy_stream = await (
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .with_hint(QueryHint(bin_name=BIN_AGE))
-            .execute()
-        )
-        legacy_ages = await collect_ages_async(legacy_stream)
-
-        assert server_ages == legacy_ages
-        assert server_ages == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
 
     async def test_multiple_indexes_auto_select(self, qsel_client):
         pac = qsel_client.underlying_client

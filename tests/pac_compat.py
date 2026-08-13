@@ -26,7 +26,6 @@ from typing import Any, Protocol
 
 import pytest
 from aerospike_async.exceptions import InvalidRequest, ResultCode
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.feature_gates import PSDK_ENABLE_SERVER_COMPILED_AEL
 
 
@@ -58,35 +57,5 @@ def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None
         "and first active node Version.supports_server_compiled_ael "
         "(Client.supports_server_compiled_ael; homogeneous cluster assumption)."
     )
-
-
-# Integration tests: ``requires_server_compiled_ael`` markers are enforced in
-# ``tests/integration/conftest.py`` (``pytest_runtest_call`` resolves
-# ``client`` / ``cluster*`` / ``session*`` / ``session_with_*`` fixtures).
-
-
-async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
-    """Assert invalid string AEL on a dataset query is rejected by the server.
-
-    With query selection (explain→execute), ``PARAMETER_ERROR`` is raised from
-    ``execute()``. With server-compiled AEL on field **43**, ``execute()`` may
-    return a stream and the cluster rejects the filter while reading rows.
-    """
-    stream = None
-    try:
-        try:
-            stream = await execute_coro
-        except AerospikeError as exc:
-            assert exc.result_code == ResultCode.PARAMETER_ERROR
-            return
-
-        with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
-            async for _ in stream:
-                pass
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
-    finally:
-        if stream is not None:
-            stream.close()
-
 
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael

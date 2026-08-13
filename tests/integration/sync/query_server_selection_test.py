@@ -312,23 +312,6 @@ class TestSyncQueryExecute:
 
 
 class TestSyncQuerySelectionRouting:
-    def test_for_bin_hint_uses_legacy_execute_path(self, qsel_client):
-        where = "$.age >= 14 and $.age <= 18"
-        default_ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .execute(),
-        )
-        for_bin_ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .with_hint(QueryHint(bin_name=BIN_AGE))
-            .execute(),
-        )
-        assert default_ages == for_bin_ages == [14, 15, 16, 17, 18]
-
     def test_for_index_hint_probes_and_executes(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -374,24 +357,6 @@ class TestSyncQuerySelectionRouting:
             .execute(),
         )
         assert ages == [14, 15, 16, 17, 18]
-
-    def test_server_led_matches_legacy_for_bin(self, qsel_client):
-        where = "$.age > 30 and $.country == 'US'"
-        server_ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .execute(),
-        )
-        legacy_ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
-            .bins([BIN_AGE])
-            .where(where)
-            .with_hint(QueryHint(bin_name=BIN_AGE))
-            .execute(),
-        )
-        assert server_ages == legacy_ages
-        assert server_ages == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
 
     def test_multiple_indexes_auto_select(self, qsel_client):
         pac = qsel_client.underlying_client

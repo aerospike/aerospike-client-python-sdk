@@ -525,9 +525,6 @@ class TestFilteredDeletePaths:
 
 # A read AEL string is compiled on its own, so the server-compiled path cannot borrow
 # the bin type from the accompanying ``where()`` and needs it pinned (``$.v:INT``).
-_read_ael_params = pytest.mark.parametrize("read_ael", [
-    pytest.param("$.v:INT", id="server-side", marks=requires_server_compiled_ael),
-])
 
 
 class TestOperateWithFilter:
@@ -592,8 +589,8 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    @_read_ael_params
-    async def test_operate_read_with_matching_where(self, session, ds, read_ael):
+    @requires_server_compiled_ael
+    async def test_operate_read_with_matching_where(self, session, ds):
         """Keyed operate: select_from() + where() on matching filter."""
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
@@ -601,7 +598,7 @@ class TestOperateWithFilter:
 
         rs = await (
             session.upsert(k)
-            .bin("result").select_from(read_ael)
+            .bin("result").select_from("$.v:INT")
             .where("$.v == 1")
             .execute()
         )
@@ -611,8 +608,8 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    @_read_ael_params
-    async def test_operate_read_filtered_out_raises(self, session, ds, read_ael):
+    @requires_server_compiled_ael
+    async def test_operate_read_filtered_out_raises(self, session, ds):
         """Upsert + bin.select_from() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT."""
         k = ds.id("op_rd_fo")
@@ -622,7 +619,7 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                .bin("result").select_from(read_ael)
+                .bin("result").select_from("$.v:INT")
                 .where("$.v == 999")
                 .fail_on_filtered_out()
                 .execute()

@@ -26,11 +26,10 @@ from aerospike_async import FilterExpression
 from aerospike_sdk import Exp, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
-from tests.pac_compat import (
-    assert_dataset_invalid_ael_rejected,
-    requires_server_compiled_ael,
-)
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
+
+DS = DataSet.of(general_namespace(), "filter_exp_test")
 
 class TestExpAlias:
     """Test that Exp is properly aliased to FilterExpression."""
@@ -519,6 +518,8 @@ class TestExpWithAel:
     Explicit casts like .asInt() are still supported but typically not needed.
     """
 
+
+    @requires_server_compiled_ael
     async def test_where_eq_int(self, session_with_data):
         """Test AEL equality with automatic int inference."""
         stream = await (
@@ -534,6 +535,7 @@ class TestExpWithAel:
         assert len(records) == 1
         assert records[0].bins["A"] == 1
 
+    @requires_server_compiled_ael
     async def test_where_gt_int(self, session_with_data):
         """Test AEL greater-than with automatic int inference."""
         stream = await (
@@ -549,6 +551,7 @@ class TestExpWithAel:
         assert len(records) == 1
         assert records[0].bins["A"] == 2
 
+    @requires_server_compiled_ael
     async def test_where_and_int(self, session_with_data):
         """Test AEL AND expression with automatic int inference."""
         stream = await (
@@ -564,6 +567,7 @@ class TestExpWithAel:
         assert len(records) == 1
         assert records[0].bins["A"] == 1
 
+    @requires_server_compiled_ael
     async def test_where_or_int(self, session_with_data):
         """Test AEL OR expression with automatic int inference."""
         stream = await (
@@ -578,6 +582,7 @@ class TestExpWithAel:
 
         assert len(records) == 2
 
+    @requires_server_compiled_ael
     async def test_where_not_int(self, session_with_data):
         """Test AEL NOT expression with automatic int inference."""
         stream = await (
@@ -592,6 +597,7 @@ class TestExpWithAel:
 
         assert len(records) == 2
 
+    @requires_server_compiled_ael
     async def test_where_arithmetic_int(self, session_with_data):
         """Test AEL arithmetic expression with automatic int inference."""
         stream = await (
@@ -606,6 +612,7 @@ class TestExpWithAel:
 
         assert len(records) == 1
 
+    @requires_server_compiled_ael
     async def test_where_string(self, session_with_data):
         """Test AEL string comparison with automatic string inference."""
         stream = await (
@@ -621,6 +628,7 @@ class TestExpWithAel:
         assert len(records) == 1
         assert records[0].bins["C"] == "abcde"
 
+    @requires_server_compiled_ael
     async def test_where_complex_int(self, session_with_data):
         """Test complex AEL expression with automatic int inference."""
         stream = await (
@@ -635,18 +643,12 @@ class TestExpWithAel:
 
         assert len(records) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.B:FLOAT.toInt() == 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
-    async def test_where_explicit_cast_still_works(self, session_with_data, ael):
+    @requires_server_compiled_ael
+    async def test_where_explicit_cast_still_works(self, session_with_data):
         """Test that asInt()/toInt() casts a float bin to int for comparison."""
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .where(ael)
+            .where("$.B:FLOAT.toInt() == 1")
             .execute()
         )
         records = []
@@ -657,6 +659,7 @@ class TestExpWithAel:
         assert len(records) == 1
         assert records[0].bins["B"] == 1.1
 
+    @requires_server_compiled_ael
     async def test_where_float_comparison(self, session_with_data):
         """Test AEL float comparison with automatic float inference."""
         stream = await (
@@ -815,8 +818,10 @@ class TestCdtPathWithExp:
 
 
 class TestCdtPathWithAel:
-    """Test CDT path expressions using the AEL parser."""
+    """Test CDT path expressions using string AEL in where()."""
 
+
+    @requires_server_compiled_ael
     async def test_list_index_access(self, session_with_cdt_data):
         """Test AEL list index access: $.numbers.[0] == 10
         
@@ -835,6 +840,7 @@ class TestCdtPathWithAel:
         assert len(records) == 1
         assert records[0].bins["numbers"][0] == 10
 
+    @requires_server_compiled_ael
     async def test_list_negative_index(self, session_with_cdt_data):
         """Test AEL list negative index access: $.numbers.[-1] == 50
         
@@ -853,6 +859,7 @@ class TestCdtPathWithAel:
         assert len(records) == 1
         assert records[0].bins["numbers"][-1] == 50
 
+    @requires_server_compiled_ael
     async def test_map_key_access(self, session_with_cdt_data):
         """Test AEL map key access: $.info.age == 30"""
         stream = await (
@@ -868,6 +875,7 @@ class TestCdtPathWithAel:
         assert len(records) == 1
         assert records[0].bins["info"]["age"] == 30
 
+    @requires_server_compiled_ael
     async def test_map_key_string_comparison(self, session_with_cdt_data):
         """Test AEL map key access with string comparison: $.info.city == 'NYC'"""
         stream = await (
@@ -884,6 +892,7 @@ class TestCdtPathWithAel:
         for rec in records:
             assert rec.bins["info"]["city"] == "NYC"
 
+    @requires_server_compiled_ael
     async def test_list_index_greater_than(self, session_with_cdt_data):
         """Test AEL list index with greater than: $.numbers.[0] > 50
         
@@ -902,6 +911,7 @@ class TestCdtPathWithAel:
         assert len(records) == 1
         assert records[0].bins["numbers"][0] > 50
 
+    @requires_server_compiled_ael
     async def test_map_key_with_and(self, session_with_cdt_data):
         """Test AEL map key with AND: $.info.age > 25 and $.info.city == 'NYC'"""
         stream = await (
@@ -923,6 +933,8 @@ class TestCdtPathWithAel:
 class TestExistsAndCount:
     """Test exists() and count() AEL functions."""
 
+
+    @requires_server_compiled_ael
     async def test_bin_exists(self, session_with_cdt_data):
         """Test $.binName.exists() for checking bin existence."""
         # All records have "numbers" bin
@@ -938,20 +950,13 @@ class TestExistsAndCount:
 
         assert len(records) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.numbers:LIST.count() > 3",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_count_comparison(self, session_with_cdt_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_count_comparison(self, session_with_cdt_data):
         """Test $.listBin.count() for getting list size."""
         # rec1 has 5 numbers, rec2 has 5 numbers, rec3 has 3 numbers
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where(ael)
-
+            .where("$.numbers:LIST.count() > 3")
             .execute()
         )
         records = []
@@ -963,20 +968,13 @@ class TestExistsAndCount:
         for rec in records:
             assert len(rec.bins["numbers"]) > 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.numbers:LIST.count() == 3",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_count_equals(self, session_with_cdt_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_count_equals(self, session_with_cdt_data):
         """Test $.listBin.count() == value."""
         # rec3 has exactly 3 numbers
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where(ael)
-
+            .where("$.numbers:LIST.count() == 3")
             .execute()
         )
         records = []
@@ -987,20 +985,13 @@ class TestExistsAndCount:
         assert len(records) == 1
         assert len(records[0].bins["numbers"]) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.names:LIST.count() >= 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_names_list_count(self, session_with_cdt_data, ael):
+    @requires_server_compiled_ael
+    async def test_names_list_count(self, session_with_cdt_data):
         """Test count on names list."""
         # rec1: 3 names, rec2: 2 names, rec3: 1 name
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where(ael)
-
+            .where("$.names:LIST.count() >= 2")
             .execute()
         )
         records = []
@@ -1012,6 +1003,7 @@ class TestExistsAndCount:
         for rec in records:
             assert len(rec.bins["names"]) >= 2
 
+    @requires_server_compiled_ael
     async def test_exists_with_and(self, session_with_cdt_data):
         """Test exists() combined with other conditions."""
         stream = await (
@@ -1027,22 +1019,15 @@ class TestExistsAndCount:
         assert len(records) == 1
         assert records[0].bins["info"]["age"] > 30
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "($.numbers:LIST.count() + $.names:LIST.count()) > 5",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_count_with_arithmetic(self, session_with_cdt_data, ael):
+    @requires_server_compiled_ael
+    async def test_count_with_arithmetic(self, session_with_cdt_data):
 
         """Test count() in arithmetic expressions."""
         # Count of numbers + count of names > 5
         # rec1: 5+3=8, rec2: 5+2=7, rec3: 3+1=4
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where(ael)
-
+            .where("($.numbers:LIST.count() + $.names:LIST.count()) > 5")
             .execute()
         )
         records = []
@@ -1097,6 +1082,8 @@ async def session_with_list_data(shared_cluster, wait_for_set_visible):
 class TestAdvancedListAel:
     """Test advanced list AEL features."""
 
+
+    @requires_server_compiled_ael
     async def test_list_by_rank_largest(self, session_with_list_data):
         """Test $.list.[#-1] to get largest value (by rank)."""
         # [#-1] gets the largest value
@@ -1114,6 +1101,7 @@ class TestAdvancedListAel:
         assert len(records) == 1
         assert max(records[0].bins["values"]) > 100
 
+    @requires_server_compiled_ael
     async def test_list_by_rank_smallest(self, session_with_list_data):
         """Test $.list.[#0] to get smallest value (by rank)."""
         # [#0] gets the smallest value
@@ -1131,20 +1119,13 @@ class TestAdvancedListAel:
         assert len(records) == 1
         assert min(records[0].bins["values"]) < 5
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.values:LIST.[=30,].count() > 0",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_by_value(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_by_value(self, session_with_list_data):
         """Test $.list.[=value] to find items containing specific value."""
         # rec1 and rec3 have 30 in their values list
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.values:LIST.[=30,].count() > 0")
             .execute()
         )
         records = []
@@ -1156,14 +1137,8 @@ class TestAdvancedListAel:
         for rec in records:
             assert 30 in rec.bins["values"]
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.values:LIST.[1:3].count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_index_range(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_index_range(self, session_with_list_data):
 
         """Test $.list.[1:3] to get a range of indices."""
         # [1:3] gets indices 1 and 2 (count=2)
@@ -1171,8 +1146,7 @@ class TestAdvancedListAel:
         # but we can verify it parses and executes without error
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.values:LIST.[1:3].count() == 2")
             .execute()
         )
         records = []
@@ -1183,14 +1157,8 @@ class TestAdvancedListAel:
         # All records should have at least 3 elements, so [1:3] returns 2 items
         assert len(records) == 4
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.values:LIST.[2:].count() == 3",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_index_range_from_start(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_index_range_from_start(self, session_with_list_data):
 
         """Test $.list.[2:] to get from index 2 to end."""
         # All 5-element lists have 3 items from index 2
@@ -1200,8 +1168,7 @@ class TestAdvancedListAel:
         # rec4: [3, 4, 5] (3 items)
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.values:LIST.[2:].count() == 3")
             .execute()
         )
         records = []
@@ -1211,14 +1178,8 @@ class TestAdvancedListAel:
 
         assert len(records) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.values:LIST.[=10:40].count() == 3",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_value_range(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_value_range(self, session_with_list_data):
 
         """Test $.list.[=10:40] to get values in range."""
         # [=10:40] gets values >= 10 and < 40
@@ -1226,8 +1187,7 @@ class TestAdvancedListAel:
         # rec2: [5, 15, 25, 35, 45] -> [15, 25, 35] (3 items)
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.values:LIST.[=10:40].count() == 3")
             .execute()
         )
         records = []
@@ -1237,20 +1197,13 @@ class TestAdvancedListAel:
 
         assert len(records) == 2
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.values:LIST.[#0:2].count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_rank_range(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_rank_range(self, session_with_list_data):
         """Test $.list.[#0:2] to get smallest 2 items by rank."""
         # [#0:2] gets rank 0 and 1 (2 smallest items)
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.values:LIST.[#0:2].count() == 2")
             .execute()
         )
         records = []
@@ -1261,20 +1214,13 @@ class TestAdvancedListAel:
         # All records have at least 2 items
         assert len(records) == 4
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.tags:LIST.[=alpha,].count() > 0",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_value_list(self, session_with_list_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_value_list(self, session_with_list_data):
         """Test $.list.[=a,b,c] to find items matching value list."""
         # Find records where tags contain "alpha"
         stream = await (
             session_with_list_data.query(general_namespace(), "list_ael_test")
-            .where(ael)
-
+            .where("$.tags:LIST.[=alpha,].count() > 0")
             .execute()
         )
         records = []
@@ -1327,20 +1273,14 @@ async def session_with_map_data(shared_cluster, wait_for_set_visible):
 class TestAdvancedMapAel:
     """Test advanced map AEL features."""
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{=100,}.count() > 0",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_by_value(self, session_with_map_data, ael):
+
+    @requires_server_compiled_ael
+    async def test_map_by_value(self, session_with_map_data):
         """Test $.map.{=value} to find entries with specific value."""
         # Find records where scores contains value 100
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{=100,}.count() > 0")
             .execute()
         )
         records = []
@@ -1351,20 +1291,13 @@ class TestAdvancedMapAel:
         assert len(records) == 1
         assert 100 in records[0].bins["scores"].values()
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{0:2}.count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_index_range(self, session_with_map_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_index_range(self, session_with_map_data):
         """Test $.map.{0:2} to get first 2 entries by index."""
         # Get first 2 entries (count=2)
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{0:2}.count() == 2")
             .execute()
         )
         records = []
@@ -1375,14 +1308,8 @@ class TestAdvancedMapAel:
         # rec2 has only 2 entries, others have 3
         assert len(records) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{=80:95}.count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_value_range(self, session_with_map_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_value_range(self, session_with_map_data):
 
         """Test $.map.{=80:95} to get values in range."""
         # Get values >= 80 and < 95
@@ -1391,8 +1318,7 @@ class TestAdvancedMapAel:
         # rec3: heidi=88 (1 item)
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{=80:95}.count() == 2")
             .execute()
         )
         records = []
@@ -1402,20 +1328,13 @@ class TestAdvancedMapAel:
 
         assert len(records) == 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{#0:2}.count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_rank_range(self, session_with_map_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_rank_range(self, session_with_map_data):
         """Test $.map.{#0:2} to get smallest 2 values by rank."""
         # Get 2 smallest values
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{#0:2}.count() == 2")
             .execute()
         )
         records = []
@@ -1474,6 +1393,8 @@ async def session_with_nested_data(shared_cluster, wait_for_set_visible):
 class TestNestedCdtAel:
     """Tests for nested CDT operations."""
 
+
+    @requires_server_compiled_ael
     async def test_nested_list_access(self, session_with_nested_data):
         """Test $.list.[0].[1] - nested list index access."""
         # nested_list[0][1] = 20 for rec1, 10 for rec2
@@ -1490,6 +1411,7 @@ class TestNestedCdtAel:
         assert len(records) == 1
         assert records[0].bins["nested_list"][0][1] == 20
 
+    @requires_server_compiled_ael
     async def test_nested_map_access(self, session_with_nested_data):
         """Test $.map.a.aa - nested map key access."""
         # nested_map.a.aa = 100 for rec1, 50 for rec2
@@ -1506,20 +1428,13 @@ class TestNestedCdtAel:
         assert len(records) == 1
         assert records[0].bins["nested_map"]["a"]["aa"] == 100
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.nested_list.[0]:LIST.count() == 3",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_nested_list_count(self, session_with_nested_data, ael):
+    @requires_server_compiled_ael
+    async def test_nested_list_count(self, session_with_nested_data):
         """Test $.list.[0].count() - count of nested list."""
         # nested_list[0] has 3 elements for rec1, 2 for rec2
         stream = await (
             session_with_nested_data.query(general_namespace(), "nested_ael_test")
-            .where(ael)
-
+            .where("$.nested_list.[0]:LIST.count() == 3")
             .execute()
         )
         records = []
@@ -1530,19 +1445,12 @@ class TestNestedCdtAel:
         assert len(records) == 1
         assert len(records[0].bins["nested_list"][0]) == 3
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.simple_list:LIST.count() == 5",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_size_simple(self, session_with_nested_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_size_simple(self, session_with_nested_data):
         """Test $.list.count() - basic list size."""
         stream = await (
             session_with_nested_data.query(general_namespace(), "nested_ael_test")
-            .where(ael)
-
+            .where("$.simple_list:LIST.count() == 5")
             .execute()
         )
         records = []
@@ -1552,6 +1460,7 @@ class TestNestedCdtAel:
 
         assert len(records) == 1
 
+    @requires_server_compiled_ael
     async def test_nested_list_with_rank(self, session_with_nested_data):
         """Test $.list.[0].[#-1] - rank in nested list."""
         # nested_list[0] largest: 30 for rec1, 10 for rec2
@@ -1571,20 +1480,14 @@ class TestNestedCdtAel:
 class TestMapKeyOperationsAel:
     """Tests for map key range and key list operations."""
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{alice,bob}.count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_key_list(self, session_with_map_data, ael):
+
+    @requires_server_compiled_ael
+    async def test_map_key_list(self, session_with_map_data):
         """Test $.map.{a,b,c} - get entries by key list."""
         # Get entries for keys alice and bob from scores
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
         records = []
@@ -1595,20 +1498,13 @@ class TestMapKeyOperationsAel:
         # Only rec1 has both alice and bob
         assert len(records) == 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{@alice:dave}.count() >= 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_key_range(self, session_with_map_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_key_range(self, session_with_map_data):
         """Test $.map.{@a:b} - map key range (server AEL; bare {a:b} is index-only)."""
         # Get entries with keys from 'a' to 'd' (alice, bob, charlie)
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{@alice:dave}.count() >= 2")
             .execute()
         )
         records = []
@@ -1661,22 +1557,16 @@ async def session_with_relative_range_data(shared_cluster, wait_for_set_visible)
 class TestRelativeRangeAel:
     """Tests for relative rank/index range operations."""
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.numbers:LIST.[#0:2~5].count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_rank_range_relative(self, session_with_relative_range_data, ael):
+
+    @requires_server_compiled_ael
+    async def test_list_rank_range_relative(self, session_with_relative_range_data):
 
         """Test $.list.[#rank:end~value] - list value-relative rank range."""
         # Get items with rank 0 to 2 (count=2) relative to value 5
         # For rec1 [0, 4, 5, 9, 11, 15]: value 5 is at index 2, rank 0-2 relative gets [5,9]
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.numbers:LIST.[#0:2~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1687,20 +1577,13 @@ class TestRelativeRangeAel:
         # Just verify it executes without error - relative rank semantics are complex
         assert isinstance(records, list)
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.numbers:LIST.[#0:~5].count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_rank_range_relative_no_count(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_rank_range_relative_no_count(self, session_with_relative_range_data):
         """Test $.list.[#rank:~value] - list value-relative rank range without end count."""
         # Get all items from rank 0 relative to value 5
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.numbers:LIST.[#0:~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1711,20 +1594,13 @@ class TestRelativeRangeAel:
         # Just verify it executes without error
         assert isinstance(records, list)
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.numbers:LIST.[!#0:2~5].count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_list_rank_range_relative_inverted(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_list_rank_range_relative_inverted(self, session_with_relative_range_data):
         """Test $.list.[!#rank:end~value] - inverted list value-relative rank range."""
         # Get items NOT in rank range
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.numbers:LIST.[!#0:2~5].count() >= 1")
             .execute()
         )
         records = []
@@ -1735,20 +1611,13 @@ class TestRelativeRangeAel:
         # Just verify it executes without error
         assert isinstance(records, list)
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{#-1:1~80}.count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_rank_range_relative(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_rank_range_relative(self, session_with_relative_range_data):
         """Test $.map.{#rank:end~value} - map value-relative rank range."""
         # Get map entries with rank relative to value 80
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{#-1:1~80}.count() >= 1")
             .execute()
         )
         records = []
@@ -1758,19 +1627,12 @@ class TestRelativeRangeAel:
 
         assert len(records) >= 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{#-2:~80}.count() >= 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_rank_range_relative_no_count(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_rank_range_relative_no_count(self, session_with_relative_range_data):
         """Test $.map.{#rank:~value} - map value-relative rank range without end count."""
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{#-2:~80}.count() >= 2")
             .execute()
         )
         records = []
@@ -1780,19 +1642,12 @@ class TestRelativeRangeAel:
 
         assert len(records) >= 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{!#-1:1~80}.count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_rank_range_relative_inverted(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_rank_range_relative_inverted(self, session_with_relative_range_data):
         """Test $.map.{!#rank:end~value} - inverted map value-relative rank range."""
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{!#-1:1~80}.count() >= 1")
             .execute()
         )
         records = []
@@ -1802,20 +1657,13 @@ class TestRelativeRangeAel:
 
         assert len(records) >= 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{0:1~bob}.count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_index_range_relative(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_index_range_relative(self, session_with_relative_range_data):
         """Test $.map.{start:end~key} - map key-relative index range."""
         # Get map entries at index 0 to 1 relative to key "bob"
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{0:1~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1825,19 +1673,12 @@ class TestRelativeRangeAel:
 
         assert len(records) >= 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{0:~bob}.count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_index_range_relative_no_count(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_index_range_relative_no_count(self, session_with_relative_range_data):
         """Test $.map.{start:~key} - map key-relative index range without end count."""
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{0:~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1847,19 +1688,12 @@ class TestRelativeRangeAel:
 
         assert len(records) >= 1
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{!0:1~bob}.count() >= 1",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_index_range_relative_inverted(self, session_with_relative_range_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_index_range_relative_inverted(self, session_with_relative_range_data):
         """Test $.map.{!start:end~key} - inverted map key-relative index range."""
         stream = await (
             session_with_relative_range_data.query(general_namespace(), "rel_range_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{!0:1~bob}.count() >= 1")
             .execute()
         )
         records = []
@@ -1916,6 +1750,7 @@ class TestAdvancedExpFilters:
     fail_on_filtered_out().
     """
 
+
     async def _assert_filtered_out(self, session, key, ael):
         """Query with AEL filter that should NOT match, expect FILTERED_OUT."""
         from aerospike_sdk.exceptions import ResultCode
@@ -1943,81 +1778,64 @@ class TestAdvancedExpFilters:
         rr = await rs.first_or_raise()
         assert rr.record.bins[bin_name] == expected_value
 
+    @requires_server_compiled_ael
     async def test_filter_arshift(self, session_with_filter_exp):
         """Arithmetic right shift: arshift(-2, 62) == -1 for key B."""
         key = DS.id("B")
         await self._assert_filtered_out(session_with_filter_exp, key, "not (($.E >> 62) == -1)")
         await self._assert_matches(session_with_filter_exp, key, "($.E >> 62) == -1", "E", -2)
 
+    @requires_server_compiled_ael
     async def test_filter_bit_count(self, session_with_filter_exp):
         """Bit count (popcount): countOneBits(1) == 1 for key A."""
         key = DS.id("A")
         await self._assert_filtered_out(session_with_filter_exp, key, "not (countOneBits($.A) == 1)")
         await self._assert_matches(session_with_filter_exp, key, "countOneBits($.A) == 1", "A", 1)
 
-    @pytest.mark.parametrize("expr", [
-        pytest.param(
-            "findBitLeft(x: $.A, value: true) == 63",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
-    async def test_filter_lscan(self, session_with_filter_exp, expr):
+    @requires_server_compiled_ael
+    async def test_filter_lscan(self, session_with_filter_exp):
         """Left scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
-        await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
+        await self._assert_filtered_out(session_with_filter_exp, key, f"not (findBitLeft(x: $.A, value: true) == 63)")
+        await self._assert_matches(session_with_filter_exp, key, "findBitLeft(x: $.A, value: true) == 63", "A", 1)
 
-    @pytest.mark.parametrize("expr", [
-        pytest.param(
-            "findBitRight(x: $.A, value: true) == 63",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
-    async def test_filter_rscan(self, session_with_filter_exp, expr):
+    @requires_server_compiled_ael
+    async def test_filter_rscan(self, session_with_filter_exp):
         """Right scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
-        await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
+        await self._assert_filtered_out(session_with_filter_exp, key, f"not (findBitRight(x: $.A, value: true) == 63)")
+        await self._assert_matches(session_with_filter_exp, key, "findBitRight(x: $.A, value: true) == 63", "A", 1)
 
+    @requires_server_compiled_ael
     async def test_filter_min(self, session_with_filter_exp):
         """Min of bins: min(1, 1, -1) == -1 for key A."""
         key = DS.id("A")
         await self._assert_filtered_out(session_with_filter_exp, key, "not (min($.A, $.D, $.E) == -1)")
         await self._assert_matches(session_with_filter_exp, key, "min($.A, $.D, $.E) == -1", "A", 1)
 
+    @requires_server_compiled_ael
     async def test_filter_max(self, session_with_filter_exp):
         """Max of bins: max(1, 1, -1) == 1 for key A."""
         key = DS.id("A")
         await self._assert_filtered_out(session_with_filter_exp, key, "not (max($.A, $.D, $.E) == 1)")
         await self._assert_matches(session_with_filter_exp, key, "max($.A, $.D, $.E) == 1", "A", 1)
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
+    @requires_server_compiled_ael
+    async def test_filter_cond(self, session_with_filter_exp):
+        """Conditional ``when(...) == 2`` for key A (A==1 ⇒ D−E==2); server-compiled AEL."""
+        key = DS.id("A")
+        ael = (
             "(when($.A:INT == 0 => $.D:INT + $.E:INT, "
             "$.A:INT == 1 => $.D:INT - $.E:INT, "
             "$.A:INT == 2 => $.D:INT * $.E:INT, "
-            "default => -1)) == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
-    async def test_filter_cond(self, session_with_filter_exp, ael):
-        """Conditional ``when(...) == 2`` for key A (A==1 ⇒ D−E==2); client vs typed server AEL."""
-        key = DS.id("A")
+            "default => -1)) == 2"
+        )
         await self._assert_filtered_out(session_with_filter_exp, key, f"not ({ael})")
         await self._assert_matches(session_with_filter_exp, key, ael, "A", 1)
 
 
 class TestInExpression:
-    """Test the IN operator: expression in expression → boolean.
-
-    Uses the session_with_cdt_data fixture which has:
-      rec1: names=["alice","bob","charlie"], numbers=[10,20,30,40,50]
-      rec2: names=["dave","eve"], numbers=[5,15,25,35,45]
-      rec3: names=["frank"], numbers=[100,200,300]
-    """
+    """Test the IN operator using programmatic ``Exp`` builders."""
 
     async def test_string_in_list_bin_with_exp(self, session_with_cdt_data):
         """Filter: "bob" in $.names — should match rec1 only."""
@@ -2040,6 +1858,18 @@ class TestInExpression:
         assert len(records) == 1
         assert "bob" in records[0].bins["names"]
 
+
+class TestInExpressionAel:
+    """Test the IN operator via string AEL in ``where()``.
+
+    Uses the session_with_cdt_data fixture which has:
+      rec1: names=["alice","bob","charlie"], numbers=[10,20,30,40,50]
+      rec2: names=["dave","eve"], numbers=[5,15,25,35,45]
+      rec3: names=["frank"], numbers=[100,200,300]
+    """
+
+
+    @requires_server_compiled_ael
     async def test_string_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: "bob" in $.names — should match rec1 only."""
         stream = await (
@@ -2054,6 +1884,7 @@ class TestInExpression:
         assert len(records) == 1
         assert "bob" in records[0].bins["names"]
 
+    @requires_server_compiled_ael
     async def test_int_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: 20 in $.numbers — matches rec1 only (numbers=[10,20,30,40,50])."""
         stream = await (
@@ -2068,6 +1899,7 @@ class TestInExpression:
         assert len(records) == 1
         assert 20 in records[0].bins["numbers"]
 
+    @requires_server_compiled_ael
     async def test_in_combined_with_and(self, session_with_cdt_data):
         """Filter: "alice" in $.names and $.info.age == 30 — rec1 only."""
         stream = await (
@@ -2083,6 +1915,7 @@ class TestInExpression:
         assert records[0].bins["info"]["name"] == "Alice"
         assert records[0].bins["info"]["age"] == 30
 
+    @requires_server_compiled_ael
     async def test_in_no_match(self, session_with_cdt_data):
         """Filter: "nonexistent" in $.names — should match nothing."""
         stream = await (
@@ -2207,6 +2040,8 @@ async def cluster_ael_blob(aerospike_host, make_cluster_definition):
 class TestAelMapBlobIntegrationQueries:
     """Extra map and blob AEL filters exercised against a live server."""
 
+
+    @requires_server_compiled_ael
     async def test_map_ael_numeric_field_filters_tier(self, session_with_map_data):
         """Map value filter on ``level`` (``type`` is reserved in the AEL grammar)."""
         stream = await (
@@ -2222,19 +2057,12 @@ class TestAelMapBlobIntegrationQueries:
         for rec in records:
             assert rec.bins["metadata"]["level"] in (2, 3)
 
-    @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "$.scores:MAP.{alice,bob}.count() == 2",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-        ])
-    async def test_map_ael_key_list_count_on_server(self, session_with_map_data, ael):
+    @requires_server_compiled_ael
+    async def test_map_ael_key_list_count_on_server(self, session_with_map_data):
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
             session_with_map_data.query(general_namespace(), "map_ael_test")
-            .where(ael)
-
+            .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
         records = []
@@ -2245,23 +2073,13 @@ class TestAelMapBlobIntegrationQueries:
         assert "alice" in records[0].bins["scores"]
         assert "bob" in records[0].bins["scores"]
 
-    @pytest.mark.parametrize(
-        "make_expr",
-        [
-            pytest.param(
-                _hex_blob_expr,
-                id="server-side-hex",
-                marks=requires_server_compiled_ael,
-            ),
-            ],
-    )
+    @requires_server_compiled_ael
     async def test_blob_bin_ael_equality(
         self,
         cluster_ael_blob,
         wait_for_set_visible,
-        make_expr,
     ):
-        """BLOB bin filter — hex literal (server-side) or base64 literal (client-side)."""
+        """BLOB bin filter — hex literal."""
         session = cluster_ael_blob.create_session()
         k = DataSet.of(general_namespace(), "ael_blob_srv_it").id("blob_row")
         payload = bytes([1, 2, 254])
@@ -2276,7 +2094,7 @@ class TestAelMapBlobIntegrationQueries:
 
         stream = await (
             session.query(general_namespace(), "ael_blob_srv_it")
-            .where(make_expr(payload))
+            .where(_hex_blob_expr(payload))
             .execute()
         )
         rows = [r.record async for r in stream]

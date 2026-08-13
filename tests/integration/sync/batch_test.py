@@ -149,15 +149,9 @@ class TestSyncBatchStream:
             except Exception:
                 pass
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     def test_stream_mixed_ops_yields_all(
-        self, cluster: Cluster, users: DataSet, track_key, sum_ael,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete dispatch correctly via
         ``batch_stream_blocking``; results yielded one-by-one with idx
@@ -179,8 +173,8 @@ class TestSyncBatchStream:
 
         stream = (
             session.upsert(keys[0]).bin("A").set_to(99)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
-            .query(keys[2]).bin("sum").select_from(sum_ael)
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[2]).bin("sum").select_from("$.A:INT + $.B:INT")
             .delete(keys[3])
             .stream()
         )
@@ -215,15 +209,9 @@ class TestSyncBatchStream:
         empty = list(session.query(keys[3]).execute())
         assert empty == []
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     def test_stream_read_only_ops_dispatch_as_reads(
-        self, cluster: Cluster, users: DataSet, track_key, sum_ael,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Read-only op lists (AEL `select_from` under the read verb) land
         as BatchReadOp on the wire, even in a lazy write-batch stream.
@@ -235,8 +223,8 @@ class TestSyncBatchStream:
             session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = (
-            session.query(keys[0]).bin("sum").select_from(sum_ael)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
+            session.query(keys[0]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
             .stream()
         )
         results = list(stream)
