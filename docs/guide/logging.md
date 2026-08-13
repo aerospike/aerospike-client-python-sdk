@@ -5,7 +5,7 @@ Python logger name:
 
 | Logger name | Layer | Description |
 |-------------|-------|-------------|
-| `aerospike_sdk` | Aerospike Python SDK | Command summaries, queries, lifecycle, index monitoring |
+| `aerospike_sdk` | Aerospike Python SDK | Command summaries, queries, lifecycle |
 | `aerospike_async` | Python Async Client (PAC) | Client init, connection lifecycle |
 | `aerospike_core` | Rust core | Cluster tend, connection pooling, wire protocol |
 
@@ -42,7 +42,6 @@ enabling everything. The names are published as constants on
 | `aerospike_sdk.pool` | `AsyncPool` start / stop, per-client connect issues | INFO start/stop, WARNING errors |
 | `aerospike_sdk.info` | Info-protocol helpers (namespace details, index metadata) | DEBUG (failures) |
 | `aerospike_sdk.background` | Background write / UDF task submission | DEBUG |
-| `aerospike_sdk.index_monitor` | Secondary-index cache refresh summaries | DEBUG |
 | `aerospike_sdk.record_stream` | Chunked stream fetches, close diagnostics | DEBUG |
 
 For example, to see per-operation command summaries only:

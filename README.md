@@ -197,7 +197,7 @@ async def main():
         )
 ```
 
-Tune `loop_count` based on your workload — `os.cpu_count()` is the default. Cluster-wide index metadata is shared via a single `IndexesMonitor` across the pool, so `sindex-list` load doesn't scale with `loop_count`.
+Tune `loop_count` based on your workload — `os.cpu_count()` is the default.
 
 For the full decision guide, the trade-offs, and measured TPS/latency across all modes, see [`docs/guide/performance.md`](docs/guide/performance.md). For the raw bench data and methodology, see [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md).
 
@@ -245,8 +245,7 @@ Persist it in `~/.config/pip/pip.conf` under `[global] extra-index-url`, or put
 the credentials in `~/.netrc` for `artifact.aerospike.io`, if you'd rather not
 set it per shell.
 
-With that in place, installing needs no repository checkout, no Java, and no
-ANTLR generation step — the parser ships inside the package:
+With that in place, installing needs no repository checkout:
 
 ```bash
 pip index versions aerospike-sdk --pre        # what's available
@@ -286,8 +285,7 @@ export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
 ```
 
-Nothing here needs Java, Rust, or `make generate-ael`: the tools are plain
-scripts, and the generated parser arrives inside the installed package.
+Nothing here needs Rust: the tools are plain scripts against the installed package.
 
 Connection settings come from the environment. `benchmarks/_env.py` loads
 `aerospike.env` if you made one and otherwise the committed
@@ -308,10 +306,9 @@ recorded in that build's JFrog build-info.
 
 Use a sparse checkout rather than a full clone. `benchmarks/benchmark.py`
 prepends its parent directory to `sys.path`, so in a full checkout the
-repository's own `aerospike_sdk/` shadows the installed package — at best the
-run fails because the generated parser is absent from a fresh clone, and at
-worst it silently measures your working tree instead of the build you pinned.
-With only `benchmarks/` checked out there is nothing to shadow.
+repository's own `aerospike_sdk/` shadows the installed package — at worst it
+silently measures your working tree instead of the build you pinned. With only
+`benchmarks/` checked out there is nothing to shadow.
 
 `python -m benchmarks.compare` is a maintainer tool rather than a tester one: it
 drives several client repositories side by side and expects a pyenv environment
@@ -340,16 +337,12 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
   free-threaded build starts at 3.14t.)
 - **Aerospike server** — required for integration tests
 - **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
-- **Java 11+** — required for the one-time AEL parser build (`make generate-ael`)
 
 ### Setting up a dev environment
 
 ```bash
-make generate-ael          # one-time: build the ANTLR AEL parser (requires Java 11+)
 pip install -e ".[dev]"    # install with dev extras
 ```
-
-`make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
 On the `dev` branch, the pinned `aerospike-async` (PAC) version is a
 pre-release build published to Aerospike's internal package index rather

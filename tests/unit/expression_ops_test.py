@@ -69,11 +69,21 @@ def _mock_server_compiled_ael_string(monkeypatch):
 class _OpCollector:
     """Minimal parent that satisfies the add_operation(op) protocol."""
 
+    _supports_server_compiled_ael = True
+
     def __init__(self):
         self.operations: list = []
 
     def add_operation(self, op):
         self.operations.append(op)
+
+    def _filter_expression_from_ael(self, ael: str):
+        from aerospike_sdk.server_filter import filter_expression_from_ael_string
+
+        return filter_expression_from_ael_string(
+            ael,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
+        )
 
 
 # ===================================================================
@@ -126,7 +136,7 @@ class TestBuildWriteFlags:
 
 class TestQueryBinBuilderSelectFrom:
 
-    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
     def test_select_from_string(self, mock_filter):
         mock_filter.return_value = MagicMock()
         collector = _OpCollector()
@@ -142,7 +152,7 @@ class TestQueryBinBuilderSelectFrom:
         qbb.select_from(expr)
         assert len(collector.operations) == 1
 
-    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
     def test_select_from_ignore_eval_failure(self, mock_filter):
         mock_filter.return_value = MagicMock()
         collector = _OpCollector()
@@ -150,7 +160,7 @@ class TestQueryBinBuilderSelectFrom:
         qbb.select_from("$.A + 4", ignore_eval_failure=True)
         assert len(collector.operations) == 1
 
-    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
     def test_multiple_select_from(self, mock_filter):
         mock_filter.return_value = MagicMock()
         collector = _OpCollector()

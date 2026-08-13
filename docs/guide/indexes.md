@@ -1,7 +1,8 @@
 # Secondary Indexes
 
-Secondary indexes enable efficient queries on bin values. The SDK
-provides both manual index management and automatic index discovery.
+Secondary indexes enable efficient queries on bin values. Create and manage
+indexes explicitly; the server selects among them when you run dataset queries
+with AEL `.where()` on clusters that support query selection (field 44).
 
 ## Creating Indexes
 
@@ -108,101 +109,11 @@ for idx in await session.list_indexes():
     print(idx["name"], idx["namespace"], idx["bin"])
 ```
 
-## Auto-Index Discovery
+## Query hints
 
-The [`IndexesMonitor`](../api/indexes-monitor.md) runs as a daemon thread,
-periodically fetching secondary index metadata from the cluster via PAC's
-blocking info APIs. It works identically on the async and synchronous surfaces — no event
-loop required.
-
-The monitor **starts lazily**: the daemon thread spins up the first time an
-AEL `.where()` query needs cached secondary-index metadata. Code paths that
-never use `.where()` (point reads/writes, batches, dataset scans without
-AEL filters) pay zero monitor overhead.
-
-When you use `.where()` with an AEL expression, the client automatically
-generates an optimal secondary index `Filter` if a matching index exists.
-This is transparent — no code changes needed:
-
-```python
-# If "users_age_idx" exists on the "age" bin, this query
-# automatically uses it as a secondary index filter
-stream = await (
-    session.query(users)
-    .where("$.age > 25")
-    .execute()
-)
-```
-
-### Configuration
-
-The refresh interval defaults to 5 seconds:
-
-```python
-cluster = await (
-    ClusterDefinition("localhost", 3000)
-    .with_index_refresh_interval(2.0)
-    .connect()
-)
-```
-
-### Explicit Override
-
-Use [`with_index_context()`](../api/query.md) to explicitly provide index
-metadata, bypassing auto-discovery:
-
-```python
-from aerospike_sdk import IndexContext, Index, IndexTypeEnum
-
-ctx = IndexContext.of("test", [
-    Index(
-        bin="age",
-        index_type=IndexTypeEnum.INTEGER,
-        namespace="test",
-        name="age_idx",
-    ),
-])
-
-stream = await (
-    session.query(users)
-    .with_index_context(ctx)
-    .where("$.age > 25")
-    .execute()
-)
-```
-
-### Indexes on Sets
-
-Secondary indexes may be defined on a specific Aerospike set or be cross-set
-(no set name). When auto-discovery is on, the SDK scopes filter selection to
-the query's set automatically — an index on set `orders` is never used to
-plan a filter for a query on set `customers`. Cross-set indexes (those
-defined without a set name) remain eligible for any query.
-
-To configure this manually, use [`IndexContext.with_query_set()`](../api/ael-filter-gen.md):
-
-```python
-from aerospike_sdk import IndexContext, Index, IndexTypeEnum
-
-ctx = IndexContext.with_query_set(
-    "test",
-    "customers",  # query set
-    [
-        Index(bin="age", index_type=IndexTypeEnum.INTEGER,
-              namespace="test", set_name="customers"),
-        Index(bin="total", index_type=IndexTypeEnum.INTEGER,
-              namespace="test", set_name="orders"),  # excluded
-    ],
-)
-```
-
-The `total` index is on `orders` and won't be considered for queries on
-`customers`. Only the `age` index is selectable. Pass `query_set=None` (or
-omit it via `IndexContext.of`) to disable set-based filtering entirely.
-
-## Query Hints
-
-Influence which index the server uses with [`QueryHint`](../api/query-hint.md):
+On clusters with **query selection** (field 44), the server chooses which index
+to use when you pass an AEL string to `.where()`. Influence that choice with
+[`QueryHint`](../api/query-hint.md):
 
 ```python
 from aerospike_sdk import QueryHint
@@ -223,3 +134,6 @@ stream = await (
     .execute()
 )
 ```
+
+See the [AEL guide](expression-ael.md) for string filter syntax and capability
+checks (`cluster.supports_ael()`, `cluster.supports_query_selection()`).
