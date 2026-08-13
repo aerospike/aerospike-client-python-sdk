@@ -26,7 +26,6 @@ are runtime-bound and live on the leaves: async terminals in
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field

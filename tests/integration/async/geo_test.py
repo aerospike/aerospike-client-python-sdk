@@ -25,7 +25,6 @@ import asyncio
 
 import pytest
 
-from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
 from tests.integration.namespace import general_namespace

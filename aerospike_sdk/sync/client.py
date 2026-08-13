@@ -192,28 +192,6 @@ class SyncClient:
             return
         self._apply_routing_capabilities_from_versions(self._cluster_versions_blocking())
 
-    @property
-    def supports_query_selection(self) -> bool:
-        """``True`` when all cluster nodes support field ``44`` query selection.
-
-        Populated at :meth:`connect` from PAC ``Version.supports_query_selection()``
-        on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_query_selection)
-
-    @property
-    def supports_server_compiled_ael(self) -> bool:
-        """``True`` when server-compiled AEL filters are usable on this connection.
-
-        Populated at :meth:`connect` from PAC ``Version.supports_server_compiled_ael()``
-        on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_server_compiled_ael)
-
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = SyncSdkConfigMonitor(

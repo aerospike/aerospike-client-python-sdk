@@ -1796,14 +1796,14 @@ class TestAdvancedExpFilters:
     async def test_filter_lscan(self, session_with_filter_exp):
         """Left scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        await self._assert_filtered_out(session_with_filter_exp, key, f"not (findBitLeft(x: $.A, value: true) == 63)")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (findBitLeft(x: $.A, value: true) == 63)")
         await self._assert_matches(session_with_filter_exp, key, "findBitLeft(x: $.A, value: true) == 63", "A", 1)
 
     @requires_server_compiled_ael
     async def test_filter_rscan(self, session_with_filter_exp):
         """Right scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        await self._assert_filtered_out(session_with_filter_exp, key, f"not (findBitRight(x: $.A, value: true) == 63)")
+        await self._assert_filtered_out(session_with_filter_exp, key, "not (findBitRight(x: $.A, value: true) == 63)")
         await self._assert_matches(session_with_filter_exp, key, "findBitRight(x: $.A, value: true) == 63", "A", 1)
 
     @requires_server_compiled_ael

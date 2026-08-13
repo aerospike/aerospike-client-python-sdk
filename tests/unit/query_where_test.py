@@ -20,7 +20,6 @@ Tests the two forms: where(str) and where(Exp).
 
 from unittest.mock import patch
 
-import pytest
 
 from aerospike_sdk import Exp
 from aerospike_sdk.aio.operations.query import QueryBuilder
