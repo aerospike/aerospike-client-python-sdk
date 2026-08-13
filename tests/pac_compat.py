@@ -27,8 +27,6 @@ from typing import Protocol
 
 import pytest
 
-from aerospike_sdk import capabilities
-
 
 class SupportsPacCapabilities(Protocol):
     """Connected SDK client that reports PAC/cluster capability flags."""
@@ -49,10 +47,10 @@ SupportsServerCompiledAel = SupportsPacCapabilities
 def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
-    Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`:
-    every node's ``Version`` must report server-compiled AEL support (>= 8.1.3).
+    Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael` (the same
+    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if capabilities.cached_client_flag(client, "supports_server_compiled_ael"):
+    if client.supports_server_compiled_ael:
         return
     pytest.skip(
         "Requires server-compiled AEL: Version.supports_server_compiled_ael on all nodes "
@@ -63,10 +61,10 @@ def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
 def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
     """Skip when field ``44`` query selection is not available for this cluster.
 
-    Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_query_selection`:
-    every node's ``Version`` must report query-selection support (>= 8.1.3).
+    Reads :attr:`SupportsPacCapabilities.supports_query_selection` (the same
+    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if capabilities.cached_client_flag(client, "supports_query_selection"):
+    if client.supports_query_selection:
         return
     pytest.skip(
         "Requires query selection: Version.supports_query_selection on all nodes "

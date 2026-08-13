@@ -23,7 +23,7 @@ Covers:
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from aerospike_sdk import Key
 from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
@@ -52,6 +52,10 @@ def _mock_server_compiled_ael_string(monkeypatch):
     def _fake(ael, *, supports_server_compiled_ael=True):
         return FilterExpression.from_server_compiled_ael(ael)
 
+    monkeypatch.setattr(
+        "aerospike_sdk.server_filter.filter_expression_from_ael_string",
+        _fake,
+    )
     monkeypatch.setattr(
         "aerospike_sdk.operations_shared.filter_expression_from_ael_string",
         _fake,
@@ -136,13 +140,22 @@ class TestBuildWriteFlags:
 
 class TestQueryBinBuilderSelectFrom:
 
-    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
+    @staticmethod
+    def _compile_ael(ael: str, *, supports_server_compiled_ael=True):
+        assert supports_server_compiled_ael
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    @patch("aerospike_sdk.server_filter.filter_expression_from_ael_string")
     def test_select_from_string(self, mock_filter):
-        mock_filter.return_value = MagicMock()
+        mock_filter.side_effect = self._compile_ael
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         result = qbb.select_from("$.A + 4")
         assert result is collector
+        mock_filter.assert_called_once_with(
+            "$.A + 4",
+            supports_server_compiled_ael=True,
+        )
         assert len(collector.operations) == 1
 
     def test_select_from_filter_expression(self):
@@ -152,20 +165,30 @@ class TestQueryBinBuilderSelectFrom:
         qbb.select_from(expr)
         assert len(collector.operations) == 1
 
-    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
+    @patch("aerospike_sdk.server_filter.filter_expression_from_ael_string")
     def test_select_from_ignore_eval_failure(self, mock_filter):
-        mock_filter.return_value = MagicMock()
+        mock_filter.side_effect = self._compile_ael
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         qbb.select_from("$.A + 4", ignore_eval_failure=True)
+        mock_filter.assert_called_once_with(
+            "$.A + 4",
+            supports_server_compiled_ael=True,
+        )
         assert len(collector.operations) == 1
 
-    @patch("aerospike_sdk.query_shared.filter_expression_from_ael_string")
+    @patch("aerospike_sdk.server_filter.filter_expression_from_ael_string")
     def test_multiple_select_from(self, mock_filter):
-        mock_filter.return_value = MagicMock()
+        mock_filter.side_effect = self._compile_ael
         collector = _OpCollector()
         QueryBinBuilder(collector, "r1").select_from("$.A == 0 and $.D == 2")
         QueryBinBuilder(collector, "r2").select_from("$.A == 0 or $.D == 2")
+        mock_filter.assert_has_calls(
+            [
+                call("$.A == 0 and $.D == 2", supports_server_compiled_ael=True),
+                call("$.A == 0 or $.D == 2", supports_server_compiled_ael=True),
+            ],
+        )
         assert len(collector.operations) == 2
 
 

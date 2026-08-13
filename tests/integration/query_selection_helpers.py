@@ -20,12 +20,10 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING, Any, Optional
 
+from aerospike_async import QuerySelection
 
 if TYPE_CHECKING:
-    from aerospike_async import QuerySelection as QuerySelectionType
     from aerospike_sdk import QueryHint
-else:
-    QuerySelectionType = Any
 
 
 class QuerySelectionClientFacade:
