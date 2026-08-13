@@ -636,11 +636,23 @@ class TestExpWithAel:
 
         assert len(records) == 3
 
-    async def test_where_explicit_cast_still_works(self, session_with_data):
-        """Test that asInt() casts a float bin to int for comparison."""
+    @pytest.mark.parametrize("ael", [
+        pytest.param(
+            "$.B.asInt() == 1",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "$.B:FLOAT.toInt() == 1",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_where_explicit_cast_still_works(self, session_with_data, ael):
+        """Test that asInt()/toInt() casts a float bin to int for comparison."""
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .where("$.B.asInt() == 1")
+            .where(ael)
             .execute()
         )
         records = []
@@ -2153,18 +2165,41 @@ class TestAdvancedExpFilters:
         await self._assert_filtered_out(session_with_filter_exp, key, "not (countOneBits($.A) == 1)")
         await self._assert_matches(session_with_filter_exp, key, "countOneBits($.A) == 1", "A", 1)
 
-    async def test_filter_lscan(self, session_with_filter_exp):
-        """Left scan: findBitLeft($.A, true) == 63 for key A."""
+    @pytest.mark.parametrize("expr", [
+        pytest.param(
+            "findBitLeft($.A, true) == 63",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "findBitLeft(x: $.A, value: true) == 63",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_filter_lscan(self, session_with_filter_exp, expr):
+        """Left scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        expr = "findBitLeft($.A, true) == 63"
         await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
         await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
 
-    async def test_filter_rscan(self, session_with_filter_exp):
-        """Right scan: findBitRight(1, true) == 63 for key A."""
+    @pytest.mark.parametrize("expr", [
+        pytest.param(
+            "findBitRight($.A, true) == 63",
+            id="client-side",
+            marks=requires_client_side_ael,
+        ),
+        pytest.param(
+            "findBitRight(x: $.A, value: true) == 63",
+            id="server-side",
+            marks=requires_server_compiled_ael,
+        ),
+    ])
+    async def test_filter_rscan(self, session_with_filter_exp, expr):
+        """Right scan of int bin A (1): the set bit is at index 63, counted from the MSB."""
         key = DS.id("A")
-        await self._assert_filtered_out(session_with_filter_exp, key, "not (findBitRight($.A, true) == 63)")
-        await self._assert_matches(session_with_filter_exp, key, "findBitRight($.A, true) == 63", "A", 1)
+        await self._assert_filtered_out(session_with_filter_exp, key, f"not ({expr})")
+        await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
 
     async def test_filter_min(self, session_with_filter_exp):
         """Min of bins: min(1, 1, -1) == -1 for key A."""

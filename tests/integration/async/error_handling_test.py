@@ -26,12 +26,16 @@ Covers:
 
 import pytest
 
+from aerospike_sdk import ErrorDetailVerbosity
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
+from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
 
 
 @pytest.fixture
@@ -519,6 +523,14 @@ class TestFilteredDeletePaths:
 # Operate (write with where) / fail_on_filtered_out
 # ---------------------------------------------------------------------------
 
+# A read AEL string is compiled on its own, so the server-compiled path cannot borrow
+# the bin type from the accompanying ``where()`` and needs it pinned (``$.v:INT``).
+_read_ael_params = pytest.mark.parametrize("read_ael", [
+    pytest.param("$.v", id="client-side", marks=requires_client_side_ael),
+    pytest.param("$.v:INT", id="server-side", marks=requires_server_compiled_ael),
+])
+
+
 class TestOperateWithFilter:
 
     async def test_operate_write_with_matching_where(self, session, ds):
@@ -581,24 +593,27 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    async def test_operate_read_with_matching_where(self, session, ds):
-        """Query + bin.select_from() with matching where() returns result."""
+    @_read_ael_params
+    async def test_operate_read_with_matching_where(self, session, ds, read_ael):
+        """Keyed operate: select_from() + where() on matching filter."""
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
         await session.upsert(k).put({"v": 1}).execute()
 
         rs = await (
             session.upsert(k)
-            .bin("result").select_from("$.v")
+            .bin("result").select_from(read_ael)
             .where("$.v == 1")
             .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
+        assert rr.record.bins["result"] == 1
 
         await _cleanup(session, k)
 
-    async def test_operate_read_filtered_out_raises(self, session, ds):
+    @_read_ael_params
+    async def test_operate_read_filtered_out_raises(self, session, ds, read_ael):
         """Upsert + bin.select_from() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT."""
         k = ds.id("op_rd_fo")
@@ -608,12 +623,49 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                .bin("result").select_from("$.v")
+                .bin("result").select_from(read_ael)
                 .where("$.v == 999")
                 .fail_on_filtered_out()
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
+
+        await _cleanup(session, k)
+
+    @requires_server_compiled_ael
+    async def test_untyped_select_from_with_where_extended_error(
+        self, cluster, ds, supports_error_detail,
+    ):
+        """Untyped read AEL + string where on keyed operate: server compile fails.
+
+        With ``error_detail_verbosity=MESSAGE`` the server folds an AEL diagnostic
+        into the raised error (not visible at default verbosity).
+        """
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+
+        behavior = Behavior(
+            "error-handling-untyped-select-from",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.MESSAGE)},
+        )
+        session = cluster.create_session(behavior=behavior)
+        k = ds.id("op_rd_untyped_err")
+        await _cleanup(session, k)
+        await session.upsert(k).put({"v": 1}).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.upsert(k)
+                .bin("result").select_from("$.v")
+                .where("$.v == 1")
+                .execute()
+            )
+
+        exc = exc_info.value
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.server_message is not None
+        assert "invalid expression in operation request" in exc.server_message
+        assert "unresolved bin type" in exc.server_message.lower()
 
         await _cleanup(session, k)
 

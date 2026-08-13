@@ -13,21 +13,18 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""PSDK runtime feature gates (dark-launch until flipped)."""
+"""PSDK runtime feature gates."""
 
 from __future__ import annotations
 
 from typing import Optional
 
-# Hard-false so field 44 query selection and field 43 server-compiled AEL can
-# merge without changing dev behavior. Flip to True when ready to enable.
-#
 # Flip these TOGETHER. With SERVER_COMPILED_AEL on but QUERY_SELECTION off,
 # indexed dataset queries run the client index planner over the raw AEL
 # string, which cannot parse server-dialect forms (e.g. ``:INT`` suffixes) —
 # queries that field 44 would plan and serve instead fail client-side.
-PSDK_ENABLE_QUERY_SELECTION: bool = False
-PSDK_ENABLE_SERVER_COMPILED_AEL: bool = False
+PSDK_ENABLE_QUERY_SELECTION: bool = True
+PSDK_ENABLE_SERVER_COMPILED_AEL: bool = True
 
 
 def cached_ael_capability_kwargs(
