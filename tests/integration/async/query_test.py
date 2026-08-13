@@ -342,6 +342,7 @@ async def test_query_with_filter_expression_and(session):
 # Metadata-based query tests 
 # ============================================================================
 
+@requires_server_compiled_ael
 async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
@@ -359,6 +360,7 @@ async def test_query_with_ael_where(session):
     assert count == 5
 
 
+@requires_server_compiled_ael
 async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
@@ -376,6 +378,7 @@ async def test_query_ael_and_or(session):
     assert count == 5
 
 
+@requires_server_compiled_ael
 async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (

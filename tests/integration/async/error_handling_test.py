@@ -314,6 +314,7 @@ class TestOpTypeErrors:
 
 class TestFailOnFilteredOut:
 
+    @requires_server_compiled_ael
     async def test_write_filtered_out_raises(self, session, ds):
         """Single-key upsert with where() + fail_on_filtered_out() raises
         FILTERED_OUT when the filter excludes the record."""
@@ -333,6 +334,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_write_filtered_out_passes_when_matched(self, session, ds):
         """Upsert with matching where() + fail_on_filtered_out() succeeds."""
         k = ds.id("fo_write_ok")
@@ -351,6 +353,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_read_filtered_out_raises(self, session, ds):
         """Query with where() + fail_on_filtered_out() raises FILTERED_OUT
         when the filter excludes the record."""
@@ -370,6 +373,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_read_filtered_out_passes_when_matched(self, session, ds):
         """Query with matching where() + fail_on_filtered_out() succeeds."""
         k = ds.id("fo_read_ok")
@@ -387,6 +391,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_delete_filtered_out_raises(self, session, ds):
         """Delete with non-matching where() + fail_on_filtered_out() raises."""
         k = ds.id("fo_del_1")
@@ -407,6 +412,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_batch_filtered_out_in_stream(self, session, ds):
         """Batch with per-key where() + fail_on_filtered_out():
         matching key succeeds, non-matching gets FILTERED_OUT in stream."""
@@ -444,6 +450,7 @@ class TestFailOnFilteredOut:
 
 class TestFilteredDeletePaths:
 
+    @requires_server_compiled_ael
     async def test_delete_with_matching_where_succeeds(self, session, ds):
         """Delete with a matching where() filter actually deletes the record."""
         k = ds.id("fd_match")
@@ -459,6 +466,7 @@ class TestFilteredDeletePaths:
 
         await delete_keys_durable(session, [k])
 
+    @requires_server_compiled_ael
     async def test_delete_with_nonmatching_where_preserves(self, session, ds):
         """Delete with a non-matching where() filter leaves the record intact."""
         k = ds.id("fd_nomatch")
@@ -472,6 +480,7 @@ class TestFilteredDeletePaths:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_durable_delete_with_where_succeeds(self, session, ds, enterprise):
         """Durable delete with matching where() deletes the record."""
         if not enterprise:
@@ -494,6 +503,7 @@ class TestFilteredDeletePaths:
 
         await delete_keys_durable(session, [k])
 
+    @requires_server_compiled_ael
     async def test_durable_delete_with_where_filtered_out(self, session, ds, enterprise):
         """Durable delete with non-matching where() + fail_on_filtered_out()
         raises FILTERED_OUT."""
@@ -529,6 +539,7 @@ class TestFilteredDeletePaths:
 
 class TestOperateWithFilter:
 
+    @requires_server_compiled_ael
     async def test_operate_write_with_matching_where(self, session, ds):
         """Upsert + bin.set_to() with matching where() writes successfully."""
         k = ds.id("op_wr_ok")
@@ -549,6 +560,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_write_nonmatching_where_skips(self, session, ds):
         """Upsert + bin.set_to() with non-matching where() silently skips."""
         k = ds.id("op_wr_skip")
@@ -567,6 +579,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_write_filtered_out_raises(self, session, ds):
         """Upsert + bin.set_to() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT and doesn't write."""
@@ -727,6 +740,7 @@ class TestWriteBinGet:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_expression_write_then_get(self, session, ds):
         """upsert_from() expression write followed by bin.get() reads back."""
         k = ds.id("wbb_exp_get")
@@ -749,6 +763,7 @@ class TestWriteBinGet:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_chained_write_then_query_with_get(self, session, ds):
         """Upsert a key, then query another key with bin.get()."""
         k1 = ds.id("wbb_chain_wr")

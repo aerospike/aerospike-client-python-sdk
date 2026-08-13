@@ -23,7 +23,9 @@ a list of PAC ``Version`` objects — the async and sync clients supply the list
 from their respective node accessors, keeping one implementation for both.
 
 All predicates delegate to PAC's own ``Version.supports_*`` methods (PAC owns
-the authoritative version→capability mapping).
+the authoritative version→capability mapping). The pinned ``aerospike-async``
+dependency is assumed to expose those predicates and
+``FilterExpression.from_server_compiled_ael``; older PAC builds are unsupported.
 """
 
 from __future__ import annotations

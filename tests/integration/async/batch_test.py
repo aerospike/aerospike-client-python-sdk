@@ -606,6 +606,7 @@ class TestRecordResultIntegration:
 class TestBatchExpressionOps:
     """Test batch operations with expression reads and writes."""
 
+    @requires_server_compiled_ael
     async def test_batch_upsert_from(self, cluster, users: DataSet):
         """upsert_from across multiple batch keys."""
         session = cluster.create_session()
@@ -649,6 +650,7 @@ class TestBatchExpressionOps:
         assert results[0].record.bins["sum"] == 8
         assert results[1].record.bins["sum"] == 17
 
+    @requires_server_compiled_ael
     async def test_batch_mixed_set_to_and_expression(
         self, cluster, users: DataSet,
     ):

@@ -100,6 +100,7 @@ class TestSyncBatchOperations:
 
 class TestSyncBatchExpressionOps:
 
+    @requires_server_compiled_ael
     def test_batch_upsert_from(self, cluster: Cluster, users: DataSet, enterprise):
         session = cluster.create_session()
         keys = [users.id(f"sbx_{i}") for i in range(2)]

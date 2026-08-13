@@ -32,6 +32,7 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 KEY_PREFIX = "qbops_"
@@ -376,6 +377,7 @@ class TestInvertedReads:
 
 class TestExpressionReads:
 
+    @requires_server_compiled_ael
     def test_select_from_simple(self, cluster):
         session = cluster.create_session()
         result = (
@@ -385,6 +387,7 @@ class TestExpressionReads:
         )
         assert result.record.bins["age_plus_20"] == 41
 
+    @requires_server_compiled_ael
     def test_select_from_multiple(self, cluster):
         session = cluster.create_session()
         result = (
@@ -396,6 +399,7 @@ class TestExpressionReads:
         assert result.record.bins["double_age"] == 44   # (20+2)*2
         assert result.record.bins["triple_score"] == 600  # 200*3
 
+    @requires_server_compiled_ael
     def test_select_from_with_get(self, cluster):
         session = cluster.create_session()
         result = (

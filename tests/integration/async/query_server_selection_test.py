@@ -22,9 +22,8 @@ reports no query-selection support (``Version.supports_query_selection()``).
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
-from aerospike_sdk import DataSet, Exp, Filter, QueryDuration, QueryHint, ResultCode, val
+from aerospike_sdk import Exp, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
@@ -35,7 +34,6 @@ from tests.integration.query_selection_helpers import (
     INDEX_NAME,
     NS,
     QuerySelection,
-    QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
     SIZE,
@@ -43,75 +41,9 @@ from tests.integration.query_selection_helpers import (
     collect_scores_async,
     count_records_async,
     explain_plan_async,
-    key_name,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pac_compat import requires_query_selection, requires_server_compiled_ael
 
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qsel_client(
-    aerospike_host,
-    make_cluster_definition,
-    wait_for_index,
-    wait_for_set_visible,
-):
-    cluster_def = make_cluster_definition(aerospike_host)
-    async with await cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, SET_NAME)
-
-        for i in range(1, SIZE + 1):
-            try:
-                await session.delete(ds.id(key_name(i))).execute()
-            except Exception:
-                pass
-
-        for i in range(1, SIZE + 1):
-            country = "US" if i % 2 == 0 else "CA"
-            await (
-                session.upsert(ds.id(key_name(i)))
-                .put({BIN_AGE: i, BIN_SCORE: i, BIN_COUNTRY: country})
-                .execute()
-            )
-
-        await wait_for_set_visible(session, NS, SET_NAME, SIZE)
-
-        for index_name, bin_name in (
-            (INDEX_NAME, BIN_AGE),
-            (SCORE_INDEX_NAME, BIN_SCORE),
-        ):
-            try:
-                await (
-                    client.index(NS, SET_NAME)
-                    .on_bin(bin_name)
-                    .named(index_name)
-                    .numeric()
-                    .create()
-                )
-            except Exception:
-                pass
-
-        await wait_for_index(
-            client, NS, SET_NAME, Filter.range(BIN_AGE, 1, SIZE),
-        )
-        await wait_for_index(
-            client, NS, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE),
-        )
-
-        yield QuerySelectionClientFacade(client, session)
-
-        for i in range(1, SIZE + 1):
-            try:
-                await session.delete(ds.id(key_name(i))).execute()
-            except Exception:
-                pass
-        for index_name in (INDEX_NAME, SCORE_INDEX_NAME):
-            try:
-                await client.index(NS, SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestQueryExplain:
@@ -231,6 +163,7 @@ class TestQueryExecute:
         ages = await collect_ages_async(stream)
         assert ages == [14, 15, 16, 17, 18]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     async def test_equality_returns_single_record(self, qsel_client):
         stream = await (
@@ -242,6 +175,7 @@ class TestQueryExecute:
         ages = await collect_ages_async(stream)
         assert ages == [25]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     async def test_primary_index_predicate(self, qsel_client):
         stream = await (
@@ -324,6 +258,7 @@ class TestQueryExecute:
             stream.close()
         assert sorted(ages) == [14, 15, 16, 17, 18]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     async def test_contradiction_raises_filtered_out(self, qsel_client):
         with pytest.raises(AerospikeError) as exc_info:

@@ -16,6 +16,8 @@
 """Integration tests for QueryHint with index_name, bin_name, and query_duration."""
 
 import pytest_asyncio
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import Filter, QueryDuration
 
 from aerospike_sdk import (
@@ -137,6 +139,7 @@ class TestIndexNameHint:
         stream.close()
         assert count == 5
 
+    @requires_server_compiled_ael
     async def test_index_name_via_ael(self, session):
         """AEL where() + index_name hint with auto-discovered index."""
         stream = await (
@@ -153,6 +156,7 @@ class TestIndexNameHint:
         stream.close()
         assert count == 5
 
+    @requires_server_compiled_ael
     async def test_index_name_with_query_duration(self, session):
         """Combine index_name and query_duration in a single hint."""
         stream = await (

@@ -44,6 +44,8 @@ KEY_A = "exp_A"
 KEY_B = "exp_B"
 
 
+
+pytestmark = requires_server_compiled_ael
 @pytest.fixture(scope="module")
 async def shared_cluster(aerospike_host, make_cluster_definition):
     """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
@@ -137,8 +139,6 @@ class TestSelectFrom:
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
-
-    @requires_server_compiled_ael
     async def test_select_from_returns_nil(self, session):
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
@@ -275,8 +275,6 @@ class TestInsertFrom:
 # ===================================================================
 
 class TestCombinedExpression:
-
-    @requires_server_compiled_ael
     async def test_upsert_from_and_select_from(self, cluster):
         """upsert_from + select_from in same execute."""
         session = cluster.create_session()
@@ -301,8 +299,6 @@ class TestCombinedExpression:
         result = await rec.first_or_raise()
         assert result is not None
         assert result.record.bins["C"] == 5
-
-    @requires_server_compiled_ael
     async def test_write_eval_error_with_ignore(
         self, cluster,
     ):

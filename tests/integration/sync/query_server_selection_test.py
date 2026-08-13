@@ -17,11 +17,9 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
-from aerospike_sdk import DataSet, Exp, Filter, QueryDuration, QueryHint, ResultCode, val
+from aerospike_sdk import Exp, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
@@ -32,7 +30,6 @@ from tests.integration.query_selection_helpers import (
     INDEX_NAME,
     NS,
     QuerySelection,
-    QuerySelectionClientFacade,
     SCORE_INDEX_NAME,
     SET_NAME,
     SIZE,
@@ -40,83 +37,9 @@ from tests.integration.query_selection_helpers import (
     collect_scores_sync,
     count_records_sync,
     explain_plan_blocking,
-    key_name,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pac_compat import requires_query_selection, requires_server_compiled_ael
 
-
-
-def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
-    deadline = time.monotonic() + timeout
-    last_err = None
-    while time.monotonic() < deadline:
-        try:
-            stream = session.query(namespace=ns, set_name=set_name).filter(sindex_filter).execute()
-            for _ in stream:
-                break
-            stream.close()
-            return
-        except Exception as exc:
-            if "IndexNotReadable" not in str(exc):
-                raise
-            last_err = exc
-            time.sleep(interval)
-    raise last_err  # type: ignore[misc]
-
-
-@pytest.fixture(scope="module")
-def qsel_client(
-    aerospike_host,
-    make_cluster_definition,
-):
-    cluster_def = make_cluster_definition(aerospike_host, sync=True)
-    with cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, SET_NAME)
-
-        for i in range(1, SIZE + 1):
-            try:
-                session.delete(ds.id(key_name(i))).execute()
-            except Exception:
-                pass
-
-        for i in range(1, SIZE + 1):
-            country = "US" if i % 2 == 0 else "CA"
-            session.upsert(ds.id(key_name(i))).put(
-                {BIN_AGE: i, BIN_SCORE: i, BIN_COUNTRY: country},
-            ).execute()
-
-        for index_name, bin_name in (
-            (INDEX_NAME, BIN_AGE),
-            (SCORE_INDEX_NAME, BIN_SCORE),
-        ):
-            try:
-                client.index(NS, SET_NAME).on_bin(bin_name).named(
-                    index_name,
-                ).numeric().create()
-            except Exception:
-                pass
-
-        _sync_wait_for_index(
-            client, session, NS, SET_NAME, Filter.range(BIN_AGE, 1, SIZE),
-        )
-        _sync_wait_for_index(
-            client, session, NS, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE),
-        )
-
-        yield QuerySelectionClientFacade(client, session)
-
-        for i in range(1, SIZE + 1):
-            try:
-                session.delete(ds.id(key_name(i))).execute()
-            except Exception:
-                pass
-        for index_name in (INDEX_NAME, SCORE_INDEX_NAME):
-            try:
-                client.index(NS, SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestSyncQueryExplain:
@@ -199,6 +122,7 @@ class TestSyncQueryExplain:
 
 
 class TestSyncQueryExecute:
+    @requires_server_compiled_ael
     @requires_query_selection
     def test_simple_range(self, qsel_client):
         stream = (
@@ -209,6 +133,7 @@ class TestSyncQueryExecute:
         )
         assert collect_ages_sync(stream) == [14, 15, 16, 17, 18]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     def test_equality_returns_single_record(self, qsel_client):
         stream = (
@@ -219,6 +144,7 @@ class TestSyncQueryExecute:
         )
         assert collect_ages_sync(stream) == [25]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     def test_primary_index_predicate(self, qsel_client):
         stream = (
@@ -296,6 +222,7 @@ class TestSyncQueryExecute:
             stream.close()
         assert sorted(ages) == [14, 15, 16, 17, 18]
 
+    @requires_server_compiled_ael
     @requires_query_selection
     def test_contradiction_raises_filtered_out(self, qsel_client):
         with pytest.raises(AerospikeError) as exc_info:

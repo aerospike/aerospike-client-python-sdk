@@ -85,6 +85,7 @@ from aerospike_async import (
     PartitionFilter,
     QueryDuration,
     QueryPolicy,
+    QueryWhereFlags,
     ReadPolicy,
     Replica,
     Statement,
@@ -96,11 +97,6 @@ from aerospike_async import (
     WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
-
-try:
-    from aerospike_async import QueryWhereFlags
-except ImportError:  # pragma: no cover - older PAC without Tier-D flags
-    QueryWhereFlags = None  # type: ignore[misc, assignment]
 
 
 from aerospike_sdk.aio.operations.cdt_read import (
@@ -1784,7 +1780,7 @@ class _QueryBuilderBase:
         return hint.index_name
 
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
-        if hint is None or QueryWhereFlags is None:
+        if hint is None:
             return None
         flags = QueryWhereFlags.EXPLAIN
         if hint.require_index:

@@ -17,98 +17,20 @@
 
 from __future__ import annotations
 
-import pytest_asyncio
-from aerospike_async import IndexType
-
-from aerospike_sdk import CollectionIndexType, DataSet
+from aerospike_sdk import DataSet
 
 from tests.integration.query_selection_helpers import (
     CDT_LIST_BIN,
-    CDT_LIST_INDEX,
     CDT_MAP_BIN,
-    CDT_MAP_INDEX,
     CDT_MAP_KEY,
     CDT_SET_NAME,
     CDT_SIZE,
     NS,
     QuerySelection,
-    cdt_key_name,
-    create_index_quiet_async,
     explain_plan_async,
-    long_bytes_be,
 )
 from tests.pac_compat import requires_query_selection
 
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qp_cdt_client(
-    aerospike_host,
-    make_cluster_definition,
-    wait_for_set_visible,
-):
-    list_blob_bytes = long_bytes_be(50003)
-
-    cluster_def = make_cluster_definition(aerospike_host)
-    async with await cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        pac = client.underlying_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, CDT_SET_NAME)
-
-        for i in range(1, CDT_SIZE + 1):
-            try:
-                await session.delete(ds.id(cdt_key_name(i))).execute()
-            except Exception:
-                pass
-
-        await create_index_quiet_async(
-            pac,
-            set_name=CDT_SET_NAME,
-            bin_name=CDT_MAP_BIN,
-            index_name=CDT_MAP_INDEX,
-            index_type=IndexType.STRING,
-            collection_type=CollectionIndexType.MAP_KEYS,
-        )
-        await create_index_quiet_async(
-            pac,
-            set_name=CDT_SET_NAME,
-            bin_name=CDT_LIST_BIN,
-            index_name=CDT_LIST_INDEX,
-            index_type=IndexType.BLOB,
-            collection_type=CollectionIndexType.LIST,
-        )
-
-        for i in range(1, CDT_SIZE + 1):
-            map_data = {"mkey1": f"v{i}"}
-            if i % 2 == 0:
-                map_data[CDT_MAP_KEY] = f"v{i}"
-
-            if i == 3:
-                list_data = [list_blob_bytes]
-            else:
-                list_data = [long_bytes_be(50000 + i)]
-
-            await (
-                session.upsert(ds.id(cdt_key_name(i)))
-                .put({CDT_MAP_BIN: map_data, CDT_LIST_BIN: list_data})
-                .execute()
-            )
-
-        await wait_for_set_visible(session, NS, CDT_SET_NAME, CDT_SIZE)
-
-        yield client
-
-        for i in range(1, CDT_SIZE + 1):
-            try:
-                await session.delete(ds.id(cdt_key_name(i))).execute()
-            except Exception:
-                pass
-        for index_name in (CDT_MAP_INDEX, CDT_LIST_INDEX):
-            try:
-                await client.index(NS, CDT_SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestQueryPlannerCollectionCdt:

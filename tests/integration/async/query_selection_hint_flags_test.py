@@ -21,93 +21,20 @@ Port of Java ``QuerySelectionHintFlagsTest``.
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import DataSet, Filter, QueryHint, ResultCode
+from aerospike_sdk import QueryHint, ResultCode
 
 from tests.integration.query_selection_helpers import (
-    BIN_AGE,
-    BIN_COUNTRY,
-    BIN_SCORE,
     HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
-    NS,
     QuerySelection,
     explain_plan_async,
-    hint_key_name,
 )
 from tests.pac_compat import requires_query_selection
 
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qselhint_client(
-    aerospike_host,
-    make_cluster_definition,
-    wait_for_index,
-    wait_for_set_visible,
-):
-    cluster_def = make_cluster_definition(aerospike_host)
-    async with await cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, HINT_SET_NAME)
-
-        for suffix in ("1", "2"):
-            try:
-                await session.delete(ds.id(hint_key_name(suffix))).execute()
-            except Exception:
-                pass
-
-        for index_name, bin_name in (
-            (HINT_INDEX_NAME, BIN_AGE),
-            (HINT_SCORE_INDEX_NAME, BIN_SCORE),
-        ):
-            try:
-                await (
-                    client.index(NS, HINT_SET_NAME)
-                    .on_bin(bin_name)
-                    .named(index_name)
-                    .numeric()
-                    .create()
-                )
-            except Exception:
-                pass
-
-        await (
-            session.upsert(ds.id(hint_key_name("1")))
-            .put({BIN_AGE: 25, BIN_SCORE: 25, BIN_COUNTRY: "US"})
-            .execute()
-        )
-        await (
-            session.upsert(ds.id(hint_key_name("2")))
-            .put({BIN_AGE: 30, BIN_SCORE: 30, BIN_COUNTRY: "CA"})
-            .execute()
-        )
-
-        await wait_for_set_visible(session, NS, HINT_SET_NAME, 2)
-        await wait_for_index(
-            client, NS, HINT_SET_NAME, Filter.range(BIN_AGE, 25, 30),
-        )
-        await wait_for_index(
-            client, NS, HINT_SET_NAME, Filter.range(BIN_SCORE, 25, 30),
-        )
-
-        yield client
-
-        for suffix in ("1", "2"):
-            try:
-                await session.delete(ds.id(hint_key_name(suffix))).execute()
-            except Exception:
-                pass
-        for index_name in (HINT_INDEX_NAME, HINT_SCORE_INDEX_NAME):
-            try:
-                await client.index(NS, HINT_SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestQuerySelectionHintFlags:

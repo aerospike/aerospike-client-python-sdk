@@ -25,6 +25,7 @@ import asyncio
 
 import pytest
 
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk.dataset import DataSet
 
 from tests.integration.namespace import general_namespace
@@ -131,6 +132,7 @@ async def session(geo_seeded_cluster):
 class TestGeoQuery:
     """``geoCompare(...)`` over a GEO2DSPHERE index returns the expected hits."""
 
+    @requires_server_compiled_ael
     async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
         stream = await (

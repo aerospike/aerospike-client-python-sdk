@@ -20,17 +20,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import QueryPolicy, FilterExpression
+from aerospike_async import FilterExpression, QueryPolicy, QueryWhereFlags
 
 from aerospike_sdk import Filter, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
-
-try:
-    from aerospike_async import QueryWhereFlags
-except ImportError:
-    QueryWhereFlags = None
 
 
 class _ClientSupportsSelection:
@@ -106,7 +101,6 @@ class TestUseServerQuerySelection:
         assert qb._use_server_query_selection(None) is True
 
 
-@pytest.mark.skipif(QueryWhereFlags is None, reason="PAC lacks QueryWhereFlags")
 class TestExplainWhereFlags:
     def test_default_none(self):
         qb = _async_builder(_ClientSupportsSelection())

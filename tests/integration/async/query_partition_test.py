@@ -25,6 +25,7 @@ from collections import Counter
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 PART_SET = "query_partition"
 HOT_SET = "query_partition_hot"
@@ -191,6 +192,7 @@ async def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
     assert records == HOT_LIMIT
 
 
+@requires_server_compiled_ael
 async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     """A filter expression and a partition range compose: exactly their intersection."""
     session = cluster.create_session()

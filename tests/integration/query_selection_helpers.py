@@ -108,6 +108,7 @@ def long_bytes_be(value: int) -> bytes:
 
 
 SCOPE_BLOB_BYTES = long_bytes_be(50001)
+CDT_LIST_BLOB_BYTES = long_bytes_be(50003)
 
 
 def blob_hex_literal(blob_bytes: bytes) -> str:

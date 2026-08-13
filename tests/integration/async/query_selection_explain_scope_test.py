@@ -17,105 +17,24 @@
 
 from __future__ import annotations
 
-import pytest_asyncio
-from aerospike_async import IndexType
-
-from aerospike_sdk import CollectionIndexType, DataSet
+from aerospike_sdk import DataSet
 
 from tests.integration.query_selection_helpers import (
     NS,
     QuerySelection,
-    SCOPE_AGE_BIN,
     SCOPE_BLOB_BIN,
     SCOPE_BLOB_INDEX,
-    SCOPE_COUNTRY_BIN,
     SCOPE_INT_INDEX,
     SCOPE_MAP_BIN,
-    SCOPE_MAP_INDEX,
     SCOPE_MAP_KEY,
     SCOPE_SET_NAME,
     SCOPE_BLOB_BYTES,
     blob_hex_literal,
     count_records_async,
-    create_index_quiet_async,
     explain_plan_async,
 )
 from tests.pac_compat import requires_query_selection
 
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qscexp_client(
-    aerospike_host,
-    make_cluster_definition,
-    wait_for_set_visible,
-):
-    cluster_def = make_cluster_definition(aerospike_host)
-    async with await cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        pac = client.underlying_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, SCOPE_SET_NAME)
-
-        for key_id in ("k1", "k2"):
-            try:
-                await session.delete(ds.id(key_id)).execute()
-            except Exception:
-                pass
-
-        await create_index_quiet_async(
-            pac,
-            set_name=SCOPE_SET_NAME,
-            bin_name=SCOPE_AGE_BIN,
-            index_name=SCOPE_INT_INDEX,
-            index_type=IndexType.NUMERIC,
-        )
-        await create_index_quiet_async(
-            pac,
-            set_name=SCOPE_SET_NAME,
-            bin_name=SCOPE_BLOB_BIN,
-            index_name=SCOPE_BLOB_INDEX,
-            index_type=IndexType.BLOB,
-        )
-        await create_index_quiet_async(
-            pac,
-            set_name=SCOPE_SET_NAME,
-            bin_name=SCOPE_MAP_BIN,
-            index_name=SCOPE_MAP_INDEX,
-            index_type=IndexType.STRING,
-            collection_type=CollectionIndexType.MAP_KEYS,
-        )
-
-        await (
-            session.upsert(ds.id("k1"))
-            .put({
-                SCOPE_AGE_BIN: 25,
-                SCOPE_COUNTRY_BIN: "US",
-                SCOPE_BLOB_BIN: SCOPE_BLOB_BYTES,
-                SCOPE_MAP_BIN: {SCOPE_MAP_KEY: "v1"},
-            })
-            .execute()
-        )
-        await (
-            session.upsert(ds.id("k2"))
-            .put({SCOPE_AGE_BIN: 30, SCOPE_COUNTRY_BIN: "CA"})
-            .execute()
-        )
-
-        await wait_for_set_visible(session, NS, SCOPE_SET_NAME, 2)
-
-        yield client
-
-        for key_id in ("k1", "k2"):
-            try:
-                await session.delete(ds.id(key_id)).execute()
-            except Exception:
-                pass
-        for index_name in (SCOPE_INT_INDEX, SCOPE_BLOB_INDEX, SCOPE_MAP_INDEX):
-            try:
-                await client.index(NS, SCOPE_SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestQuerySelectionExplainScope:

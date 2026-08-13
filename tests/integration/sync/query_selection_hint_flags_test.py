@@ -17,102 +17,21 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import DataSet, Filter, QueryHint, ResultCode
+from aerospike_sdk import QueryHint, ResultCode
 
 from tests.integration.query_selection_helpers import (
-    BIN_AGE,
-    BIN_COUNTRY,
-    BIN_SCORE,
     HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
-    NS,
     QuerySelection,
     explain_plan_blocking,
-    hint_key_name,
 )
 from tests.pac_compat import requires_query_selection
 
-
-
-def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
-    deadline = time.monotonic() + timeout
-    last_err = None
-    while time.monotonic() < deadline:
-        try:
-            stream = session.query(namespace=ns, set_name=set_name).filter(sindex_filter).execute()
-            for _ in stream:
-                break
-            stream.close()
-            return
-        except Exception as exc:
-            if "IndexNotReadable" not in str(exc):
-                raise
-            last_err = exc
-            time.sleep(interval)
-    raise last_err  # type: ignore[misc]
-
-
-@pytest.fixture(scope="module")
-def qselhint_client(
-    aerospike_host,
-    make_cluster_definition,
-):
-    cluster_def = make_cluster_definition(aerospike_host, sync=True)
-    with cluster_def.connect() as cluster:
-        client = cluster._sdk_client
-        session = cluster.create_session()
-        ds = DataSet.of(NS, HINT_SET_NAME)
-
-        for suffix in ("1", "2"):
-            try:
-                session.delete(ds.id(hint_key_name(suffix))).execute()
-            except Exception:
-                pass
-
-        for index_name, bin_name in (
-            (HINT_INDEX_NAME, BIN_AGE),
-            (HINT_SCORE_INDEX_NAME, BIN_SCORE),
-        ):
-            try:
-                client.index(NS, HINT_SET_NAME).on_bin(bin_name).named(
-                    index_name,
-                ).numeric().create()
-            except Exception:
-                pass
-
-        session.upsert(ds.id(hint_key_name("1"))).put(
-            {BIN_AGE: 25, BIN_SCORE: 25, BIN_COUNTRY: "US"},
-        ).execute()
-        session.upsert(ds.id(hint_key_name("2"))).put(
-            {BIN_AGE: 30, BIN_SCORE: 30, BIN_COUNTRY: "CA"},
-        ).execute()
-
-        _sync_wait_for_index(
-            client, session, NS, HINT_SET_NAME, Filter.range(BIN_AGE, 25, 30),
-        )
-        _sync_wait_for_index(
-            client, session, NS, HINT_SET_NAME, Filter.range(BIN_SCORE, 25, 30),
-        )
-
-        yield client
-
-        for suffix in ("1", "2"):
-            try:
-                session.delete(ds.id(hint_key_name(suffix))).execute()
-            except Exception:
-                pass
-        for index_name in (HINT_INDEX_NAME, HINT_SCORE_INDEX_NAME):
-            try:
-                client.index(NS, HINT_SET_NAME).named(index_name).drop()
-            except Exception:
-                pass
 
 
 class TestSyncQuerySelectionHintFlags:

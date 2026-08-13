@@ -24,6 +24,8 @@ not expose ``ctx`` yet.
 """
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import CTX, Filter
 from aerospike_async import IndexType
 
@@ -61,6 +63,7 @@ def _user_keys_from_stream(results):
     return keys
 
 
+@requires_server_compiled_ael
 async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, wait_for_index):
     """Query with ``Filter.equal(...).context([...])`` on a nested map value (indexed path).
 
@@ -150,6 +153,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
         await _cleanup_records(session, keys)
 
 
+@requires_server_compiled_ael
 async def test_query_filter_equal_single_map_key_context(cluster, enterprise, wait_for_index):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()

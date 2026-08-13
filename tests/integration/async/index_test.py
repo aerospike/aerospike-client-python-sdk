@@ -18,6 +18,8 @@
 import os
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
@@ -171,6 +173,7 @@ async def test_create_duplicate_index_fails(cluster):
         pass
 
 
+@requires_server_compiled_ael
 async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index):
     """Create a numeric index on a nested map element via chainable .context()."""
     index_name = "test_ctx_idx"
@@ -228,6 +231,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
             pass
 
 
+@requires_server_compiled_ael
 async def test_create_expression_index_and_query(cluster, server_version, wait_for_index):
     """Create an expression-based index, list it, query through it, drop it."""
     if server_version is None or server_version < (8, 1, 2, 0):
@@ -281,6 +285,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
         i["name"] == index_name for i in await session.list_indexes()
     ), "expression index still listed after drop"
 
+@requires_server_compiled_ael
 async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_for_index):
     """Create a blob index on a bytes bin, query through it, drop it."""
     if not supports_blob_index:
@@ -326,6 +331,7 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         except Exception:
             pass
 
+@requires_server_compiled_ael
 async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index, wait_for_index):
     """Blob index over LIST collection elements: create, query via contains, drop."""
     if not supports_blob_index:

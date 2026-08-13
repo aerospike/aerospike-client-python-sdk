@@ -21,6 +21,8 @@ These tests provide simple, focused examples for documentation.
 import asyncio
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet, Key
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -324,6 +326,7 @@ async def test_java_example_query_namespace_set(session, customer_dataset):
     assert count > 0
 
 
+@requires_server_compiled_ael
 async def test_java_example_query_with_where(session, customer_dataset):
     """Java: rs = session.query(customerDataSet)
               .where(DSL.of("$.name == 'Tim' and $.age > 18"))
@@ -546,6 +549,7 @@ async def test_java_example_filter_control_on_partition_range(session, customer_
     stream.close()
 
 
+@requires_server_compiled_ael
 async def test_java_example_filter_control_full(session, customer_dataset):
     """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitionRange(1, 4)
               .where(DSL.of("$.bonus > 100 and $.person.age >= 18"));

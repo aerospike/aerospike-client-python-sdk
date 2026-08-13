@@ -7,6 +7,8 @@ Each test is tagged with the doc page and section it validates.
 import os
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 
 from aerospike_sdk import (
@@ -44,6 +46,7 @@ async def session(make_cluster_definition):
 # docs/index.md — Quick Example (async)
 # ------------------------------------------------------------------
 
+@requires_server_compiled_ael
 @pytest.mark.asyncio(loop_scope="session")
 async def test_quick_example_async(session):
     """docs/index.md — Quick Example (async tab)."""
@@ -202,6 +205,7 @@ async def test_batch_read(session):
 # docs/guide/writes.md — Conditional writes
 # ------------------------------------------------------------------
 
+@requires_server_compiled_ael
 @pytest.mark.asyncio(loop_scope="session")
 async def test_conditional_write(session):
     """docs/guide/writes.md — Conditional Writes with where()."""

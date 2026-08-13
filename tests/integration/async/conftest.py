@@ -21,7 +21,9 @@ every test function. Tests must keep keys isolated (unique names / sets) or
 clean up.
 """
 
-import pytest_asyncio
+import pytest_asyncio  # noqa: E402 — pytest_plugins must load first
+
+pytest_plugins = ["tests.integration.query_selection_async_fixtures"]
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")

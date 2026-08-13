@@ -33,6 +33,7 @@ import math
 
 import pytest
 
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import HllConfig
@@ -187,6 +188,7 @@ class TestHllReadsAndUnion:
 
 class TestAelFilterExpressions:
 
+    @requires_server_compiled_ael
     async def test_ael_hll_count_filter(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
@@ -213,6 +215,7 @@ class TestAelFilterExpressions:
         rs.close()
         assert count == 1
 
+    @requires_server_compiled_ael
     async def test_ael_union_count_with_single_bin_ref(self, hll_cluster):
         """``$.h.hllUnionCount($.a) > 0`` — bare HLL bin reference as the
         multi-sketch arg. Server treats it as an implicit single-element list.
@@ -699,6 +702,7 @@ class TestHllAelServerSide:
     count, then asserts the query returns the expected number of records.
     """
 
+    @requires_server_compiled_ael
     async def test_ael_union_count_filter_server_side(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
@@ -728,6 +732,7 @@ class TestHllAelServerSide:
         # Only "a" has union > 2 (3 distinct: alice, bob, carol).
         assert matched == 1
 
+    @requires_server_compiled_ael
     async def test_ael_intersect_count_filter_server_side(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
@@ -759,6 +764,7 @@ class TestHllAelServerSide:
         # Only "a" shares values with its peer bin.
         assert matched == 1
 
+    @requires_server_compiled_ael
     async def test_ael_similarity_filter_server_side(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
@@ -790,6 +796,7 @@ class TestHllAelServerSide:
         # Only "a" has high similarity.
         assert matched == 1
 
+    @requires_server_compiled_ael
     async def test_ael_describe_filter_server_side(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)
@@ -820,6 +827,7 @@ class TestHllAelServerSide:
         rs.close()
         assert matched == 1
 
+    @requires_server_compiled_ael
     async def test_ael_may_contain_filter_server_side(self, hll_cluster):
         session = hll_cluster.create_session()
         ds = DataSet.of(NAMESPACE, SET)

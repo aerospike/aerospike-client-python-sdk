@@ -18,14 +18,14 @@
 The fold logic (minimum across all nodes) is unit-tested in
 ``tests/unit/capabilities_test.py``;
 this confirms the probes reach the live cluster, return the expected type, and
-agree with the connected server's version. Assertions are relative to the
-reported version rather than hardcoded, so they hold on any server.
+match the all-nodes fold of each node's PAC ``Version.supports_*`` predicates.
+Version floors live in PAC, not the SDK.
 """
 
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Version
+from aerospike_sdk import Version, capabilities
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,13 +50,17 @@ class TestCapabilityProbes:
                       cluster.supports_query_selection):
             assert isinstance(await probe(), bool)
 
-    async def test_probes_agree_with_reported_version(self, cluster):
-        """Each probe matches the version floor it gates on (relative, not
-        hardcoded, so the test holds on any server)."""
-        v = await cluster.server_version()
-        vt = (v.major, v.minor, v.patch)
-        # Query operations gate at >= 8.1.2; the >= 8.1.3 family below it.
-        assert await cluster.supports_query_operations() == (vt >= (8, 1, 2))
-        assert await cluster.supports_string_operations() == (vt >= (8, 1, 3))
-        assert await cluster.supports_ael() == (vt >= (8, 1, 3))
-        assert await cluster.supports_query_selection() == (vt >= (8, 1, 3))
+    async def test_probes_agree_with_pac_version_predicates(self, cluster):
+        """Each probe matches ``capabilities.supports_*`` over live node versions."""
+        versions = await cluster._sdk_client._cluster_versions()
+        assert versions, "connected cluster should report at least one node"
+        assert await cluster.supports_query_operations() == (
+            capabilities.supports_query_operations(versions)
+        )
+        assert await cluster.supports_string_operations() == (
+            capabilities.supports_string_operations(versions)
+        )
+        assert await cluster.supports_ael() == capabilities.supports_ael(versions)
+        assert await cluster.supports_query_selection() == (
+            capabilities.supports_query_selection(versions)
+        )

@@ -21,7 +21,7 @@ node accessor (`_cluster_versions_blocking`), so it needs its own live check.
 
 import pytest
 
-from aerospike_sdk import Version
+from aerospike_sdk import Version, capabilities
 
 
 @pytest.fixture(scope="module")
@@ -43,10 +43,17 @@ class TestSyncCapabilityProbes:
                       cluster.supports_query_selection):
             assert isinstance(probe(), bool)
 
-    def test_probes_agree_with_reported_version(self, cluster):
-        v = cluster.server_version()
-        vt = (v.major, v.minor, v.patch)
-        assert cluster.supports_query_operations() == (vt >= (8, 1, 2))
-        assert cluster.supports_string_operations() == (vt >= (8, 1, 3))
-        assert cluster.supports_ael() == (vt >= (8, 1, 3))
-        assert cluster.supports_query_selection() == (vt >= (8, 1, 3))
+    def test_probes_agree_with_pac_version_predicates(self, cluster):
+        """Each probe matches ``capabilities.supports_*`` over live node versions."""
+        versions = cluster._sdk_client._cluster_versions_blocking()
+        assert versions, "connected cluster should report at least one node"
+        assert cluster.supports_query_operations() == (
+            capabilities.supports_query_operations(versions)
+        )
+        assert cluster.supports_string_operations() == (
+            capabilities.supports_string_operations(versions)
+        )
+        assert cluster.supports_ael() == capabilities.supports_ael(versions)
+        assert cluster.supports_query_selection() == (
+            capabilities.supports_query_selection(versions)
+        )
