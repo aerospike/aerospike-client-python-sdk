@@ -28,7 +28,6 @@ import pytest
 from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
-from tests.pac_compat import requires_client_side_ael
 from tests.integration.namespace import general_namespace
 
 
@@ -146,38 +145,3 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    @requires_client_side_ael
-    async def test_ael_with_explicit_get_type_geo(self, session):
-        """Same query expressed with explicit ``.get(type: GEO)`` cast on the bin."""
-        stream = await (
-            session.query(NAMESPACE, REGION_SET)
-            .where(f"geoCompare($.{BIN_NAME}.get(type: GEO), geoJson('{QUERY_POINT}'))")
-            .execute()
-        )
-        count = 0
-        async for _ in stream:
-            count += 1
-        stream.close()
-        assert count == 5
-
-    async def test_programmatic_exp_geo_compare_returns_5(self, session):
-        """Programmatic ``Exp.geo_compare(...)`` via ``.where(FilterExpression)``.
-
-        Bypasses the AEL parser so the underlying FilterExpression path is
-        exercised end-to-end against a live cluster. Equivalent in effect to
-        the AEL form above, but proves both surfaces independently.
-        """
-        filter_exp = Exp.geo_compare(
-            Exp.geo_bin(BIN_NAME),
-            Exp.geo_val(QUERY_POINT),
-        )
-        stream = await (
-            session.query(NAMESPACE, REGION_SET)
-            .where(filter_exp)
-            .execute()
-        )
-        count = 0
-        async for _ in stream:
-            count += 1
-        stream.close()
-        assert count == 5

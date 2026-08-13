@@ -22,15 +22,13 @@ import pytest
 from tests.pac_compat import (
     SupportsServerCompiledAel,
     skip_if_lacks_server_compiled_ael,
-    skip_if_server_compiled_ael_available,
 )
 
 
 def pytest_runtest_call(item: pytest.Item) -> None:
     """Honor AEL path markers once the test's fixtures are materialized."""
     need_server = item.get_closest_marker("requires_server_compiled_ael") is not None
-    need_client = item.get_closest_marker("requires_client_side_ael") is not None
-    if not (need_server or need_client):
+    if not need_server:
         return
     client = resolve_ael_client_from_funcargs(item.funcargs)
     if client is None:
@@ -42,10 +40,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
             "drop coverage for both modes.",
             pytrace=False,
         )
-    if need_server:
-        skip_if_lacks_server_compiled_ael(client)
-    if need_client:
-        skip_if_server_compiled_ael_available(client)
+    skip_if_lacks_server_compiled_ael(client)
 
 
 def resolve_ael_client_from_funcargs(

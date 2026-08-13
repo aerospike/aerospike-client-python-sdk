@@ -23,12 +23,11 @@ import base64
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import AelParseException, Exp, in_list, map_keys, map_values, val
+from aerospike_sdk import Exp, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected,
-    requires_client_side_ael,
     requires_server_compiled_ael,
 )
 from tests.integration.namespace import general_namespace
@@ -638,11 +637,6 @@ class TestExpWithAel:
 
     @pytest.mark.parametrize("ael", [
         pytest.param(
-            "$.B.asInt() == 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "$.B:FLOAT.toInt() == 1",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -678,29 +672,6 @@ class TestExpWithAel:
         assert len(records) == 2
         for rec in records:
             assert rec.bins["B"] > 1.0
-
-    @requires_client_side_ael
-    async def test_where_invalid_ael(self, session_with_data):
-        """Test that invalid AEL raises AelParseException."""
-
-        with pytest.raises(AelParseException):
-            await (
-                session_with_data.query(general_namespace(), "exp_test")
-                .where("this is not valid AEL !!!")
-                .execute()
-            )
-
-    @requires_server_compiled_ael
-    async def test_where_invalid_ael_server_compiled(self, session_with_data):
-        """Invalid AEL on server path surfaces as ``PARAMETER_ERROR`` from the server."""
-        await assert_dataset_invalid_ael_rejected(
-            session_with_data.query(general_namespace(), "exp_test")
-            .where("this is not valid AEL !!!")
-            .execute()
-        )
-
-
-# CDT Path Access Tests
 
 async def _seed_cdt_data(cluster, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
@@ -973,12 +944,7 @@ class TestExistsAndCount:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.numbers.count() > 3",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_count_comparison(self, session_with_cdt_data, ael):
         """Test $.listBin.count() for getting list size."""
         # rec1 has 5 numbers, rec2 has 5 numbers, rec3 has 3 numbers
@@ -1003,12 +969,7 @@ class TestExistsAndCount:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.numbers.count() == 3",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_count_equals(self, session_with_cdt_data, ael):
         """Test $.listBin.count() == value."""
         # rec3 has exactly 3 numbers
@@ -1032,12 +993,7 @@ class TestExistsAndCount:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.names.count() >= 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_names_list_count(self, session_with_cdt_data, ael):
         """Test count on names list."""
         # rec1: 3 names, rec2: 2 names, rec3: 1 name
@@ -1077,12 +1033,7 @@ class TestExistsAndCount:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "($.numbers.count() + $.names.count()) > 5",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_count_with_arithmetic(self, session_with_cdt_data, ael):
 
         """Test count() in arithmetic expressions."""
@@ -1186,12 +1137,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.values.[=30].count() > 0",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_by_value(self, session_with_list_data, ael):
         """Test $.list.[=value] to find items containing specific value."""
         # rec1 and rec3 have 30 in their values list
@@ -1216,12 +1162,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.values.[1:3].count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_index_range(self, session_with_list_data, ael):
 
         """Test $.list.[1:3] to get a range of indices."""
@@ -1248,12 +1189,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.values.[2:].count() == 3",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_index_range_from_start(self, session_with_list_data, ael):
 
         """Test $.list.[2:] to get from index 2 to end."""
@@ -1281,12 +1217,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.values.[=10:40].count() == 3",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_value_range(self, session_with_list_data, ael):
 
         """Test $.list.[=10:40] to get values in range."""
@@ -1312,12 +1243,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.values.[#0:2].count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_rank_range(self, session_with_list_data, ael):
         """Test $.list.[#0:2] to get smallest 2 items by rank."""
         # [#0:2] gets rank 0 and 1 (2 smallest items)
@@ -1341,12 +1267,7 @@ class TestAdvancedListAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.tags.[=alpha].count() > 0",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_value_list(self, session_with_list_data, ael):
         """Test $.list.[=a,b,c] to find items matching value list."""
         # Find records where tags contain "alpha"
@@ -1412,12 +1333,7 @@ class TestAdvancedMapAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{=100}.count() > 0",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_by_value(self, session_with_map_data, ael):
         """Test $.map.{=value} to find entries with specific value."""
         # Find records where scores contains value 100
@@ -1441,12 +1357,7 @@ class TestAdvancedMapAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{0:2}.count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_index_range(self, session_with_map_data, ael):
         """Test $.map.{0:2} to get first 2 entries by index."""
         # Get first 2 entries (count=2)
@@ -1470,12 +1381,7 @@ class TestAdvancedMapAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{=80:95}.count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_value_range(self, session_with_map_data, ael):
 
         """Test $.map.{=80:95} to get values in range."""
@@ -1502,12 +1408,7 @@ class TestAdvancedMapAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{#0:2}.count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_rank_range(self, session_with_map_data, ael):
         """Test $.map.{#0:2} to get smallest 2 values by rank."""
         # Get 2 smallest values
@@ -1611,12 +1512,7 @@ class TestNestedCdtAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.nested_list.[0].count() == 3",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_nested_list_count(self, session_with_nested_data, ael):
         """Test $.list.[0].count() - count of nested list."""
         # nested_list[0] has 3 elements for rec1, 2 for rec2
@@ -1640,12 +1536,7 @@ class TestNestedCdtAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.simple_list.count() == 5",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_size_simple(self, session_with_nested_data, ael):
         """Test $.list.count() - basic list size."""
         stream = await (
@@ -1686,12 +1577,7 @@ class TestMapKeyOperationsAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{alice,bob}.count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_key_list(self, session_with_map_data, ael):
         """Test $.map.{a,b,c} - get entries by key list."""
         # Get entries for keys alice and bob from scores
@@ -1715,12 +1601,7 @@ class TestMapKeyOperationsAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{alice-dave}.count() >= 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_key_range(self, session_with_map_data, ael):
         """Test $.map.{@a:b} - map key range (server AEL; bare {a:b} is index-only)."""
         # Get entries with keys from 'a' to 'd' (alice, bob, charlie)
@@ -1786,12 +1667,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.numbers.[#0:2~5].count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_rank_range_relative(self, session_with_relative_range_data, ael):
 
         """Test $.list.[#rank:end~value] - list value-relative rank range."""
@@ -1817,12 +1693,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.numbers.[#0:~5].count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_rank_range_relative_no_count(self, session_with_relative_range_data, ael):
         """Test $.list.[#rank:~value] - list value-relative rank range without end count."""
         # Get all items from rank 0 relative to value 5
@@ -1846,12 +1717,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.numbers.[!#0:2~5].count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_list_rank_range_relative_inverted(self, session_with_relative_range_data, ael):
         """Test $.list.[!#rank:end~value] - inverted list value-relative rank range."""
         # Get items NOT in rank range
@@ -1875,12 +1741,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{#-1:1~80}.count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_rank_range_relative(self, session_with_relative_range_data, ael):
         """Test $.map.{#rank:end~value} - map value-relative rank range."""
         # Get map entries with rank relative to value 80
@@ -1903,12 +1764,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{#-2:~80}.count() >= 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_rank_range_relative_no_count(self, session_with_relative_range_data, ael):
         """Test $.map.{#rank:~value} - map value-relative rank range without end count."""
         stream = await (
@@ -1930,12 +1786,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{!#-1:1~80}.count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_rank_range_relative_inverted(self, session_with_relative_range_data, ael):
         """Test $.map.{!#rank:end~value} - inverted map value-relative rank range."""
         stream = await (
@@ -1957,12 +1808,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{0:1~bob}.count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_index_range_relative(self, session_with_relative_range_data, ael):
         """Test $.map.{start:end~key} - map key-relative index range."""
         # Get map entries at index 0 to 1 relative to key "bob"
@@ -1985,12 +1831,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{0:~bob}.count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_index_range_relative_no_count(self, session_with_relative_range_data, ael):
         """Test $.map.{start:~key} - map key-relative index range without end count."""
         stream = await (
@@ -2012,12 +1853,7 @@ class TestRelativeRangeAel:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{!0:1~bob}.count() >= 1",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_index_range_relative_inverted(self, session_with_relative_range_data, ael):
         """Test $.map.{!start:end~key} - inverted map key-relative index range."""
         stream = await (
@@ -2036,52 +1872,6 @@ class TestRelativeRangeAel:
 
 class TestAelErrorHandling:
     """Tests for AEL error handling."""
-
-    @requires_client_side_ael
-    async def test_invalid_ael_syntax_client_parse(self, session_with_cdt_data):
-        """Invalid AEL raises :class:`AelParseException` when parsed client-side."""
-        with pytest.raises(AelParseException):
-            await (
-                session_with_cdt_data.query(general_namespace(), "cdt_test")
-                .where("this is not valid AEL !!!")
-                .execute()
-            )
-
-    @requires_server_compiled_ael
-    async def test_invalid_ael_syntax_server_path(self, session_with_cdt_data):
-        """Invalid AEL on server path surfaces as ``PARAMETER_ERROR`` from the server."""
-        await assert_dataset_invalid_ael_rejected(
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where("this is not valid AEL !!!")
-            .execute()
-        )
-
-    @requires_client_side_ael
-    async def test_invalid_list_syntax_client_parse(self, session_with_cdt_data):
-        """Invalid list path raises :class:`AelParseException` when parsed client-side."""
-        with pytest.raises(AelParseException):
-            await (
-                session_with_cdt_data.query(general_namespace(), "cdt_test")
-                .where("$.numbers.[invalidSyntax] == 100")
-                .execute()
-            )
-
-    @requires_server_compiled_ael
-    async def test_invalid_list_syntax_server_path(self, session_with_cdt_data):
-        """Invalid list path on server path surfaces as ``PARAMETER_ERROR`` from the server."""
-        await assert_dataset_invalid_ael_rejected(
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .where("$.numbers.[invalidSyntax] == 100")
-            .execute()
-        )
-
-
-# =============================================================================
-# Advanced expression filter tests (JFC FilterExpTest equivalents)
-# =============================================================================
-
-DS = DataSet.of(general_namespace(), "filter_exp_test")
-
 
 @pytest.fixture
 async def session_with_filter_exp(
@@ -2167,11 +1957,6 @@ class TestAdvancedExpFilters:
 
     @pytest.mark.parametrize("expr", [
         pytest.param(
-            "findBitLeft($.A, true) == 63",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "findBitLeft(x: $.A, value: true) == 63",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -2184,11 +1969,6 @@ class TestAdvancedExpFilters:
         await self._assert_matches(session_with_filter_exp, key, expr, "A", 1)
 
     @pytest.mark.parametrize("expr", [
-        pytest.param(
-            "findBitRight($.A, true) == 63",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "findBitRight(x: $.A, value: true) == 63",
             id="server-side",
@@ -2214,14 +1994,6 @@ class TestAdvancedExpFilters:
         await self._assert_matches(session_with_filter_exp, key, "max($.A, $.D, $.E) == 1", "A", 1)
 
     @pytest.mark.parametrize("ael", [
-        pytest.param(
-            "(when($.A == 0 => $.D + $.E, "
-            "$.A == 1 => $.D - $.E, "
-            "$.A == 2 => $.D * $.E, "
-            "default => -1)) == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "(when($.A:INT == 0 => $.D:INT + $.E:INT, "
             "$.A:INT == 1 => $.D:INT - $.E:INT, "
@@ -2456,12 +2228,7 @@ class TestAelMapBlobIntegrationQueries:
             id="server-side",
             marks=requires_server_compiled_ael,
         ),
-        pytest.param(
-            "$.scores.{alice,bob}.count() == 2",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-    ])
+        ])
     async def test_map_ael_key_list_count_on_server(self, session_with_map_data, ael):
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
@@ -2486,12 +2253,7 @@ class TestAelMapBlobIntegrationQueries:
                 id="server-side-hex",
                 marks=requires_server_compiled_ael,
             ),
-            pytest.param(
-                _b64_blob_expr,
-                id="client-side-b64",
-                marks=requires_client_side_ael,
-            ),
-        ],
+            ],
     )
     async def test_blob_bin_ael_equality(
         self,

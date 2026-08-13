@@ -58,7 +58,7 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape

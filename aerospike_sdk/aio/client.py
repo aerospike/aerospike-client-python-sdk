@@ -39,7 +39,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
+from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
@@ -101,11 +101,9 @@ class Client:
         self,
         seeds: str,
         policy: Optional[ClientPolicy] = None,
-        index_refresh_interval: float = 5.0,
         *,
         max_error_rate: Optional[int] = None,
         error_rate_window: Optional[int] = None,
-        indexes_monitor: Optional[IndexesMonitor] = None,
     ) -> None:
         """Store cluster seeds and policy; connection starts in :meth:`connect` or ``async with``.
 
@@ -114,12 +112,6 @@ class Client:
                 ``"127.0.0.1:3000"`` or a comma-separated host list if supported).
             policy: Optional :class:`~aerospike_async.ClientPolicy`; defaults to a
                 new client policy when omitted.
-            index_refresh_interval: Seconds between secondary index cache refreshes
-                (default 5.0). The monitor is a daemon thread that starts lazily
-                on the first AEL ``where()`` query and periodically refreshes
-                cached index metadata so subsequent queries can transparently
-                generate secondary index filters. Clients that never use
-                ``where()`` never start the monitor thread.
             max_error_rate: Per-node circuit-breaker threshold. When a node's
                 error count crosses this value within ``error_rate_window``
                 tend iterations, subsequent commands routed to that node fail
@@ -129,17 +121,6 @@ class Client:
             error_rate_window: Number of cluster tend iterations after which
                 each node's error counter is reset. Defaults to the underlying
                 :class:`ClientPolicy` default (``1``).
-            indexes_monitor: Optional pre-constructed :class:`IndexesMonitor`
-                to share across Clients (for example, all clients in an
-                :class:`~aerospike_sdk.AsyncPool`). When provided, this
-                Client uses it for AEL filter generation but does not
-                start or stop it — the caller that constructed the monitor
-                owns its lifecycle. When ``None`` (default), the Client
-                owns and manages a private monitor.
-
-        Note:
-            No network I/O occurs here. The client connects when you ``await
-            connect()`` or enter ``async with``.
         """
         self._seeds = seeds
         if policy is None:
@@ -151,12 +132,6 @@ class Client:
         self._policy = policy
         self._client: Optional[AsyncClient] = None
         self._connected = False
-        if indexes_monitor is not None:
-            self._indexes_monitor = indexes_monitor
-            self._owns_monitor = False
-        else:
-            self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
-            self._owns_monitor = True
         # Shared by all Session instances from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
@@ -278,9 +253,6 @@ class Client:
                     exc,
                     exc_info=True,
                 )
-        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
-        # Sync benches and callers that never touch the AEL filter-generation
-        # path pay zero daemon-thread cost.
 
     async def close(self) -> None:
         """Close the underlying async client and clear connection state.
@@ -293,8 +265,6 @@ class Client:
         if self._sdk_config_monitor is not None:
             await self._sdk_config_monitor.stop()
             self._sdk_config_monitor = None
-        if self._owns_monitor:
-            self._indexes_monitor.stop()
         if self._client is not None:
             await self._client.close()
             self._client = None
@@ -331,10 +301,7 @@ class Client:
         """Synchronously open a connection without requiring an asyncio loop.
 
         Uses :func:`aerospike_async.new_client_blocking` to construct the
-        underlying PAC client and sets ``_connected = True``. The
-        :class:`IndexesMonitor` daemon thread is not started here; it
-        lazy-starts on the first AEL ``where()`` query that needs cached
-        secondary-index metadata.
+        underlying PAC client and sets ``_connected = True``.
 
         Idempotent: returns early if already connected.
 
@@ -374,15 +341,12 @@ class Client:
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
         )
-        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close_blocking(self) -> None:
         """Synchronously close the underlying client. Pair with :meth:`connect_blocking`.
 
         Safe to call when already closed.
         """
-        if self._owns_monitor:
-            self._indexes_monitor.stop()
         if self._client is not None:
             self._client.close_blocking()
             self._client = None
@@ -562,7 +526,6 @@ class Client:
                 namespace=namespace,
                 set_name=set_name,
                 behavior=behavior,
-                indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 sdk_client=self,
@@ -585,7 +548,6 @@ class Client:
                 namespace=namespace,
                 set_name=set_name,
                 behavior=behavior,
-                indexes_monitor=self._indexes_monitor,
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
                 sdk_client=self,
@@ -618,7 +580,6 @@ class Client:
             namespace=namespace,
             set_name=set_name,
             behavior=behavior,
-            indexes_monitor=self._indexes_monitor,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
             sdk_client=self,

@@ -14,43 +14,39 @@
 
 from unittest.mock import MagicMock, patch
 
-from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
+import pytest
+
 from aerospike_sdk.server_compiled_ael import (
     compute_server_compiled_ael_support_blocking,
 )
+from aerospike_sdk.server_filter import filter_expression_from_ael_string
 
 
 class TestFilterExpressionFromAelString:
-    def test_uses_client_parse_when_gate_off(self):
-        with patch("aerospike_sdk.ael.server_filter.parse_ael") as parse_ael:
-            sentinel = object()
-            parse_ael.return_value = sentinel
-            result = filter_expression_from_ael_string(
+    def test_raises_when_gate_off(self):
+        with pytest.raises(ValueError, match="server-compiled AEL"):
+            filter_expression_from_ael_string(
                 "$.age > 1",
                 supports_server_compiled_ael=False,
             )
-        assert result is sentinel
-        parse_ael.assert_called_once_with("$.age > 1")
 
     def test_uses_server_compiled_when_gate_on(self):
         sentinel = object()
         factory = MagicMock(return_value=sentinel)
         with patch(
-            "aerospike_sdk.ael.server_filter._SERVER_COMPILED_FACTORY",
+            "aerospike_sdk.server_filter._SERVER_COMPILED_FACTORY",
             factory,
         ):
             with patch(
-                "aerospike_sdk.ael.server_filter._PAC_EXPOSES_SERVER_COMPILED",
+                "aerospike_sdk.server_filter._PAC_EXPOSES_SERVER_COMPILED",
                 True,
             ):
-                with patch("aerospike_sdk.ael.server_filter.parse_ael") as parse_ael:
-                    result = filter_expression_from_ael_string(
-                        "$.age > 1",
-                        supports_server_compiled_ael=True,
-                    )
+                result = filter_expression_from_ael_string(
+                    "$.age > 1",
+                    supports_server_compiled_ael=True,
+                )
         assert result is sentinel
         factory.assert_called_once_with("$.age > 1")
-        parse_ael.assert_not_called()
 
 
 class TestComputeServerCompiledAelSupport:

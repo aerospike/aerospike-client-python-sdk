@@ -58,7 +58,6 @@ async def qscexp_client(
     blob_bytes = long_bytes_be(50001)
 
     cluster_def = make_cluster_definition(aerospike_host)
-    cluster_def.with_index_refresh_interval(0.25)
     async with await cluster_def.connect() as cluster:
         client = cluster._sdk_client
         pac = client.underlying_client

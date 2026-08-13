@@ -1094,21 +1094,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        self._prepare_dataset_query_index_context(
-            use_server_query_selection=use_server_query_selection,
-        )
-        await self._wait_for_dataset_query_index_context(
-            use_server_query_selection=use_server_query_selection,
-        )
-
-        if not use_server_query_selection and self._where_ael is not None:
-            self._resolve_index_context()
-
         partition_filter = self._partition_filter or PartitionFilter.all()
-
-        self._maybe_auto_generate_filters(
-            hint, policy, use_server_query_selection=use_server_query_selection,
-        )
 
         statement = self._build_statement()
 

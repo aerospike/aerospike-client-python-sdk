@@ -50,7 +50,6 @@ from typing import (
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition
-from aerospike_sdk.index_monitor import IndexesMonitor
 
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -132,14 +131,6 @@ class AsyncPool:
     scale with ``loop_count``.  The throughput benefit only materializes
     under a free-threaded build (3.14t).
 
-    **Shared IndexesMonitor.**  Index metadata is cluster-scoped, so the
-    pool runs one shared :class:`IndexesMonitor` (anchored to loop 0,
-    issuing info commands through loop 0's Cluster) instead of one per
-    loop, so cluster-side ``sindex-list`` load is independent of
-    ``loop_count``.  Tune via ``index_refresh_interval`` — either the
-    kwarg on :class:`AsyncPool` or
-    :meth:`ClusterDefinition.with_index_refresh_interval`.
-
     **Per-Client Tokio runtime.**  When ``loop_count >= 4``, AsyncPool
     automatically configures each per-loop Cluster to use its own dedicated
     PAC Tokio runtime instead of the shared global one. This eliminates the
@@ -198,7 +189,6 @@ class AsyncPool:
         cluster_definition: Optional[ClusterDefinition] = None,
         loop_count: Optional[int] = None,
         *,
-        index_refresh_interval: Optional[float] = None,
         per_client_runtime: Optional[bool] = None,
         use_uvloop: Optional[bool] = None,
         client_factory: Optional[Callable[[], Client]] = None,
@@ -226,13 +216,6 @@ class AsyncPool:
                 :meth:`ClusterDefinition.with_system_settings`.
             loop_count: Number of event loops / OS threads.  Defaults to
                 ``os.cpu_count()`` (or ``4`` if indeterminate).
-            index_refresh_interval: Seconds between secondary-index cache
-                refreshes for the pool's *single shared* ``IndexesMonitor``.
-                Defaults to the definition's
-                :meth:`~ClusterDefinition.with_index_refresh_interval` value
-                (itself 5.0 by default).  Index metadata is cluster-scoped,
-                so one monitor serves all pool Clusters, eliminating
-                N×polling load.
             client_factory: **Deprecated** — pass ``cluster_definition``
                 instead.  Zero-argument callable returning an *unconnected*
                 :class:`~aerospike_sdk.aio.client.Client`, called once per
@@ -310,12 +293,6 @@ class AsyncPool:
             raise ValueError("cluster_definition is required")
         self._definition = cluster_definition
         self._factory = client_factory
-        if index_refresh_interval is None:
-            index_refresh_interval = (
-                cluster_definition._index_refresh_interval
-                if cluster_definition is not None
-                else 5.0
-            )
         self._n = loop_count or os.cpu_count() or 4
         # Auto-decide per-Client runtime: enable at 4+ loops where it scales,
         # leave alone below where the shared global runtime wins. ALSO gate
@@ -368,10 +345,6 @@ class AsyncPool:
         self._started = False
         self._closed = False
         self._loop_ready: List[threading.Event] = [threading.Event() for _ in range(self._n)]
-        # Shared monitor: one instance for all pool clients.  Constructed
-        # here; started on loop 0 in `start()`, stopped before client 0 in
-        # `aclose()`.
-        self._shared_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -401,7 +374,7 @@ class AsyncPool:
         # construction and the shared monitor is injected at __init__ time.
         if self._definition is not None:
             clients: List[Client] = self._definition._build_pool_members(
-                self._n, self._shared_monitor
+                self._n
             )
         else:
             # Deprecated client_factory path. Each factory call returns a
@@ -412,14 +385,6 @@ class AsyncPool:
             clients = []
             for _ in range(self._n):
                 client = self._factory()
-                # Replace the factory-created per-Client monitor with the
-                # pool's shared one before `connect()` runs.
-                # `_owns_monitor = False` makes the per-Client lazy-start
-                # path skip start (so only one daemon thread polls, not N).
-                # The pool drives the shared monitor's lifecycle (stop on
-                # aclose).
-                client._indexes_monitor = self._shared_monitor
-                client._owns_monitor = False
                 clients.append(client)
 
         # One-shot policy mutation.  Per-Client Tokio runtime must
@@ -547,16 +512,6 @@ class AsyncPool:
         if self._closed:
             return
         self._closed = True
-
-        # Stop the shared monitor before closing clients — the daemon thread
-        # issues info commands through clients[0]'s PAC client, so it must
-        # be torn down before that client closes. No-op if it was never
-        # started (lazy-start: only triggered on first AEL query).
-        if self._started:
-            try:
-                self._shared_monitor.stop()
-            except Exception as exc:
-                log.warning("AsyncPool: error stopping shared monitor: %s", exc)
 
         # Close all clients concurrently on their own loops. Sequential
         # `.result()` would freeze the caller's loop for up to

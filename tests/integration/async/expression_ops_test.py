@@ -35,7 +35,7 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import ResultCode, ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 NS = general_namespace()
@@ -139,11 +139,6 @@ class TestSelectFrom:
         assert result.record.bins.get("ev") is None
 
     @pytest.mark.parametrize("bin_ael", [
-        pytest.param(
-            "$.A",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "$.A:INT",
             id="server-side",
@@ -289,11 +284,6 @@ class TestCombinedExpression:
 
     @pytest.mark.parametrize("upsert_ael,select_ael", [
         pytest.param(
-            "$.D + 10", "$.A",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "$.D:INT + 10", "$.A:INT",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -325,11 +315,6 @@ class TestCombinedExpression:
         assert result.record.bins["C"] == 5
 
     @pytest.mark.parametrize("upsert_ael,select_ael", [
-        pytest.param(
-            "$.A + 4", "$.A",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "$.A:INT + 4", "$.A:INT",
             id="server-side",

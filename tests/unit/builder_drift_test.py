@@ -228,7 +228,7 @@ _POSITIONAL_CTOR_ORDER = {
     _QueryBuilderBase: (
         "aerospike_sdk.aio.session.Session._fast_query_builder",
         (
-            "client", "namespace", "set_name", "behavior", "indexes_monitor",
+            "client", "namespace", "set_name", "behavior",
             "cached_read_policy", "cached_write_policy",
             "cached_read_policy_sc", "cached_write_policy_sc",
             "txn", "namespace_mode_resolver",

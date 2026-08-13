@@ -215,22 +215,3 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
     finally:
         await cluster.close()
 
-
-async def test_with_index_refresh_interval_threads_through(aerospike_host):
-    """``with_index_refresh_interval`` reaches the connected cluster's monitor."""
-    if ":" in aerospike_host:
-        hostname, port_str = aerospike_host.split(":", 1)
-        port = int(port_str)
-    else:
-        hostname = aerospike_host
-        port = 3000
-
-    cd = apply_general_auth(ClusterDefinition(hostname, port)).with_index_refresh_interval(2.5)
-    assert cd._index_refresh_interval == 2.5
-    cluster = await cd.connect()
-    try:
-        assert cluster._sdk_client._indexes_monitor._refresh_interval == 2.5
-    finally:
-        await cluster.close()
-
-

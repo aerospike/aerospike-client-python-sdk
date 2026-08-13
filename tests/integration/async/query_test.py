@@ -65,7 +65,6 @@ def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
         client=cluster._client.underlying_client,
         namespace=namespace,
         set_name=None,
-        indexes_monitor=cluster._client._indexes_monitor,
     )
 
 

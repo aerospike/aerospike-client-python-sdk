@@ -139,8 +139,7 @@ from aerospike_sdk.background_shared import (
     make_background_write_policy,
     reject_unsupported_background_write_ops,
 )
-from aerospike_sdk.ael.parser import parse_ael_with_index
-from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
     OnError,
@@ -219,9 +218,7 @@ def _resolve_hll_flags(
 class QueryHint:
     """Hint for influencing secondary index selection and query scheduling.
 
-    Provide ``index_name`` as a soft explain hint on the server-led path, or
-    ``bin_name`` to skip explain and use legacy client-side index selection.
-    ``index_name`` and ``bin_name`` are mutually exclusive.
+    Provide ``index_name`` as a soft explain hint on the server-led path.
 
     On clusters that support field ``44`` query selection (>= 8.1.3),
     ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
@@ -241,31 +238,23 @@ class QueryHint:
 
     Args:
         index_name: Soft index name hint (field ``21`` on explain).
-        bin_name: Legacy path — skip server explain; client picks index by bin.
         query_duration: Override ``expected_duration`` on the query policy.
         require_index: Explain flag — reject primary-index fallback.
         hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
-        ValueError: If both ``index_name`` and ``bin_name`` are provided, or
-            ``hard_hint`` without ``index_name``.
+        ValueError: If ``hard_hint`` is set without ``index_name``.
 
     See Also:
         :meth:`QueryBuilder.with_hint`
     """
 
     index_name: Optional[str] = None
-    bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
     require_index: bool = False
     hard_hint: bool = False
 
     def __post_init__(self) -> None:
-        if self.index_name is not None and self.bin_name is not None:
-            raise ValueError(
-                "index_name and bin_name are mutually exclusive; "
-                "provide one or neither, not both"
-            )
         if self.hard_hint and not self.index_name:
             raise ValueError("hard_hint requires index_name")
 
@@ -281,19 +270,15 @@ class _FilterRecord:
     ctx: Optional[List[CTX]] = None
 
     def rebuild_for_hint(self, hint: QueryHint) -> Filter:
-        """Reconstruct this filter with the hint's index_name or bin_name override."""
+        """Reconstruct this filter with the hint's ``index_name`` override."""
         if self.method is None or self.args is None:
             raise ValueError(
-                "Cannot apply index_name/bin_name hint to a pre-built Filter. "
-                "Use Filter.*_by_index() directly or let the PSDK generate the "
-                "filter via parse_ael_with_index()."
+                "Cannot apply index_name hint to a pre-built Filter. "
+                "Use Filter.*_by_index() directly."
             )
         if hint.index_name is not None:
             factory = getattr(Filter, f"{self.method}_by_index")
             f = factory(hint.index_name, *self.args)
-        elif hint.bin_name is not None:
-            factory = getattr(Filter, self.method)
-            f = factory(hint.bin_name, *self.args)
         else:
             return self.filter
         if self.ctx:
@@ -302,8 +287,6 @@ class _FilterRecord:
 
 
 if TYPE_CHECKING:
-    from aerospike_sdk.ael.filter_gen import IndexContext
-    from aerospike_sdk.index_monitor import IndexesMonitor
     from aerospike_sdk.policy.behavior import Behavior
 
 @dataclass(slots=True)
@@ -394,7 +377,6 @@ class _QueryBuilderBase:
     _filter_expression: Optional[FilterExpression] = None
     _query_hint: Optional[QueryHint] = None
     _where_ael: Optional[str] = None
-    _index_context: Optional["IndexContext"] = None
     _policy: Optional[QueryPolicy] = None
     _partition_filter: Optional[PartitionFilter] = None
     _chunk_size: Optional[int] = None
@@ -431,7 +413,6 @@ class _QueryBuilderBase:
         namespace: str,
         set_name: str,
         behavior: Optional[Behavior] = None,
-        indexes_monitor: Optional["IndexesMonitor"] = None,
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         cached_read_policy_sc: Optional[ReadPolicy] = None,
@@ -451,8 +432,6 @@ class _QueryBuilderBase:
             namespace: The namespace name.
             set_name: The set name.
             behavior: Optional Behavior for deriving policies.
-            indexes_monitor: Optional monitor providing cached index metadata
-                for transparent filter generation from AEL expressions.
             cached_read_policy: Pre-computed read policy from the session.
             cached_write_policy: Pre-computed write policy from the session.
             txn: Optional active :class:`~aerospike_async.Txn` captured from
@@ -475,7 +454,6 @@ class _QueryBuilderBase:
         self._namespace = namespace
         self._set_name = set_name
         self._behavior = behavior
-        self._indexes_monitor = indexes_monitor
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
         # Mutable-list fields need per-instance copies (cannot live as
         # class defaults — first mutation would leak across instances).
@@ -898,26 +876,6 @@ class _QueryBuilderBase:
             self._filter_expression = expression
         return self
 
-    def with_index_context(self, index_context: "IndexContext") -> Self:
-        """Explicitly override the secondary index metadata used for filter generation.
-
-        Most applications do **not** need this method. The client automatically
-        discovers and caches secondary index metadata from the cluster in the
-        background. Use this only when you need to force a specific index
-        context that differs from the live cluster state.
-
-        Args:
-            index_context: Index metadata for the query's namespace.
-
-        Returns:
-            This builder for method chaining.
-
-        See Also:
-            :class:`~aerospike_sdk.ael.filter_gen.IndexContext`
-        """
-        self._index_context = index_context
-        return self
-
     def with_policy(self, policy: QueryPolicy) -> Self:
         """
         Set the query policy.
@@ -1144,9 +1102,9 @@ class _QueryBuilderBase:
     def with_hint(self, hint: QueryHint) -> Self:
         """Attach a query hint for secondary index selection or scheduling.
 
-        A hint can redirect which secondary index is used (``index_name``),
-        remap the filter to a different bin (``bin_name``), or override the
-        expected query duration (``query_duration``).  Only one call to
+        A hint can redirect which secondary index is used (``index_name``)
+        or override the expected query duration (``query_duration``).
+        Only one call to
         ``with_hint`` is allowed per builder.
 
         Example::
@@ -1817,27 +1775,6 @@ class _QueryBuilderBase:
             bwp.durable_delete = eff
         return bwp
 
-    def _resolve_index_context(self) -> None:
-        """Auto-populate ``_index_context`` from the monitor when not set.
-
-        The monitor's cached :class:`IndexContext` is at namespace granularity
-        and has no ``query_set``. We derive a per-query copy with
-        ``query_set=self._set_name`` so filter selection rejects indexes
-        defined on a different set; cross-set indexes (those without a
-        set name) remain eligible.
-        """
-        if self._index_context is not None:
-            return
-        if self._indexes_monitor is None:
-            return
-        ctx = self._indexes_monitor.get_index_context(self._namespace)
-        if ctx is None:
-            return
-        if self._set_name and ctx.query_set != self._set_name:
-            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
-            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
-        self._index_context = ctx
-
     def _dataset_set_name(self) -> Optional[str]:
         return self._set_name or None
 
@@ -1872,8 +1809,6 @@ class _QueryBuilderBase:
             return False
         if self._filter_records:
             return False
-        if hint is not None and hint.bin_name is not None:
-            return False
         return self._supports_query_selection
 
     def _apply_dataset_query_policy_filter(
@@ -1887,52 +1822,6 @@ class _QueryBuilderBase:
         self._resolve_where_filter_expression()
         if self._filter_expression is not None:
             policy.filter_expression = self._filter_expression
-
-    def _prepare_dataset_query_index_context(
-        self,
-        *,
-        use_server_query_selection: bool,
-    ) -> None:
-        if self._where_ael is None or self._indexes_monitor is None:
-            return
-        if use_server_query_selection:
-            return
-        self._indexes_monitor.start(self._client)
-
-    async def _wait_for_dataset_query_index_context(
-        self,
-        *,
-        use_server_query_selection: bool,
-    ) -> None:
-        if self._where_ael is None or self._indexes_monitor is None:
-            return
-        if use_server_query_selection:
-            return
-        await asyncio.to_thread(self._indexes_monitor.wait_until_ready)
-
-    def _wait_for_dataset_query_index_context_blocking(
-        self,
-        *,
-        use_server_query_selection: bool,
-    ) -> None:
-        if self._where_ael is None or self._indexes_monitor is None:
-            return
-        if use_server_query_selection:
-            return
-        self._indexes_monitor.wait_until_ready()
-
-    def _maybe_auto_generate_filters(
-        self,
-        hint: Optional[QueryHint],
-        policy: QueryPolicy,
-        *,
-        use_server_query_selection: bool,
-    ) -> None:
-        if self._where_ael is None or self._index_context is None:
-            return
-        if use_server_query_selection:
-            return
-        self._auto_generate_filters(hint, policy)
 
     async def _run_dataset_query_async(
         self,
@@ -2009,37 +1898,6 @@ class _QueryBuilderBase:
         )
         return recordset, plan
 
-    def _auto_generate_filters(
-        self,
-        hint: Optional[QueryHint],
-        policy: QueryPolicy,
-    ) -> None:
-        """Parse AEL with index context to generate Filter + Exp.
-
-        When a hint provides ``index_name`` or ``bin_name``, those overrides
-        are forwarded to the filter generation pipeline.
-        """
-        if self._where_ael is None or self._index_context is None:
-            return
-
-        hint_index = hint.index_name if hint is not None else None
-        hint_bin = hint.bin_name if hint is not None else None
-
-        result = parse_ael_with_index(
-            self._where_ael,
-            self._index_context,
-            hint_index_name=hint_index,
-            hint_bin_name=hint_bin,
-        )
-        if result.filter is not None:
-            self._filter_records.append(_FilterRecord(filter=result.filter))
-            log.debug(
-                "Auto-selected secondary index filter for query on %s.%s",
-                self._namespace,
-                self._set_name,
-            )
-        if result.exp is not None:
-            policy.filter_expression = result.exp
     def _batch_policy_for(
         self, op_kind: "OpKind", op_shape: "OpShape",
     ) -> Optional[BatchPolicy]:
@@ -2226,9 +2084,7 @@ class _QueryBuilderBase:
         statement = Statement(self._namespace, self._set_name, bins)
         if self._filter_records:
             hint = self._query_hint
-            needs_rebuild = hint is not None and (
-                hint.index_name is not None or hint.bin_name is not None
-            )
+            needs_rebuild = hint is not None and hint.index_name is not None
             filters = []
             for rec in self._filter_records:
                 if needs_rebuild and hint is not None and rec.method is not None:

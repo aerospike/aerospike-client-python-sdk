@@ -31,8 +31,6 @@ from typing_extensions import Self
 
 from aerospike_async import FilterExpression, Key
 
-from aerospike_sdk.ael.parser import parse_ael
-
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
     from aerospike_sdk.aio.operations.query import WriteSegmentBuilder
     from aerospike_sdk.aio.operations.udf import UdfBuilder, UdfFunctionBuilder
@@ -170,7 +168,7 @@ class _UdfBuilderBase(Generic[_QB]):
             :meth:`QueryBuilder.where`: Same AEL for reads.
         """
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self

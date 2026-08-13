@@ -27,7 +27,7 @@ import pytest_asyncio
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 
@@ -632,11 +632,6 @@ class TestBatchExpressionOps:
 
     @pytest.mark.parametrize("sum_ael", [
         pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "$.A:INT + $.B:INT",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -714,11 +709,6 @@ class TestBatchStream:
 
     @pytest.mark.parametrize("sum_ael", [
         pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "$.A:INT + $.B:INT",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -784,11 +774,6 @@ class TestBatchStream:
         assert empty == []
 
     @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "$.A:INT + $.B:INT",
             id="server-side",

@@ -18,9 +18,11 @@
 Tests the two forms: where(str) and where(Exp).
 """
 
+from unittest.mock import patch
+
 import pytest
 
-from aerospike_sdk import Exp, parse_ael
+from aerospike_sdk import Exp
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import SyncQueryBuilder
 
@@ -44,24 +46,40 @@ class TestQueryBuilderWhere:
     """Test QueryBuilder.where() overloads."""
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) records AEL and materializes on demand."""
-        builder = _query_builder()
-        expected = parse_ael("$.age > 20")
-        result = builder.where("$.age > 20")
-        assert result is builder
-        assert builder._where_ael == "$.age > 20"
-        assert builder._filter_expression is None
-        assert builder._effective_filter_expression() == expected
+        """where(str) records AEL and materializes via server_filter."""
+        sentinel = object()
+        builder = _query_builder(supports_server_compiled_ael=True)
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            return_value=sentinel,
+        ) as factory:
+            result = builder.where("$.age > 20")
+            assert result is builder
+            assert builder._where_ael == "$.age > 20"
+            assert builder._filter_expression is None
+            assert builder._effective_filter_expression() is sentinel
+        factory.assert_called_once_with(
+            "$.age > 20",
+            supports_server_compiled_ael=True,
+        )
 
     def test_where_ael_fstring_sets_filter_expression(self):
         """where(str) with f-string interpolation."""
-        builder = _query_builder()
+        sentinel = object()
+        builder = _query_builder(supports_server_compiled_ael=True)
         age = 21
-        expected = parse_ael("$.age > 21")
-        result = builder.where(f"$.age > {age}")
-        assert result is builder
-        assert builder._where_ael == f"$.age > {age}"
-        assert builder._effective_filter_expression() == expected
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            return_value=sentinel,
+        ) as factory:
+            result = builder.where(f"$.age > {age}")
+            assert result is builder
+            assert builder._where_ael == f"$.age > {age}"
+            assert builder._effective_filter_expression() is sentinel
+        factory.assert_called_once_with(
+            f"$.age > {age}",
+            supports_server_compiled_ael=True,
+        )
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(Exp) stores the expression directly."""
@@ -99,16 +117,25 @@ class TestSyncQueryBuilderWhere:
             client=object(),
             namespace="test",
             set_name="unit_test",
+            supports_server_compiled_ael=True,
         )
 
     def test_where_ael_string_sets_filter_expression(self):
-        """where(str) records AEL and materializes on demand."""
+        """where(str) records AEL and materializes via server_filter."""
+        sentinel = object()
         builder = self._sync_builder()
-        expected = parse_ael("$.age > 20")
-        result = builder.where("$.age > 20")
-        assert result is builder
-        assert builder._where_ael == "$.age > 20"
-        assert builder._effective_filter_expression() == expected
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            return_value=sentinel,
+        ) as factory:
+            result = builder.where("$.age > 20")
+            assert result is builder
+            assert builder._where_ael == "$.age > 20"
+            assert builder._effective_filter_expression() is sentinel
+        factory.assert_called_once_with(
+            "$.age > 20",
+            supports_server_compiled_ael=True,
+        )
 
     def test_where_filter_expression_sets_filter_expression(self):
         """where(Exp) stores the expression directly."""

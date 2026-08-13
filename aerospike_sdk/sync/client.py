@@ -15,12 +15,8 @@
 
 """Synchronous SDK client.
 
-Owns a PAC ``aerospike_async.Client`` and a daemon-thread
-:class:`~aerospike_sdk.index_monitor.IndexesMonitor`. Every lifecycle and
-IO entry calls PAC's ``_blocking`` methods; no asyncio event loop is
-constructed. Builder and session factories return synchronous wrappers
-(:class:`~aerospike_sdk.sync.operations.query.QueryBuilder`,
-:class:`~aerospike_sdk.sync.session.Session`).
+Owns a PAC ``aerospike_async.Client``. Every lifecycle and IO entry calls
+PAC's ``_blocking`` methods; no asyncio event loop is constructed.
 """
 
 from __future__ import annotations
@@ -42,7 +38,7 @@ from aerospike_async import (
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.udf_shared import parse_udf_list
-from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
+from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
@@ -94,11 +90,9 @@ class SyncClient:
         self,
         seeds: str,
         policy: Optional[ClientPolicy] = None,
-        index_refresh_interval: float = 5.0,
         *,
         max_error_rate: Optional[int] = None,
         error_rate_window: Optional[int] = None,
-        indexes_monitor: Optional[IndexesMonitor] = None,
         current_thread_runtime: bool = False,
     ) -> None:
         """Initialize a SyncClient (no IO).
@@ -109,18 +103,10 @@ class SyncClient:
                 fresh ``ClientPolicy`` left at PAC's own defaults. Pass an
                 explicit ``ClientPolicy`` to override any client-level
                 setting.
-            index_refresh_interval: Seconds between secondary index cache
-                refreshes (default 5.0). The monitor is a daemon thread that
-                starts lazily on the first AEL ``where()`` query — clients
-                that never use AEL filters never spin up the thread.
             max_error_rate: Per-node circuit-breaker threshold (see
                 :class:`aerospike_sdk.aio.client.Client`).
             error_rate_window: Tend iterations until each node's error
                 counter resets.
-            indexes_monitor: Optional pre-constructed
-                :class:`IndexesMonitor` to share across clients (for example
-                an :class:`AsyncPool`). When supplied, this client uses it
-                but does not own its lifecycle.
             current_thread_runtime: **Experimental — opt-in, subject to
                 removal.** When ``True``, each calling OS thread gets its
                 own PAC ``_LocalClient`` (sync-only, backed by a per-thread
@@ -148,12 +134,6 @@ class SyncClient:
         self._current_thread_runtime = current_thread_runtime
         self._client: Optional[AsyncClient] = None
         self._connected = False
-        if indexes_monitor is not None:
-            self._indexes_monitor = indexes_monitor
-            self._owns_monitor = False
-        else:
-            self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
-            self._owns_monitor = True
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
@@ -219,9 +199,7 @@ class SyncClient:
         """Open a connection to the cluster synchronously.
 
         Calls :func:`aerospike_async.new_client_blocking` directly — no
-        asyncio loop is constructed. The :class:`IndexesMonitor` daemon
-        thread is not started here; it lazy-starts on the first AEL
-        ``where()`` query.
+        asyncio loop is constructed.
 
         When ``current_thread_runtime=True``, no PAC Client is constructed
         here. Instead a thread-local proxy is installed; each calling OS
@@ -260,19 +238,15 @@ class SyncClient:
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
         )
-        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close(self) -> None:
         """Close the connection synchronously.
 
-        Stops the :class:`IndexesMonitor` daemon thread (if owned) and
-        calls PAC's ``close_blocking``. Safe to call when already closed.
+        Calls PAC's ``close_blocking``. Safe to call when already closed.
         """
         if self._sdk_config_monitor is not None:
             self._sdk_config_monitor.stop()
             self._sdk_config_monitor = None
-        if self._owns_monitor:
-            self._indexes_monitor.stop()
         if self._client is not None:
             self._client.close_blocking()
             self._client = None

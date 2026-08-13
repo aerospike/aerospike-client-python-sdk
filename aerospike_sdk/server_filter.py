@@ -13,13 +13,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Pick client-parsed vs server-compiled filter wire form for AEL strings."""
+"""Encode string AEL as server-compiled filter expressions (field 43)."""
 
 from __future__ import annotations
 
 from aerospike_async import FilterExpression
-
-from aerospike_sdk.ael.parser import parse_ael
 
 # Resolved once at import — the PAC factory does not change at runtime.
 _SERVER_COMPILED_FACTORY = getattr(
@@ -33,13 +31,15 @@ def filter_expression_from_ael_string(
     *,
     supports_server_compiled_ael: bool,
 ) -> FilterExpression:
-    """Return a ``FilterExpression`` for *ael*, using server-compiled wire when allowed.
+    """Return field **43** ``FilterExpression`` for *ael* (server compiles at eval time).
 
-    When ``supports_server_compiled_ael`` is true and PAC exposes the factory,
-    returns field **43** MessagePack ``[128, "<utf-8 ael>"]`` via
-    :meth:`~aerospike_async.FilterExpression.from_server_compiled_ael`.
-    Otherwise parses on the client via :func:`~aerospike_sdk.ael.parser.parse_ael`.
+    Raises:
+        ValueError: When the cluster or PAC build lacks server-compiled AEL support.
     """
     if supports_server_compiled_ael and _PAC_EXPOSES_SERVER_COMPILED:
         return _SERVER_COMPILED_FACTORY(ael)  # type: ignore[misc]
-    return parse_ael(ael)
+    raise ValueError(
+        "String AEL requires server-compiled AEL support (Aerospike >= 8.1.3 "
+        "and a PAC build exposing FilterExpression.from_server_compiled_ael). "
+        "Use FilterExpression / Exp builders, or upgrade the cluster.",
+    )

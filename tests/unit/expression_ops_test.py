@@ -17,17 +17,16 @@
 
 Covers:
 - _build_exp_write_flags bitmask construction
-- parse_ael -> Exp conversion
 - QueryBinBuilder.select_from
 - OP_NOT_APPLICABLE guard on dataset queries with expression ops
 - WriteBinBuilder expression methods
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from aerospike_sdk import Exp, Key
-from aerospike_async import ExpReadFlags, ExpWriteFlags
+from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.aio.operations.query import (
@@ -36,7 +35,6 @@ from aerospike_sdk.aio.operations.query import (
     WriteBinBuilder,
     WriteSegmentBuilder,
 )
-from aerospike_sdk.ael.parser import parse_ael
 from aerospike_sdk.operations_shared import _build_exp_write_flags
 
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT
@@ -47,6 +45,21 @@ _EXP_WRITE_UPDATE_ONLY = ExpWriteFlags.UPDATE_ONLY
 _EXP_WRITE_ALLOW_DELETE = ExpWriteFlags.ALLOW_DELETE
 _EXP_WRITE_POLICY_NO_FAIL = ExpWriteFlags.POLICY_NO_FAIL
 _EXP_WRITE_EVAL_NO_FAIL = ExpWriteFlags.EVAL_NO_FAIL
+
+
+@pytest.fixture(autouse=True)
+def _mock_server_compiled_ael_string(monkeypatch):
+    def _fake(ael, *, supports_server_compiled_ael=True):
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    monkeypatch.setattr(
+        "aerospike_sdk.operations_shared.filter_expression_from_ael_string",
+        _fake,
+    )
+    monkeypatch.setattr(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        _fake,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -108,23 +121,14 @@ class TestBuildWriteFlags:
 
 
 # ===================================================================
-# parse_ael
-# ===================================================================
-
-class TestParseAel:
-
-    def test_string_converted_via_parse_ael(self):
-        result = parse_ael("$.age + 1")
-        assert isinstance(result, Exp)
-
-
-# ===================================================================
 # QueryBinBuilder.select_from
 # ===================================================================
 
 class TestQueryBinBuilderSelectFrom:
 
-    def test_select_from_string(self):
+    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    def test_select_from_string(self, mock_filter):
+        mock_filter.return_value = MagicMock()
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         result = qbb.select_from("$.A + 4")
@@ -132,19 +136,23 @@ class TestQueryBinBuilderSelectFrom:
         assert len(collector.operations) == 1
 
     def test_select_from_filter_expression(self):
-        expr = parse_ael("$.A + 4")
+        expr = FilterExpression.from_server_compiled_ael("$.A + 4")
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         qbb.select_from(expr)
         assert len(collector.operations) == 1
 
-    def test_select_from_ignore_eval_failure(self):
+    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    def test_select_from_ignore_eval_failure(self, mock_filter):
+        mock_filter.return_value = MagicMock()
         collector = _OpCollector()
         qbb = QueryBinBuilder(collector, "ev")
         qbb.select_from("$.A + 4", ignore_eval_failure=True)
         assert len(collector.operations) == 1
 
-    def test_multiple_select_from(self):
+    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    def test_multiple_select_from(self, mock_filter):
+        mock_filter.return_value = MagicMock()
         collector = _OpCollector()
         QueryBinBuilder(collector, "r1").select_from("$.A == 0 and $.D == 2")
         QueryBinBuilder(collector, "r2").select_from("$.A == 0 or $.D == 2")
@@ -157,8 +165,15 @@ class TestQueryBinBuilderSelectFrom:
 
 class TestDatasetQueryGuard:
 
-    async def test_select_from_on_dataset_query_raises(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="s")
+    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
+    async def test_select_from_on_dataset_query_raises(self, mock_filter):
+        mock_filter.return_value = MagicMock()
+        qb = QueryBuilder(
+            client=MagicMock(),
+            namespace="test",
+            set_name="s",
+            supports_server_compiled_ael=True,
+        )
         qb.bin("ev").select_from("$.A + 4")
         with pytest.raises(AerospikeError) as exc_info:
             await qb.execute()
@@ -172,7 +187,12 @@ class TestDatasetQueryGuard:
 class TestWriteBinBuilderExpression:
 
     def _make_write_builder(self, bin_name: str = "ev", op_type: str = "update"):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="s")
+        qb = QueryBuilder(
+            client=MagicMock(),
+            namespace="test",
+            set_name="s",
+            supports_server_compiled_ael=True,
+        )
         qb._single_key = Key("test", "s", "k1")
         qb._op_type = op_type
         segment = WriteSegmentBuilder(qb)

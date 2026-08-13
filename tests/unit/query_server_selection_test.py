@@ -17,10 +17,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import QueryPolicy
+from aerospike_async import QueryPolicy, FilterExpression
 
 from aerospike_sdk import Filter, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -80,11 +80,6 @@ class TestUseServerQuerySelection:
         qb = _async_builder(_ClientSupportsSelection())
         assert qb._use_server_query_selection(None) is False
 
-    def test_false_with_bin_name_hint(self):
-        qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
-        hint = QueryHint(bin_name="alt")
-        assert qb._use_server_query_selection(hint) is False
-
     def test_false_with_explicit_filter(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
         qb.filter(Filter.equal("age", 30))
@@ -143,11 +138,18 @@ class TestApplyDatasetQueryPolicyFilter:
         qb = _async_builder(
             _ClientNoSelection(),
             supports_query_selection=False,
+            supports_server_compiled_ael=True,
         ).where("$.age > 30")
         policy = QueryPolicy()
-        qb._apply_dataset_query_policy_filter(
-            policy, use_server_query_selection=False,
-        )
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            side_effect=lambda ael, *, supports_server_compiled_ael=True: (
+                FilterExpression.from_server_compiled_ael(ael)
+            ),
+        ):
+            qb._apply_dataset_query_policy_filter(
+                policy, use_server_query_selection=False,
+            )
         assert policy.filter_expression is not None
 
 
@@ -176,8 +178,18 @@ class TestExecuteDatasetQueryRouting:
         client.query_explain = AsyncMock()
         client.query_with_plan = AsyncMock()
 
-        qb = _async_builder(client, supports_query_selection=False).where("$.age > 30")
-        await qb._execute_dataset_query()
+        qb = _async_builder(
+            client,
+            supports_query_selection=False,
+            supports_server_compiled_ael=True,
+        ).where("$.age > 30")
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            side_effect=lambda ael, *, supports_server_compiled_ael=True: (
+                FilterExpression.from_server_compiled_ael(ael)
+            ),
+        ):
+            await qb._execute_dataset_query()
 
         client.query.assert_awaited_once()
         client.query_explain.assert_not_awaited()
@@ -226,8 +238,18 @@ class TestExecuteDatasetQueryBlockingRouting:
         client.query_explain_blocking = MagicMock()
         client.query_with_plan_blocking = MagicMock()
 
-        qb = _sync_builder(client, supports_query_selection=False).where("$.age > 30")
-        qb._execute_dataset_query_blocking()
+        qb = _sync_builder(
+            client,
+            supports_query_selection=False,
+            supports_server_compiled_ael=True,
+        ).where("$.age > 30")
+        with patch(
+            "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+            side_effect=lambda ael, *, supports_server_compiled_ael=True: (
+                FilterExpression.from_server_compiled_ael(ael)
+            ),
+        ):
+            qb._execute_dataset_query_blocking()
 
         client.query_blocking.assert_called_once()
         client.query_explain_blocking.assert_not_called()

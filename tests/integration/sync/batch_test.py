@@ -25,7 +25,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 
@@ -151,11 +151,6 @@ class TestSyncBatchStream:
 
     @pytest.mark.parametrize("sum_ael", [
         pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
             "$.A:INT + $.B:INT",
             id="server-side",
             marks=requires_server_compiled_ael,
@@ -221,11 +216,6 @@ class TestSyncBatchStream:
         assert empty == []
 
     @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
         pytest.param(
             "$.A:INT + $.B:INT",
             id="server-side",

@@ -24,8 +24,10 @@ Covers:
 - BinBuilder -> QueryBuilder transitions
 """
 
+import pytest
+
 from aerospike_sdk import Exp, Key
-from aerospike_async import RecordExistsAction, WritePolicy
+from aerospike_async import RecordExistsAction, WritePolicy, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
     _OperationSpec,
@@ -36,11 +38,23 @@ from aerospike_sdk.aio.operations.query import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_server_compiled_ael_string(monkeypatch):
+    def _fake(ael, *, supports_server_compiled_ael=True):
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    monkeypatch.setattr(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        _fake,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_builder(**overrides) -> QueryBuilder:
+    overrides.setdefault("supports_server_compiled_ael", True)
     return QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
 
 def _make_key(i: int = 1) -> Key:

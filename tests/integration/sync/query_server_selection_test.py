@@ -75,7 +75,6 @@ def qsel_client(
     skip_unless_query_selection(supports_query_selection)
 
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
-    cluster_def.with_index_refresh_interval(0.25)
     with cluster_def.connect() as cluster:
         client = cluster._sdk_client
         session = cluster.create_session()

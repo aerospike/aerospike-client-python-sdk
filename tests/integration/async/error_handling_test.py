@@ -35,7 +35,7 @@ from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 
 
 @pytest.fixture
@@ -526,7 +526,6 @@ class TestFilteredDeletePaths:
 # A read AEL string is compiled on its own, so the server-compiled path cannot borrow
 # the bin type from the accompanying ``where()`` and needs it pinned (``$.v:INT``).
 _read_ael_params = pytest.mark.parametrize("read_ael", [
-    pytest.param("$.v", id="client-side", marks=requires_client_side_ael),
     pytest.param("$.v:INT", id="server-side", marks=requires_server_compiled_ael),
 ])
 

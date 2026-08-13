@@ -37,7 +37,7 @@ from aerospike_sdk.background_shared import (
     reject_unsupported_background_write_ops,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.ael.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
 

@@ -36,7 +36,6 @@ async def cluster(
 ):
     """Setup cluster, data, and a secondary index for hint tests."""
     cluster_def = make_cluster_definition(aerospike_host)
-    cluster_def.with_index_refresh_interval(0.25)
     async with await cluster_def.connect() as c:
         session = c.create_session()
         ds = DataSet.of(general_namespace(), SET_NAME)
@@ -171,22 +170,3 @@ class TestIndexNameHint:
         stream.close()
         assert len(records) == 1
         assert records[0].bins["age"] == 27
-
-
-class TestBinNameHint:
-    """bin_name hint redirects the filter to a different bin."""
-
-    async def test_bin_name_via_ael(self, session):
-        """AEL referencing $.age with bin_name hint and auto-discovered index."""
-        stream = await (
-            session.query(general_namespace(), SET_NAME)
-            .where("$.age == 25")
-            .with_hint(QueryHint(bin_name="age"))
-            .execute()
-        )
-        records = []
-        async for result in stream:
-            records.append(result.record_or_raise())
-        stream.close()
-        assert len(records) == 1
-        assert records[0].bins["age"] == 25
