@@ -30,7 +30,7 @@ from aerospike_async import (
     RecordExistsAction,
 )
 
-from aerospike_sdk import capabilities
+
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.background_shared import (
     dataset_statement,
@@ -201,8 +201,8 @@ class _BackgroundOperationBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
-        self._supports_server_compiled_ael = capabilities.cached_client_flag(
-            session.client, "supports_server_compiled_ael",
+        self._supports_server_compiled_ael = bool(
+            session.client._cached_supports_server_compiled_ael,
         )
 
     def default_with_durable_delete(self) -> BackgroundOperationBuilder:
@@ -548,8 +548,8 @@ class _BackgroundUdfBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
-        self._supports_server_compiled_ael = capabilities.cached_client_flag(
-            session.client, "supports_server_compiled_ael",
+        self._supports_server_compiled_ael = bool(
+            session.client._cached_supports_server_compiled_ael,
         )
 
     def default_with_durable_delete(self) -> BackgroundUdfBuilder:

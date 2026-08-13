@@ -102,7 +102,7 @@ try:
 except ImportError:  # pragma: no cover - older PAC without Tier-D flags
     QueryWhereFlags = None  # type: ignore[misc, assignment]
 
-from aerospike_sdk import capabilities
+
 from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
     CdtReadInvertableBuilder,
@@ -478,9 +478,7 @@ class _QueryBuilderBase:
         elif (
             supports_server_compiled_ael is None
             and sdk_client is not None
-            and capabilities.cached_client_flag(
-                sdk_client, "supports_server_compiled_ael",
-            )
+            and sdk_client._cached_supports_server_compiled_ael
         ):
             self._supports_server_compiled_ael = True
         if supports_query_selection is True:
@@ -488,7 +486,7 @@ class _QueryBuilderBase:
         elif (
             supports_query_selection is None
             and sdk_client is not None
-            and capabilities.cached_client_flag(sdk_client, "supports_query_selection")
+            and sdk_client._cached_supports_query_selection
         ):
             self._supports_query_selection = True
         if txn is None:
