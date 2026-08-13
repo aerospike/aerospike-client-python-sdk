@@ -523,6 +523,14 @@ class TestFilteredDeletePaths:
 # Operate (write with where) / fail_on_filtered_out
 # ---------------------------------------------------------------------------
 
+# A read AEL string is compiled on its own, so the server-compiled path cannot borrow
+# the bin type from the accompanying ``where()`` and needs it pinned (``$.v:INT``).
+_read_ael_params = pytest.mark.parametrize("read_ael", [
+    pytest.param("$.v", id="client-side", marks=requires_client_side_ael),
+    pytest.param("$.v:INT", id="server-side", marks=requires_server_compiled_ael),
+])
+
+
 class TestOperateWithFilter:
 
     async def test_operate_write_with_matching_where(self, session, ds):
@@ -585,25 +593,9 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    @pytest.mark.parametrize("read_ael", [
-        pytest.param(
-            "$.v",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.v:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @_read_ael_params
     async def test_operate_read_with_matching_where(self, session, ds, read_ael):
-        """Keyed operate: select_from() + where() on matching filter.
-
-        Client-side AEL uses untyped ``$.v``. Server-compiled field-43 paths
-        must pin bin types (``$.v:INT``); filter compiles ``$.v == 1`` in
-        isolation and does not type an untyped read AEL string.
-        """
+        """Keyed operate: select_from() + where() on matching filter."""
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
         await session.upsert(k).put({"v": 1}).execute()
@@ -620,18 +612,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
-    @pytest.mark.parametrize("read_ael", [
-        pytest.param(
-            "$.v",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.v:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @_read_ael_params
     async def test_operate_read_filtered_out_raises(self, session, ds, read_ael):
         """Upsert + bin.select_from() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT."""
