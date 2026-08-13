@@ -56,8 +56,11 @@ def pytest_runtest_call(item: pytest.Item) -> None:
 
 
 def _is_sdk_capability_client(candidate: object) -> bool:
-    """True for SDK ``Client``/``SyncClient`` with connect-time capability cache."""
-    return hasattr(candidate, "_cached_supports_server_compiled_ael")
+    """True when *candidate* exposes the public SDK ``supports_*`` properties."""
+    return (
+        hasattr(candidate, "supports_server_compiled_ael")
+        and hasattr(candidate, "supports_query_selection")
+    )
 
 
 def _unwrap_sdk_client(value: object) -> SupportsPacCapabilities | None:
@@ -65,21 +68,13 @@ def _unwrap_sdk_client(value: object) -> SupportsPacCapabilities | None:
     if value is None:
         return None
 
-    if isinstance(value, tuple):
-        for item in value:
-            client = _unwrap_sdk_client(item)
-            if client is not None:
-                return client
-        return None
-
     sdk = getattr(value, "_sdk_client", None)
-    if _is_sdk_capability_client(sdk):
+    if sdk is not None and _is_sdk_capability_client(sdk):
         return sdk  # type: ignore[return-value]
 
     for candidate in (
         value,
         getattr(value, "_client", None),
-        getattr(value, "underlying_client", None),
         getattr(getattr(value, "client", None), "_client", None),
         getattr(value, "client", None),
     ):
@@ -116,13 +111,4 @@ def resolve_sdk_client_from_funcargs(
             if client is not None:
                 return client
 
-    for value in funcargs.values():
-        client = _unwrap_sdk_client(value)
-        if client is not None:
-            return client
-
     return None
-
-
-# Backward-compatible alias for older imports.
-resolve_ael_client_from_funcargs = resolve_sdk_client_from_funcargs

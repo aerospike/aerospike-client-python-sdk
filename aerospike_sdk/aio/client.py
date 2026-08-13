@@ -36,7 +36,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk import capabilities
+from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -56,7 +56,7 @@ from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
-class Client:
+class Client(RoutingCapabilitiesMixin):
     """Low-level async connection primitive.
 
     Most applications should connect via
@@ -123,10 +123,7 @@ class Client:
         # Shared by all Session instances from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
-        # Lazy routing gates (field 43 / 44), cached for the client's lifetime
-        # after the first probe — cleared on close, like MRT and namespace mode.
-        self._cached_supports_query_selection: Optional[bool] = None
-        self._cached_supports_server_compiled_ael: Optional[bool] = None
+        self._init_routing_capability_cache()
         # Resolved SDK-level settings (file over programmatic over defaults).
         # A frozen snapshot swapped wholesale by the config monitor, so the
         # operation path reads it lock-free.
@@ -176,32 +173,11 @@ class Client:
             return []
         return [node.version for node in await self._client.nodes()]
 
-    def _cluster_versions_blocking(self) -> list:
-        """Blocking node versions for sync routing probes on an async client."""
-        if self._client is None:
-            return []
-        nodes_fn = getattr(self._client, "nodes_blocking", None)
-        if nodes_fn is None:
-            return []
-        return [node.version for node in nodes_fn()]
-
-    def _apply_routing_capabilities_from_versions(self, versions: list) -> None:
-        self._cached_supports_query_selection = capabilities.supports_query_selection(
-            versions,
-        )
-        self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
-
     async def _warm_routing_capabilities_async(self) -> None:
         """Fill routing caches from a live node list (async connect path)."""
         if not self._connected or self._client is None:
             return
         self._apply_routing_capabilities_from_versions(await self._cluster_versions())
-
-    def _warm_routing_capabilities_blocking(self) -> None:
-        """Fill routing caches from a live node list (blocking connect path)."""
-        if not self._connected or self._client is None:
-            return
-        self._apply_routing_capabilities_from_versions(self._cluster_versions_blocking())
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -276,32 +252,9 @@ class Client:
             self._client = None
             self._connected = False
             log.info("Client closed")
-        self._cached_supports_query_selection = None
-        self._cached_supports_server_compiled_ael = None
+        self._clear_routing_capability_cache()
         self._namespace_mode_cache.clear()
         self._supports_mrt_cache = None
-
-    @property
-    def supports_query_selection(self) -> bool:
-        """``True`` when all cluster nodes support field ``44`` query selection.
-
-        Populated at :meth:`connect` / :meth:`connect_blocking` from PAC
-        ``Version.supports_query_selection()`` on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_query_selection)
-
-    @property
-    def supports_server_compiled_ael(self) -> bool:
-        """``True`` when server-compiled AEL filters are usable on this connection.
-
-        Populated at :meth:`connect` / :meth:`connect_blocking` from PAC
-        ``Version.supports_server_compiled_ael()`` on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_server_compiled_ael)
 
     def connect_blocking(self) -> None:
         """Synchronously open a connection without requiring an asyncio loop.
@@ -347,8 +300,7 @@ class Client:
             self._client = None
             self._connected = False
             log.info("Client closed")
-        self._cached_supports_query_selection = None
-        self._cached_supports_server_compiled_ael = None
+        self._clear_routing_capability_cache()
         self._namespace_mode_cache.clear()
         self._supports_mrt_cache = None
 

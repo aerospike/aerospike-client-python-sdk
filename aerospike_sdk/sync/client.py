@@ -37,7 +37,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk import capabilities
+from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
@@ -56,7 +56,7 @@ from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
-class SyncClient:
+class SyncClient(RoutingCapabilitiesMixin):
     """Low-level synchronous connection primitive (no ``async``/``await``).
 
     Most applications should connect via
@@ -132,10 +132,7 @@ class SyncClient:
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
-        # Lazy routing gates (field 43 / 44), cached for the client's lifetime
-        # after the first probe — cleared on close, like MRT and namespace mode.
-        self._cached_supports_query_selection: Optional[bool] = None
-        self._cached_supports_server_compiled_ael: Optional[bool] = None
+        self._init_routing_capability_cache()
         # Resolved SDK-level settings (file over programmatic over defaults).
         # A frozen snapshot swapped wholesale by the config monitor, so the
         # operation path reads it lock-free.
@@ -166,31 +163,6 @@ class SyncClient:
                 node.version.supports_mrt() for node in nodes
             )
         return self._supports_mrt_cache
-
-    def _cluster_versions_blocking(self) -> list:
-        """Per-node ``Version`` list for capability probes (fresh, uncached).
-
-        Sync sibling of the async ``_cluster_versions``: read live so a probe
-        reflects current cluster membership. The ``current_thread_runtime``
-        proxy has no node-listing surface, so it yields an empty list (every
-        probe then reports unsupported), matching the MRT-probe behavior.
-        """
-        nodes_fn = getattr(self._client, "nodes_blocking", None)
-        if nodes_fn is None:
-            return []
-        return [node.version for node in nodes_fn()]
-
-    def _apply_routing_capabilities_from_versions(self, versions: list) -> None:
-        self._cached_supports_query_selection = capabilities.supports_query_selection(
-            versions,
-        )
-        self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
-
-    def _warm_routing_capabilities_blocking(self) -> None:
-        """Fill routing caches from a live node list (connect path)."""
-        if not self._connected or self._client is None:
-            return
-        self._apply_routing_capabilities_from_versions(self._cluster_versions_blocking())
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -250,8 +222,7 @@ class SyncClient:
             self._client = None
             self._connected = False
             log.info("Client closed")
-        self._cached_supports_query_selection = None
-        self._cached_supports_server_compiled_ael = None
+        self._clear_routing_capability_cache()
         self._namespace_mode_cache.clear()
         self._supports_mrt_cache = None
 
@@ -289,28 +260,6 @@ class SyncClient:
         """Alias of :attr:`underlying_client` for parity with
         :class:`~aerospike_sdk.aio.client.Client`."""
         return self.underlying_client
-
-    @property
-    def supports_query_selection(self) -> bool:
-        """``True`` when all cluster nodes support field ``44`` query selection.
-
-        Populated at :meth:`connect` from PAC ``Version.supports_query_selection()``
-        on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_query_selection)
-
-    @property
-    def supports_server_compiled_ael(self) -> bool:
-        """``True`` when server-compiled AEL filters are usable on this connection.
-
-        Populated at :meth:`connect` from PAC ``Version.supports_server_compiled_ael()``
-        on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_server_compiled_ael)
 
     def _ensure_connected(self) -> SyncClient:
         """Connect if not already connected; return ``self`` for chaining."""

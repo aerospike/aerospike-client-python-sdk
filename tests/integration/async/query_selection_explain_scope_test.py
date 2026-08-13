@@ -34,11 +34,11 @@ from tests.integration.query_selection_helpers import (
     SCOPE_MAP_INDEX,
     SCOPE_MAP_KEY,
     SCOPE_SET_NAME,
+    SCOPE_BLOB_BYTES,
     blob_hex_literal,
     count_records_async,
     create_index_quiet_async,
     explain_plan_async,
-    long_bytes_be,
 )
 from tests.pac_compat import requires_query_selection
 
@@ -50,8 +50,6 @@ async def qscexp_client(
     make_cluster_definition,
     wait_for_set_visible,
 ):
-    blob_bytes = long_bytes_be(50001)
-
     cluster_def = make_cluster_definition(aerospike_host)
     async with await cluster_def.connect() as cluster:
         client = cluster._sdk_client
@@ -93,7 +91,7 @@ async def qscexp_client(
             .put({
                 SCOPE_AGE_BIN: 25,
                 SCOPE_COUNTRY_BIN: "US",
-                SCOPE_BLOB_BIN: blob_bytes,
+                SCOPE_BLOB_BIN: SCOPE_BLOB_BYTES,
                 SCOPE_MAP_BIN: {SCOPE_MAP_KEY: "v1"},
             })
             .execute()
@@ -106,7 +104,7 @@ async def qscexp_client(
 
         await wait_for_set_visible(session, NS, SCOPE_SET_NAME, 2)
 
-        yield client, blob_bytes
+        yield client
 
         for key_id in ("k1", "k2"):
             try:
@@ -125,7 +123,7 @@ class TestQuerySelectionExplainScope:
     async def test_explain_scalar_integer_secondary_index_succeeds(
         self, qscexp_client,
     ):
-        client, _ = qscexp_client
+        client = qscexp_client
         pac = client.underlying_client
         plan = await explain_plan_async(
             pac, "$.age == 25", set_name=SCOPE_SET_NAME,
@@ -138,7 +136,7 @@ class TestQuerySelectionExplainScope:
     async def test_explain_scalar_string_primary_index_no_index_fields(
         self, qscexp_client,
     ):
-        client, _ = qscexp_client
+        client = qscexp_client
         pac = client.underlying_client
         plan = await explain_plan_async(
             pac, "$.country == 'US'", set_name=SCOPE_SET_NAME,
@@ -151,9 +149,9 @@ class TestQuerySelectionExplainScope:
     async def test_explain_blob_equality_selects_secondary_index(
         self, qscexp_client,
     ):
-        client, blob_bytes = qscexp_client
+        client = qscexp_client
         pac = client.underlying_client
-        where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(blob_bytes)}'"
+        where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
         plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -163,7 +161,7 @@ class TestQuerySelectionExplainScope:
     async def test_explain_map_keys_exists_primary_index_fallback(
         self, qscexp_client,
     ):
-        client, _ = qscexp_client
+        client = qscexp_client
         pac = client.underlying_client
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
         plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
@@ -175,9 +173,9 @@ class TestQuerySelectionExplainScope:
     async def test_execute_blob_equality_returns_matching_row(
         self, qscexp_client,
     ):
-        client, blob_bytes = qscexp_client
+        client = qscexp_client
         session = client.create_session()
-        where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(blob_bytes)}'"
+        where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
 
         stream = await (
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
@@ -191,7 +189,7 @@ class TestQuerySelectionExplainScope:
     async def test_execute_map_keys_exists_returns_matching_rows(
         self, qscexp_client,
     ):
-        client, _ = qscexp_client
+        client = qscexp_client
         session = client.create_session()
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
 

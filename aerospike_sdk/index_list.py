@@ -13,20 +13,28 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Parse ``sindex-list`` info responses for :meth:`Session.list_indexes`."""
+"""Parse ``sindex-list`` info responses for :meth:`Session.list_indexes` and info helpers."""
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
-def _parse_sindex_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+def parse_index_list(
+    raw_responses: Dict[str, Dict[str, str]],
+    *,
+    namespace: Optional[str] = None,
+) -> List[Dict[str, str]]:
     """Parse ``info_on_all_nodes("sindex-list")`` into deduplicated index dicts.
 
-    Server response is semicolon-separated entries where each entry contains
-    colon-separated ``key=value`` pairs, e.g.::
+    Each record uses the public shape: ``namespace``, ``set``, ``bin``, ``name``,
+    plus ``type``, ``index_type``, ``context``, and ``state`` when the server
+    reports them. Entries missing ``indexname`` or ``ns`` are skipped; a missing
+    ``bin`` is preserved as ``""`` rather than dropping the index.
 
-        ns=test:indexname=age_idx:set=users:bin=age:type=numeric:indextype=default:...
+    Args:
+        raw_responses: ``{node: {info_key: value}}`` from PAC info-on-all-nodes.
+        namespace: When set, keep only indexes in this namespace.
     """
     index_map: Dict[str, Dict[str, str]] = {}
     for node_response in raw_responses.values():
@@ -42,50 +50,27 @@ def _parse_sindex_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[st
                     if "=" in token:
                         k, v = token.split("=", 1)
                         fields[k] = v
-                index_name = fields.get("indexname")
-                if not index_name or index_name in index_map:
+                index_name = fields.get("indexname", "")
+                ns = fields.get("ns", "")
+                if not index_name or not ns:
                     continue
-                ns = fields.get("ns")
-                bin_name = fields.get("bin")
-                if not ns or not bin_name:
+                if namespace is not None and ns != namespace:
+                    continue
+                if index_name in index_map:
                     continue
                 rec: Dict[str, str] = {
-                    "ns": ns,
+                    "namespace": ns,
                     "set": fields.get("set", ""),
-                    "bin": bin_name,
-                    "indexname": index_name,
+                    "bin": fields.get("bin", ""),
+                    "name": index_name,
                 }
                 if "type" in fields:
                     rec["type"] = fields["type"]
                 if "indextype" in fields:
-                    rec["indextype"] = fields["indextype"]
+                    rec["index_type"] = fields["indextype"]
                 if "context" in fields:
                     rec["context"] = fields["context"]
+                if "state" in fields:
+                    rec["state"] = fields["state"]
                 index_map[index_name] = rec
     return list(index_map.values())
-
-
-def parse_index_list(raw_responses: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
-    """Parse a raw ``sindex-list`` response into public index descriptors.
-
-    Wraps :func:`_parse_sindex_list` and normalizes the server's field names
-    to the public shape returned by ``list_indexes``: ``namespace``, ``set``,
-    ``bin``, ``name``, plus ``type`` / ``index_type`` / ``context`` when the
-    server reports them.
-    """
-    indexes: List[Dict[str, str]] = []
-    for entry in _parse_sindex_list(raw_responses):
-        rec: Dict[str, str] = {
-            "namespace": entry.get("ns", ""),
-            "set": entry.get("set", ""),
-            "bin": entry.get("bin", ""),
-            "name": entry.get("indexname", ""),
-        }
-        if "type" in entry:
-            rec["type"] = entry["type"]
-        if "indextype" in entry:
-            rec["index_type"] = entry["indextype"]
-        if "context" in entry:
-            rec["context"] = entry["context"]
-        indexes.append(rec)
-    return indexes

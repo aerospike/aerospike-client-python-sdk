@@ -41,7 +41,11 @@ def _sdk_client(implicit=True):
     settings = fill_hard_defaults(SystemSettings(
         transactions=TransactionSettings(implicit_batch_write_transactions=implicit),
     ))
-    return SimpleNamespace(_sdk_settings=settings)
+    return SimpleNamespace(
+        _sdk_settings=settings,
+        _cached_supports_server_compiled_ael=False,
+        _cached_supports_query_selection=False,
+    )
 
 
 def _settings(attempts=None, sleep=timedelta(0)):

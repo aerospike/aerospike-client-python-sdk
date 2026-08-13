@@ -20,7 +20,7 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING, Any, Optional
 
-from aerospike_async import QuerySelection
+from aerospike_async import QuerySelection  # noqa: F401 — re-exported for integration tests
 
 if TYPE_CHECKING:
     from aerospike_sdk import QueryHint
@@ -105,6 +105,9 @@ def cdt_key_name(i: int) -> str:
 def long_bytes_be(value: int) -> bytes:
     """8-byte big-endian integer (Java ``Buffer.longToBytes``)."""
     return struct.pack(">q", value)
+
+
+SCOPE_BLOB_BYTES = long_bytes_be(50001)
 
 
 def blob_hex_literal(blob_bytes: bytes) -> str:

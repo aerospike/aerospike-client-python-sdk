@@ -40,10 +40,6 @@ class SupportsPacCapabilities(Protocol):
         ...
 
 
-# Backward-compatible alias for older imports.
-SupportsServerCompiledAel = SupportsPacCapabilities
-
-
 def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
