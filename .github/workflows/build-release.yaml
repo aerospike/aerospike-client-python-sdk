@@ -64,8 +64,6 @@ jobs:
       working-directory: aerospike-client-python-sdk
       setup-python: true
       python-version: "3.13"
-      setup-java: true
-      java-version: "21"
       build-script: |
         set -euo pipefail
 
@@ -75,8 +73,6 @@ jobs:
         fi
 
         python -m pip install --upgrade pip build
-
-        make generate-ael
 
         rm -rf dist
         mkdir -p dist

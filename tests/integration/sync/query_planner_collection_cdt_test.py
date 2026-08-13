@@ -36,21 +36,16 @@ from tests.integration.query_selection_helpers import (
     create_index_quiet_blocking,
     explain_plan_blocking,
     long_bytes_be,
-    requires_pac_query_selection_api,
-    skip_unless_query_selection,
 )
+from tests.pac_compat import requires_query_selection
 
-pytestmark = requires_pac_query_selection_api
 
 
 @pytest.fixture(scope="module")
 def qp_cdt_client(
     aerospike_host,
     make_cluster_definition,
-    supports_query_selection,
 ):
-    skip_unless_query_selection(supports_query_selection)
-
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
     with cluster_def.connect() as cluster:
         client = cluster._sdk_client
@@ -109,6 +104,7 @@ def qp_cdt_client(
 
 
 class TestSyncQueryPlannerCollectionCdt:
+    @requires_query_selection
     def test_plan_map_keys_exists_primary_index_fallback(self, qp_cdt_client):
         where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         plan = explain_plan_blocking(
@@ -117,6 +113,7 @@ class TestSyncQueryPlannerCollectionCdt:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     def test_plan_list_exists_primary_index_fallback(self, qp_cdt_client):
         where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
         plan = explain_plan_blocking(
@@ -125,6 +122,7 @@ class TestSyncQueryPlannerCollectionCdt:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     def test_execute_cdt_exists_without_for_bin_returns_matching_rows(
         self, qp_cdt_client,
     ):

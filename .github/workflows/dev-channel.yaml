@@ -3,7 +3,7 @@ name: Dev channel publish
 # Publishes a uniquely-versioned wheel and sdist to the JFrog dev repo on
 # every merge to dev, so test teams and other downstream consumers can
 # install a specific SDK build with a plain pip command instead of cloning
-# the repo and running the ANTLR generation step behind a Java toolchain.
+# the repo.
 #
 # The committed VERSION file is never mutated: the next dev version
 # (e.g. 0.9.0-alpha.5 -> 0.9.0-alpha.6.dev.<run>) is computed here and
@@ -68,9 +68,8 @@ jobs:
     secrets: inherit
 
   # Installs the freshly published version the way a consumer will: by name
-  # and version from the dev index, on a runner with no Java and no source
-  # checkout. That proves the wheel carries the generated ANTLR parser and
-  # that PAC resolves from the same index.
+  # and version from the dev index, on a runner with no source checkout. That
+  # proves PAC resolves from the same index.
   smoke-install:
     needs: [compute-version, build-publish]
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run == false }}
@@ -122,11 +121,6 @@ jobs:
           import os
 
           import aerospike_sdk
-          # The generated parser must ship inside the wheel: this runner has
-          # no Java to regenerate it.
-          from aerospike_sdk.ael.antlr4.generated.ConditionLexer import (  # noqa: F401
-              ConditionLexer,
-          )
 
           expected = os.environ["VERSION"]
           assert aerospike_sdk.__version__ == expected, (

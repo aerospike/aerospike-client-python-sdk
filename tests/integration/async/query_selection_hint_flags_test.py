@@ -38,23 +38,18 @@ from tests.integration.query_selection_helpers import (
     QuerySelection,
     explain_plan_async,
     hint_key_name,
-    requires_pac_query_selection_api,
-    skip_unless_query_selection,
 )
+from tests.pac_compat import requires_query_selection
 
-pytestmark = requires_pac_query_selection_api
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def qselhint_client(
     aerospike_host,
     make_cluster_definition,
-    supports_query_selection,
     wait_for_index,
     wait_for_set_visible,
 ):
-    skip_unless_query_selection(supports_query_selection)
-
     cluster_def = make_cluster_definition(aerospike_host)
     async with await cluster_def.connect() as cluster:
         client = cluster._sdk_client
@@ -116,6 +111,7 @@ async def qselhint_client(
 
 
 class TestQuerySelectionHintFlags:
+    @requires_query_selection
     async def test_require_index_on_primary_index_plan_fails_explain(
         self, qselhint_client,
     ):
@@ -129,6 +125,7 @@ class TestQuerySelectionHintFlags:
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
+    @requires_query_selection
     async def test_require_index_with_soft_hint_selects_secondary_index(
         self, qselhint_client,
     ):
@@ -143,6 +140,7 @@ class TestQuerySelectionHintFlags:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == HINT_INDEX_NAME
 
+    @requires_query_selection
     async def test_hard_hint_with_matching_index_selects_hinted_index(
         self, qselhint_client,
     ):
@@ -157,6 +155,7 @@ class TestQuerySelectionHintFlags:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == HINT_INDEX_NAME
 
+    @requires_query_selection
     async def test_require_index_and_hard_hint_selects_hinted_index(
         self, qselhint_client,
     ):
@@ -174,6 +173,7 @@ class TestQuerySelectionHintFlags:
 
         assert plan.index_name == HINT_INDEX_NAME
 
+    @requires_query_selection
     async def test_hard_hint_with_wrong_index_fails_explain(self, qselhint_client):
         pac = qselhint_client.underlying_client
         with pytest.raises(IndexNotFound) as exc_info:
@@ -188,6 +188,7 @@ class TestQuerySelectionHintFlags:
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
+    @requires_query_selection
     async def test_bad_ael_fails_explain_with_parameter(self, qselhint_client):
         pac = qselhint_client.underlying_client
         with pytest.raises(InvalidRequest) as exc_info:

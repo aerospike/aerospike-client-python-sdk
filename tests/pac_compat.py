@@ -13,49 +13,66 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""PAC capability checks shared by unit and integration tests.
+"""PAC capability markers and skip helpers shared by unit and integration tests.
 
-Integration tests that need server-compiled AEL on the wire can use
-:data:`requires_server_compiled_ael` (see ``tests/integration/conftest.py``).
+Integration tests declare requirements with :data:`requires_server_compiled_ael`
+or :data:`requires_query_selection`; ``tests/integration/conftest.py`` resolves
+a connected SDK client from fixtures and calls the matching skip helper
+(``Client.supports_*``, computed from PAC ``Version.supports_*`` at connect).
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import Any, Protocol
+from typing import Protocol
 
 import pytest
-from aerospike_async.exceptions import InvalidRequest, ResultCode
-from aerospike_sdk.feature_gates import PSDK_ENABLE_SERVER_COMPILED_AEL
 
 
-class SupportsServerCompiledAel(Protocol):
-    """Connected client (or stand-in) that reports server-compiled AEL availability."""
+class SupportsPacCapabilities(Protocol):
+    """Connected SDK client that reports PAC/cluster capability flags."""
 
     @property
     def supports_server_compiled_ael(self) -> bool:
         ...
 
+    @property
+    def supports_query_selection(self) -> bool:
+        ...
 
-def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None:
+
+# Backward-compatible alias for older imports.
+SupportsServerCompiledAel = SupportsPacCapabilities
+
+
+def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
     Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`:
-    PAC must expose ``FilterExpression.from_server_compiled_ael``, and the
-    **first active** node's ``Version`` must report server-compiled AEL support
-    (homogeneous cluster: all nodes same build).
+    PAC must expose ``FilterExpression.from_server_compiled_ael``, and every
+    node's ``Version`` must report server-compiled AEL support (>= 8.1.3).
     """
-    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
-        pytest.skip(
-            "server-compiled AEL feature gate disabled "
-            "(PSDK_ENABLE_SERVER_COMPILED_AEL)"
-        )
     if client.supports_server_compiled_ael:
         return
     pytest.skip(
         "Requires server-compiled AEL: PAC FilterExpression.from_server_compiled_ael "
-        "and first active node Version.supports_server_compiled_ael "
-        "(Client.supports_server_compiled_ael; homogeneous cluster assumption)."
+        "and Version.supports_server_compiled_ael on all nodes "
+        "(Client.supports_server_compiled_ael)."
     )
 
+
+def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
+    """Skip when field ``44`` query selection is not available for this cluster.
+
+    Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_query_selection`:
+    every node's ``Version`` must report query-selection support (>= 8.1.3).
+    """
+    if client.supports_query_selection:
+        return
+    pytest.skip(
+        "Requires query selection: Version.supports_query_selection on all nodes "
+        "(Client.supports_query_selection)."
+    )
+
+
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
+requires_query_selection = pytest.mark.requires_query_selection

@@ -36,22 +36,17 @@ from tests.integration.query_selection_helpers import (
     create_index_quiet_async,
     explain_plan_async,
     long_bytes_be,
-    requires_pac_query_selection_api,
-    skip_unless_query_selection,
 )
+from tests.pac_compat import requires_query_selection
 
-pytestmark = requires_pac_query_selection_api
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def qp_cdt_client(
     aerospike_host,
     make_cluster_definition,
-    supports_query_selection,
     wait_for_set_visible,
 ):
-    skip_unless_query_selection(supports_query_selection)
-
     list_blob_bytes = long_bytes_be(50003)
 
     cluster_def = make_cluster_definition(aerospike_host)
@@ -117,6 +112,7 @@ async def qp_cdt_client(
 
 
 class TestQueryPlannerCollectionCdt:
+    @requires_query_selection
     async def test_plan_map_keys_exists_primary_index_fallback(
         self, qp_cdt_client,
     ):
@@ -127,6 +123,7 @@ class TestQueryPlannerCollectionCdt:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     async def test_plan_list_exists_primary_index_fallback(self, qp_cdt_client):
         pac = qp_cdt_client.underlying_client
         where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
@@ -135,6 +132,7 @@ class TestQueryPlannerCollectionCdt:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     async def test_execute_cdt_exists_without_for_bin_returns_matching_rows(
         self, qp_cdt_client,
     ):

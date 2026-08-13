@@ -48,9 +48,8 @@ jobs:
           fi
 
   # Lint gate: fails the build on any ruff error, so the tree-wide cleanup can't
-  # regress. Pure static check — no server, PAC dev-index, or ANTLR generation
-  # needed (generated/ is gitignored, so ruff lints the same tracked files as
-  # local dev). Ruff is pinned so a new release adding rules can't spuriously break CI.
+  # regress. Pure static check — no server or PAC dev-index needed. Ruff is
+  # pinned so a new release adding rules can't spuriously break CI.
   lint:
     name: Ruff lint
     runs-on: ubuntu-latest
@@ -104,9 +103,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Run unit tests
         run: python -m pytest tests/unit -v
@@ -175,9 +171,6 @@ jobs:
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
-      - name: Generate ANTLR parser
-        run: make generate-ael
-
       - name: Run integration tests
         env:
           AEROSPIKE_HOST: localhost:3000
@@ -232,9 +225,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Verify GIL stays disabled after import
         run: |
@@ -301,9 +291,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Verify GIL stays disabled after import
         run: |

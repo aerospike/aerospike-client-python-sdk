@@ -20,31 +20,7 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING, Any, Optional
 
-import pytest
-
-from aerospike_sdk.feature_gates import PSDK_ENABLE_QUERY_SELECTION
-
-try:
-    from aerospike_async import QuerySelection
-except ImportError:
-    QuerySelection = None  # type: ignore[misc, assignment]
-
-requires_pac_query_selection_api = pytest.mark.skipif(
-    QuerySelection is None,
-    reason="PAC QuerySelection API not available (requires newer aerospike-async)",
-)
-
-
-def skip_unless_query_selection(supports_query_selection: bool) -> None:
-    """Skip integration tests that need field ``44`` explain→execute routing."""
-    if not PSDK_ENABLE_QUERY_SELECTION:
-        pytest.skip(
-            "query selection feature gate disabled (PSDK_ENABLE_QUERY_SELECTION)"
-        )
-    if supports_query_selection:
-        return
-    pytest.skip("cluster lacks query selection (PAC)")
-
+from aerospike_async import QuerySelection
 
 if TYPE_CHECKING:
     from aerospike_async import QuerySelection as QuerySelectionType

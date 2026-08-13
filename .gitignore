@@ -71,7 +71,3 @@ requirements-local.txt
 # OS
 .DS_Store
 Thumbs.db
-
-
-aerospike_sdk/ael/antlr4/generated/
-antlr-*.jar

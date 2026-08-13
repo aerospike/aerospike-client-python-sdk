@@ -20,48 +20,109 @@ from __future__ import annotations
 import pytest
 
 from tests.pac_compat import (
-    SupportsServerCompiledAel,
+    SupportsPacCapabilities,
+    skip_if_lacks_query_selection,
     skip_if_lacks_server_compiled_ael,
+)
+
+_CAPABILITY_MARKERS: tuple[tuple[str, object], ...] = (
+    ("requires_server_compiled_ael", skip_if_lacks_server_compiled_ael),
+    ("requires_query_selection", skip_if_lacks_query_selection),
 )
 
 
 def pytest_runtest_call(item: pytest.Item) -> None:
-    """Honor AEL path markers once the test's fixtures are materialized."""
-    need_server = item.get_closest_marker("requires_server_compiled_ael") is not None
-    if not need_server:
+    """Honor PAC capability markers once the test's fixtures are materialized."""
+    skip_checks = [
+        skip_fn
+        for marker_name, skip_fn in _CAPABILITY_MARKERS
+        if item.get_closest_marker(marker_name) is not None
+    ]
+    if not skip_checks:
         return
-    client = resolve_ael_client_from_funcargs(item.funcargs)
+
+    client = resolve_sdk_client_from_funcargs(item.funcargs)
     if client is None:
         pytest.fail(
-            "AEL path marker present but no client/cluster/session fixture "
-            "found — the test's mode cannot be determined. Name the fixture "
-            "client / cluster* / session / session_with_* (or extend "
-            "resolve_ael_client_from_funcargs); skipping here would silently "
-            "drop coverage for both modes.",
+            "PAC capability marker present but no SDK client fixture found — "
+            "name the fixture client / cluster* / session / session_with_* / "
+            "qsel_client (or extend resolve_sdk_client_from_funcargs); skipping "
+            "here would silently drop coverage.",
             pytrace=False,
         )
-    skip_if_lacks_server_compiled_ael(client)
+
+    for skip_fn in skip_checks:
+        skip_fn(client)  # type: ignore[operator]
 
 
-def resolve_ael_client_from_funcargs(
+def _is_sdk_capability_client(candidate: object) -> bool:
+    """True for SDK ``Client``/``SyncClient`` with connect-time capability cache."""
+    return hasattr(candidate, "_cached_supports_server_compiled_ael")
+
+
+def _unwrap_sdk_client(value: object) -> SupportsPacCapabilities | None:
+    """Return an SDK client exposing ``supports_*`` flags, unwrapping facades."""
+    if value is None:
+        return None
+
+    if isinstance(value, tuple):
+        for item in value:
+            client = _unwrap_sdk_client(item)
+            if client is not None:
+                return client
+        return None
+
+    sdk = getattr(value, "_sdk_client", None)
+    if _is_sdk_capability_client(sdk):
+        return sdk  # type: ignore[return-value]
+
+    for candidate in (
+        value,
+        getattr(value, "_client", None),
+        getattr(value, "underlying_client", None),
+        getattr(getattr(value, "client", None), "_client", None),
+        getattr(value, "client", None),
+    ):
+        if candidate is not None and _is_sdk_capability_client(candidate):
+            return candidate  # type: ignore[return-value]
+
+    return None
+
+
+def resolve_sdk_client_from_funcargs(
     funcargs: dict[str, object],
-) -> SupportsServerCompiledAel | None:
+) -> SupportsPacCapabilities | None:
     """Return a connected SDK client from a test's resolved fixture dict."""
     if "client" in funcargs:
-        client = funcargs["client"]
-        if getattr(client, "supports_server_compiled_ael", None) is not None:
-            return client  # type: ignore[return-value]
+        client = _unwrap_sdk_client(funcargs["client"])
+        if client is not None:
+            return client
+
+    for name, value in funcargs.items():
+        if name.endswith("_client"):
+            client = _unwrap_sdk_client(value)
+            if client is not None:
+                return client
 
     for name, value in funcargs.items():
         if name == "cluster" or name.startswith("cluster_"):
-            sdk_client = getattr(value, "_sdk_client", None)
-            if sdk_client is not None:
-                return sdk_client  # type: ignore[return-value]
+            client = _unwrap_sdk_client(value)
+            if client is not None:
+                return client
 
     for name, value in funcargs.items():
         if name == "session" or name.startswith("session_with_"):
-            client = getattr(value, "client", None)
-            if getattr(client, "supports_server_compiled_ael", None) is not None:
-                return client  # type: ignore[return-value]
+            client = _unwrap_sdk_client(value)
+            if client is not None:
+                return client
+
+    for value in funcargs.values():
+        client = _unwrap_sdk_client(value)
+        if client is not None:
+            return client
 
     return None
+
+
+# Backward-compatible alias for older imports.
+resolve_ael_client_from_funcargs = resolve_sdk_client_from_funcargs

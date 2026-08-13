@@ -21,8 +21,6 @@ from typing import Any
 
 from aerospike_async import FilterExpression
 
-from aerospike_sdk.feature_gates import PSDK_ENABLE_SERVER_COMPILED_AEL
-
 
 def _version_supports_server_compiled_ael(version_obj: object) -> bool:
     """Call PAC ``Version.supports_server_compiled_ael()`` when present."""
@@ -42,8 +40,6 @@ async def compute_server_compiled_ael_support(pac: Any) -> bool:
     Mirrors Rust ``Cluster::supports_server_compiled_ael()`` (all nodes >= 8.1.3)
     and requires PAC ``FilterExpression.from_server_compiled_ael``.
     """
-    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
-        return False
     if not _pac_exposes_server_compiled_factory():
         return False
     nodes_fn = getattr(pac, "nodes", None)
@@ -57,8 +53,6 @@ async def compute_server_compiled_ael_support(pac: Any) -> bool:
 
 def compute_server_compiled_ael_support_blocking(pac: Any) -> bool:
     """Blocking counterpart of :func:`compute_server_compiled_ael_support`."""
-    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
-        return False
     if not _pac_exposes_server_compiled_factory():
         return False
     nodes_fn = getattr(pac, "nodes_blocking", None)

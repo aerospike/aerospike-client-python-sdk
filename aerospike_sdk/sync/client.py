@@ -43,10 +43,6 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
-from aerospike_sdk.feature_gates import (
-    PSDK_ENABLE_QUERY_SELECTION,
-    PSDK_ENABLE_SERVER_COMPILED_AEL,
-)
 from aerospike_sdk.query_selection import compute_query_selection_support_blocking
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
 from aerospike_sdk.server_compiled_ael import compute_server_compiled_ael_support_blocking
@@ -222,18 +218,12 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
-        if PSDK_ENABLE_QUERY_SELECTION:
-            self._cached_supports_query_selection = compute_query_selection_support_blocking(
-                self._client,
-            )
-        else:
-            self._cached_supports_query_selection = False
-        if PSDK_ENABLE_SERVER_COMPILED_AEL:
-            self._cached_supports_server_compiled_ael = (
-                compute_server_compiled_ael_support_blocking(self._client)
-            )
-        else:
-            self._cached_supports_server_compiled_ael = False
+        self._cached_supports_query_selection = compute_query_selection_support_blocking(
+            self._client,
+        )
+        self._cached_supports_server_compiled_ael = (
+            compute_server_compiled_ael_support_blocking(self._client)
+        )
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},

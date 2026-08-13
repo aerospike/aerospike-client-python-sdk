@@ -39,21 +39,16 @@ from tests.integration.query_selection_helpers import (
     create_index_quiet_blocking,
     explain_plan_blocking,
     long_bytes_be,
-    requires_pac_query_selection_api,
-    skip_unless_query_selection,
 )
+from tests.pac_compat import requires_query_selection
 
-pytestmark = requires_pac_query_selection_api
 
 
 @pytest.fixture(scope="module")
 def qscexp_client(
     aerospike_host,
     make_cluster_definition,
-    supports_query_selection,
 ):
-    skip_unless_query_selection(supports_query_selection)
-
     blob_bytes = long_bytes_be(50001)
 
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
@@ -117,6 +112,7 @@ def qscexp_client(
 
 
 class TestSyncQuerySelectionExplainScope:
+    @requires_query_selection
     def test_explain_scalar_integer_secondary_index_succeeds(self, qscexp_client):
         client, _ = qscexp_client
         plan = explain_plan_blocking(
@@ -125,6 +121,7 @@ class TestSyncQuerySelectionExplainScope:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_INT_INDEX
 
+    @requires_query_selection
     def test_explain_scalar_string_primary_index_no_index_fields(self, qscexp_client):
         client, _ = qscexp_client
         plan = explain_plan_blocking(
@@ -133,6 +130,7 @@ class TestSyncQuerySelectionExplainScope:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     def test_explain_blob_equality_selects_secondary_index(self, qscexp_client):
         client, blob_bytes = qscexp_client
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(blob_bytes)}'"
@@ -142,6 +140,7 @@ class TestSyncQuerySelectionExplainScope:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_BLOB_INDEX
 
+    @requires_query_selection
     def test_explain_map_keys_exists_primary_index_fallback(self, qscexp_client):
         client, _ = qscexp_client
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
@@ -151,6 +150,7 @@ class TestSyncQuerySelectionExplainScope:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     def test_execute_blob_equality_returns_matching_row(self, qscexp_client):
         client, blob_bytes = qscexp_client
         session = client.create_session()
@@ -163,6 +163,7 @@ class TestSyncQuerySelectionExplainScope:
         )
         assert count == 1
 
+    @requires_query_selection
     def test_execute_map_keys_exists_returns_matching_rows(self, qscexp_client):
         client, _ = qscexp_client
         session = client.create_session()

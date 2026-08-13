@@ -41,11 +41,9 @@ from tests.integration.query_selection_helpers import (
     count_records_sync,
     explain_plan_blocking,
     key_name,
-    requires_pac_query_selection_api,
-    skip_unless_query_selection,
 )
+from tests.pac_compat import requires_query_selection
 
-pytestmark = requires_pac_query_selection_api
 
 
 def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeout=5.0, interval=0.25):
@@ -70,10 +68,7 @@ def _sync_wait_for_index(client, session, ns, set_name, sindex_filter, *, timeou
 def qsel_client(
     aerospike_host,
     make_cluster_definition,
-    supports_query_selection,
 ):
-    skip_unless_query_selection(supports_query_selection)
-
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
     with cluster_def.connect() as cluster:
         client = cluster._sdk_client
@@ -125,6 +120,7 @@ def qsel_client(
 
 
 class TestSyncQueryExplain:
+    @requires_query_selection
     def test_range_selects_secondary_index(self, qsel_client):
         pac = qsel_client.underlying_client
         plan = explain_plan_blocking(pac, "$.age >= 14 and $.age <= 18")
@@ -132,6 +128,7 @@ class TestSyncQueryExplain:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
+    @requires_query_selection
     def test_non_indexed_predicate_selects_primary(self, qsel_client):
         pac = qsel_client.underlying_client
         plan = explain_plan_blocking(pac, "$.country == 'US'")
@@ -139,11 +136,13 @@ class TestSyncQueryExplain:
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
+    @requires_query_selection
     def test_contradiction_filtered_out(self, qsel_client):
         pac = qsel_client.underlying_client
         plan = explain_plan_blocking(pac, "$.age > 100 and $.age < 10")
         assert plan.selection == QuerySelection.FILTERED_OUT
 
+    @requires_query_selection
     def test_for_index_hint(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -153,6 +152,7 @@ class TestSyncQueryExplain:
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
+    @requires_query_selection
     def test_plan_bytes_stable_across_repeated_probes(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -165,6 +165,7 @@ class TestSyncQueryExplain:
         assert second.index_name == first.index_name
         assert second.ael == first.ael
 
+    @requires_query_selection
     def test_for_index_hint_on_nonexistent_index(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -176,6 +177,7 @@ class TestSyncQueryExplain:
         assert plan.index_name == INDEX_NAME
         assert plan.index_name != BOGUS_INDEX_NAME
 
+    @requires_query_selection
     def test_for_index_hint_on_wrong_existing_index(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -197,6 +199,7 @@ class TestSyncQueryExplain:
 
 
 class TestSyncQueryExecute:
+    @requires_query_selection
     def test_simple_range(self, qsel_client):
         stream = (
             qsel_client.query(NS, SET_NAME)
@@ -206,6 +209,7 @@ class TestSyncQueryExecute:
         )
         assert collect_ages_sync(stream) == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_equality_returns_single_record(self, qsel_client):
         stream = (
             qsel_client.query(NS, SET_NAME)
@@ -215,6 +219,7 @@ class TestSyncQueryExecute:
         )
         assert collect_ages_sync(stream) == [25]
 
+    @requires_query_selection
     def test_primary_index_predicate(self, qsel_client):
         stream = (
             qsel_client.query(NS, SET_NAME)
@@ -231,6 +236,7 @@ class TestSyncQueryExecute:
         assert len(countries) == 25
         assert all(c == "US" for c in countries)
 
+    @requires_query_selection
     def test_plan_then_execute_consistency(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -246,6 +252,7 @@ class TestSyncQueryExecute:
         )
         assert collect_ages_sync(stream) == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_compound_predicate(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age > 30 and $.country == 'US'"
@@ -270,6 +277,7 @@ class TestSyncQueryExecute:
             stream.close()
         assert sorted(ages) == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
 
+    @requires_query_selection
     def test_reading_only_bins_projects_requested_bins(self, qsel_client):
         where = "$.age >= 14 and $.age <= 18"
         stream = (
@@ -288,6 +296,7 @@ class TestSyncQueryExecute:
             stream.close()
         assert sorted(ages) == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_contradiction_raises_filtered_out(self, qsel_client):
         with pytest.raises(AerospikeError) as exc_info:
             qsel_client.query(NS, SET_NAME).where(
@@ -295,6 +304,7 @@ class TestSyncQueryExecute:
             ).execute()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
+    @requires_query_selection
     def test_empty_secondary_index_result(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age == 999"
@@ -312,6 +322,7 @@ class TestSyncQueryExecute:
 
 
 class TestSyncQuerySelectionRouting:
+    @requires_query_selection
     def test_for_index_hint_probes_and_executes(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -328,6 +339,7 @@ class TestSyncQuerySelectionRouting:
         assert plan.index_name == INDEX_NAME
         assert ages == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_query_duration_only_hint_still_probes_and_executes(self, qsel_client):
         pac = qsel_client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
@@ -344,6 +356,7 @@ class TestSyncQuerySelectionRouting:
         assert plan.index_name == INDEX_NAME
         assert ages == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_where_exp_uses_non_probe_execute_path(self, qsel_client):
         ages = collect_ages_sync(
             qsel_client.query(NS, SET_NAME)
@@ -358,6 +371,7 @@ class TestSyncQuerySelectionRouting:
         )
         assert ages == [14, 15, 16, 17, 18]
 
+    @requires_query_selection
     def test_multiple_indexes_auto_select(self, qsel_client):
         pac = qsel_client.underlying_client
         age_where = "$.age >= 14 and $.age <= 18"
@@ -383,6 +397,7 @@ class TestSyncQuerySelectionRouting:
         assert ages == [14, 15, 16, 17, 18]
         assert scores == [40, 41, 42, 43, 44]
 
+    @requires_query_selection
     def test_no_where_scan(self, qsel_client):
         count = count_records_sync(qsel_client.query(NS, SET_NAME).execute())
         assert count == SIZE
