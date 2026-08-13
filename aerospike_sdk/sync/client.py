@@ -37,15 +37,15 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk import capabilities
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
-from aerospike_sdk.query_selection import compute_query_selection_support_blocking
+from aerospike_sdk.server_compiled_ael import supports_server_compiled_ael_routing
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
-from aerospike_sdk.server_compiled_ael import compute_server_compiled_ael_support_blocking
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.sync.operations.index import IndexBuilder
@@ -133,6 +133,8 @@ class SyncClient:
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
+        # Lazy routing gates (field 43 / 44), cached for the client's lifetime
+        # after the first probe — cleared on close, like MRT and namespace mode.
         self._cached_supports_query_selection: Optional[bool] = None
         self._cached_supports_server_compiled_ael: Optional[bool] = None
         # Resolved SDK-level settings (file over programmatic over defaults).
@@ -179,6 +181,37 @@ class SyncClient:
             return []
         return [node.version for node in nodes_fn()]
 
+    def _ensure_routing_capabilities_resolved(self) -> None:
+        """Probe node versions once and fill both routing caches."""
+        if (
+            self._cached_supports_query_selection is not None
+            and self._cached_supports_server_compiled_ael is not None
+        ):
+            return
+        if not self._connected or self._client is None:
+            if self._cached_supports_query_selection is None:
+                self._cached_supports_query_selection = False
+            if self._cached_supports_server_compiled_ael is None:
+                self._cached_supports_server_compiled_ael = False
+            return
+        versions = self._cluster_versions_blocking()
+        if self._cached_supports_query_selection is None:
+            self._cached_supports_query_selection = capabilities.supports_query_selection(
+                versions,
+            )
+        if self._cached_supports_server_compiled_ael is None:
+            self._cached_supports_server_compiled_ael = supports_server_compiled_ael_routing(
+                versions,
+            )
+
+    def _resolve_supports_query_selection(self) -> bool:
+        self._ensure_routing_capabilities_resolved()
+        return bool(self._cached_supports_query_selection)
+
+    def _resolve_supports_server_compiled_ael(self) -> bool:
+        self._ensure_routing_capabilities_resolved()
+        return bool(self._cached_supports_server_compiled_ael)
+
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = SyncSdkConfigMonitor(
@@ -218,12 +251,6 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
-        self._cached_supports_query_selection = compute_query_selection_support_blocking(
-            self._client,
-        )
-        self._cached_supports_server_compiled_ael = (
-            compute_server_compiled_ael_support_blocking(self._client)
-        )
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -284,25 +311,26 @@ class SyncClient:
 
     @property
     def supports_query_selection(self) -> bool:
-        """``True`` when all cluster nodes support field ``44`` query selection (>= 8.1.3).
+        """``True`` when all cluster nodes support field ``44`` query selection.
 
-        Computed at :meth:`connect` from PAC ``Version.supports_query_selection()``
-        on every node.
+        Resolved lazily on first use from PAC ``Version.supports_query_selection()``
+        on every node, then cached for this connection.
         """
         if not self._connected or self._client is None:
             return False
-        return bool(self._cached_supports_query_selection)
+        return self._resolve_supports_query_selection()
 
     @property
     def supports_server_compiled_ael(self) -> bool:
         """``True`` when server-compiled AEL filters are usable on this connection.
 
-        Requires all nodes >= 8.1.3 (PAC ``Version.supports_server_compiled_ael``)
-        and PAC ``FilterExpression.from_server_compiled_ael``. Cached at connect.
+        Resolved lazily on first use: every node must report
+        ``Version.supports_server_compiled_ael()`` and PAC must expose
+        ``FilterExpression.from_server_compiled_ael``. Cached thereafter.
         """
         if not self._connected or self._client is None:
             return False
-        return bool(self._cached_supports_server_compiled_ael)
+        return self._resolve_supports_server_compiled_ael()
 
     def _ensure_connected(self) -> SyncClient:
         """Connect if not already connected; return ``self`` for chaining."""

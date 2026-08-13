@@ -378,7 +378,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             else:
                 client = getattr(self, "_sdk_client_fast", None)
                 flag = (
-                    bool(getattr(client, "_cached_supports_server_compiled_ael", False))
+                    bool(getattr(client, "supports_server_compiled_ael", False))
                     if client is not None
                     else False
                 )

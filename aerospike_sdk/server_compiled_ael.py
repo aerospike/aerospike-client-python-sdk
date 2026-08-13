@@ -17,48 +17,34 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, List
 
 from aerospike_async import FilterExpression
 
-
-def _version_supports_server_compiled_ael(version_obj: object) -> bool:
-    """Call PAC ``Version.supports_server_compiled_ael()`` when present."""
-    fn = getattr(version_obj, "supports_server_compiled_ael", None)
-    if not callable(fn):
-        return False
-    return bool(fn())
+from aerospike_sdk import capabilities
 
 
 def _pac_exposes_server_compiled_factory() -> bool:
     return callable(getattr(FilterExpression, "from_server_compiled_ael", None))
 
 
-async def compute_server_compiled_ael_support(pac: Any) -> bool:
-    """``True`` when every connected node reports server-compiled AEL support.
+def supports_server_compiled_ael_routing(versions: List[Any]) -> bool:
+    """Whether string AEL may route through field **43** on this cluster.
 
-    Mirrors Rust ``Cluster::supports_server_compiled_ael()`` (all nodes >= 8.1.3)
-    and requires PAC ``FilterExpression.from_server_compiled_ael``.
+    Requires every node's ``Version.supports_server_compiled_ael()`` and PAC
+    ``FilterExpression.from_server_compiled_ael``.
     """
     if not _pac_exposes_server_compiled_factory():
         return False
-    nodes_fn = getattr(pac, "nodes", None)
-    if not callable(nodes_fn):
-        return False
-    nodes = await nodes_fn()
-    if not nodes:
-        return False
-    return all(_version_supports_server_compiled_ael(n.version) for n in nodes)
+    return capabilities.supports_ael(versions)
 
 
 def compute_server_compiled_ael_support_blocking(pac: Any) -> bool:
-    """Blocking counterpart of :func:`compute_server_compiled_ael_support`."""
-    if not _pac_exposes_server_compiled_factory():
-        return False
+    """``True`` when field **43** routing is usable on the connected cluster."""
     nodes_fn = getattr(pac, "nodes_blocking", None)
     if not callable(nodes_fn):
         return False
     nodes = nodes_fn()
     if not nodes:
         return False
-    return all(_version_supports_server_compiled_ael(n.version) for n in nodes)
+    return supports_server_compiled_ael_routing([node.version for node in nodes])

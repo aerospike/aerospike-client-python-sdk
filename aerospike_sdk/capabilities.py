@@ -22,19 +22,13 @@ least-capable node a caller must guard against. These are pure functions over
 a list of PAC ``Version`` objects — the async and sync clients supply the list
 from their respective node accessors, keeping one implementation for both.
 
-Most predicates delegate to PAC's own ``Version.supports_*`` methods (PAC owns
-the authoritative version→capability mapping). Query selection has no PAC
-``Version`` predicate, so it falls back to the documented server floor
-(>= 8.1.3), matching how the reference client gates the same feature.
+All predicates delegate to PAC's own ``Version.supports_*`` methods (PAC owns
+the authoritative version→capability mapping).
 """
 
 from __future__ import annotations
 
 from typing import Any, List, Optional, Tuple
-
-# Server floor for server-led query selection (wire field 44). PAC's Version
-# exposes no predicate for it, so gate on the version like the reference does.
-_QUERY_SELECTION_MIN = (8, 1, 3)
 
 
 def version_key(version: Any) -> Tuple[int, int, int, int]:
@@ -65,6 +59,5 @@ def supports_string_operations(versions: List[Any]) -> bool:
 
 
 def supports_query_selection(versions: List[Any]) -> bool:
-    """Whether every node supports server-led index selection (>= 8.1.3)."""
-    floor = min_version(versions)
-    return floor is not None and version_key(floor)[:3] >= _QUERY_SELECTION_MIN
+    """Whether every node supports server-led index selection (field ``44``)."""
+    return bool(versions) and all(v.supports_query_selection() for v in versions)

@@ -19,35 +19,15 @@ from __future__ import annotations
 
 from typing import Any
 
-
-def _version_supports_query_selection(version_obj: object) -> bool:
-    """Call PAC ``Version.supports_query_selection()`` when present."""
-    fn = getattr(version_obj, "supports_query_selection", None)
-    if not callable(fn):
-        return False
-    return bool(fn())
-
-
-async def compute_query_selection_support(pac: Any) -> bool:
-    """``True`` when every connected node reports query-selection support.
-
-    Mirrors Rust ``Cluster::supports_query_selection()`` (all nodes >= 8.1.3).
-    """
-    nodes_fn = getattr(pac, "nodes", None)
-    if not callable(nodes_fn):
-        return False
-    nodes = await nodes_fn()
-    if not nodes:
-        return False
-    return all(_version_supports_query_selection(n.version) for n in nodes)
+from aerospike_sdk import capabilities
 
 
 def compute_query_selection_support_blocking(pac: Any) -> bool:
-    """Blocking counterpart of :func:`compute_query_selection_support`."""
+    """``True`` when every connected node reports query-selection support."""
     nodes_fn = getattr(pac, "nodes_blocking", None)
     if not callable(nodes_fn):
         return False
     nodes = nodes_fn()
     if not nodes:
         return False
-    return all(_version_supports_query_selection(n.version) for n in nodes)
+    return capabilities.supports_query_selection([node.version for node in nodes])
