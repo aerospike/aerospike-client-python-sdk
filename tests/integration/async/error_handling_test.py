@@ -651,6 +651,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_untyped_select_from_with_where_extended_error(
         self, cluster, ds, supports_error_detail,
     ):
@@ -661,8 +662,6 @@ class TestOperateWithFilter:
         """
         if not supports_error_detail:
             pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
-        if not await cluster.supports_ael():
-            pytest.skip("requires server-compiled AEL (server >= 8.1.3)")
 
         behavior = Behavior(
             "error-handling-untyped-select-from",
