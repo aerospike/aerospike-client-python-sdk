@@ -106,11 +106,7 @@ async def cluster(aerospike_host, make_cluster_definition):
         session = c.create_session()
         ds = DataSet.of(general_namespace(), "query_test")
 
-        for i in range(10):
-            try:
-                await session.delete(ds.id(i)).execute()
-            except Exception:
-                pass
+        await session.truncate(ds)
 
         for i in range(10):
             await session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()

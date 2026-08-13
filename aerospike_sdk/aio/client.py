@@ -45,7 +45,6 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
-from aerospike_sdk.server_compiled_ael import supports_server_compiled_ael_routing
 from aerospike_sdk.sdk_config_monitor import AsyncSdkConfigMonitor, SdkConfigSource
 
 if typing.TYPE_CHECKING:
@@ -186,36 +185,23 @@ class Client:
             return []
         return [node.version for node in nodes_fn()]
 
-    def _ensure_routing_capabilities_resolved(self) -> None:
-        """Probe node versions once and fill both routing caches."""
-        if (
-            self._cached_supports_query_selection is not None
-            and self._cached_supports_server_compiled_ael is not None
-        ):
-            return
+    def _apply_routing_capabilities_from_versions(self, versions: list) -> None:
+        self._cached_supports_query_selection = capabilities.supports_query_selection(
+            versions,
+        )
+        self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
+
+    async def _warm_routing_capabilities_async(self) -> None:
+        """Fill routing caches from a live node list (async connect path)."""
         if not self._connected or self._client is None:
-            if self._cached_supports_query_selection is None:
-                self._cached_supports_query_selection = False
-            if self._cached_supports_server_compiled_ael is None:
-                self._cached_supports_server_compiled_ael = False
             return
-        versions = self._cluster_versions_blocking()
-        if self._cached_supports_query_selection is None:
-            self._cached_supports_query_selection = capabilities.supports_query_selection(
-                versions,
-            )
-        if self._cached_supports_server_compiled_ael is None:
-            self._cached_supports_server_compiled_ael = supports_server_compiled_ael_routing(
-                versions,
-            )
+        self._apply_routing_capabilities_from_versions(await self._cluster_versions())
 
-    def _resolve_supports_query_selection(self) -> bool:
-        self._ensure_routing_capabilities_resolved()
-        return bool(self._cached_supports_query_selection)
-
-    def _resolve_supports_server_compiled_ael(self) -> bool:
-        self._ensure_routing_capabilities_resolved()
-        return bool(self._cached_supports_server_compiled_ael)
+    def _warm_routing_capabilities_blocking(self) -> None:
+        """Fill routing caches from a live node list (blocking connect path)."""
+        if not self._connected or self._client is None:
+            return
+        self._apply_routing_capabilities_from_versions(self._cluster_versions_blocking())
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -253,6 +239,7 @@ class Client:
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
+        await self._warm_routing_capabilities_async()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -298,24 +285,23 @@ class Client:
     def supports_query_selection(self) -> bool:
         """``True`` when all cluster nodes support field ``44`` query selection.
 
-        Resolved lazily on first use from PAC ``Version.supports_query_selection()``
-        on every node, then cached for this connection.
+        Populated at :meth:`connect` / :meth:`connect_blocking` from PAC
+        ``Version.supports_query_selection()`` on every node.
         """
         if not self._connected or self._client is None:
             return False
-        return self._resolve_supports_query_selection()
+        return bool(self._cached_supports_query_selection)
 
     @property
     def supports_server_compiled_ael(self) -> bool:
         """``True`` when server-compiled AEL filters are usable on this connection.
 
-        Resolved lazily on first use: every node must report
-        ``Version.supports_server_compiled_ael()`` and PAC must expose
-        ``FilterExpression.from_server_compiled_ael``. Cached thereafter.
+        Populated at :meth:`connect` / :meth:`connect_blocking` from PAC
+        ``Version.supports_server_compiled_ael()`` on every node.
         """
         if not self._connected or self._client is None:
             return False
-        return self._resolve_supports_server_compiled_ael()
+        return bool(self._cached_supports_server_compiled_ael)
 
     def connect_blocking(self) -> None:
         """Synchronously open a connection without requiring an asyncio loop.
@@ -345,6 +331,7 @@ class Client:
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
+        self._warm_routing_capabilities_blocking()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},

@@ -58,6 +58,7 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
+from aerospike_sdk import capabilities
 from aerospike_sdk.server_filter import filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
@@ -378,7 +379,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             else:
                 client = getattr(self, "_sdk_client_fast", None)
                 flag = (
-                    bool(getattr(client, "supports_server_compiled_ael", False))
+                    capabilities.cached_client_flag(client, "supports_server_compiled_ael")
                     if client is not None
                     else False
                 )

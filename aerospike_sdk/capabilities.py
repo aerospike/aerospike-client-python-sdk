@@ -31,6 +31,11 @@ from __future__ import annotations
 from typing import Any, List, Optional, Tuple
 
 
+def cached_client_flag(client: Any, name: str) -> bool:
+    """Read a connect-time routing cache entry without triggering a PAC probe."""
+    return bool(getattr(client, f"_cached_{name}", False))
+
+
 def version_key(version: Any) -> Tuple[int, int, int, int]:
     """Sortable ``(major, minor, patch, build)`` tuple for a PAC ``Version``."""
     return (version.major, version.minor, version.patch, version.build)

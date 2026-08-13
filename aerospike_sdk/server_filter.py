@@ -19,12 +19,6 @@ from __future__ import annotations
 
 from aerospike_async import FilterExpression
 
-# Resolved once at import — the PAC factory does not change at runtime.
-_SERVER_COMPILED_FACTORY = getattr(
-    FilterExpression, "from_server_compiled_ael", None,
-)
-_PAC_EXPOSES_SERVER_COMPILED: bool = callable(_SERVER_COMPILED_FACTORY)
-
 
 def filter_expression_from_ael_string(
     ael: str,
@@ -34,12 +28,11 @@ def filter_expression_from_ael_string(
     """Return field **43** ``FilterExpression`` for *ael* (server compiles at eval time).
 
     Raises:
-        ValueError: When the cluster or PAC build lacks server-compiled AEL support.
+        ValueError: When the cluster lacks server-compiled AEL support.
     """
-    if supports_server_compiled_ael and _PAC_EXPOSES_SERVER_COMPILED:
-        return _SERVER_COMPILED_FACTORY(ael)  # type: ignore[misc]
-    raise ValueError(
-        "String AEL requires server-compiled AEL support (Aerospike >= 8.1.3 "
-        "and a PAC build exposing FilterExpression.from_server_compiled_ael). "
-        "Use FilterExpression / Exp builders, or upgrade the cluster.",
-    )
+    if not supports_server_compiled_ael:
+        raise ValueError(
+            "String AEL requires server-compiled AEL support (Aerospike >= 8.1.3 "
+            "on every node). Use FilterExpression / Exp builders, or upgrade the cluster.",
+        )
+    return FilterExpression.from_server_compiled_ael(ael)
