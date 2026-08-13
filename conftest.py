@@ -359,59 +359,6 @@ def general_namespace_is_sc(aerospike_host, pytestconfig):
         client.close_blocking()
 
 
-def _namespace_allows_client_ttl_from_body(body: str) -> bool:
-    """True when the namespace accepts client-specified TTL on writes."""
-    allow_without = False
-    nsup_period = 0
-    for pair in body.split(";"):
-        pair = pair.strip()
-        if "=" not in pair:
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key == "allow-ttl-without-nsup":
-            allow_without = value.lower() == "true"
-        elif key == "nsup-period":
-            try:
-                nsup_period = int(value)
-            except ValueError:
-                pass
-    return allow_without or nsup_period > 0
-
-
-@pytest.fixture(scope="session")
-def namespace_allows_client_ttl_writes(aerospike_host, pytestconfig):
-    """Server-derived: can this cluster's general namespace accept client TTL writes?
-
-    Aerospike rejects explicit TTL with ``FailForbidden`` when
-    ``allow-ttl-without-nsup=false`` and ``nsup-period=0``. CI enables NSUP before
-    integration tests (see ``.github/workflows/build-test.yml``).
-    """
-    from tests.integration.namespace import general_namespace
-
-    ns = general_namespace()
-    probe = ClientPolicy()
-    probe.use_services_alternate = _use_services_alternate_from_env()
-    if _general_auth_enabled():
-        _apply_auth_from_env(probe)
-    probe.timeout = 2000
-
-    try:
-        client = new_client_blocking(probe, aerospike_host)
-    except Exception:
-        return False
-    try:
-        for body in client.info_blocking(f"namespace/{ns}").values():
-            if body:
-                return _namespace_allows_client_ttl_from_body(body)
-        return False
-    except Exception:
-        return False
-    finally:
-        client.close_blocking()
-
-
 @pytest.fixture(scope="session")
 def sc_aware_delete(general_namespace_is_sc):
     """Best-effort cleanup delete that is durable when the target namespace is SC.
@@ -451,20 +398,6 @@ def _enforce_requires_mode(request):
     )
     if reason:
         pytest.skip(reason)
-
-
-@pytest.fixture(autouse=True)
-def _enforce_requires_client_ttl_writes(request):
-    """Skip ``@requires_client_ttl_writes`` tests when the namespace rejects TTL writes."""
-    marker = request.node.get_closest_marker("requires_client_ttl_writes")
-    if marker is None:
-        return
-    if not request.getfixturevalue("namespace_allows_client_ttl_writes"):
-        pytest.skip(
-            "Requires client TTL writes: enable nsup-period>0 or "
-            "allow-ttl-without-nsup=true on the general namespace "
-            "(CI applies both via asinfo before integration tests).",
-        )
 
 
 def _terminal_emit(config):
@@ -702,6 +635,39 @@ def wait_for_set_visible():
                 return
             last_seen = seen
             await asyncio.sleep(interval)
+        raise TimeoutError(
+            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
+            f"to set scan within {timeout}s"
+        )
+
+    return _wait
+
+
+@pytest.fixture(scope="session")
+def sync_wait_for_set_visible():
+    """Return a sync helper that polls a set scan until ``expected`` records are visible.
+
+    Sync counterpart of :func:`wait_for_set_visible`. See that fixture's docstring
+    for why seed fixtures call this before index waits or yielding to tests.
+    """
+    def _wait(
+        session, ns, set_name, expected,
+        *, timeout=5.0, interval=0.05, settle=0.1,
+    ):
+        deadline = time.monotonic() + timeout
+        last_seen = -1
+        while time.monotonic() < deadline:
+            stream = session.query(ns, set_name).execute()
+            seen = 0
+            for _ in stream:
+                seen += 1
+            stream.close()
+            if seen >= expected:
+                if settle > 0:
+                    time.sleep(settle)
+                return
+            last_seen = seen
+            time.sleep(interval)
         raise TimeoutError(
             f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
             f"to set scan within {timeout}s"

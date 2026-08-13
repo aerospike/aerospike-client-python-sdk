@@ -40,9 +40,9 @@ from tests.pac_compat import requires_query_selection
 class TestQuerySelectionExplainScope:
     @requires_query_selection
     async def test_explain_scalar_integer_secondary_index_succeeds(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
+        client = query_selection_cluster.client
         pac = client.underlying_client
         plan = await explain_plan_async(
             pac, "$.age == 25", set_name=SCOPE_SET_NAME,
@@ -53,9 +53,9 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     async def test_explain_scalar_string_primary_index_no_index_fields(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
+        client = query_selection_cluster.client
         pac = client.underlying_client
         plan = await explain_plan_async(
             pac, "$.country == 'US'", set_name=SCOPE_SET_NAME,
@@ -66,9 +66,9 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     async def test_explain_blob_equality_selects_secondary_index(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
+        client = query_selection_cluster.client
         pac = client.underlying_client
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
         plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
@@ -78,9 +78,9 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     async def test_explain_map_keys_exists_primary_index_fallback(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
+        client = query_selection_cluster.client
         pac = client.underlying_client
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
         plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
@@ -90,10 +90,9 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     async def test_execute_blob_equality_returns_matching_row(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
-        session = client.create_session()
+        session = query_selection_cluster.session
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
 
         stream = await (
@@ -106,10 +105,9 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     async def test_execute_map_keys_exists_returns_matching_rows(
-        self, qscexp_client,
+        self, query_selection_cluster,
     ):
-        client = qscexp_client
-        session = client.create_session()
+        session = query_selection_cluster.session
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
 
         stream = await (

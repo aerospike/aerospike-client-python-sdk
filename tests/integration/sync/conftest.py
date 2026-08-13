@@ -12,18 +12,8 @@
 
 """Shared sync integration fixtures."""
 
-from tests.integration.query_selection_sync_fixtures import (
-    qp_cdt_client,
-    qsel_client,
-    qselhint_client,
-    qscexp_client,
-    query_selection_cluster,
-)
+from tests.integration.query_selection_sync_fixtures import query_selection_cluster
 
 __all__ = [
-    "qp_cdt_client",
-    "qsel_client",
-    "qselhint_client",
-    "qscexp_client",
     "query_selection_cluster",
 ]

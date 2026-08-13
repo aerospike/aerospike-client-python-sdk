@@ -35,7 +35,7 @@ from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_ttl_writes, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 
 
 @pytest.fixture
@@ -828,7 +828,6 @@ class TestIdempotentOps:
 # TTL expiry
 # ---------------------------------------------------------------------------
 
-@requires_client_ttl_writes
 class TestTtlExpiry:
 
     async def test_record_expires_after_ttl(self, session, ds):

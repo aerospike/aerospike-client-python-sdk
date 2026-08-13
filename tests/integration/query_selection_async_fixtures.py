@@ -10,13 +10,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Session-scoped query-selection cluster + module client fixtures (async)."""
+"""Session-scoped query-selection cluster fixture (async)."""
 
 from __future__ import annotations
 
 import pytest_asyncio
 
-from tests.integration.query_selection_helpers import QuerySelectionClientFacade
 from tests.integration.query_selection_seed import (
     QuerySelectionClusterState,
     seed_query_selection_async,
@@ -42,24 +41,3 @@ async def query_selection_cluster(
         state = QuerySelectionClusterState(client=client, session=session)
         yield state
         await teardown_query_selection_async(client, session)
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qsel_client(query_selection_cluster):
-    state = query_selection_cluster
-    yield QuerySelectionClientFacade(state.client, state.session)
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qscexp_client(query_selection_cluster):
-    yield query_selection_cluster.client
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qselhint_client(query_selection_cluster):
-    yield query_selection_cluster.client
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def qp_cdt_client(query_selection_cluster):
-    yield query_selection_cluster.client

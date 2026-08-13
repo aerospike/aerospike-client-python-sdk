@@ -13,10 +13,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Live server-capability probes on a connected sync cluster.
+"""Live wiring tests for sync server-capability probes on a connected cluster.
 
 Sync counterpart of the async capabilities suite; the sync client has its own
-node accessor (`_cluster_versions_blocking`), so it needs its own live check.
+node accessor (``_cluster_versions_blocking``). The fold logic is unit-tested in
+``tests/unit/capabilities_test.py``; this module checks probe delegation only.
 """
 
 import pytest
@@ -44,7 +45,7 @@ class TestSyncCapabilityProbes:
             assert isinstance(probe(), bool)
 
     def test_probes_agree_with_pac_version_predicates(self, cluster):
-        """Each probe matches ``capabilities.supports_*`` over live node versions."""
+        """Wiring: each probe delegates to the matching ``capabilities.supports_*``."""
         versions = cluster._sdk_client._cluster_versions_blocking()
         assert versions, "connected cluster should report at least one node"
         assert cluster.supports_query_operations() == (

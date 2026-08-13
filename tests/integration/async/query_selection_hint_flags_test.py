@@ -40,9 +40,9 @@ from tests.pac_compat import requires_query_selection
 class TestQuerySelectionHintFlags:
     @requires_query_selection
     async def test_require_index_on_primary_index_plan_fails_explain(
-        self, qselhint_client,
+        self, query_selection_cluster,
     ):
-        pac = qselhint_client.underlying_client
+        pac = query_selection_cluster.client.underlying_client
         with pytest.raises(IndexNotFound) as exc_info:
             await explain_plan_async(
                 pac,
@@ -54,9 +54,9 @@ class TestQuerySelectionHintFlags:
 
     @requires_query_selection
     async def test_require_index_with_soft_hint_selects_secondary_index(
-        self, qselhint_client,
+        self, query_selection_cluster,
     ):
-        pac = qselhint_client.underlying_client
+        pac = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
             pac,
             "$.age == 25",
@@ -69,9 +69,9 @@ class TestQuerySelectionHintFlags:
 
     @requires_query_selection
     async def test_hard_hint_with_matching_index_selects_hinted_index(
-        self, qselhint_client,
+        self, query_selection_cluster,
     ):
-        pac = qselhint_client.underlying_client
+        pac = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
             pac,
             "$.age == 25",
@@ -84,9 +84,9 @@ class TestQuerySelectionHintFlags:
 
     @requires_query_selection
     async def test_require_index_and_hard_hint_selects_hinted_index(
-        self, qselhint_client,
+        self, query_selection_cluster,
     ):
-        pac = qselhint_client.underlying_client
+        pac = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
             pac,
             "$.age == 25",
@@ -101,8 +101,8 @@ class TestQuerySelectionHintFlags:
         assert plan.index_name == HINT_INDEX_NAME
 
     @requires_query_selection
-    async def test_hard_hint_with_wrong_index_fails_explain(self, qselhint_client):
-        pac = qselhint_client.underlying_client
+    async def test_hard_hint_with_wrong_index_fails_explain(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         with pytest.raises(IndexNotFound) as exc_info:
             await explain_plan_async(
                 pac,
@@ -116,8 +116,8 @@ class TestQuerySelectionHintFlags:
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
     @requires_query_selection
-    async def test_bad_ael_fails_explain_with_parameter(self, qselhint_client):
-        pac = qselhint_client.underlying_client
+    async def test_bad_ael_fails_explain_with_parameter(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         with pytest.raises(InvalidRequest) as exc_info:
             await explain_plan_async(
                 pac, "$.age > 30 and", set_name=HINT_SET_NAME,

@@ -13,12 +13,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Live server-capability probes on a connected cluster.
+"""Live wiring tests for server-capability probes on a connected cluster.
 
-The fold logic (minimum across all nodes) is unit-tested in
-``tests/unit/capabilities_test.py``;
-this confirms the probes reach the live cluster, return the expected type, and
-match the all-nodes fold of each node's PAC ``Version.supports_*`` predicates.
+The all-nodes fold logic is unit-tested in ``tests/unit/capabilities_test.py``
+against fakes; this module checks that live ``Cluster`` probes delegate to the
+matching ``capabilities.supports_*`` helpers over connected node versions.
 Version floors live in PAC, not the SDK.
 """
 
@@ -51,7 +50,7 @@ class TestCapabilityProbes:
             assert isinstance(await probe(), bool)
 
     async def test_probes_agree_with_pac_version_predicates(self, cluster):
-        """Each probe matches ``capabilities.supports_*`` over live node versions."""
+        """Wiring: each probe delegates to the matching ``capabilities.supports_*``."""
         versions = await cluster._sdk_client._cluster_versions()
         assert versions, "connected cluster should report at least one node"
         assert await cluster.supports_query_operations() == (

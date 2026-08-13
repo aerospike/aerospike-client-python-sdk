@@ -44,30 +44,30 @@ from tests.pac_compat import requires_query_selection, requires_server_compiled_
 
 class TestSyncQueryExplain:
     @requires_query_selection
-    def test_range_selects_secondary_index(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_range_selects_secondary_index(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(pac, "$.age >= 14 and $.age <= 18")
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
     @requires_query_selection
-    def test_non_indexed_predicate_selects_primary(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_non_indexed_predicate_selects_primary(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(pac, "$.country == 'US'")
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
-    def test_contradiction_filtered_out(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_contradiction_filtered_out(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(pac, "$.age > 100 and $.age < 10")
         assert plan.selection == QuerySelection.FILTERED_OUT
 
     @requires_query_selection
-    def test_for_index_hint(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_for_index_hint(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = explain_plan_blocking(
             pac, where, hint=QueryHint(index_name=INDEX_NAME),
@@ -76,8 +76,8 @@ class TestSyncQueryExplain:
         assert plan.index_name == INDEX_NAME
 
     @requires_query_selection
-    def test_plan_bytes_stable_across_repeated_probes(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_plan_bytes_stable_across_repeated_probes(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         first = explain_plan_blocking(pac, where)
         second = explain_plan_blocking(pac, where)
@@ -89,8 +89,8 @@ class TestSyncQueryExplain:
         assert second.ael == first.ael
 
     @requires_query_selection
-    def test_for_index_hint_on_nonexistent_index(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_for_index_hint_on_nonexistent_index(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = explain_plan_blocking(
             pac, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
@@ -101,14 +101,14 @@ class TestSyncQueryExplain:
         assert plan.index_name != BOGUS_INDEX_NAME
 
     @requires_query_selection
-    def test_for_index_hint_on_wrong_existing_index(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_for_index_hint_on_wrong_existing_index(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=SCORE_INDEX_NAME)
         plan = explain_plan_blocking(pac, where, hint=hint)
 
         ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -124,9 +124,9 @@ class TestSyncQueryExplain:
 class TestSyncQueryExecute:
     @requires_server_compiled_ael
     @requires_query_selection
-    def test_simple_range(self, qsel_client):
+    def test_simple_range(self, query_selection_cluster):
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where("$.age >= 14 and $.age <= 18")
             .execute()
@@ -135,9 +135,9 @@ class TestSyncQueryExecute:
 
     @requires_server_compiled_ael
     @requires_query_selection
-    def test_equality_returns_single_record(self, qsel_client):
+    def test_equality_returns_single_record(self, query_selection_cluster):
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where("$.age == 25")
             .execute()
@@ -146,9 +146,9 @@ class TestSyncQueryExecute:
 
     @requires_server_compiled_ael
     @requires_query_selection
-    def test_primary_index_predicate(self, qsel_client):
+    def test_primary_index_predicate(self, query_selection_cluster):
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_COUNTRY])
             .where("$.country == 'US'")
             .execute()
@@ -163,15 +163,15 @@ class TestSyncQueryExecute:
         assert all(c == "US" for c in countries)
 
     @requires_query_selection
-    def test_plan_then_execute_consistency(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_plan_then_execute_consistency(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = explain_plan_blocking(pac, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -179,15 +179,15 @@ class TestSyncQueryExecute:
         assert collect_ages_sync(stream) == [14, 15, 16, 17, 18]
 
     @requires_query_selection
-    def test_compound_predicate(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_compound_predicate(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age > 30 and $.country == 'US'"
         plan = explain_plan_blocking(pac, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE, BIN_COUNTRY])
             .where(where)
             .execute()
@@ -204,10 +204,10 @@ class TestSyncQueryExecute:
         assert sorted(ages) == [32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
 
     @requires_query_selection
-    def test_reading_only_bins_projects_requested_bins(self, qsel_client):
+    def test_reading_only_bins_projects_requested_bins(self, query_selection_cluster):
         where = "$.age >= 14 and $.age <= 18"
         stream = (
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -224,23 +224,23 @@ class TestSyncQueryExecute:
 
     @requires_server_compiled_ael
     @requires_query_selection
-    def test_contradiction_raises_filtered_out(self, qsel_client):
+    def test_contradiction_raises_filtered_out(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
-            qsel_client.query(NS, SET_NAME).where(
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).where(
                 "$.age > 100 and $.age < 10",
             ).execute()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
 
     @requires_query_selection
-    def test_empty_secondary_index_result(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_empty_secondary_index_result(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age == 999"
         plan = explain_plan_blocking(pac, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
         count = count_records_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .execute(),
@@ -250,13 +250,13 @@ class TestSyncQueryExecute:
 
 class TestSyncQuerySelectionRouting:
     @requires_query_selection
-    def test_for_index_hint_probes_and_executes(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_for_index_hint_probes_and_executes(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=INDEX_NAME)
         plan = explain_plan_blocking(pac, where, hint=hint)
         ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -267,13 +267,13 @@ class TestSyncQuerySelectionRouting:
         assert ages == [14, 15, 16, 17, 18]
 
     @requires_query_selection
-    def test_query_duration_only_hint_still_probes_and_executes(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_query_duration_only_hint_still_probes_and_executes(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(query_duration=QueryDuration.SHORT)
         plan = explain_plan_blocking(pac, where, hint=hint)
         ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -284,9 +284,9 @@ class TestSyncQuerySelectionRouting:
         assert ages == [14, 15, 16, 17, 18]
 
     @requires_query_selection
-    def test_where_exp_uses_non_probe_execute_path(self, qsel_client):
+    def test_where_exp_uses_non_probe_execute_path(self, query_selection_cluster):
         ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(
                 Exp.and_([
@@ -299,21 +299,21 @@ class TestSyncQuerySelectionRouting:
         assert ages == [14, 15, 16, 17, 18]
 
     @requires_query_selection
-    def test_multiple_indexes_auto_select(self, qsel_client):
-        pac = qsel_client.underlying_client
+    def test_multiple_indexes_auto_select(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         age_where = "$.age >= 14 and $.age <= 18"
         score_where = "$.score >= 40 and $.score <= 44"
 
         age_plan = explain_plan_blocking(pac, age_where)
         score_plan = explain_plan_blocking(pac, score_where)
         ages = collect_ages_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_AGE])
             .where(age_where)
             .execute(),
         )
         scores = collect_scores_sync(
-            qsel_client.query(NS, SET_NAME)
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_SCORE])
             .where(score_where)
             .execute(),
@@ -325,6 +325,6 @@ class TestSyncQuerySelectionRouting:
         assert scores == [40, 41, 42, 43, 44]
 
     @requires_query_selection
-    def test_no_where_scan(self, qsel_client):
-        count = count_records_sync(qsel_client.query(NS, SET_NAME).execute())
+    def test_no_where_scan(self, query_selection_cluster):
+        count = count_records_sync(query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).execute())
         assert count == SIZE

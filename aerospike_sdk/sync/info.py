@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.info_shared import InfoCommandsBase
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -70,7 +71,7 @@ class InfoCommands(InfoCommandsBase):
     def secondary_indexes(self, namespace: Optional[str] = None) -> List[Dict[str, str]]:
         """All secondary indexes (optionally filtered by namespace)."""
         responses = self._pac.info_on_all_nodes_blocking("sindex-list")
-        return self._parse_sindex_list(responses, namespace)
+        return parse_index_list(responses, namespace=namespace)
 
     def secondary_index_details(self, namespace: str, index_name: str) -> Optional[Dict[str, str]]:
         """Details for one secondary index; ``None`` when missing."""

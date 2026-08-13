@@ -72,7 +72,6 @@ addopts = "-s"
 markers = [
     "requires_server_compiled_ael: needs connected client with server-compiled AEL (see tests/integration/conftest.py)",
     "requires_query_selection: needs connected client with field 44 query selection (see tests/integration/conftest.py)",
-    "requires_client_ttl_writes: needs namespace nsup-period>0 or allow-ttl-without-nsup=true (see conftest.py)",
 ]
 testpaths = ["tests"]
 python_files = ["*_test.py"]

@@ -10,13 +10,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Session-scoped query-selection cluster + module client fixtures (sync)."""
+"""Session-scoped query-selection cluster fixture (sync)."""
 
 from __future__ import annotations
 
 import pytest
 
-from tests.integration.query_selection_helpers import QuerySelectionClientFacade
 from tests.integration.query_selection_seed import (
     QuerySelectionClusterState,
     seed_query_selection_sync,
@@ -29,34 +28,16 @@ def query_selection_cluster(
     aerospike_host,
     make_cluster_definition,
     sync_wait_for_index,
+    sync_wait_for_set_visible,
 ):
     """One connect + seed for all sync query-selection integration modules."""
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
     with cluster_def.connect() as cluster:
         client = cluster._sdk_client
         session = cluster.create_session()
-        seed_query_selection_sync(client, session, sync_wait_for_index)
+        seed_query_selection_sync(
+            client, session, sync_wait_for_index, sync_wait_for_set_visible,
+        )
         state = QuerySelectionClusterState(client=client, session=session)
         yield state
         teardown_query_selection_sync(client, session)
-
-
-@pytest.fixture(scope="module")
-def qsel_client(query_selection_cluster):
-    state = query_selection_cluster
-    yield QuerySelectionClientFacade(state.client, state.session)
-
-
-@pytest.fixture(scope="module")
-def qscexp_client(query_selection_cluster):
-    yield query_selection_cluster.client
-
-
-@pytest.fixture(scope="module")
-def qselhint_client(query_selection_cluster):
-    yield query_selection_cluster.client
-
-
-@pytest.fixture(scope="module")
-def qp_cdt_client(query_selection_cluster):
-    yield query_selection_cluster.client

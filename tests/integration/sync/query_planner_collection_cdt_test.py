@@ -35,28 +35,28 @@ from tests.pac_compat import requires_query_selection
 
 class TestSyncQueryPlannerCollectionCdt:
     @requires_query_selection
-    def test_plan_map_keys_exists_primary_index_fallback(self, qp_cdt_client):
+    def test_plan_map_keys_exists_primary_index_fallback(self, query_selection_cluster):
         where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         plan = explain_plan_blocking(
-            qp_cdt_client.underlying_client, where, set_name=CDT_SET_NAME,
+            query_selection_cluster.client.underlying_client, where, set_name=CDT_SET_NAME,
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
-    def test_plan_list_exists_primary_index_fallback(self, qp_cdt_client):
+    def test_plan_list_exists_primary_index_fallback(self, query_selection_cluster):
         where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
         plan = explain_plan_blocking(
-            qp_cdt_client.underlying_client, where, set_name=CDT_SET_NAME,
+            query_selection_cluster.client.underlying_client, where, set_name=CDT_SET_NAME,
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
     def test_execute_cdt_exists_without_for_bin_returns_matching_rows(
-        self, qp_cdt_client,
+        self, query_selection_cluster,
     ):
-        session = qp_cdt_client.create_session()
+        session = query_selection_cluster.session
         ds = DataSet.of(NS, CDT_SET_NAME)
         map_where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"

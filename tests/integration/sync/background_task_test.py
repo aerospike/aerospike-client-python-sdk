@@ -20,7 +20,7 @@ from aerospike_sdk import UDFLang
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_ttl_writes, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "pfc_bg_task"
@@ -122,7 +122,6 @@ def test_sync_background_delete(cluster):
             assert rr.is_ok
 
 
-@requires_client_ttl_writes
 def test_sync_background_touch(cluster):
     session = cluster.create_session()
     for i in range(1, 11):

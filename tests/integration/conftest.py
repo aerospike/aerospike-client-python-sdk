@@ -21,6 +21,7 @@ import pytest
 
 from tests.pac_compat import (
     SupportsPacCapabilities,
+    has_sdk_capability_properties,
     skip_if_lacks_query_selection,
     skip_if_lacks_server_compiled_ael,
 )
@@ -46,7 +47,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
         pytest.fail(
             "PAC capability marker present but no SDK client fixture found — "
             "name the fixture client / cluster* / session / session_with_* / "
-            "qsel_client (or extend resolve_sdk_client_from_funcargs); skipping "
+            "query_selection_cluster (or extend resolve_sdk_client_from_funcargs); skipping "
             "here would silently drop coverage.",
             pytrace=False,
         )
@@ -56,11 +57,8 @@ def pytest_runtest_call(item: pytest.Item) -> None:
 
 
 def _is_sdk_capability_client(candidate: object) -> bool:
-    """True when *candidate* exposes the public SDK ``supports_*`` properties."""
-    return (
-        hasattr(candidate, "supports_server_compiled_ael")
-        and hasattr(candidate, "supports_query_selection")
-    )
+    """True when *candidate* exposes the public SDK ``supports_*`` bool properties."""
+    return has_sdk_capability_properties(candidate)
 
 
 def _unwrap_sdk_client(value: object) -> SupportsPacCapabilities | None:

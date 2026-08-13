@@ -24,9 +24,7 @@ interpreted.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
-
-from aerospike_sdk.index_list import parse_index_list
+from typing import Dict, Optional, Set
 
 
 class InfoCommandsBase:
@@ -66,13 +64,6 @@ class InfoCommandsBase:
                 if isinstance(value, str) and value:
                     out.update(item.strip() for item in value.split(sep) if item.strip())
         return out
-
-    @staticmethod
-    def _parse_sindex_list(
-        responses: Dict[str, Dict[str, str]], namespace: Optional[str]
-    ) -> List[Dict[str, str]]:
-        """Parse ``sindex-list`` responses into de-duplicated index records."""
-        return parse_index_list(responses, namespace=namespace)
 
     @staticmethod
     def _interpret_namespace_details(

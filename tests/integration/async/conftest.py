@@ -23,21 +23,11 @@ clean up.
 
 import pytest_asyncio
 
-from tests.integration.query_selection_async_fixtures import (
-    qp_cdt_client,
-    qsel_client,
-    qselhint_client,
-    qscexp_client,
-    query_selection_cluster,
-)
+from tests.integration.query_selection_async_fixtures import query_selection_cluster
 
 __all__ = [
     "cluster",
     "cluster_sc",
-    "qp_cdt_client",
-    "qsel_client",
-    "qselhint_client",
-    "qscexp_client",
     "query_selection_cluster",
 ]
 

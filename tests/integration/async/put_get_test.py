@@ -22,7 +22,6 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from .durable_delete_support import delete_keys_durable
-from tests.pac_compat import requires_client_ttl_writes
 from tests.integration.namespace import general_namespace
 
 
@@ -640,7 +639,6 @@ async def test_touch_nonexistent_record(cluster):
     assert not first.is_ok
 
 
-@requires_client_ttl_writes
 async def test_touch_with_ttl(cluster):
     """Touch with expire_record_after_seconds sets the TTL."""
     session = cluster.create_session()

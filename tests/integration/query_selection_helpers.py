@@ -26,30 +26,6 @@ if TYPE_CHECKING:
     from aerospike_sdk import QueryHint
 
 
-class QuerySelectionClientFacade:
-    """Test helper: ``Client`` no longer exposes ``query()`` — delegate to ``Session``.
-
-    Fixtures yield this so selection integration tests keep ``qsel_client.query(ns, set)``
-    while still exposing ``underlying_client`` for direct PAC explain probes.
-    """
-
-    __slots__ = ("_client", "_session")
-
-    def __init__(self, client: Any, session: Any) -> None:
-        self._client = client
-        self._session = session
-
-    @property
-    def underlying_client(self) -> Any:
-        return self._client.underlying_client
-
-    def query(self, namespace: str, set_name: str) -> Any:
-        return self._session.query(namespace=namespace, set_name=set_name)
-
-    def index(self, *args: Any, **kwargs: Any) -> Any:
-        return self._client.index(*args, **kwargs)
-
-
 NS = "test"
 SET_NAME = "qselint"
 INDEX_NAME = "qsel_age_idx"
@@ -192,6 +168,36 @@ def create_index_quiet_blocking(
         )
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
+            raise
+
+
+async def drop_index_quiet_async(
+    client: Any,
+    ns: str,
+    set_name: str,
+    index_name: str,
+) -> None:
+    from aerospike_sdk import ResultCode
+
+    try:
+        await client.index(ns, set_name).named(index_name).drop()
+    except Exception as exc:
+        if getattr(exc, "result_code", None) != ResultCode.INDEX_NOT_FOUND:
+            raise
+
+
+def drop_index_quiet_blocking(
+    client: Any,
+    ns: str,
+    set_name: str,
+    index_name: str,
+) -> None:
+    from aerospike_sdk import ResultCode
+
+    try:
+        client.index(ns, set_name).named(index_name).drop()
+    except Exception as exc:
+        if getattr(exc, "result_code", None) != ResultCode.INDEX_NOT_FOUND:
             raise
 
 

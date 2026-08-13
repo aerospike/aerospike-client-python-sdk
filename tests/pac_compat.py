@@ -40,13 +40,33 @@ class SupportsPacCapabilities(Protocol):
         ...
 
 
+def _capability_bool(client: object, attr: str) -> bool:
+    """Read a connected SDK client's ``supports_*`` flag; fail if not a bool."""
+    value = getattr(client, attr, None)
+    if not isinstance(value, bool):
+        pytest.fail(
+            f"{attr!r} must be a bool property on the resolved SDK client, "
+            f"got {type(value).__name__}",
+            pytrace=False,
+        )
+    return value
+
+
+def has_sdk_capability_properties(candidate: object) -> bool:
+    """True when *candidate* exposes both ``supports_*`` bool properties."""
+    return (
+        isinstance(getattr(candidate, "supports_server_compiled_ael", None), bool)
+        and isinstance(getattr(candidate, "supports_query_selection", None), bool)
+    )
+
+
 def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
     Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael` (the same
     public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if client.supports_server_compiled_ael:
+    if _capability_bool(client, "supports_server_compiled_ael") is True:
         return
     pytest.skip(
         "Requires server-compiled AEL: Version.supports_server_compiled_ael on all nodes "
@@ -60,7 +80,7 @@ def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
     Reads :attr:`SupportsPacCapabilities.supports_query_selection` (the same
     public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if client.supports_query_selection:
+    if _capability_bool(client, "supports_query_selection") is True:
         return
     pytest.skip(
         "Requires query selection: Version.supports_query_selection on all nodes "
@@ -70,4 +90,3 @@ def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
 
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
 requires_query_selection = pytest.mark.requires_query_selection
-requires_client_ttl_writes = pytest.mark.requires_client_ttl_writes

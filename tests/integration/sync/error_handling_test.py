@@ -20,7 +20,6 @@ from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_ttl_writes
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +67,6 @@ class TestSyncIdempotentOps:
         assert len(results) == 0
 
 
-@requires_client_ttl_writes
 class TestSyncTtlPreservation:
 
     def test_no_change_in_expiration_preserves_ttl(self, cluster, ds):

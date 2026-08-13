@@ -36,9 +36,9 @@ from tests.pac_compat import requires_query_selection
 class TestQueryPlannerCollectionCdt:
     @requires_query_selection
     async def test_plan_map_keys_exists_primary_index_fallback(
-        self, qp_cdt_client,
+        self, query_selection_cluster,
     ):
-        pac = qp_cdt_client.underlying_client
+        pac = query_selection_cluster.client.underlying_client
         where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         plan = await explain_plan_async(pac, where, set_name=CDT_SET_NAME)
 
@@ -46,8 +46,8 @@ class TestQueryPlannerCollectionCdt:
         assert plan.index_name is None
 
     @requires_query_selection
-    async def test_plan_list_exists_primary_index_fallback(self, qp_cdt_client):
-        pac = qp_cdt_client.underlying_client
+    async def test_plan_list_exists_primary_index_fallback(self, query_selection_cluster):
+        pac = query_selection_cluster.client.underlying_client
         where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
         plan = await explain_plan_async(pac, where, set_name=CDT_SET_NAME)
 
@@ -56,9 +56,9 @@ class TestQueryPlannerCollectionCdt:
 
     @requires_query_selection
     async def test_execute_cdt_exists_without_for_bin_returns_matching_rows(
-        self, qp_cdt_client,
+        self, query_selection_cluster,
     ):
-        session = qp_cdt_client.create_session()
+        session = query_selection_cluster.session
         ds = DataSet.of(NS, CDT_SET_NAME)
         map_where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"

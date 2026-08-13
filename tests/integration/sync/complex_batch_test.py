@@ -28,7 +28,7 @@ from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_ttl_writes, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 
 
 @pytest.fixture(scope="module")
@@ -270,7 +270,6 @@ class TestDeleteInChain:
 class TestPerSpecSettings:
     """Per-spec write settings: TTL, generation."""
 
-    @requires_client_ttl_writes
     def test_expire_record_after_seconds(self, session, ds):
         k = ds.id("cb_ttl_1")
         _cleanup(session, k)
@@ -337,7 +336,6 @@ class TestPerSpecSettings:
         _cleanup(session, k)
 
 
-@requires_client_ttl_writes
 class TestChainLevelDefaults:
     """Chain-level default_expire_record_after_seconds."""
 

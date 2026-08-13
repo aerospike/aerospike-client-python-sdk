@@ -25,7 +25,6 @@ Coverage:
 import pytest
 from aerospike_sdk.dataset import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_client_ttl_writes
 
 
 @pytest.fixture
@@ -172,7 +171,6 @@ class TestOperate:
         assert "a" not in read_rec.bins
         assert len(read_rec.bins) == 1
 
-    @requires_client_ttl_writes
     async def test_touch_record_resets_ttl(self, cluster, test_set: DataSet):
         """Touch the record to reset its TTL within an atomic operate call."""
         session = cluster.create_session()

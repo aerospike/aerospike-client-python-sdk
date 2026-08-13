@@ -39,42 +39,42 @@ from tests.pac_compat import requires_query_selection
 
 class TestSyncQuerySelectionExplainScope:
     @requires_query_selection
-    def test_explain_scalar_integer_secondary_index_succeeds(self, qscexp_client):
+    def test_explain_scalar_integer_secondary_index_succeeds(self, query_selection_cluster):
         plan = explain_plan_blocking(
-            qscexp_client.underlying_client, "$.age == 25", set_name=SCOPE_SET_NAME,
+            query_selection_cluster.client.underlying_client, "$.age == 25", set_name=SCOPE_SET_NAME,
         )
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_INT_INDEX
 
     @requires_query_selection
-    def test_explain_scalar_string_primary_index_no_index_fields(self, qscexp_client):
+    def test_explain_scalar_string_primary_index_no_index_fields(self, query_selection_cluster):
         plan = explain_plan_blocking(
-            qscexp_client.underlying_client, "$.country == 'US'", set_name=SCOPE_SET_NAME,
+            query_selection_cluster.client.underlying_client, "$.country == 'US'", set_name=SCOPE_SET_NAME,
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
-    def test_explain_blob_equality_selects_secondary_index(self, qscexp_client):
+    def test_explain_blob_equality_selects_secondary_index(self, query_selection_cluster):
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
         plan = explain_plan_blocking(
-            qscexp_client.underlying_client, where, set_name=SCOPE_SET_NAME,
+            query_selection_cluster.client.underlying_client, where, set_name=SCOPE_SET_NAME,
         )
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_BLOB_INDEX
 
     @requires_query_selection
-    def test_explain_map_keys_exists_primary_index_fallback(self, qscexp_client):
+    def test_explain_map_keys_exists_primary_index_fallback(self, query_selection_cluster):
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
         plan = explain_plan_blocking(
-            qscexp_client.underlying_client, where, set_name=SCOPE_SET_NAME,
+            query_selection_cluster.client.underlying_client, where, set_name=SCOPE_SET_NAME,
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
-    def test_execute_blob_equality_returns_matching_row(self, qscexp_client):
-        session = qscexp_client.create_session()
+    def test_execute_blob_equality_returns_matching_row(self, query_selection_cluster):
+        session = query_selection_cluster.session
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
         count = count_records_sync(
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
@@ -85,8 +85,8 @@ class TestSyncQuerySelectionExplainScope:
         assert count == 1
 
     @requires_query_selection
-    def test_execute_map_keys_exists_returns_matching_rows(self, qscexp_client):
-        session = qscexp_client.create_session()
+    def test_execute_map_keys_exists_returns_matching_rows(self, query_selection_cluster):
+        session = query_selection_cluster.session
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
         stream = (
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
