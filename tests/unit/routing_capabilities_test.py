@@ -307,5 +307,6 @@ class TestRefreshUnderARunningLoop:
         assert in_flight is not None
 
         client._clear_routing_capability_cache()
-        assert in_flight.cancelled() or in_flight.cancelling()
+        await asyncio.sleep(0)
+        assert in_flight.cancelled()
         assert client._routing_capability_refresh is None
