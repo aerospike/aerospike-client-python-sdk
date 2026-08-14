@@ -224,12 +224,12 @@ class QueryHint:
     ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
 
     .. deprecated:: alpha
-        ``bin_name`` exists only for parity with the Java SDK's ``forBin()``
-        during alpha. The bin name itself is not sent anywhere — it only
-        selects the field ``43`` route. The Query Optimizer PRD specifies the
-        index *name* as the sole hint shape, so this is expected to be removed
-        from both SDKs once product signs off. Prefer ``index_name``, or
-        :meth:`QueryBuilder.filter` when you want to bypass the planner.
+        ``bin_name`` is a legacy opt-out that skips server-led selection in
+        favor of the field ``43`` route. The bin name itself is not sent
+        anywhere. The Query Optimizer PRD specifies the index *name* as the sole
+        hint shape, so this is expected to be removed once product signs off.
+        Prefer ``index_name``, or :meth:`QueryBuilder.filter` when you want to
+        bypass the planner.
 
     Example::
 
@@ -494,7 +494,7 @@ class _QueryBuilderBase:
         elif (
             supports_server_compiled_ael is None
             and sdk_client is not None
-            and sdk_client._cached_supports_server_compiled_ael
+            and sdk_client.supports_server_compiled_ael
         ):
             self._supports_server_compiled_ael = True
         if supports_query_selection is True:
@@ -502,7 +502,7 @@ class _QueryBuilderBase:
         elif (
             supports_query_selection is None
             and sdk_client is not None
-            and sdk_client._cached_supports_query_selection
+            and sdk_client.supports_query_selection
         ):
             self._supports_query_selection = True
         if txn is None:
@@ -872,9 +872,8 @@ class _QueryBuilderBase:
         programmatically.
 
         Supplying *params* interpolates them into the template with printf
-        syntax, matching the Java SDK so one template serves both. Only
-        trusted values belong here — interpolation does not quote or escape,
-        so it is no safer than an f-string.
+        syntax. Only trusted values belong here — interpolation does not quote
+        or escape, so it is no safer than an f-string.
 
         Args:
             expression: AEL string or ``FilterExpression``.

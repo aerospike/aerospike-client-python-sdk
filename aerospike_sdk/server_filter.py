@@ -30,14 +30,13 @@ def bind_ael_params(
 ) -> Union[str, FilterExpression]:
     """Interpolate printf-style *params* into an AEL template.
 
-    Mirrors the Java SDK's ``where(String ael, Object... params)``. An empty
-    *params* passes the template through untouched, so an AEL string is only
-    ever treated as a format string when the caller supplies values. The
-    printf syntax is common to Python's ``%`` and Java's ``String.format``, so
-    one template works unchanged in both SDKs.
+    An empty *params* passes the template through untouched, so an AEL string is
+    only ever treated as a format string when the caller supplies values. Use
+    ``%%`` to escape literal ``%`` when params are supplied.
 
-    Booleans are lowered to ``true`` / ``false``; Python's ``%s`` would
-    otherwise emit ``True``, which the AEL parser rejects.
+    Booleans are lowered to ``true`` / ``false`` and ``None`` to ``null``;
+    Python's ``%s`` would otherwise emit ``True`` or ``None``, which the AEL
+    parser rejects.
 
     Raises:
         TypeError: If *params* accompany a non-string expression.
@@ -51,7 +50,14 @@ def bind_ael_params(
             f"{type(expression).__name__}",
         )
     bound = tuple(
-        "true" if p is True else "false" if p is False else p for p in params
+        "true"
+        if p is True
+        else "false"
+        if p is False
+        else "null"
+        if p is None
+        else p
+        for p in params
     )
     try:
         return expression % bound
@@ -71,9 +77,8 @@ def filter_expression_from_ael_string(
 
     Raises:
         AerospikeError: When the cluster lacks server-compiled AEL support,
-            carrying ``ResultCode.OP_NOT_APPLICABLE``. Matches the Java SDK,
-            which throws the same code from ``AelMaterializer``, so callers
-            branch on the result code rather than the exception type.
+            carrying ``ResultCode.OP_NOT_APPLICABLE`` so callers can branch on
+            the result code rather than the exception type.
     """
     if not supports_server_compiled_ael:
         raise AerospikeError(

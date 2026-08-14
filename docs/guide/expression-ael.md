@@ -40,8 +40,7 @@ async with await ClusterDefinition("localhost", 3000).connect() as cluster:
 ```
 
 String AEL against an older cluster raises `AerospikeError` with
-`ResultCode.OP_NOT_APPLICABLE`, the same result code the Java SDK reports for
-this case:
+`ResultCode.OP_NOT_APPLICABLE`:
 
 ```python
 from aerospike_sdk import ResultCode
@@ -163,12 +162,10 @@ stream = await session.query(users).where(f"$.age > {min_age}").execute()
 stream = await session.query(users).where("$.age > %d", min_age).execute()
 ```
 
-The printf form uses the same template syntax as the Java SDK's
-`where(String ael, Object... params)`, so one template works in both.
-
-Both forms are plain interpolation — **neither quotes nor escapes the value,
-so never pass untrusted input**. When the value is not trusted, use the `Exp`
-builder, which never round-trips through text.
+The printf form uses standard printf template syntax. Both forms are plain
+interpolation — **neither quotes nor escapes the value, so never pass untrusted
+input**. When the value is not trusted, use the `Exp` builder, which never
+round-trips through text.
 
 Two things to know about the printf form. Booleans are lowered to AEL's
 `true` / `false` rather than Python's `True`. And AEL's `%` (modulo) operator

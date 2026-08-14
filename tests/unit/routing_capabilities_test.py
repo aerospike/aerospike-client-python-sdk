@@ -19,8 +19,8 @@ import pytest
 
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.routing_capabilities_shared import (
-    _PAC_DEFAULT_TEND_INTERVAL_SECONDS,
     RoutingCapabilitiesMixin,
+    _pac_default_tend_interval_seconds,
 )
 
 
@@ -178,7 +178,7 @@ class TestTendIntervalRefresh:
         assert client.supports_query_selection is False
 
     def test_gates_reopen_when_the_lagging_node_leaves(self, clock):
-        """Unlike the Java SDK's one-way ratchet, recovery needs no reconnect."""
+        """Gates reopen when a lagging node leaves, without reconnecting."""
         pac = _FakePacClient(
             _FakeVersion(),
             _FakeVersion(ael=False, query_selection=False),
@@ -222,7 +222,7 @@ class TestTendIntervalRefresh:
     def test_unset_interval_falls_back_to_the_pac_default(self):
         client = _Client(_FakePacClient(_FakeVersion()))
         assert client._routing_capability_ttl_seconds() == pytest.approx(
-            _PAC_DEFAULT_TEND_INTERVAL_SECONDS,
+            _pac_default_tend_interval_seconds(),
         )
 
     def test_unlistable_client_refresh_never_touches_the_proxy_instance(self, clock):

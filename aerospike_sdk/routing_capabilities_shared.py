@@ -49,9 +49,15 @@ from aerospike_sdk.policy.system_settings import SystemSettings
 
 log = logging.getLogger(__name__)
 
-# PAC owns the tend cadence and its own default for it; read that default rather
-# than restating it, so the refresh window follows PAC if the default moves.
-_PAC_DEFAULT_TEND_INTERVAL_SECONDS = ClientPolicy().tend_interval / 1000.0
+_pac_default_tend_interval_seconds_value: Optional[float] = None
+
+
+def _pac_default_tend_interval_seconds() -> float:
+    """PAC's default tend interval, read once on first use (not at import)."""
+    global _pac_default_tend_interval_seconds_value
+    if _pac_default_tend_interval_seconds_value is None:
+        _pac_default_tend_interval_seconds_value = ClientPolicy().tend_interval / 1000.0
+    return _pac_default_tend_interval_seconds_value
 
 
 class _RoutingCapabilitiesClient(Protocol):
@@ -62,6 +68,8 @@ class _RoutingCapabilitiesClient(Protocol):
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_refresh: Optional[asyncio.Task[None]]
+    _routing_capability_ttl_cached: Optional[float]
+    _routing_capability_ttl_settings: Any
 
     # Declared so the mixin's own ``self``-annotated methods may call each other.
     def _client_can_list_nodes(self) -> bool: ...
@@ -81,6 +89,8 @@ class RoutingCapabilitiesMixin:
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_refresh: Optional[asyncio.Task[None]]
+    _routing_capability_ttl_cached: Optional[float]
+    _routing_capability_ttl_settings: Any
 
     def _init_routing_capability_cache(self) -> None:
         """Initialize routing caches; call from client ``__init__``."""
@@ -88,6 +98,8 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
         self._routing_capability_refresh = None
+        self._routing_capability_ttl_cached = None
+        self._routing_capability_ttl_settings = None
 
     def _clear_routing_capability_cache(self) -> None:
         """Drop routing caches; call from client close paths."""
@@ -97,6 +109,8 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
+        self._routing_capability_ttl_cached = None
+        self._routing_capability_ttl_settings = None
 
     def _client_can_list_nodes(self: _RoutingCapabilitiesClient) -> bool:
         """Whether this client's PAC handle exposes a node list.
@@ -109,7 +123,7 @@ class RoutingCapabilitiesMixin:
         pac = self._client
         if pac is None:
             return False
-        return getattr(type(pac), "nodes_blocking", None) is not None
+        return hasattr(type(pac), "nodes_blocking")
 
     def _cluster_versions_blocking(self: _RoutingCapabilitiesClient) -> List[Any]:
         """Blocking node versions, or ``[]`` when this client cannot list nodes.
@@ -161,13 +175,18 @@ class RoutingCapabilitiesMixin:
 
         Re-deriving faster than PAC tends would walk the same node list and reach
         the same answer, so the tend cadence is the useful floor. ``None`` means
-        the caller never overrode it and PAC's own default applies. Read per call
-        because config-file reload swaps ``_sdk_settings`` wholesale.
+        the caller never overrode it and PAC's own default applies. The float is
+        cached and recomputed when ``_sdk_settings`` is swapped wholesale.
         """
-        interval = self._sdk_settings.tend_interval
-        if interval is None:
-            return _PAC_DEFAULT_TEND_INTERVAL_SECONDS
-        return interval.total_seconds()
+        settings = self._sdk_settings
+        if self._routing_capability_ttl_settings is not settings:
+            self._routing_capability_ttl_settings = settings
+            interval = settings.tend_interval
+            if interval is None:
+                self._routing_capability_ttl_cached = _pac_default_tend_interval_seconds()
+            else:
+                self._routing_capability_ttl_cached = interval.total_seconds()
+        return self._routing_capability_ttl_cached
 
     def _resolve_routing_capabilities_blocking(
         self: _RoutingCapabilitiesClient,

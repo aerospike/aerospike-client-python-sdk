@@ -43,8 +43,8 @@ def _sdk_client(implicit=True):
     ))
     return SimpleNamespace(
         _sdk_settings=settings,
-        _cached_supports_server_compiled_ael=False,
-        _cached_supports_query_selection=False,
+        supports_server_compiled_ael=False,
+        supports_query_selection=False,
     )
 
 

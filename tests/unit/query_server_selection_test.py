@@ -317,6 +317,7 @@ class TestServerCompiledAelWhere:
 class TestAsyncSessionSingleKeyCapabilityFlags:
     def test_fast_path_inherits_server_compiled_ael(self):
         from unittest.mock import MagicMock
+        import time
 
         from aerospike_async import ClientPolicy
         from aerospike_sdk import Key
@@ -330,6 +331,7 @@ class TestAsyncSessionSingleKeyCapabilityFlags:
         sdk_client._connected = True
         sdk_client._cached_supports_query_selection = True
         sdk_client._cached_supports_server_compiled_ael = True
+        sdk_client._routing_capability_stamp = time.monotonic()
         session = Session(client=sdk_client, behavior=Behavior.DEFAULT)
         builder = session.query(Key("test", "users", 1))
         assert builder._supports_server_compiled_ael is True

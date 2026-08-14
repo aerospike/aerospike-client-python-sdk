@@ -56,9 +56,9 @@ def _sdk_client():
         transactions=TransactionSettings(implicit_batch_write_transactions=False),
     ))
     client = SimpleNamespace(
+        supports_server_compiled_ael=False,
+        supports_query_selection=False,
         _sdk_settings=settings,
-        _cached_supports_server_compiled_ael=False,
-        _cached_supports_query_selection=False,
     )
     client._supports_mrt_blocking = lambda: False
     return client

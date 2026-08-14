@@ -23,6 +23,7 @@ attempt left the single-key fast path returning an aio.QueryBuilder, so
 got :class:`AttributeError` on the next method call.
 """
 
+import time
 from unittest.mock import MagicMock
 
 from aerospike_sdk import Key
@@ -42,6 +43,7 @@ def _make_offline_sync_client() -> SyncClient:
     client._connected = True
     client._cached_supports_query_selection = True
     client._cached_supports_server_compiled_ael = True
+    client._routing_capability_stamp = time.monotonic()
     return client
 
 

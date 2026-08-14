@@ -21,7 +21,7 @@ from aerospike_sdk.server_filter import filter_expression_from_ael_string
 
 
 def test_raises_when_gate_off():
-    """Old clusters reject string AEL with the code the Java SDK uses."""
+    """Old clusters reject string AEL with OP_NOT_APPLICABLE."""
     with pytest.raises(AerospikeError, match="server-compiled AEL") as exc_info:
         filter_expression_from_ael_string(
             "$.age > 1",

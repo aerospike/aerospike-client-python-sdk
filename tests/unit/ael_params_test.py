@@ -39,8 +39,8 @@ class TestPassthrough:
         assert bind_ael_params(expression, ()) is expression
 
 
-class TestJavaParity:
-    """Outputs must match what Java's ``String.format`` produces."""
+class TestPrintfBinding:
+    """Printf-style placeholders bind to AEL literals as expected."""
 
     @pytest.mark.parametrize(
         ("template", "params", "expected"),
@@ -62,13 +62,16 @@ class TestJavaParity:
 
 
 class TestBooleanLowering:
-    """Python's ``%s`` yields ``True``; AEL and Java both want ``true``."""
+    """Python's ``%s`` yields ``True``; AEL expects ``true``."""
 
     def test_true_is_lowered(self):
         assert bind_ael_params("$.flag == %s", (True,)) == "$.flag == true"
 
     def test_false_is_lowered(self):
         assert bind_ael_params("$.flag == %s", (False,)) == "$.flag == false"
+
+    def test_none_is_lowered(self):
+        assert bind_ael_params("$.flag == %s", (None,)) == "$.flag == null"
 
     def test_int_one_is_not_lowered(self):
         """``1 is True`` is false in Python, so integers keep their identity."""
