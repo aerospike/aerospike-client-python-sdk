@@ -50,7 +50,22 @@ class TestQueryHintValidation:
     def test_all_none_is_valid(self):
         hint = QueryHint()
         assert hint.index_name is None
+        assert hint.bin_name is None
         assert hint.query_duration is None
+
+    def test_bin_name_only(self):
+        hint = QueryHint(bin_name="alt_bin")
+        assert hint.bin_name == "alt_bin"
+        assert hint.index_name is None
+
+    def test_bin_name_with_query_duration(self):
+        hint = QueryHint(bin_name="b", query_duration=QueryDuration.SHORT)
+        assert hint.bin_name == "b"
+        assert hint.query_duration == QueryDuration.SHORT
+
+    def test_index_name_and_bin_name_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            QueryHint(index_name="idx", bin_name="b")
 
     def test_hard_hint_without_index_name_raises(self):
         with pytest.raises(ValueError, match="hard_hint requires index_name"):

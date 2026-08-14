@@ -69,27 +69,27 @@ def _sync_builder(
 class TestUseServerQuerySelection:
     def test_true_with_string_ael_and_support(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
-        assert qb._use_server_query_selection() is True
+        assert qb._use_server_query_selection(None) is True
 
     def test_false_without_where_ael(self):
         qb = _async_builder(_ClientSupportsSelection())
-        assert qb._use_server_query_selection() is False
+        assert qb._use_server_query_selection(None) is False
 
     def test_false_with_explicit_filter(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
         qb.filter(Filter.equal("age", 30))
-        assert qb._use_server_query_selection() is False
+        assert qb._use_server_query_selection(None) is False
 
     def test_false_when_capability_off(self):
         qb = _async_builder(
             _ClientNoSelection(),
             supports_query_selection=False,
         ).where("$.age > 30")
-        assert qb._use_server_query_selection() is False
+        assert qb._use_server_query_selection(None) is False
 
     def test_false_when_capability_not_enabled_on_builder(self):
         qb = _async_builder(object(), supports_query_selection=False).where("$.age > 30")
-        assert qb._use_server_query_selection() is False
+        assert qb._use_server_query_selection(None) is False
 
     def test_index_name_hint_still_uses_server_path(self):
         qb = (
@@ -97,11 +97,20 @@ class TestUseServerQuerySelection:
             .where("$.age > 30")
             .with_hint(QueryHint(index_name="age_idx"))
         )
-        assert qb._use_server_query_selection() is True
+        assert qb._use_server_query_selection(qb._query_hint) is True
+
+    def test_false_with_bin_name_hint(self):
+        """``bin_name`` opts out of explain→execute (Java ``forBin`` parity)."""
+        qb = (
+            _async_builder(_ClientSupportsSelection())
+            .where("$.age > 30")
+            .with_hint(QueryHint(bin_name="alt"))
+        )
+        assert qb._use_server_query_selection(qb._query_hint) is False
 
     def test_sync_builder_inherits_routing(self):
         qb = _sync_builder(_ClientSupportsSelection()).where("$.score >= 10")
-        assert qb._use_server_query_selection() is True
+        assert qb._use_server_query_selection(None) is True
 
 
 class TestExplainWhereFlags:
@@ -302,7 +311,7 @@ class TestServerCompiledAelWhere:
             policy, use_server_query_selection=True,
         )
         assert policy.filter_expression is None
-        assert qb._use_server_query_selection() is True
+        assert qb._use_server_query_selection(None) is True
 
 
 class TestAsyncSessionSingleKeyCapabilityFlags:

@@ -832,7 +832,7 @@ class _BlockingQueryDispatch:
             chunk_total_limit = policy.max_records or 0
             policy.max_records = self._chunk_size
         hint = self._query_hint
-        use_server_query_selection = self._use_server_query_selection()
+        use_server_query_selection = self._use_server_query_selection(hint)
         self._apply_dataset_query_policy_filter(
             policy, use_server_query_selection=use_server_query_selection,
         )

@@ -215,10 +215,21 @@ def _resolve_hll_flags(
 class QueryHint:
     """Hint for influencing secondary index selection and query scheduling.
 
-    Provide ``index_name`` as a soft explain hint on the server-led path.
+    Provide ``index_name`` as a soft explain hint on the server-led path, or
+    ``bin_name`` to opt out of server-led selection and send the AEL on the
+    plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
+    mutually exclusive.
 
     On clusters that support field ``44`` query selection (>= 8.1.3),
     ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
+
+    .. deprecated:: alpha
+        ``bin_name`` exists only for parity with the Java SDK's ``forBin()``
+        during alpha. The bin name itself is not sent anywhere — it only
+        selects the field ``43`` route. The Query Optimizer PRD specifies the
+        index *name* as the sole hint shape, so this is expected to be removed
+        from both SDKs once product signs off. Prefer ``index_name``, or
+        :meth:`QueryBuilder.filter` when you want to bypass the planner.
 
     Example::
 
@@ -235,23 +246,31 @@ class QueryHint:
 
     Args:
         index_name: Soft index name hint (field ``21`` on explain).
+        bin_name: Opt out of explain; send the AEL on field ``43``. Deprecated.
         query_duration: Override ``expected_duration`` on the query policy.
         require_index: Explain flag — reject primary-index fallback.
         hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
-        ValueError: If ``hard_hint`` is set without ``index_name``.
+        ValueError: If both ``index_name`` and ``bin_name`` are provided, or
+            ``hard_hint`` is set without ``index_name``.
 
     See Also:
         :meth:`QueryBuilder.with_hint`
     """
 
     index_name: Optional[str] = None
+    bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
     require_index: bool = False
     hard_hint: bool = False
 
     def __post_init__(self) -> None:
+        if self.index_name is not None and self.bin_name is not None:
+            raise ValueError(
+                "index_name and bin_name are mutually exclusive; "
+                "provide one or neither, not both"
+            )
         if self.hard_hint and not self.index_name:
             raise ValueError("hard_hint requires index_name")
 
@@ -1806,11 +1825,13 @@ class _QueryBuilderBase:
                 "Query plan filtered out by server",
             )
 
-    def _use_server_query_selection(self) -> bool:
+    def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
         if self._where_ael is None:
             return False
         if self._filter_records:
+            return False
+        if hint is not None and hint.bin_name is not None:
             return False
         return self._supports_query_selection
 

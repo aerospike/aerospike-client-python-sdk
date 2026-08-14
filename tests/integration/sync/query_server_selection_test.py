@@ -249,6 +249,25 @@ class TestSyncQueryExecute:
 
 
 class TestSyncQuerySelectionRouting:
+    @requires_server_compiled_ael
+    def test_for_bin_hint_uses_legacy_execute_path(self, query_selection_cluster):
+        """``bin_name`` skips explain but returns the same rows (Java ``forBin`` parity)."""
+        where = "$.age >= 14 and $.age <= 18"
+        default_ages = collect_ages_sync(
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .execute(),
+        )
+        for_bin_ages = collect_ages_sync(
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            .bins([BIN_AGE])
+            .where(where)
+            .with_hint(QueryHint(bin_name=BIN_AGE))
+            .execute(),
+        )
+        assert default_ages == for_bin_ages == [14, 15, 16, 17, 18]
+
     @requires_query_selection
     def test_for_index_hint_probes_and_executes(self, query_selection_cluster):
         pac = query_selection_cluster.client.underlying_client

@@ -127,5 +127,27 @@ stream = await (
 )
 ```
 
+### Opting out of server-led selection
+
+`bin_name` skips the server's explain step and sends the AEL as a plain filter
+expression instead. It is mutually exclusive with `index_name`:
+
+```python
+stream = await (
+    session.query(users)
+    .where("$.age > 25")
+    .with_hint(QueryHint(bin_name="age"))
+    .execute()
+)
+```
+
+!!! warning "Deprecated in alpha"
+    `bin_name` exists only for parity with the Java SDK's `forBin()` during
+    alpha, and the bin name itself is not sent to the server — it only selects
+    the route. The Query Optimizer PRD specifies the index *name* as the sole
+    hint shape, so this is expected to be removed from both SDKs. To bypass the
+    planner deliberately, prefer an explicit `.filter(...)`, which the server
+    honors when the index is available.
+
 See the [AEL guide](expression-ael.md) for string filter syntax and capability
 checks (`cluster.supports_ael()`, `cluster.supports_query_selection()`).
