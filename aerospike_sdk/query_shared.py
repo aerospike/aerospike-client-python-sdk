@@ -136,7 +136,7 @@ from aerospike_sdk.background_shared import (
     make_background_write_policy,
     reject_unsupported_background_write_ops,
 )
-from aerospike_sdk.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
     OnError,
@@ -855,7 +855,7 @@ class _QueryBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> QueryBuilder: ...
+    def where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> QueryBuilder: ...
@@ -863,28 +863,41 @@ class _QueryBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Apply a server-side filter for dataset queries or keyed reads that support it.
 
-        String arguments are parsed with the AEL; prefer f-strings for
-        dynamic literals. Pass a pre-built :class:`~aerospike_async.FilterExpression`
-        when constructing filters programmatically.
+        String arguments are AEL, compiled by the server. Pass a pre-built
+        :class:`~aerospike_async.FilterExpression` when constructing filters
+        programmatically.
+
+        Supplying *params* interpolates them into the template with printf
+        syntax, matching the Java SDK so one template serves both. Only
+        trusted values belong here — interpolation does not quote or escape,
+        so it is no safer than an f-string.
 
         Args:
             expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template.
 
         Returns:
             This builder for chaining.
 
+        Raises:
+            TypeError: If *params* accompany a ``FilterExpression``.
+            ValueError: If the template is not a valid printf format string.
+
         Example::
 
             qb = session.query(ds).where("$.status == 'active'")
+            qb = session.query(ds).where("$.score > %d", min_score)
             qb = session.query(ds).where(f"$.score > {min_score}")
 
         See Also:
             :meth:`default_where`: Default filter for chained operations without their own.
             :meth:`filter_expression`: Attach an expression without AEL parsing.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._where_ael = expression
         else:
@@ -1233,7 +1246,7 @@ class _QueryBuilderBase:
         return self.include_missing_keys()
 
     @overload
-    def default_where(self, expression: str) -> QueryBuilder: ...
+    def default_where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
     def default_where(self, expression: FilterExpression) -> QueryBuilder: ...
@@ -1241,6 +1254,7 @@ class _QueryBuilderBase:
     def default_where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Set a filter applied to any chained operation that does not call :meth:`where`.
 
@@ -1264,13 +1278,20 @@ class _QueryBuilderBase:
 
         Args:
             expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`where` for the interpolation contract.
 
         Returns:
             This builder for chaining.
 
+        Raises:
+            TypeError: If *params* accompany a ``FilterExpression``.
+            ValueError: If the template is not a valid printf format string.
+
         See Also:
             :meth:`where`: Per-operation filter on the current operation.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._default_where_ael = expression
             self._default_filter_expression = None

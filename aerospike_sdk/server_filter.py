@@ -17,7 +17,49 @@
 
 from __future__ import annotations
 
+from typing import Any, Union
+
 from aerospike_async import FilterExpression
+
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
+
+
+def bind_ael_params(
+    expression: Union[str, FilterExpression],
+    params: tuple[Any, ...],
+) -> Union[str, FilterExpression]:
+    """Interpolate printf-style *params* into an AEL template.
+
+    Mirrors the Java SDK's ``where(String ael, Object... params)``. An empty
+    *params* passes the template through untouched, so an AEL string is only
+    ever treated as a format string when the caller supplies values. The
+    printf syntax is common to Python's ``%`` and Java's ``String.format``, so
+    one template works unchanged in both SDKs.
+
+    Booleans are lowered to ``true`` / ``false``; Python's ``%s`` would
+    otherwise emit ``True``, which the AEL parser rejects.
+
+    Raises:
+        TypeError: If *params* accompany a non-string expression.
+        ValueError: If the template is not a valid printf format string.
+    """
+    if not params:
+        return expression
+    if not isinstance(expression, str):
+        raise TypeError(
+            "AEL params require a string template, got "
+            f"{type(expression).__name__}",
+        )
+    bound = tuple(
+        "true" if p is True else "false" if p is False else p for p in params
+    )
+    try:
+        return expression % bound
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"cannot bind params into AEL template {expression!r}: {exc}. "
+            "AEL's '%' (modulo) must be written '%%' when params are supplied.",
+        ) from exc
 
 
 def filter_expression_from_ael_string(
@@ -28,11 +70,15 @@ def filter_expression_from_ael_string(
     """Return field **43** ``FilterExpression`` for *ael* (server compiles at eval time).
 
     Raises:
-        ValueError: When the cluster lacks server-compiled AEL support.
+        AerospikeError: When the cluster lacks server-compiled AEL support,
+            carrying ``ResultCode.OP_NOT_APPLICABLE``. Matches the Java SDK,
+            which throws the same code from ``AelMaterializer``, so callers
+            branch on the result code rather than the exception type.
     """
     if not supports_server_compiled_ael:
-        raise ValueError(
+        raise AerospikeError(
             "String AEL requires server-compiled AEL support (Aerospike >= 8.1.3 "
             "on every node). Use FilterExpression / Exp builders, or upgrade the cluster.",
+            result_code=ResultCode.OP_NOT_APPLICABLE,
         )
     return FilterExpression.from_server_compiled_ael(ael)

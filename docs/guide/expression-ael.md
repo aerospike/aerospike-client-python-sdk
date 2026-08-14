@@ -35,6 +35,21 @@ async with await ClusterDefinition("localhost", 3000).connect() as cluster:
         )
 ```
 
+String AEL against an older cluster raises `AerospikeError` with
+`ResultCode.OP_NOT_APPLICABLE`, the same result code the Java SDK reports for
+this case:
+
+```python
+from aerospike_sdk import ResultCode
+from aerospike_sdk.exceptions import AerospikeError
+
+try:
+    stream = await session.query(users).where("$.age > 18").execute()
+except AerospikeError as exc:
+    if exc.result_code == ResultCode.OP_NOT_APPLICABLE:
+        ...  # fall back to Exp
+```
+
 ## Syntax Reference
 
 The grammar below describes valid AEL text accepted by the server compiler.
@@ -135,15 +150,31 @@ $.name == "Alice"
 $.name == 'Alice'
 ```
 
-Embed dynamic values by building the string in Python (only when the value is
-trusted — never interpolate untrusted input):
+Embed dynamic values either with an f-string or by passing params to
+`where()`, which interpolates them with printf syntax:
 
 ```python
 min_age = 18
 stream = await session.query(users).where(f"$.age > {min_age}").execute()
+stream = await session.query(users).where("$.age > %d", min_age).execute()
 ```
 
-For complex parameterization, prefer the `Exp` builder.
+The printf form uses the same template syntax as the Java SDK's
+`where(String ael, Object... params)`, so one template works in both.
+
+Both forms are plain interpolation — **neither quotes nor escapes the value,
+so never pass untrusted input**. When the value is not trusted, use the `Exp`
+builder, which never round-trips through text.
+
+Two things to know about the printf form. Booleans are lowered to AEL's
+`true` / `false` rather than Python's `True`. And AEL's `%` (modulo) operator
+must be written `%%` whenever you pass params, since the template is a format
+string only then:
+
+```python
+session.query(users).where("$.id % 100 == 0")             # no params, plain %
+session.query(users).where("$.id %% 100 == 0 and $.age > %d", min_age)
+```
 
 ### List Membership (IN)
 
@@ -212,10 +243,10 @@ Seven read-side HLL path functions are available on HLL bins. Each operates on
 $.h.hllCount() > 1000000
 $.h.hllDescribe() == [14, 0]
 $.h.hllMayContain(['alice', 'bob']) == 1
-$.h.hllUnionCount(?0) > 50000
-$.h.hllIntersectCount(?0) > 100
-$.h.hllSimilarity(?0) >= 0.8
-$.h.hllUnion(?0) == ?1
+$.h.hllUnionCount($.a) > 50000
+$.h.hllIntersectCount($.a) > 100
+$.h.hllSimilarity($.a) >= 0.8
+$.h.hllUnion($.a) == x'00040c00...'
 ```
 
 `hllDescribe()` returns a two-element list ``[index_bit_count, min_hash_bit_count]``;
@@ -228,8 +259,9 @@ The multi-sketch functions (`hllUnion`, `hllUnionCount`, `hllIntersectCount`,
 - **A single HLL bin reference** — `$.a`. The server treats a bare HLL value
   as an implicit single-element list, so `$.h.hllUnionCount($.a)` evaluates
   cleanly.
-- **A list-typed expression of HLL byte blobs** — either an inline literal
-  list `[?0, ?1]` or a placeholder bound to a Python `list[bytes]`.
+- **A list-typed expression of HLL byte blobs** — an inline literal list of
+  AEL blob literals, `[x'00040c00...', x'00040c00...']`. Build these in
+  Python with `sketch.hex()` and interpolate them into the template.
 
 `[$.a, $.b]` (a list literal containing bin references) is **not** supported
 — the server's HLL ops can't recursively evaluate scalar bin sub-expressions

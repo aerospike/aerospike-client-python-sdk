@@ -1745,6 +1745,44 @@ class TestPointReadStringFilter:
         assert await rs.first() is None
 
 
+class TestAelParamBinding:
+    """Params interpolate into the template and the server parses the result.
+
+    Row ``A`` is ``{A: 1, B: 1.1, C: "abcde", D: 1, E: -1}``.
+    """
+
+    @requires_server_compiled_ael
+    async def test_int_param_matches(self, session_with_data):
+        ds = DataSet.of(general_namespace(), "exp_test")
+        rs = await session_with_data.query(ds.id("A")).where("$.A == %d", 1).execute()
+        assert await rs.first() is not None
+
+    @requires_server_compiled_ael
+    async def test_string_param_matches(self, session_with_data):
+        ds = DataSet.of(general_namespace(), "exp_test")
+        rs = await (
+            session_with_data.query(ds.id("A")).where("$.C == '%s'", "abcde").execute()
+        )
+        assert await rs.first() is not None
+
+    @requires_server_compiled_ael
+    async def test_param_that_does_not_match_filters_out(self, session_with_data):
+        ds = DataSet.of(general_namespace(), "exp_test")
+        rs = await session_with_data.query(ds.id("A")).where("$.A > %d", 100).execute()
+        assert await rs.first() is None
+
+    @requires_server_compiled_ael
+    async def test_escaped_modulo_with_param(self, session_with_data):
+        """``%%`` reaches the server as AEL's modulo operator, not a format spec."""
+        ds = DataSet.of(general_namespace(), "exp_test")
+        rs = await (
+            session_with_data.query(ds.id("A"))
+            .where("$.A %% 2 == 1 and $.A == %d", 1)
+            .execute()
+        )
+        assert await rs.first() is not None
+
+
 @pytest.fixture
 async def session_with_filter_exp(
     shared_cluster, wait_for_set_visible,

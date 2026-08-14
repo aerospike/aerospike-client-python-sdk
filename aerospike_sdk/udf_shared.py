@@ -31,6 +31,8 @@ from typing_extensions import Self
 
 from aerospike_async import FilterExpression, Key
 
+from aerospike_sdk.server_filter import bind_ael_params
+
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
     from aerospike_sdk.aio.operations.query import WriteSegmentBuilder
     from aerospike_sdk.aio.operations.udf import UdfBuilder, UdfFunctionBuilder
@@ -147,7 +149,7 @@ class _UdfBuilderBase(Generic[_QB]):
         return self
 
     @overload
-    def where(self, expression: str) -> Self: ...
+    def where(self, expression: str, *params: Any) -> Self: ...
 
     @overload
     def where(self, expression: FilterExpression) -> Self: ...
@@ -155,11 +157,14 @@ class _UdfBuilderBase(Generic[_QB]):
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Apply a filter expression so the UDF runs only when the predicate matches.
 
         Args:
             expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`QueryBuilder.where` for the interpolation contract.
 
         Returns:
             This builder for chaining.
@@ -167,6 +172,7 @@ class _UdfBuilderBase(Generic[_QB]):
         See Also:
             :meth:`QueryBuilder.where`: Same AEL for reads.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:

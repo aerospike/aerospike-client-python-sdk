@@ -59,7 +59,7 @@ from aerospike_async import (
 from aerospike_async.exceptions import ResultCode
 
 
-from aerospike_sdk.server_filter import filter_expression_from_ael_string
+from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
@@ -413,7 +413,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
         return self
 
     @overload
-    def where(self, expression: str) -> Self: ...
+    def where(self, expression: str, *params: Any) -> Self: ...
 
     @overload
     def where(self, expression: FilterExpression) -> Self: ...
@@ -421,15 +421,19 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Set a filter expression on the current write segment.
 
         Args:
             expression: AEL string or pre-built FilterExpression.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`QueryBuilder.where` for the interpolation contract.
 
         Returns:
             self for method chaining.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
@@ -970,9 +974,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._dd_override = True
         return self
 
-    def where(self, expression):
+    def where(self, expression, *params):
         self._promote()
-        return super().where(expression)
+        return super().where(expression, *params)
 
     def expire_record_after_seconds(self, seconds):
         self._promote()

@@ -16,15 +16,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.server_filter import filter_expression_from_ael_string
 
 
 def test_raises_when_gate_off():
-    with pytest.raises(ValueError, match="server-compiled AEL"):
+    """Old clusters reject string AEL with the code the Java SDK uses."""
+    with pytest.raises(AerospikeError, match="server-compiled AEL") as exc_info:
         filter_expression_from_ael_string(
             "$.age > 1",
             supports_server_compiled_ael=False,
         )
+    assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
 
 def test_uses_server_compiled_when_gate_on():

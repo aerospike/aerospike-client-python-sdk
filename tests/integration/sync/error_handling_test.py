@@ -153,3 +153,33 @@ class TestSyncPointReadStringFilter:
         ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
         rs = session_with_ael_row.query(ds.id("row")).default_where("$.A > 100").execute()
         assert rs.first() is None
+
+
+class TestSyncAelParamBinding:
+    """Sync twin of ``async/exp_test.py::TestAelParamBinding``.
+
+    The seeded row is ``{age: 30, A: 1}``.
+    """
+
+    @requires_server_compiled_ael
+    def test_int_param_matches(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).where("$.age == %d", 30).execute()
+        assert rs.first() is not None
+
+    @requires_server_compiled_ael
+    def test_param_that_does_not_match_filters_out(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).where("$.age > %d", 100).execute()
+        assert rs.first() is None
+
+    @requires_server_compiled_ael
+    def test_escaped_modulo_with_param(self, session_with_ael_row):
+        """``%%`` reaches the server as AEL's modulo operator, not a format spec."""
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = (
+            session_with_ael_row.query(ds.id("row"))
+            .where("$.age %% 4 == 2 and $.A == %d", 1)
+            .execute()
+        )
+        assert rs.first() is not None
