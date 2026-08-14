@@ -408,7 +408,10 @@ async def test_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     assert not rows[2].is_ok
     assert rows[2].key == k3
     assert rows[2].result_code == ResultCode.UDF_BAD_RESPONSE
-    assert rows[2].record is None
+    # Multiple UDF segments fold into one batch, so the server's UDF failure
+    # detail is surfaced as a FAILURE bin rather than dropped.
+    assert rows[2].record is not None
+    assert "FAILURE" in rows[2].record.bins
     r1 = await (
         await session.query(k1).bins(["cx"]).execute()
     ).first_or_raise()
