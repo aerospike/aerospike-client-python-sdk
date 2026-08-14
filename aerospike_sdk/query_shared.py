@@ -1806,7 +1806,7 @@ class _QueryBuilderBase:
                 "Query plan filtered out by server",
             )
 
-    def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
+    def _use_server_query_selection(self) -> bool:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
         if self._where_ael is None:
             return False

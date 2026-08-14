@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync field ``44`` explain scope tests (Java ``QuerySelectionExplainScopeTest``)."""
+"""Sync field ``44`` explain scope across index shapes."""
 
 from __future__ import annotations
 

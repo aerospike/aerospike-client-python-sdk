@@ -125,14 +125,6 @@ stream = await (
     .with_hint(QueryHint(index_name="users_city_idx"))
     .execute()
 )
-
-# Hint by bin name
-stream = await (
-    session.query(users)
-    .where("$.age > 25 and $.city == 'NYC'")
-    .with_hint(QueryHint(bin_name="city"))
-    .execute()
-)
 ```
 
 See the [AEL guide](expression-ael.md) for string filter syntax and capability

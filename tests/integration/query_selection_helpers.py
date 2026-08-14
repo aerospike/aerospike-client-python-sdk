@@ -38,14 +38,14 @@ BIN_COUNTRY = "country"
 KEY_PREFIX = "qselkey"
 SIZE = 50
 
-# QuerySelectionHintFlagsTest fixture (Java qselhint set)
+# Hint-flags integration fixture (qselhint set)
 HINT_SET_NAME = "qselhint"
 HINT_INDEX_NAME = "qselhint_age_idx"
 HINT_SCORE_INDEX_NAME = "qselhint_score_idx"
 HINT_BOGUS_INDEX_NAME = "qselhint_missing_idx"
 HINT_KEY_PREFIX = "qselhintkey"
 
-# QuerySelectionExplainScopeTest fixture (Java qscexp set)
+# Explain-scope integration fixture (qscexp set)
 SCOPE_SET_NAME = "qscexp"
 SCOPE_INT_INDEX = "qscexp_age_idx"
 SCOPE_BLOB_INDEX = "qscexp_bb_idx"
@@ -56,7 +56,7 @@ SCOPE_BLOB_BIN = "bb"
 SCOPE_MAP_BIN = "map_bin"
 SCOPE_MAP_KEY = "mkey2"
 
-# QueryPlannerCollectionCdtTest fixture (Java qp_cdt set)
+# CDT planner integration fixture (qp_cdt set)
 CDT_SET_NAME = "qp_cdt"
 CDT_KEY_PREFIX = "qpcdt"
 CDT_MAP_BIN = "map_bin"
@@ -80,7 +80,7 @@ def cdt_key_name(i: int) -> str:
 
 
 def long_bytes_be(value: int) -> bytes:
-    """8-byte big-endian integer (Java ``Buffer.longToBytes``)."""
+    """8-byte big-endian integer."""
     return struct.pack(">q", value)
 
 
@@ -89,7 +89,7 @@ CDT_LIST_BLOB_BYTES = long_bytes_be(50003)
 
 
 def blob_hex_literal(blob_bytes: bytes) -> str:
-    """Server AEL hex blob literal for equality (Java ``x'...'``)."""
+    """Server AEL hex blob literal for equality (``x'...'`` form)."""
     return blob_bytes.hex()
 
 
@@ -108,7 +108,7 @@ def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
 
 
 async def explain_plan_async(pac, where: str, *, set_name: str = SET_NAME, hint=None):
-    """Run phase-1 explain (mirrors Java ``IndexProbePlanner.plan``)."""
+    """Run phase-1 explain via PAC ``query_explain``."""
     index_name_hint = hint.index_name if hint is not None else None
     return await pac.query_explain(
         NS,

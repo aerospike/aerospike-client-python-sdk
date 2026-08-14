@@ -50,7 +50,11 @@ class TestCapabilityProbes:
             assert isinstance(await probe(), bool)
 
     async def test_probes_agree_with_pac_version_predicates(self, cluster):
-        """Wiring: each probe delegates to the matching ``capabilities.supports_*``."""
+        """Wiring: cluster probe → ``capabilities.supports_*`` over live node versions.
+
+        This alone is tautological (same fold on both sides); pair with
+        :meth:`test_probes_match_reported_version_floors` to catch a bad mapping.
+        """
         versions = await cluster._sdk_client._cluster_versions()
         assert versions, "connected cluster should report at least one node"
         assert await cluster.supports_query_operations() == (
@@ -65,7 +69,11 @@ class TestCapabilityProbes:
         )
 
     async def test_probes_match_reported_version_floors(self, cluster):
-        """Each probe matches the version floor it gates on (relative, not hardcoded)."""
+        """Each probe matches the version floor it gates on (relative to ``server_version()``).
+
+        Catches a wrong ``capabilities.supports_*`` mapping that the delegation
+        check above would miss on a homogeneous CI cluster.
+        """
         v = await cluster.server_version()
         assert v is not None
         vt = (v.major, v.minor, v.patch)

@@ -13,10 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Tier D integration tests: ``REQUIRE_INDEX`` and ``HARD_HINT`` on field 44 explain.
-
-Port of Java ``QuerySelectionHintFlagsTest``.
-"""
+"""Tier D integration tests: ``REQUIRE_INDEX`` and ``HARD_HINT`` on field 44 explain."""
 
 from __future__ import annotations
 

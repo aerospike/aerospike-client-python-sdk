@@ -10,7 +10,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""One-time seed/teardown for query-selection integration datasets (four Java suites)."""
+"""One-time seed/teardown for query-selection integration datasets (four suites)."""
 
 from __future__ import annotations
 

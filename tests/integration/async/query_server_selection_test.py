@@ -107,7 +107,7 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_index_probe_planner_smoke(self, query_selection_cluster):
-        """PAC explain path (Python equivalent of Java ``IndexProbePlanner.plan``)."""
+        """PAC explain path smoke test via ``query_explain``."""
         pac = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = await explain_plan_async(pac, where)

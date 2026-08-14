@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""MAPKEYS / LIST collection CDT ``.exists()`` planner tests (Java ``QueryPlannerCollectionCdtTest``)."""
+"""MAPKEYS / LIST collection CDT ``.exists()`` planner tests."""
 
 from __future__ import annotations
 

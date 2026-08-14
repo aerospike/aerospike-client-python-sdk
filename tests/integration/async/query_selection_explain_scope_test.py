@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Field ``44`` explain scope across index shapes (Java ``QuerySelectionExplainScopeTest``)."""
+"""Field ``44`` explain scope across index shapes (numeric, blob, map-key indexes)."""
 
 from __future__ import annotations
 
