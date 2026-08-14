@@ -20,7 +20,8 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING, Any, Optional
 
-from aerospike_async import QuerySelection  # noqa: F401 — re-exported for integration tests
+from aerospike_async import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
+from aerospike_sdk import ResultCode
 
 if TYPE_CHECKING:
     from aerospike_sdk import QueryHint
@@ -94,8 +95,6 @@ def blob_hex_literal(blob_bytes: bytes) -> str:
 
 def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
     """Map :class:`QueryHint` to PAC ``explain_where_flags`` (field ``44``)."""
-    from aerospike_async import QueryWhereFlags
-
     if hint is None:
         return None
     flags = QueryWhereFlags.EXPLAIN
@@ -140,8 +139,6 @@ async def create_index_quiet_async(
     index_type,
     collection_type=None,
 ) -> None:
-    from aerospike_sdk import ResultCode
-
     try:
         await pac.create_index(
             NS, set_name, bin_name, index_name, index_type, collection_type,
@@ -160,8 +157,6 @@ def create_index_quiet_blocking(
     index_type,
     collection_type=None,
 ) -> None:
-    from aerospike_sdk import ResultCode
-
     try:
         pac.create_index_blocking(
             NS, set_name, bin_name, index_name, index_type, collection_type,
@@ -177,8 +172,6 @@ async def drop_index_quiet_async(
     set_name: str,
     index_name: str,
 ) -> None:
-    from aerospike_sdk import ResultCode
-
     try:
         await client.index(ns, set_name).named(index_name).drop()
     except Exception as exc:
@@ -192,8 +185,6 @@ def drop_index_quiet_blocking(
     set_name: str,
     index_name: str,
 ) -> None:
-    from aerospike_sdk import ResultCode
-
     try:
         client.index(ns, set_name).named(index_name).drop()
     except Exception as exc:

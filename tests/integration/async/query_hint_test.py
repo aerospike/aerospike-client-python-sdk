@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Integration tests for QueryHint with index_name, bin_name, and query_duration."""
+"""Integration tests for QueryHint with index_name and query_duration."""
 
 import pytest_asyncio
 
