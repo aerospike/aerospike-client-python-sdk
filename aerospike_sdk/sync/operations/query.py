@@ -171,6 +171,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and not self._specs
             and self._filter_expression is None
             and self._default_filter_expression is None
+            and self._where_ael is None
+            and self._default_where_ael is None
             and not self._filter_records
             and self._op_type is None
             and self._base_read_policy is not None

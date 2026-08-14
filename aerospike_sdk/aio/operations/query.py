@@ -270,6 +270,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             and self._filter_expression is None
             and self._default_filter_expression is None
             and self._where_ael is None
+            and self._default_where_ael is None
             and self._generation is None
             and self._ttl_seconds is None
             and self._default_ttl_seconds is None

@@ -23,7 +23,7 @@ a connected SDK client from fixtures and calls the matching skip helper
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 import pytest
@@ -92,7 +92,7 @@ def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
     )
 
 
-async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
+async def assert_dataset_invalid_ael_rejected_async(execute_coro: Awaitable[Any]) -> None:
     """Assert invalid string AEL on a dataset query is rejected by the server.
 
     With query selection (explain→execute), ``PARAMETER_ERROR`` is raised from
@@ -116,7 +116,30 @@ async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> N
             stream.close()
 
 
-async def assert_point_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
+def assert_dataset_invalid_ael_rejected_sync(execute: Callable[[], Any]) -> None:
+    """Sync counterpart of :func:`assert_dataset_invalid_ael_rejected_async`.
+
+    Takes a zero-arg callable, not a stream: the rejection may surface from
+    ``execute()`` itself, so the helper has to own that call.
+    """
+    stream = None
+    try:
+        try:
+            stream = execute()
+        except (AerospikeError, InvalidRequest) as exc:
+            assert exc.result_code == ResultCode.PARAMETER_ERROR
+            return
+
+        with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+            for _ in stream:
+                pass
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    finally:
+        if stream is not None:
+            stream.close()
+
+
+async def assert_point_invalid_ael_rejected_async(execute_coro: Awaitable[Any]) -> None:
     """Assert invalid string AEL on a point query is rejected (field **43** path)."""
     try:
         rs = await execute_coro
@@ -126,6 +149,19 @@ async def assert_point_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> Non
 
     with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
         await rs.first_or_raise()
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+def assert_point_invalid_ael_rejected_sync(execute: Callable[[], Any]) -> None:
+    """Sync counterpart of :func:`assert_point_invalid_ael_rejected_async`."""
+    try:
+        rs = execute()
+    except (AerospikeError, InvalidRequest) as exc:
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        return
+
+    with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+        rs.first_or_raise()
     assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
 

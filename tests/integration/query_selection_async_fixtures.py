@@ -31,7 +31,11 @@ async def query_selection_cluster(
     wait_for_index,
     wait_for_set_visible,
 ):
-    """One connect + seed for all async query-selection integration modules."""
+    """One connect + seed for all async query-selection integration modules.
+
+    Skips before seed when ``client.supports_query_selection`` is false so
+    pre-8.1.3 clusters do not run truncate/index setup (blob sindex, etc.).
+    """
     cluster_def = make_cluster_definition(aerospike_host)
     async with await cluster_def.connect() as cluster:
         client = cluster._sdk_client
