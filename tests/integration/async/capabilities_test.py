@@ -16,9 +16,9 @@
 """Live wiring tests for server-capability probes on a connected cluster.
 
 The all-nodes fold logic is unit-tested in ``tests/unit/capabilities_test.py``
-against fakes; this module checks that live ``Cluster`` probes delegate to the
-matching ``capabilities.supports_*`` helpers over connected node versions.
-Version floors live in PAC, not the SDK.
+against fakes. This module adds two live checks: probe wiring (delegation to
+``capabilities.supports_*`` over node versions) and version-floor alignment
+against the cluster's reported minimum version (catches a wrong mapping on CI).
 """
 
 import pytest
@@ -63,3 +63,13 @@ class TestCapabilityProbes:
         assert await cluster.supports_query_selection() == (
             capabilities.supports_query_selection(versions)
         )
+
+    async def test_probes_match_reported_version_floors(self, cluster):
+        """Each probe matches the version floor it gates on (relative, not hardcoded)."""
+        v = await cluster.server_version()
+        assert v is not None
+        vt = (v.major, v.minor, v.patch)
+        assert await cluster.supports_query_operations() == (vt >= (8, 1, 2))
+        assert await cluster.supports_string_operations() == (vt >= (8, 1, 3))
+        assert await cluster.supports_ael() == (vt >= (8, 1, 3))
+        assert await cluster.supports_query_selection() == (vt >= (8, 1, 3))

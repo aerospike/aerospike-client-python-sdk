@@ -26,7 +26,11 @@ from aerospike_async import FilterExpression
 from aerospike_sdk import Exp, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pac_compat import (
+    assert_dataset_invalid_ael_rejected,
+    assert_point_invalid_ael_rejected,
+    requires_server_compiled_ael,
+)
 from tests.integration.namespace import general_namespace
 
 DS = DataSet.of(general_namespace(), "filter_exp_test")
@@ -1705,7 +1709,25 @@ class TestRelativeRangeAel:
 
 
 class TestAelErrorHandling:
-    """Tests for AEL error handling."""
+    """Invalid string AEL through the public SDK ``where()`` API."""
+
+    @requires_server_compiled_ael
+    async def test_dataset_invalid_ael_rejected(self, session_with_data):
+        """Malformed dataset AEL surfaces as ``PARAMETER_ERROR`` from the server."""
+        await assert_dataset_invalid_ael_rejected(
+            session_with_data.query(general_namespace(), "exp_test")
+            .where("$.age >")
+            .execute()
+        )
+
+    @requires_server_compiled_ael
+    async def test_point_invalid_ael_rejected(self, session_with_data):
+        """Malformed point-query AEL uses field **43** and raises ``PARAMETER_ERROR``."""
+        ds = DataSet.of(general_namespace(), "exp_test")
+        await assert_point_invalid_ael_rejected(
+            session_with_data.query(ds.id("A")).where("$.A >").execute()
+        )
+
 
 @pytest.fixture
 async def session_with_filter_exp(

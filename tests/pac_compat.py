@@ -23,9 +23,13 @@ a connected SDK client from fixtures and calls the matching skip helper
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Awaitable
+from typing import Any, Protocol
 
 import pytest
+from aerospike_async.exceptions import InvalidRequest
+
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 class SupportsPacCapabilities(Protocol):
@@ -86,6 +90,43 @@ def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
         "Requires query selection: Version.supports_query_selection on all nodes "
         "(Client.supports_query_selection)."
     )
+
+
+async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
+    """Assert invalid string AEL on a dataset query is rejected by the server.
+
+    With query selection (explain→execute), ``PARAMETER_ERROR`` is raised from
+    ``execute()``. With server-compiled AEL on field **43**, ``execute()`` may
+    return a stream and the cluster rejects the filter while reading rows.
+    """
+    stream = None
+    try:
+        try:
+            stream = await execute_coro
+        except (AerospikeError, InvalidRequest) as exc:
+            assert exc.result_code == ResultCode.PARAMETER_ERROR
+            return
+
+        with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+            async for _ in stream:
+                pass
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    finally:
+        if stream is not None:
+            stream.close()
+
+
+async def assert_point_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
+    """Assert invalid string AEL on a point query is rejected (field **43** path)."""
+    try:
+        rs = await execute_coro
+    except (AerospikeError, InvalidRequest) as exc:
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        return
+
+    with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+        await rs.first_or_raise()
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
 
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael

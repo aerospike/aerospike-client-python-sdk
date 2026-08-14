@@ -12,6 +12,8 @@
 
 """Unit tests for server-compiled AEL filter encoding."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from aerospike_sdk.server_filter import filter_expression_from_ael_string
@@ -23,3 +25,17 @@ def test_raises_when_gate_off():
             "$.age > 1",
             supports_server_compiled_ael=False,
         )
+
+
+def test_uses_server_compiled_when_gate_on():
+    sentinel = MagicMock()
+    with patch(
+        "aerospike_sdk.server_filter.FilterExpression.from_server_compiled_ael",
+        return_value=sentinel,
+    ) as factory:
+        result = filter_expression_from_ael_string(
+            "$.age > 1",
+            supports_server_compiled_ael=True,
+        )
+    factory.assert_called_once_with("$.age > 1")
+    assert result is sentinel

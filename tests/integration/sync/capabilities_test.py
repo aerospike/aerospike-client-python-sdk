@@ -17,7 +17,8 @@
 
 Sync counterpart of the async capabilities suite; the sync client has its own
 node accessor (``_cluster_versions_blocking``). The fold logic is unit-tested in
-``tests/unit/capabilities_test.py``; this module checks probe delegation only.
+``tests/unit/capabilities_test.py``. This module adds live wiring and
+version-floor checks against the reported minimum server version.
 """
 
 import pytest
@@ -58,3 +59,13 @@ class TestSyncCapabilityProbes:
         assert cluster.supports_query_selection() == (
             capabilities.supports_query_selection(versions)
         )
+
+    def test_probes_match_reported_version_floors(self, cluster):
+        """Each probe matches the version floor it gates on (relative, not hardcoded)."""
+        v = cluster.server_version()
+        assert v is not None
+        vt = (v.major, v.minor, v.patch)
+        assert cluster.supports_query_operations() == (vt >= (8, 1, 2))
+        assert cluster.supports_string_operations() == (vt >= (8, 1, 3))
+        assert cluster.supports_ael() == (vt >= (8, 1, 3))
+        assert cluster.supports_query_selection() == (vt >= (8, 1, 3))
