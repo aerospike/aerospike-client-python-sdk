@@ -10,9 +10,13 @@ stream = await session.query(users).where("$.age > 18").execute()
 ## How string AEL is executed
 
 The SDK does **not** parse AEL strings locally. When the connected cluster
-supports it (Aerospike **8.1.3+** on every node, probed at connect time), string
-AEL is sent to the server for compilation (**field 43** via
+supports it (Aerospike **8.1.3+** on every node), string AEL is sent to the
+server for compilation (**field 43** via
 `FilterExpression.from_server_compiled_ael`).
+
+The check is re-derived from the cluster's node list once per tend interval, so a
+node joining with an older build closes the capability within one tend rather
+than at the next reconnect, and it reopens once that node leaves.
 
 Dataset queries on clusters that also support **query selection** (**field 44**)
 use server-led index selection: the server explains the AEL string, picks an

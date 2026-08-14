@@ -161,24 +161,6 @@ class Client(RoutingCapabilitiesMixin):
             )
         return self._supports_mrt_cache
 
-    async def _cluster_versions(self) -> list:
-        """Per-node ``Version`` list for capability probes (fresh, uncached).
-
-        Read live rather than cached so a probe reflects the current cluster
-        membership — a lower-version node joining after connect changes the
-        minimum. Cold path (user-facing introspection), so the extra
-        ``nodes()`` round is not a concern.
-        """
-        if self._client is None:
-            return []
-        return [node.version for node in await self._client.nodes()]
-
-    async def _warm_routing_capabilities_async(self) -> None:
-        """Fill routing caches from a live node list (async connect path)."""
-        if not self._connected or self._client is None:
-            return
-        self._apply_routing_capabilities_from_versions(await self._cluster_versions())
-
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = AsyncSdkConfigMonitor(
@@ -215,7 +197,7 @@ class Client(RoutingCapabilitiesMixin):
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         self._client = await new_client(self._policy, self._seeds)
         self._connected = True
-        await self._warm_routing_capabilities_async()
+        await self._warm_routing_capabilities()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
