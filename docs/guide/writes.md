@@ -277,6 +277,23 @@ await (
 Mixed operations across different keys are handled automatically when you chain
 multiple write segments.
 
+A UDF apply can be part of that mix. Chain `execute_udf(*keys).function(...)`
+into a batch alongside reads, writes, and deletes; the per-key UDF applies
+travel in the same single round-trip rather than a separate call:
+
+```python
+await (
+    session.query(users.id(1))                       # read
+    .execute_udf(users.id(2))                        # per-key UDF apply
+        .function("stats", "increment").passing("visits", 1)
+    .delete(users.id(3))                             # delete
+    .execute()
+)
+```
+
+A batch that is *only* UDF applies (no other op types) uses the dedicated
+apply-many path instead — both produce one round-trip.
+
 (execute-vs-stream)=
 ### `execute()` vs `stream()`
 

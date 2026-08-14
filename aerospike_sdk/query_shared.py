@@ -54,6 +54,7 @@ from aerospike_async import (
     BatchPolicy,
     BatchReadOp,
     BatchReadPolicy,
+    BatchUDFOp,
     BatchUDFPolicy,
     BatchWriteOp,
     BatchWritePolicy,
@@ -1458,7 +1459,13 @@ class _QueryBuilderBase:
         self._clear_pending_udf_state()
 
     def _specs_require_sequential_run(self) -> bool:
-        return any(spec.op_type == "udf" for spec in self._specs)
+        # A single homogeneous UDF apply (one ``execute_udf`` over many keys)
+        # uses the dedicated apply-many path — already a single round-trip.
+        # Every other UDF combination — multiple UDF segments, or a UDF mixed
+        # with other op types — folds into one mixed batch call where each UDF
+        # row becomes a ``BatchUDFOp``, matching the single-round-trip behavior
+        # of every other batch.
+        return len(self._specs) == 1 and self._specs[0].op_type == "udf"
 
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
@@ -2242,6 +2249,20 @@ class _QueryBuilderBase:
             brp = self._make_batch_read_policy(spec)
             for key in spec.keys:
                 ops.append(BatchReadOp(key, bins=[], policy=brp))
+        elif op_type == "udf":
+            pkg, fn, udf_args = spec.udf_package, spec.udf_function, spec.udf_args
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_udf_policy(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    up = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchUDFOp(key, pkg, fn, udf_args, policy=up))
+            else:
+                up = self._make_batch_udf_policy(spec)
+                for key in spec.keys:
+                    ops.append(BatchUDFOp(key, pkg, fn, udf_args, policy=up))
         else:
             write_ops = list(spec.operations)
             if mixed:
