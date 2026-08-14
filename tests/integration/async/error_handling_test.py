@@ -853,13 +853,12 @@ class TestTtlExpiry:
         assert rr is None
 
     async def test_record_with_no_ttl_persists(self, session, ds):
-        """Record with default TTL (0 = namespace default, effectively no
-        expiry on test namespace) persists beyond a short wait."""
+        """A record written with ``never_expire()`` persists beyond a short wait."""
         import asyncio
         k = ds.id("ttl_persist")
         await _cleanup(session, k)
 
-        await session.upsert(k).put({"v": 1}).execute()
+        await session.upsert(k).never_expire().put({"v": 1}).execute()
 
         await asyncio.sleep(3)
 

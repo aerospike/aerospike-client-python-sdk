@@ -359,9 +359,9 @@ async def session_with_data(shared_cluster, enterprise, wait_for_set_visible):
         except Exception:
             pass
 
-    await session.upsert(ds.id("A")).put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
-    await session.upsert(ds.id("B")).put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
-    await session.upsert(ds.id("C")).put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
+    await session.upsert(ds.id("A")).never_expire().put({"A": 1, "B": 1.1, "C": "abcde", "D": 1, "E": -1}).execute()
+    await session.upsert(ds.id("B")).never_expire().put({"A": 2, "B": 2.2, "C": "abcdeabcde", "D": 1, "E": -2}).execute()
+    await session.upsert(ds.id("C")).never_expire().put({"A": 0, "B": -1.0, "C": "1", "D": 0, "E": 0}).execute()
 
     await wait_for_set_visible(session, general_namespace(), "exp_test", 3)
 
@@ -697,19 +697,19 @@ async def _seed_cdt_data(cluster, *, wait_for_set_visible):
         except Exception:
             pass
 
-    await session.upsert(ds.id("rec1")).put({
+    await session.upsert(ds.id("rec1")).never_expire().put({
         "numbers": [10, 20, 30, 40, 50],
         "names": ["alice", "bob", "charlie"],
         "info": {"name": "Alice", "age": 30, "city": "NYC"},
         "nested": [{"id": 1, "value": 100}, {"id": 2, "value": 200}],
     }).execute()
-    await session.upsert(ds.id("rec2")).put({
+    await session.upsert(ds.id("rec2")).never_expire().put({
         "numbers": [5, 15, 25, 35, 45],
         "names": ["dave", "eve"],
         "info": {"name": "Bob", "age": 25, "city": "LA"},
         "nested": [{"id": 3, "value": 300}],
     }).execute()
-    await session.upsert(ds.id("rec3")).put({
+    await session.upsert(ds.id("rec3")).never_expire().put({
         "numbers": [100, 200, 300],
         "names": ["frank"],
         "info": {"name": "Charlie", "age": 40, "city": "NYC"},
