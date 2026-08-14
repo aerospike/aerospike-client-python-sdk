@@ -154,13 +154,9 @@ class SyncClient(RoutingCapabilitiesMixin):
         (implicit batch-write transactions stay off on that path).
         """
         if self._supports_mrt_cache is None:
-            nodes_fn = getattr(self._client, "nodes_blocking", None)
-            if nodes_fn is None:
-                self._supports_mrt_cache = False
-                return False
-            nodes = nodes_fn()
-            self._supports_mrt_cache = bool(nodes) and all(
-                node.version.supports_mrt() for node in nodes
+            versions = self._cluster_versions_blocking()
+            self._supports_mrt_cache = bool(versions) and all(
+                version.supports_mrt() for version in versions
             )
         return self._supports_mrt_cache
 

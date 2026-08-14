@@ -19,6 +19,11 @@ Field ``43`` (server-compiled AEL) and field ``44`` (query selection) gates are
 resolved once at connect from the live node list and stored on the client for
 builder hot paths. Mixed into :class:`~aerospike_sdk.aio.client.Client` and
 :class:`~aerospike_sdk.sync.client.SyncClient`.
+
+Not every client can read node versions: the ``current_thread_runtime`` proxy has
+no node-listing surface, so the cluster version there is *undeterminable* rather
+than old. See :meth:`RoutingCapabilitiesMixin._apply_undeterminable_routing_capabilities`
+for how the two gates resolve in that case.
 """
 
 from __future__ import annotations
@@ -33,6 +38,12 @@ class _RoutingCapabilitiesClient(Protocol):
     _connected: bool
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
+
+    # Declared so the mixin's own ``self``-annotated methods may call each other.
+    def _client_can_list_nodes(self) -> bool: ...
+    def _cluster_versions_blocking(self) -> List[Any]: ...
+    def _apply_routing_capabilities_from_versions(self, versions: List[Any]) -> None: ...
+    def _apply_undeterminable_routing_capabilities(self) -> None: ...
 
 
 class RoutingCapabilitiesMixin:
@@ -51,15 +62,24 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
 
-    def _cluster_versions_blocking(self: _RoutingCapabilitiesClient) -> List[Any]:
-        """Blocking node versions for connect-time routing probes."""
+    def _client_can_list_nodes(self: _RoutingCapabilitiesClient) -> bool:
+        """Whether this client's PAC handle exposes a node list.
+
+        The ``current_thread_runtime`` proxy wraps PAC's ``_LocalClient``, which
+        has no node-listing surface. Probed on ``type(pac)`` rather than the
+        instance: an instance lookup falls through the proxy's ``__getattr__``,
+        which would build a per-thread client just to answer this question.
+        """
         pac = self._client
         if pac is None:
+            return False
+        return getattr(type(pac), "nodes_blocking", None) is not None
+
+    def _cluster_versions_blocking(self: _RoutingCapabilitiesClient) -> List[Any]:
+        """Blocking node versions, or ``[]`` when this client cannot list nodes."""
+        if not self._client_can_list_nodes():
             return []
-        nodes_fn = getattr(pac, "nodes_blocking", None)
-        if nodes_fn is None:
-            return []
-        return [node.version for node in nodes_fn()]
+        return [node.version for node in self._client.nodes_blocking()]
 
     def _apply_routing_capabilities_from_versions(
         self: _RoutingCapabilitiesClient,
@@ -70,9 +90,26 @@ class RoutingCapabilitiesMixin:
         )
         self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
 
+    def _apply_undeterminable_routing_capabilities(
+        self: _RoutingCapabilitiesClient,
+    ) -> None:
+        """Resolve both gates for a client that cannot read node versions.
+
+        The two gates diverge deliberately. Field ``43`` is the only encoding
+        left for string AEL, so it stays open and a cluster below 8.1.3 rejects
+        the filter itself — pre-failing here would reject string AEL against a
+        capable cluster. Field ``44`` has a working field-``43`` execute path to
+        fall back on, so an unverifiable cluster keeps it closed.
+        """
+        self._cached_supports_query_selection = False
+        self._cached_supports_server_compiled_ael = True
+
     def _warm_routing_capabilities_blocking(self: _RoutingCapabilitiesClient) -> None:
         """Fill routing caches from a live node list (blocking connect path)."""
         if not self._connected or self._client is None:
+            return
+        if not self._client_can_list_nodes():
+            self._apply_undeterminable_routing_capabilities()
             return
         self._apply_routing_capabilities_from_versions(self._cluster_versions_blocking())
 
