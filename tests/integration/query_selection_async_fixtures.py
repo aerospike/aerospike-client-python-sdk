@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest_asyncio
 
+from tests.pac_compat import skip_if_lacks_query_selection
 from tests.integration.query_selection_seed import (
     QuerySelectionClusterState,
     seed_query_selection_async,
@@ -34,6 +35,7 @@ async def query_selection_cluster(
     cluster_def = make_cluster_definition(aerospike_host)
     async with await cluster_def.connect() as cluster:
         client = cluster._sdk_client
+        skip_if_lacks_query_selection(client)
         session = cluster.create_session()
         await seed_query_selection_async(
             client, session, wait_for_index, wait_for_set_visible,

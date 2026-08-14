@@ -26,6 +26,7 @@ import asyncio
 import pytest
 
 from tests.pac_compat import requires_server_compiled_ael
+from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
 
 from tests.integration.namespace import general_namespace
@@ -138,6 +139,27 @@ class TestGeoQuery:
         stream = await (
             session.query(NAMESPACE, REGION_SET)
             .where(f"geoCompare($.{BIN_NAME}, geoJson('{QUERY_POINT}'))")
+            .execute()
+        )
+        count = 0
+        async for _ in stream:
+            count += 1
+        stream.close()
+        assert count == 5
+
+    async def test_programmatic_exp_geo_compare_returns_5(self, session):
+        """Programmatic ``Exp.geo_compare(...)`` via ``.where(FilterExpression)``.
+
+        Bypasses string AEL so the FilterExpression path is exercised end-to-end
+        against a live cluster. Equivalent in effect to the AEL form above.
+        """
+        filter_exp = Exp.geo_compare(
+            Exp.geo_bin(BIN_NAME),
+            Exp.geo_val(QUERY_POINT),
+        )
+        stream = await (
+            session.query(NAMESPACE, REGION_SET)
+            .where(filter_exp)
             .execute()
         )
         count = 0

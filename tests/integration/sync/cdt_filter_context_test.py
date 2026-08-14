@@ -25,7 +25,6 @@ from aerospike_async import IndexType
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
@@ -96,7 +95,6 @@ def _admin_create_flat(pac, index_name: str) -> None:
     )
 
 
-@requires_server_compiled_ael
 def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wait_for_index):
     """Sync query with ``Filter.equal(...).context([...])`` on a nested map value."""
     _require_filter_context()
@@ -167,7 +165,6 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
         _cleanup_records(session, keys)
 
 
-@requires_server_compiled_ael
 def test_query_filter_equal_single_map_key_context(cluster, enterprise, sync_wait_for_index):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()
