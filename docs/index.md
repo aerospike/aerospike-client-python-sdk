@@ -161,6 +161,7 @@ guide/background-udf
 
 guide/error-handling
 guide/logging
+guide/metrics
 guide/performance
 guide/benchmarking
 ```

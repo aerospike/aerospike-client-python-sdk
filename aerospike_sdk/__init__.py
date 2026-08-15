@@ -25,6 +25,7 @@ from aerospike_async import (
     BitWriteFlags,
     CdtOperation,
     CollectionIndexType,
+    CommandType,
     CommitStatus,
     CTX,
     ErrorDetailVerbosity,
@@ -34,6 +35,7 @@ from aerospike_async import (
     Filter,
     HLLWriteFlags,
     Key,
+    LatencyUnit,
     ListOrderType,
     ListReturnType,
     ListSortFlags,
@@ -47,6 +49,7 @@ from aerospike_async import (
     RegexFlag,
     RegisterTask,
     ResultCode,
+    Sampler,
     SelectFlags,
     SpecialValue,
     StringNumericType,
@@ -105,6 +108,12 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.metrics import (
+    DerivedHistogram,
+    LatencyType,
+    MetricsPolicy,
+    MetricsSnapshot,
+)
 from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
@@ -173,11 +182,13 @@ __all__ = [
     "CapacityError",
     "ClusterDefinition",
     "CollectionIndexType",
+    "CommandType",
     "CommitError",
     "CommitStatus",
     "ConnectionError",
     "CTX",
     "DataSet",
+    "DerivedHistogram",
     "ElementError",
     "ElementExistsError",
     "ElementNotFoundError",
@@ -201,6 +212,8 @@ __all__ = [
     "InvalidNodeError",
     "Key",
     "KeyBusyError",
+    "LatencyType",
+    "LatencyUnit",
     "ListOrderType",
     "ListReturnType",
     "ListSortFlags",
@@ -210,6 +223,8 @@ __all__ = [
     "MapReturnType",
     "MapWriteFlags",
     "MaxErrorRate",
+    "MetricsPolicy",
+    "MetricsSnapshot",
     "ModifyFlags",
     "OnError",
     "OperationResult",
@@ -226,6 +241,7 @@ __all__ = [
     "RegexFlag",
     "RegisterTask",
     "ResultCode",
+    "Sampler",
     "SdkLoggers",
     "SecondaryIndexError",
     "SecurityError",
