@@ -21,6 +21,8 @@ These tests provide simple, focused examples for documentation.
 import asyncio
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet, Key
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -54,10 +56,12 @@ _ORPHAN_CUSTOMER_INDEXES = ("age_idx", "tags_idx")
 async def _drop_orphan_customer_indexes(session, customers):
     """Best-effort drop of indexes left over from prior runs.
 
-    AEL ``where()`` consults ``IndexesMonitor``; an orphaned ``age_idx``
-    on the cluster makes :func:`test_java_example_query_with_where` send
-    a sindex filter that the server may have already dropped, raising
-    ``IndexNotFound``.
+    :func:`test_java_example_index_operations` creates ``age_idx`` and
+    ``tags_idx`` on the Customers set. If a prior run exits before teardown,
+    those indexes can still exist when :func:`test_java_example_query_with_where`
+    runs. Server-led query selection (explain on field ``44``) may then plan
+    against a stale or partially dropped index and raise ``IndexNotFound`` or
+    return unexpected hits. Drop them up front so each test sees a clean set.
     """
     for name in _ORPHAN_CUSTOMER_INDEXES:
         try:
@@ -72,8 +76,8 @@ async def customer_dataset(session):
 
     This fixture ensures test data is in a known state before each test.
     It deletes and recreates keys 1, 2, 3 to ensure clean state, and
-    sweeps any leftover Customers-set indexes from prior runs so AEL's
-    auto-index path stays consistent.
+    sweeps any leftover Customers-set indexes from prior runs so string-AEL
+    dataset queries plan against a predictable secondary-index set.
     """
     customers = DataSet.of(general_namespace(), "Customers")
     await _drop_orphan_customer_indexes(session, customers)
@@ -324,6 +328,7 @@ async def test_java_example_query_namespace_set(session, customer_dataset):
     assert count > 0
 
 
+@requires_server_compiled_ael
 async def test_java_example_query_with_where(session, customer_dataset):
     """Java: rs = session.query(customerDataSet)
               .where(DSL.of("$.name == 'Tim' and $.age > 18"))
@@ -546,6 +551,7 @@ async def test_java_example_filter_control_on_partition_range(session, customer_
     stream.close()
 
 
+@requires_server_compiled_ael
 async def test_java_example_filter_control_full(session, customer_dataset):
     """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitionRange(1, 4)
               .where(DSL.of("$.bonus > 100 and $.person.age >= 18"));
@@ -642,7 +648,7 @@ async def test_java_example_index_operations(session, customer_dataset):
             pass  # Index may not exist
     finally:
         # Drop both indexes so later tests (and reruns) don't see orphans
-        # that mislead AEL's secondary-index auto-routing.
+        # that confuse server-led index selection on the Customers set.
         await _drop_orphan_customer_indexes(session, customer_dataset)
 
 

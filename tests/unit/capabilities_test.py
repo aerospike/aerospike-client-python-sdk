@@ -28,7 +28,7 @@ class _FakeVersion:
     """Stand-in for PAC ``Version``: version fields + predicate methods."""
 
     def __init__(self, major, minor, patch, build=0, *,
-                 ael=None, query_ops=None, string_ops=None):
+                 ael=None, query_ops=None, string_ops=None, query_selection=None):
         self.major, self.minor, self.patch, self.build = major, minor, patch, build
         # Default each predicate to "supported iff >= 8.1.3", the real floor,
         # unless the test pins it explicitly.
@@ -37,6 +37,7 @@ class _FakeVersion:
         self._query_ops = ((major, minor, patch) >= (8, 1, 2)
                            if query_ops is None else query_ops)
         self._string_ops = ge813 if string_ops is None else string_ops
+        self._query_selection = ge813 if query_selection is None else query_selection
 
     def supports_server_compiled_ael(self):
         return self._ael
@@ -46,6 +47,9 @@ class _FakeVersion:
 
     def supports_string_operations(self):
         return self._string_ops
+
+    def supports_query_selection(self):
+        return self._query_selection
 
 
 class TestVersionKeyAndMin:
@@ -97,12 +101,12 @@ class TestAllNodesFolds:
         assert not capabilities.supports_query_selection([])
 
     def test_predicates_delegate_to_pac_not_version_floor(self):
-        # supports_ael/query_ops/string_ops read PAC's predicate, not a
-        # hardcoded version check: a node reporting the predicate False
-        # despite a high version is honored.
-        vs = [_FakeVersion(9, 0, 0, ael=False, string_ops=False, query_ops=False)]
+        # Every predicate reads PAC's Version.supports_*(), not a hardcoded
+        # version check: a node reporting the predicate False despite a high
+        # version is honored.
+        vs = [_FakeVersion(9, 0, 0, ael=False, string_ops=False, query_ops=False,
+                           query_selection=False)]
         assert not capabilities.supports_ael(vs)
         assert not capabilities.supports_string_operations(vs)
         assert not capabilities.supports_query_operations(vs)
-        # query_selection has no PAC predicate, so it stays a version floor.
-        assert capabilities.supports_query_selection(vs)
+        assert not capabilities.supports_query_selection(vs)

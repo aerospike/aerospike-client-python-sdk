@@ -23,6 +23,14 @@ clean up.
 
 import pytest_asyncio
 
+from tests.integration.query_selection_async_fixtures import query_selection_cluster
+
+__all__ = [
+    "cluster",
+    "cluster_sc",
+    "query_selection_cluster",
+]
+
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):

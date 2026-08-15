@@ -28,6 +28,7 @@ from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
+from tests.pac_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "test"
@@ -159,6 +160,7 @@ def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
         assert r.record is not None
 
 
+@requires_server_compiled_ael
 def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")

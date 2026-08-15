@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
 
+from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.info_shared import InfoCommandsBase
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -121,7 +122,7 @@ class InfoCommands(InfoCommandsBase):
             A list of dictionaries containing secondary index information.
         """
         all_responses = await self._session._client._client.info_on_all_nodes("sindex-list")
-        return self._parse_sindex_list(all_responses, namespace)
+        return parse_index_list(all_responses, namespace=namespace)
 
     async def secondary_index_details(
         self, namespace: str, index_name: str

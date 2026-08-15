@@ -24,7 +24,7 @@ interpreted.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 
 class InfoCommandsBase:
@@ -64,50 +64,6 @@ class InfoCommandsBase:
                 if isinstance(value, str) and value:
                     out.update(item.strip() for item in value.split(sep) if item.strip())
         return out
-
-    @staticmethod
-    def _parse_sindex_list(
-        responses: Dict[str, Dict[str, str]], namespace: Optional[str]
-    ) -> List[Dict[str, str]]:
-        """Parse ``sindex-list`` responses into de-duplicated index records.
-
-        Each entry is a ``:``-separated list of ``key=value`` tokens; records
-        are keyed by ``indexname`` (first seen wins) and optionally filtered to
-        *namespace*.
-        """
-        index_map: Dict[str, Dict[str, str]] = {}
-        for node_response in responses.values():
-            for value in node_response.values():
-                if not isinstance(value, str) or not value:
-                    continue
-                for entry in value.split(";"):
-                    entry = entry.strip()
-                    if not entry:
-                        continue
-                    fields: Dict[str, str] = {}
-                    for token in entry.split(":"):
-                        if "=" in token:
-                            k, v = token.split("=", 1)
-                            fields[k] = v
-                    index_name = fields.get("indexname", "")
-                    ns = fields.get("ns", "")
-                    if not index_name or not ns:
-                        continue
-                    if namespace and ns != namespace:
-                        continue
-                    if index_name not in index_map:
-                        entry_map = {
-                            "namespace": ns,
-                            "set": fields.get("set", ""),
-                            "bin": fields.get("bin", ""),
-                            "name": index_name,
-                        }
-                        if "type" in fields:
-                            entry_map["type"] = fields["type"]
-                        if "state" in fields:
-                            entry_map["state"] = fields["state"]
-                        index_map[index_name] = entry_map
-        return list(index_map.values())
 
     @staticmethod
     def _interpret_namespace_details(

@@ -13,15 +13,18 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Live server-capability probes on a connected sync cluster.
+"""Live wiring tests for sync server-capability probes on a connected cluster.
 
 Sync counterpart of the async capabilities suite; the sync client has its own
-node accessor (`_cluster_versions_blocking`), so it needs its own live check.
+node accessor (``_cluster_versions_blocking``). The fold logic is unit-tested in
+``tests/unit/capabilities_test.py``. This module adds two live checks: probe
+wiring (delegation to ``capabilities.supports_*``) and version-floor alignment
+against the reported minimum server version.
 """
 
 import pytest
 
-from aerospike_sdk import Version
+from aerospike_sdk import Version, capabilities
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +46,33 @@ class TestSyncCapabilityProbes:
                       cluster.supports_query_selection):
             assert isinstance(probe(), bool)
 
-    def test_probes_agree_with_reported_version(self, cluster):
+    def test_probes_agree_with_pac_version_predicates(self, cluster):
+        """Wiring: cluster probe → ``capabilities.supports_*`` over live node versions.
+
+        This alone is tautological (same fold on both sides); pair with
+        :meth:`test_probes_match_reported_version_floors` to catch a bad mapping.
+        """
+        versions = cluster._sdk_client._cluster_versions_blocking()
+        assert versions, "connected cluster should report at least one node"
+        assert cluster.supports_query_operations() == (
+            capabilities.supports_query_operations(versions)
+        )
+        assert cluster.supports_string_operations() == (
+            capabilities.supports_string_operations(versions)
+        )
+        assert cluster.supports_ael() == capabilities.supports_ael(versions)
+        assert cluster.supports_query_selection() == (
+            capabilities.supports_query_selection(versions)
+        )
+
+    def test_probes_match_reported_version_floors(self, cluster):
+        """Each probe matches the version floor it gates on (relative to ``server_version()``).
+
+        Catches a wrong ``capabilities.supports_*`` mapping that the delegation
+        check above would miss on a homogeneous CI cluster.
+        """
         v = cluster.server_version()
+        assert v is not None
         vt = (v.major, v.minor, v.patch)
         assert cluster.supports_query_operations() == (vt >= (8, 1, 2))
         assert cluster.supports_string_operations() == (vt >= (8, 1, 3))

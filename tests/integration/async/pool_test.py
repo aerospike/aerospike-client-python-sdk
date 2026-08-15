@@ -30,7 +30,6 @@ from aerospike_sdk import AsyncPool
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk import index_monitor as _index_monitor_module
 from tests.integration.namespace import general_namespace
 
 
@@ -227,59 +226,6 @@ class TestAsyncPoolGuards:
 
             with pytest.raises(RuntimeError, match="within a pool loop"):
                 await pool.run(recursive)
-
-
-class TestAsyncPoolSharedMonitor:
-    """Index metadata is cluster-scoped, not member-scoped — one monitor for the pool."""
-
-    async def test_all_members_share_one_monitor_instance(
-        self, aerospike_host, make_cluster_definition
-    ):
-        """Identity check: every member client's monitor is the same object."""
-        async with AsyncPool(make_cluster_definition(aerospike_host), loop_count=4) as pool:
-            async def grab_monitor_id(cluster: Cluster) -> int:
-                return id(cluster._client._indexes_monitor)
-
-            monitor_ids = [await pool.run(grab_monitor_id, pick=i) for i in range(4)]
-            assert len(set(monitor_ids)) == 1, (
-                f"expected one shared IndexesMonitor across the pool, "
-                f"got distinct ids={monitor_ids}"
-            )
-            assert monitor_ids[0] == id(pool._shared_monitor)
-
-    async def test_only_one_poll_per_refresh_interval(
-        self, aerospike_host, make_cluster_definition, monkeypatch
-    ):
-        """N members should produce 1 poll per refresh_interval, not N."""
-        call_count = 0
-        real_fetch = _index_monitor_module._fetch_indexes_blocking
-
-        def counting_fetch(pac_client):
-            nonlocal call_count
-            call_count += 1
-            return real_fetch(pac_client)
-
-        monkeypatch.setattr(
-            _index_monitor_module, "_fetch_indexes_blocking", counting_fetch,
-        )
-
-        async with AsyncPool(
-            make_cluster_definition(aerospike_host),
-            loop_count=4,
-            index_refresh_interval=0.3,
-        ) as pool:
-            # Trigger lazy-start by issuing one AEL query against the pool's
-            # shared monitor — pool monitors no longer eager-start on entry.
-            _ = pool  # silence unused
-            # Wait for the first refresh to land plus a full cycle.
-            await asyncio.sleep(0.7)
-
-        # The monitor lazy-starts now, so call_count may be 0 if no AEL
-        # query touched the daemon thread. When it does start, expect
-        # ≥1 and ≤3 calls.
-        assert call_count <= 3, (
-            f"expected ≤3 _fetch_indexes_blocking calls with a shared monitor; got {call_count}"
-        )
 
 
 async def _noop(cluster: Cluster) -> None:

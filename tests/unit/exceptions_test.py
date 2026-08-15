@@ -68,9 +68,6 @@ from aerospike_sdk.exceptions import (
     PacUDFBadResponse,
 )
 
-from aerospike_sdk.ael.exceptions import NoApplicableFilterError
-
-
 class TestExceptionHierarchy:
     """Verify the inheritance tree matches the design."""
 
@@ -350,18 +347,6 @@ class TestConvertPacException:
             raise pfc from pac
         except GenerationError as caught:
             assert caught.__cause__ is pac
-
-
-class TestNoApplicableFilterError:
-    """Verify NoApplicableFilterError is independent of AerospikeError."""
-
-    def test_is_exception(self):
-        assert issubclass(NoApplicableFilterError, Exception)
-        assert not issubclass(NoApplicableFilterError, AerospikeError)
-
-    def test_raise_and_catch(self):
-        with pytest.raises(NoApplicableFilterError):
-            raise NoApplicableFilterError("no filter for this expression")
 
 
 class TestRetryContextPropagation:

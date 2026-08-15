@@ -13,78 +13,86 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""PAC capability checks shared by unit and integration tests.
+"""PAC capability markers and skip helpers shared by unit and integration tests.
 
-Integration tests that need server-compiled AEL on the wire can use
-:data:`requires_server_compiled_ael`; tests that assume the **client-side**
-string-AEL path (no server compilation for ``where(str)``) can use
-:data:`requires_client_side_ael` (see ``tests/integration/conftest.py``).
+Integration tests declare requirements with :data:`requires_server_compiled_ael`
+or :data:`requires_query_selection`; ``tests/integration/conftest.py`` resolves
+a connected SDK client from fixtures and calls the matching skip helper
+(``Client.supports_*``, computed from PAC ``Version.supports_*`` at connect).
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 import pytest
-from aerospike_async.exceptions import InvalidRequest, ResultCode
-from aerospike_sdk.exceptions import AerospikeError
-from aerospike_sdk.feature_gates import PSDK_ENABLE_SERVER_COMPILED_AEL
+from aerospike_async.exceptions import InvalidRequest
+
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
-class SupportsServerCompiledAel(Protocol):
-    """Connected client (or stand-in) that reports server-compiled AEL availability."""
+class SupportsPacCapabilities(Protocol):
+    """Connected SDK client that reports PAC/cluster capability flags."""
 
     @property
     def supports_server_compiled_ael(self) -> bool:
         ...
 
+    @property
+    def supports_query_selection(self) -> bool:
+        ...
 
-def skip_if_lacks_server_compiled_ael(client: SupportsServerCompiledAel) -> None:
+
+def _capability_bool(client: object, attr: str) -> bool:
+    """Read a connected SDK client's ``supports_*`` flag; fail if not a bool."""
+    value = getattr(client, attr, None)
+    if not isinstance(value, bool):
+        pytest.fail(
+            f"{attr!r} must be a bool property on the resolved SDK client, "
+            f"got {type(value).__name__}",
+            pytrace=False,
+        )
+    return value
+
+
+def has_sdk_capability_properties(candidate: object) -> bool:
+    """True when *candidate* exposes both ``supports_*`` bool properties."""
+    return (
+        isinstance(getattr(candidate, "supports_server_compiled_ael", None), bool)
+        and isinstance(getattr(candidate, "supports_query_selection", None), bool)
+    )
+
+
+def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     """Skip when server-compiled AEL is not available for this connection/cluster.
 
-    Mirrors :attr:`aerospike_sdk.aio.client.Client.supports_server_compiled_ael`:
-    PAC must expose ``FilterExpression.from_server_compiled_ael``, and the
-    **first active** node's ``Version`` must report server-compiled AEL support
-    (homogeneous cluster: all nodes same build).
+    Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael` (the same
+    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
-        pytest.skip(
-            "server-compiled AEL feature gate disabled "
-            "(PSDK_ENABLE_SERVER_COMPILED_AEL)"
-        )
-    if client.supports_server_compiled_ael:
+    if _capability_bool(client, "supports_server_compiled_ael") is True:
         return
     pytest.skip(
-        "Requires server-compiled AEL: PAC FilterExpression.from_server_compiled_ael "
-        "and first active node Version.supports_server_compiled_ael "
-        "(Client.supports_server_compiled_ael; homogeneous cluster assumption)."
+        "Requires server-compiled AEL: Version.supports_server_compiled_ael on all nodes "
+        "(Client.supports_server_compiled_ael)."
     )
 
 
-def skip_if_server_compiled_ael_available(client: SupportsServerCompiledAel) -> None:
-    """Skip when the SDK would use server-compiled AEL for string ``where()`` predicates.
+def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
+    """Skip when field ``44`` query selection is not available for this cluster.
 
-    Use for integration tests that only apply to the client-side
-    :func:`~aerospike_sdk.ael.parser.parse_ael` path (``Client.supports_server_compiled_ael``
-    is false: missing PAC API, old server build, or pre-connect client).
+    Reads :attr:`SupportsPacCapabilities.supports_query_selection` (the same
+    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
     """
-    if not PSDK_ENABLE_SERVER_COMPILED_AEL:
-        return
-    if not client.supports_server_compiled_ael:
+    if _capability_bool(client, "supports_query_selection") is True:
         return
     pytest.skip(
-        "Requires client-side AEL parsing for string predicates: "
-        "Client.supports_server_compiled_ael is true (server-compiled path in use)."
+        "Requires query selection: Version.supports_query_selection on all nodes "
+        "(Client.supports_query_selection)."
     )
 
 
-# Integration tests: ``requires_*_ael`` markers are enforced in
-# ``tests/integration/conftest.py`` (``pytest_runtest_call`` resolves
-# ``client`` / ``cluster*`` / ``session*`` / ``session_with_*`` fixtures).
-
-
-async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> None:
+async def assert_dataset_invalid_ael_rejected_async(execute_coro: Awaitable[Any]) -> None:
     """Assert invalid string AEL on a dataset query is rejected by the server.
 
     With query selection (explain→execute), ``PARAMETER_ERROR`` is raised from
@@ -95,7 +103,7 @@ async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> N
     try:
         try:
             stream = await execute_coro
-        except AerospikeError as exc:
+        except (AerospikeError, InvalidRequest) as exc:
             assert exc.result_code == ResultCode.PARAMETER_ERROR
             return
 
@@ -108,5 +116,54 @@ async def assert_dataset_invalid_ael_rejected(execute_coro: Awaitable[Any]) -> N
             stream.close()
 
 
+def assert_dataset_invalid_ael_rejected_sync(execute: Callable[[], Any]) -> None:
+    """Sync counterpart of :func:`assert_dataset_invalid_ael_rejected_async`.
+
+    Takes a zero-arg callable, not a stream: the rejection may surface from
+    ``execute()`` itself, so the helper has to own that call.
+    """
+    stream = None
+    try:
+        try:
+            stream = execute()
+        except (AerospikeError, InvalidRequest) as exc:
+            assert exc.result_code == ResultCode.PARAMETER_ERROR
+            return
+
+        with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+            for _ in stream:
+                pass
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    finally:
+        if stream is not None:
+            stream.close()
+
+
+async def assert_point_invalid_ael_rejected_async(execute_coro: Awaitable[Any]) -> None:
+    """Assert invalid string AEL on a point query is rejected (field **43** path)."""
+    try:
+        rs = await execute_coro
+    except (AerospikeError, InvalidRequest) as exc:
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        return
+
+    with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+        await rs.first_or_raise()
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+def assert_point_invalid_ael_rejected_sync(execute: Callable[[], Any]) -> None:
+    """Sync counterpart of :func:`assert_point_invalid_ael_rejected_async`."""
+    try:
+        rs = execute()
+    except (AerospikeError, InvalidRequest) as exc:
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        return
+
+    with pytest.raises((AerospikeError, InvalidRequest)) as exc_info:
+        rs.first_or_raise()
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
-requires_client_side_ael = pytest.mark.requires_client_side_ael
+requires_query_selection = pytest.mark.requires_query_selection

@@ -800,10 +800,11 @@ class _BlockingQueryDispatch:
             ``None``. ``(recordset, reexecute_or_none)``.
 
         Note:
-            Mirrors the async path: when an AEL ``where()`` is present and
-            an :class:`IndexesMonitor` is attached, blocks until the
-            monitor's first refresh has completed so cached secondary-index
-            metadata is available for filter generation.
+            Builds the same policy + statement, then dispatches via PAC
+            ``query_blocking`` which returns a :class:`Recordset` with the
+            Python-iterator protocol (blocking ``__next__`` that releases the
+            GIL while waiting on the underlying Tokio stream). The caller wraps
+            the returned recordset in :class:`RecordStream`.
         """
         log.debug(
             "dataset query (blocking): %s.%s filter=%s chunk=%s hint=%s",
@@ -839,21 +840,7 @@ class _BlockingQueryDispatch:
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        self._prepare_dataset_query_index_context(
-            use_server_query_selection=use_server_query_selection,
-        )
-        self._wait_for_dataset_query_index_context_blocking(
-            use_server_query_selection=use_server_query_selection,
-        )
-
-        if not use_server_query_selection and self._where_ael is not None:
-            self._resolve_index_context()
-
         partition_filter = self._partition_filter or PartitionFilter.all()
-
-        self._maybe_auto_generate_filters(
-            hint, policy, use_server_query_selection=use_server_query_selection,
-        )
 
         statement = self._build_statement()
 

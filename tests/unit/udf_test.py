@@ -15,9 +15,11 @@
 
 """Unit tests for foreground UDF chainable builders."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from aerospike_async import FilterExpression
+
 from aerospike_sdk import Key
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
@@ -29,7 +31,13 @@ def _connected_qb() -> QueryBuilder:
     client = MagicMock()
     client.execute_udf = AsyncMock(return_value="rv")
     client.batch_apply = AsyncMock(return_value=[])
-    return QueryBuilder(client, "test", "set", Behavior.DEFAULT)
+    return QueryBuilder(
+        client,
+        "test",
+        "set",
+        Behavior.DEFAULT,
+        supports_server_compiled_ael=True,
+    )
 
 
 def test_function_builder_has_no_execute():
@@ -105,12 +113,18 @@ def test_udf_spec_type_in_operation_spec():
 async def test_where_sets_filter_on_builder():
     qb = _connected_qb()
     qb._set_current_keys_from_varargs((Key("test", "set", 1),))
-    await (
-        UdfFunctionBuilder(qb)
-        .function("pkg", "fn")
-        .where("$.x == 1")
-        .execute()
-    )
+    with patch(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        side_effect=lambda ael, *, supports_server_compiled_ael=True: (
+            FilterExpression.from_server_compiled_ael(ael)
+        ),
+    ):
+        await (
+            UdfFunctionBuilder(qb)
+            .function("pkg", "fn")
+            .where("$.x == 1")
+            .execute()
+        )
     wp = qb._client.execute_udf.await_args.kwargs["policy"]
     assert wp.filter_expression is not None
 

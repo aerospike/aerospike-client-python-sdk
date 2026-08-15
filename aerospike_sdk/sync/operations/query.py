@@ -42,7 +42,6 @@ from aerospike_sdk.query_shared import (
 )
 from aerospike_sdk.sync.operations.query_dispatch import _BlockingQueryDispatch
 from aerospike_sdk.exceptions import _convert_pac_exception
-from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.operations_shared import (
     _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
@@ -172,6 +171,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and not self._specs
             and self._filter_expression is None
             and self._default_filter_expression is None
+            and self._where_ael is None
+            and self._default_where_ael is None
             and not self._filter_records
             and self._op_type is None
             and self._base_read_policy is not None
@@ -448,10 +449,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
-            **cached_ael_capability_kwargs(
-                getattr(self._sdk_client_fast, "_cached_supports_server_compiled_ael", None),
-                getattr(self._sdk_client_fast, "_cached_supports_query_selection", None),
-            ),
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

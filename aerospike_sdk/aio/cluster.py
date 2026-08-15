@@ -73,7 +73,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         cls,
         policy: ClientPolicy,
         seeds: str,
-        index_refresh_interval: float = 5.0,
         sdk_settings: Optional[SystemSettings] = None,
         sdk_config_source: Optional[SdkConfigSource] = None,
     ) -> Cluster:
@@ -83,7 +82,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         Args:
             policy: The ClientPolicy configuration
             seeds: The seeds string (e.g., "localhost:3000")
-            index_refresh_interval: Seconds between secondary-index cache refreshes
             sdk_settings: Resolved SDK settings to store for runtime reads
             sdk_config_source: When set, arms config hot-reload on the client
 
@@ -96,7 +94,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         sdk_client = Client(
             seeds=seeds,
             policy=policy,
-            index_refresh_interval=index_refresh_interval,
         )
         if sdk_settings is not None:
             sdk_client._sdk_settings = sdk_settings

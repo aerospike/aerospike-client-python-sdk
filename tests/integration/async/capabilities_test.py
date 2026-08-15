@@ -13,19 +13,18 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Live server-capability probes on a connected cluster.
+"""Live wiring tests for server-capability probes on a connected cluster.
 
-The fold logic (minimum across all nodes) is unit-tested in
-``tests/unit/capabilities_test.py``;
-this confirms the probes reach the live cluster, return the expected type, and
-agree with the connected server's version. Assertions are relative to the
-reported version rather than hardcoded, so they hold on any server.
+The all-nodes fold logic is unit-tested in ``tests/unit/capabilities_test.py``
+against fakes. This module adds two live checks: probe wiring (delegation to
+``capabilities.supports_*`` over node versions) and version-floor alignment
+against the cluster's reported minimum version (catches a wrong mapping on CI).
 """
 
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Version
+from aerospike_sdk import Version, capabilities
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,12 +49,34 @@ class TestCapabilityProbes:
                       cluster.supports_query_selection):
             assert isinstance(await probe(), bool)
 
-    async def test_probes_agree_with_reported_version(self, cluster):
-        """Each probe matches the version floor it gates on (relative, not
-        hardcoded, so the test holds on any server)."""
+    async def test_probes_agree_with_pac_version_predicates(self, cluster):
+        """Wiring: cluster probe → ``capabilities.supports_*`` over live node versions.
+
+        This alone is tautological (same fold on both sides); pair with
+        :meth:`test_probes_match_reported_version_floors` to catch a bad mapping.
+        """
+        versions = await cluster._sdk_client._cluster_versions()
+        assert versions, "connected cluster should report at least one node"
+        assert await cluster.supports_query_operations() == (
+            capabilities.supports_query_operations(versions)
+        )
+        assert await cluster.supports_string_operations() == (
+            capabilities.supports_string_operations(versions)
+        )
+        assert await cluster.supports_ael() == capabilities.supports_ael(versions)
+        assert await cluster.supports_query_selection() == (
+            capabilities.supports_query_selection(versions)
+        )
+
+    async def test_probes_match_reported_version_floors(self, cluster):
+        """Each probe matches the version floor it gates on (relative to ``server_version()``).
+
+        Catches a wrong ``capabilities.supports_*`` mapping that the delegation
+        check above would miss on a homogeneous CI cluster.
+        """
         v = await cluster.server_version()
+        assert v is not None
         vt = (v.major, v.minor, v.patch)
-        # Query operations gate at >= 8.1.2; the >= 8.1.3 family below it.
         assert await cluster.supports_query_operations() == (vt >= (8, 1, 2))
         assert await cluster.supports_string_operations() == (vt >= (8, 1, 3))
         assert await cluster.supports_ael() == (vt >= (8, 1, 3))

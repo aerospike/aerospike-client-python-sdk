@@ -89,7 +89,6 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         return Cluster._create(
             policy,
             seeds,
-            index_refresh_interval=self._index_refresh_interval,
             sdk_settings=settings,
             sdk_config_source=config_source,
         )

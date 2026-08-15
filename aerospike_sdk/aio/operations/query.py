@@ -76,7 +76,6 @@ from aerospike_sdk.exceptions import (
     AerospikeError,
     _convert_pac_exception,
 )
-from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -271,6 +270,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             and self._filter_expression is None
             and self._default_filter_expression is None
             and self._where_ael is None
+            and self._default_where_ael is None
             and self._generation is None
             and self._ttl_seconds is None
             and self._default_ttl_seconds is None
@@ -1094,21 +1094,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        self._prepare_dataset_query_index_context(
-            use_server_query_selection=use_server_query_selection,
-        )
-        await self._wait_for_dataset_query_index_context(
-            use_server_query_selection=use_server_query_selection,
-        )
-
-        if not use_server_query_selection and self._where_ael is not None:
-            self._resolve_index_context()
-
         partition_filter = self._partition_filter or PartitionFilter.all()
-
-        self._maybe_auto_generate_filters(
-            hint, policy, use_server_query_selection=use_server_query_selection,
-        )
 
         statement = self._build_statement()
 
@@ -1265,10 +1251,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
-            **cached_ael_capability_kwargs(
-                getattr(self._sdk_client_fast, "_cached_supports_server_compiled_ael", None),
-                getattr(self._sdk_client_fast, "_cached_supports_query_selection", None),
-            ),
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key

@@ -33,7 +33,6 @@ from aerospike_sdk.exceptions import (
     PacServerError,
     _convert_pac_exception,
 )
-from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -291,7 +290,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace=key.namespace,
                 set_name=key.set_name,
                 behavior=behavior,
-                indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
@@ -300,10 +298,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
-                **cached_ael_capability_kwargs(
-                    self._client._cached_supports_server_compiled_ael,
-                    self._client._cached_supports_query_selection,
-                ),
             )
             builder._single_key = key
             return builder
@@ -316,7 +310,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace=ns,
                 set_name=sn,
                 behavior=behavior,
-                indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
@@ -325,10 +318,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
-                **cached_ael_capability_kwargs(
-                    self._client._cached_supports_server_compiled_ael,
-                    self._client._cached_supports_query_selection,
-                ),
             )
             builder._keys = keys
             return builder
@@ -346,7 +335,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace=namespace,
             set_name=set_name,
             behavior=behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -355,10 +343,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
-            **cached_ael_capability_kwargs(
-                self._client._cached_supports_server_compiled_ael,
-                self._client._cached_supports_query_selection,
-            ),
         )
 
     def background_task(self) -> SyncBackgroundTaskSession:

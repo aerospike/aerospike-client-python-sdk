@@ -1,8 +1,5 @@
 # Copyright 2025-2026 Aerospike, Inc.
 #
-# Portions may be licensed to Aerospike, Inc. under one or more contributor
-# license agreements WHICH ARE COMPATIBLE WITH THE APACHE LICENSE, VERSION 2.0.
-#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
 # the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -13,4 +10,10 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# AEL test package
+"""Shared sync integration fixtures."""
+
+from tests.integration.query_selection_sync_fixtures import query_selection_cluster
+
+__all__ = [
+    "query_selection_cluster",
+]

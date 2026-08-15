@@ -26,6 +26,7 @@ from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 async def _wait_for_set_count(
@@ -61,11 +62,12 @@ async def _wait_for_set_count(
 
 
 def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
+    sdk = cluster._sdk_client
     return QueryBuilder(
-        client=cluster._client.underlying_client,
+        client=sdk.underlying_client,
         namespace=namespace,
         set_name=None,
-        indexes_monitor=cluster._client._indexes_monitor,
+        sdk_client=sdk,
     )
 
 
@@ -104,11 +106,7 @@ async def cluster(aerospike_host, make_cluster_definition):
         session = c.create_session()
         ds = DataSet.of(general_namespace(), "query_test")
 
-        for i in range(10):
-            try:
-                await session.delete(ds.id(i)).execute()
-            except Exception:
-                pass
+        await session.truncate(ds)
 
         for i in range(10):
             await session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()
@@ -344,6 +342,7 @@ async def test_query_with_filter_expression_and(session):
 # Metadata-based query tests 
 # ============================================================================
 
+@requires_server_compiled_ael
 async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
@@ -361,6 +360,7 @@ async def test_query_with_ael_where(session):
     assert count == 5
 
 
+@requires_server_compiled_ael
 async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
@@ -378,6 +378,7 @@ async def test_query_ael_and_or(session):
     assert count == 5
 
 
+@requires_server_compiled_ael
 async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (
@@ -450,6 +451,7 @@ async def test_query_record_size(session):
     assert count == 10
 
 
+@requires_server_compiled_ael
 async def test_query_ael_set_name_matches_no_set_records(cluster):
     """Test AEL filtering for records written without a set name."""
     namespace = general_namespace()
@@ -507,7 +509,9 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
+            lambda: _namespace_query(cluster, namespace).filter_expression(
+                Exp.eq(Exp.string_bin("probe"), val(probe)),
+            ),
             {"no-set", "named-set"},
         )
 

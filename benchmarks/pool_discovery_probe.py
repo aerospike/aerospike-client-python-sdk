@@ -72,7 +72,6 @@ from aerospike_sdk import AsyncPool, ClusterDefinition, Host
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.index_monitor import IndexesMonitor
 from aerospike_sdk.policy.behavior import Behavior
 
 from benchmarks._env import client_policy_from_config, default_host, ensure_env
@@ -281,8 +280,7 @@ async def _run_threaded_seq(
     show_info: bool,
 ) -> List[int]:
     print(f"[threaded-seq] {loops} clients on {loops} threads, connected one at a time")
-    monitor = IndexesMonitor(refresh_interval=5.0)
-    members: List[Client] = cluster_def._build_pool_members(loops, monitor)
+    members: List[Client] = cluster_def._build_pool_members(loops)
     threads = [_LoopThread(i) for i in range(loops)]
     clusters: List[Optional[Cluster]] = [None] * loops
     counts: List[int] = []
@@ -306,7 +304,6 @@ async def _run_threaded_seq(
                 except Exception as exc:
                     print(f"  (close failed: {exc})")
             thread.stop()
-        monitor.stop()
     return counts
 
 

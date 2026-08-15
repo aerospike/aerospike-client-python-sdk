@@ -20,6 +20,7 @@ from aerospike_sdk import UDFLang
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "pfc_bg_task"
@@ -100,6 +101,7 @@ def test_sync_background_update(cluster):
         assert rr.record.bins.get(BG_BIN2) == "sync_updated"
 
 
+@requires_server_compiled_ael
 def test_sync_background_delete(cluster):
     session = cluster.create_session()
     for i in range(1, 11):

@@ -48,7 +48,6 @@ class TestSdkLoggerNames:
         assert SdkLoggers.QUERY == "aerospike_sdk.query"
         assert SdkLoggers.INFO == "aerospike_sdk.info"
         assert SdkLoggers.BACKGROUND == "aerospike_sdk.background"
-        assert SdkLoggers.INDEX_MONITOR == "aerospike_sdk.index_monitor"
         assert SdkLoggers.LIFECYCLE == "aerospike_sdk.lifecycle"
         assert SdkLoggers.POOL == "aerospike_sdk.pool"
         assert SdkLoggers.RECORD_STREAM == "aerospike_sdk.record_stream"

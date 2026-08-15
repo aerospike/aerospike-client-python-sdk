@@ -25,7 +25,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 
@@ -100,6 +100,7 @@ class TestSyncBatchOperations:
 
 class TestSyncBatchExpressionOps:
 
+    @requires_server_compiled_ael
     def test_batch_upsert_from(self, cluster: Cluster, users: DataSet, enterprise):
         session = cluster.create_session()
         keys = [users.id(f"sbx_{i}") for i in range(2)]
@@ -149,20 +150,9 @@ class TestSyncBatchStream:
             except Exception:
                 pass
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     def test_stream_mixed_ops_yields_all(
-        self, cluster: Cluster, users: DataSet, track_key, sum_ael,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete dispatch correctly via
         ``batch_stream_blocking``; results yielded one-by-one with idx
@@ -184,8 +174,8 @@ class TestSyncBatchStream:
 
         stream = (
             session.upsert(keys[0]).bin("A").set_to(99)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
-            .query(keys[2]).bin("sum").select_from(sum_ael)
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[2]).bin("sum").select_from("$.A:INT + $.B:INT")
             .delete(keys[3])
             .stream()
         )
@@ -220,20 +210,9 @@ class TestSyncBatchStream:
         empty = list(session.query(keys[3]).execute())
         assert empty == []
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     def test_stream_read_only_ops_dispatch_as_reads(
-        self, cluster: Cluster, users: DataSet, track_key, sum_ael,
+        self, cluster: Cluster, users: DataSet, track_key,
     ):
         """Read-only op lists (AEL `select_from` under the read verb) land
         as BatchReadOp on the wire, even in a lazy write-batch stream.
@@ -245,8 +224,8 @@ class TestSyncBatchStream:
             session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = (
-            session.query(keys[0]).bin("sum").select_from(sum_ael)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
+            session.query(keys[0]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
             .stream()
         )
         results = list(stream)

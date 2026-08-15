@@ -19,6 +19,7 @@ import asyncio
 
 import pytest
 
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
@@ -97,6 +98,7 @@ class TestMixedReadWrite:
 
         await _cleanup(session, k1, k2)
 
+    @requires_server_compiled_ael
     async def test_query_expression_then_write(self, session, ds):
         k1 = ds.id("cb_rw_5")
         k2 = ds.id("cb_rw_6")
@@ -187,6 +189,7 @@ class TestMixedOpTypes:
 class TestWriteWithExpressions:
     """Expression-based writes in a chained context."""
 
+    @requires_server_compiled_ael
     async def test_upsert_from_expression(self, session, ds):
         k = ds.id("cb_exp_1")
         await _cleanup(session, k)
@@ -211,6 +214,7 @@ class TestWriteWithExpressions:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_expression_write_and_scalar_write(self, session, ds):
         k = ds.id("cb_exp_2")
         await _cleanup(session, k)
@@ -526,6 +530,7 @@ class TestBatchReadHeaders:
 class TestBatchReadComplex:
     """Chained per-key read configs: specific bins, no bins, expression, missing bin, missing key."""
 
+    @requires_server_compiled_ael
     async def test_batch_read_complex(self, session, ds, seed_data):
         keys = seed_data["keys"]
         k1, k2, k3, k4 = keys[0], keys[1], keys[2], keys[3]
@@ -635,6 +640,7 @@ class TestBatchDeleteEdgeCases:
 class TestBatchWriteComplex:
     """Chained writes starting from session.upsert() (BinBuilder → QueryBuilder transition)."""
 
+    @requires_server_compiled_ael
     async def test_batch_write_complex(self, session, ds, seed_data):
         keys = seed_data["keys"]
         k1, k6 = keys[0], keys[5]

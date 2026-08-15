@@ -15,12 +15,8 @@
 
 """Synchronous SDK client.
 
-Owns a PAC ``aerospike_async.Client`` and a daemon-thread
-:class:`~aerospike_sdk.index_monitor.IndexesMonitor`. Every lifecycle and
-IO entry calls PAC's ``_blocking`` methods; no asyncio event loop is
-constructed. Builder and session factories return synchronous wrappers
-(:class:`~aerospike_sdk.sync.operations.query.QueryBuilder`,
-:class:`~aerospike_sdk.sync.session.Session`).
+Owns a PAC ``aerospike_async.Client``. Every lifecycle and IO entry calls
+PAC's ``_blocking`` methods; no asyncio event loop is constructed.
 """
 
 from __future__ import annotations
@@ -41,19 +37,14 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
-from aerospike_sdk.index_monitor import IndexesMonitor, parse_index_list
+from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
-from aerospike_sdk.feature_gates import (
-    PSDK_ENABLE_QUERY_SELECTION,
-    PSDK_ENABLE_SERVER_COMPILED_AEL,
-)
-from aerospike_sdk.query_selection import compute_query_selection_support_blocking
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
-from aerospike_sdk.server_compiled_ael import compute_server_compiled_ael_support_blocking
 
 if TYPE_CHECKING:  # avoid circular imports — type-only annotations
     from aerospike_sdk.sync.operations.index import IndexBuilder
@@ -65,7 +56,7 @@ from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
-class SyncClient:
+class SyncClient(RoutingCapabilitiesMixin):
     """Low-level synchronous connection primitive (no ``async``/``await``).
 
     Most applications should connect via
@@ -94,11 +85,9 @@ class SyncClient:
         self,
         seeds: str,
         policy: Optional[ClientPolicy] = None,
-        index_refresh_interval: float = 5.0,
         *,
         max_error_rate: Optional[int] = None,
         error_rate_window: Optional[int] = None,
-        indexes_monitor: Optional[IndexesMonitor] = None,
         current_thread_runtime: bool = False,
     ) -> None:
         """Initialize a SyncClient (no IO).
@@ -109,18 +98,10 @@ class SyncClient:
                 fresh ``ClientPolicy`` left at PAC's own defaults. Pass an
                 explicit ``ClientPolicy`` to override any client-level
                 setting.
-            index_refresh_interval: Seconds between secondary index cache
-                refreshes (default 5.0). The monitor is a daemon thread that
-                starts lazily on the first AEL ``where()`` query — clients
-                that never use AEL filters never spin up the thread.
             max_error_rate: Per-node circuit-breaker threshold (see
                 :class:`aerospike_sdk.aio.client.Client`).
             error_rate_window: Tend iterations until each node's error
                 counter resets.
-            indexes_monitor: Optional pre-constructed
-                :class:`IndexesMonitor` to share across clients (for example
-                an :class:`AsyncPool`). When supplied, this client uses it
-                but does not own its lifecycle.
             current_thread_runtime: **Experimental — opt-in, subject to
                 removal.** When ``True``, each calling OS thread gets its
                 own PAC ``_LocalClient`` (sync-only, backed by a per-thread
@@ -148,17 +129,10 @@ class SyncClient:
         self._current_thread_runtime = current_thread_runtime
         self._client: Optional[AsyncClient] = None
         self._connected = False
-        if indexes_monitor is not None:
-            self._indexes_monitor = indexes_monitor
-            self._owns_monitor = False
-        else:
-            self._indexes_monitor = IndexesMonitor(refresh_interval=index_refresh_interval)
-            self._owns_monitor = True
         # Shared by all sessions from this client; avoids repeated
         # namespace/<ns> info probes when callers use multiple sessions.
         self._namespace_mode_cache: Dict[str, Mode] = {}
-        self._cached_supports_query_selection: Optional[bool] = None
-        self._cached_supports_server_compiled_ael: Optional[bool] = None
+        self._init_routing_capability_cache()
         # Resolved SDK-level settings (file over programmatic over defaults).
         # A frozen snapshot swapped wholesale by the config monitor, so the
         # operation path reads it lock-free.
@@ -180,28 +154,11 @@ class SyncClient:
         (implicit batch-write transactions stay off on that path).
         """
         if self._supports_mrt_cache is None:
-            nodes_fn = getattr(self._client, "nodes_blocking", None)
-            if nodes_fn is None:
-                self._supports_mrt_cache = False
-                return False
-            nodes = nodes_fn()
-            self._supports_mrt_cache = bool(nodes) and all(
-                node.version.supports_mrt() for node in nodes
+            versions = self._cluster_versions_blocking()
+            self._supports_mrt_cache = bool(versions) and all(
+                version.supports_mrt() for version in versions
             )
         return self._supports_mrt_cache
-
-    def _cluster_versions_blocking(self) -> list:
-        """Per-node ``Version`` list for capability probes (fresh, uncached).
-
-        Sync sibling of the async ``_cluster_versions``: read live so a probe
-        reflects current cluster membership. The ``current_thread_runtime``
-        proxy has no node-listing surface, so it yields an empty list (every
-        probe then reports unsupported), matching the MRT-probe behavior.
-        """
-        nodes_fn = getattr(self._client, "nodes_blocking", None)
-        if nodes_fn is None:
-            return []
-        return [node.version for node in nodes_fn()]
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
@@ -219,9 +176,7 @@ class SyncClient:
         """Open a connection to the cluster synchronously.
 
         Calls :func:`aerospike_async.new_client_blocking` directly — no
-        asyncio loop is constructed. The :class:`IndexesMonitor` daemon
-        thread is not started here; it lazy-starts on the first AEL
-        ``where()`` query.
+        asyncio loop is constructed.
 
         When ``current_thread_runtime=True``, no PAC Client is constructed
         here. Instead a thread-local proxy is installed; each calling OS
@@ -244,42 +199,26 @@ class SyncClient:
         else:
             self._client = new_client_blocking(self._policy, self._seeds)
         self._connected = True
-        if PSDK_ENABLE_QUERY_SELECTION:
-            self._cached_supports_query_selection = compute_query_selection_support_blocking(
-                self._client,
-            )
-        else:
-            self._cached_supports_query_selection = False
-        if PSDK_ENABLE_SERVER_COMPILED_AEL:
-            self._cached_supports_server_compiled_ael = (
-                compute_server_compiled_ael_support_blocking(self._client)
-            )
-        else:
-            self._cached_supports_server_compiled_ael = False
+        self._warm_routing_capabilities_blocking()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
         )
-        # IndexesMonitor starts lazily on the first AEL ``where()`` query.
 
     def close(self) -> None:
         """Close the connection synchronously.
 
-        Stops the :class:`IndexesMonitor` daemon thread (if owned) and
-        calls PAC's ``close_blocking``. Safe to call when already closed.
+        Calls PAC's ``close_blocking``. Safe to call when already closed.
         """
         if self._sdk_config_monitor is not None:
             self._sdk_config_monitor.stop()
             self._sdk_config_monitor = None
-        if self._owns_monitor:
-            self._indexes_monitor.stop()
         if self._client is not None:
             self._client.close_blocking()
             self._client = None
             self._connected = False
             log.info("Client closed")
-        self._cached_supports_query_selection = None
-        self._cached_supports_server_compiled_ael = None
+        self._clear_routing_capability_cache()
         self._namespace_mode_cache.clear()
         self._supports_mrt_cache = None
 
@@ -317,28 +256,6 @@ class SyncClient:
         """Alias of :attr:`underlying_client` for parity with
         :class:`~aerospike_sdk.aio.client.Client`."""
         return self.underlying_client
-
-    @property
-    def supports_query_selection(self) -> bool:
-        """``True`` when all cluster nodes support field ``44`` query selection (>= 8.1.3).
-
-        Computed at :meth:`connect` from PAC ``Version.supports_query_selection()``
-        on every node.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_query_selection)
-
-    @property
-    def supports_server_compiled_ael(self) -> bool:
-        """``True`` when server-compiled AEL filters are usable on this connection.
-
-        Requires all nodes >= 8.1.3 (PAC ``Version.supports_server_compiled_ael``)
-        and PAC ``FilterExpression.from_server_compiled_ael``. Cached at connect.
-        """
-        if not self._connected or self._client is None:
-            return False
-        return bool(self._cached_supports_server_compiled_ael)
 
     def _ensure_connected(self) -> SyncClient:
         """Connect if not already connected; return ``self`` for chaining."""

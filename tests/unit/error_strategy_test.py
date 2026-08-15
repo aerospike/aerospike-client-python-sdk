@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from aerospike_sdk import Key
-from aerospike_async import Expiration
+from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
@@ -32,6 +32,17 @@ from aerospike_sdk.error_strategy import (
 )
 from aerospike_sdk.operations_shared import _to_expiration
 from aerospike_sdk.record_result import RecordResult
+
+
+@pytest.fixture(autouse=True)
+def _mock_server_compiled_ael_string(monkeypatch):
+    def _fake(ael, *, supports_server_compiled_ael=True):
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    monkeypatch.setattr(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        _fake,
+    )
 
 
 def _key(val: int = 1) -> Key:
@@ -257,6 +268,7 @@ class TestBuilderFlagWiring:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            supports_server_compiled_ael=True,
         )
         qb._op_type = "upsert"
         qb._single_key = _key()

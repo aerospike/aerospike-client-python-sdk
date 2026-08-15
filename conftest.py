@@ -597,14 +597,14 @@ def wait_for_index():
 
 @pytest.fixture(scope="session")
 def wait_for_set_visible():
-    """Return an async helper that polls a set scan until ``expected`` records are visible.
+    """Return an async helper that polls a set scan until exactly ``expected`` records are visible.
 
     Point writes ack as soon as they are committed, but set scans / SI queries
     can lag a few milliseconds behind the ack as the partition map and any
     secondary-index entries catch up. Fixtures that insert N records and then
     expect a scan to see them should call this before yielding to tests so the
-    suite is robust to CI runner load. Replaces fixed ``asyncio.sleep`` waits
-    that previously guessed a wall-clock value.
+    suite is robust to CI runner load. Uses ``seen == expected`` (not ``>=``) so
+    truncate lag or leftover rows from a prior run cannot satisfy the check early.
 
     Usage::
 
@@ -622,7 +622,7 @@ def wait_for_set_visible():
             async for _ in stream:
                 seen += 1
             stream.close()
-            if seen >= expected:
+            if seen == expected:
                 # Brief settle pause — scan-count visibility precedes CDT-bin
                 # storage / filter-expression readiness by a few tens of ms
                 # on busier CI runners. Without this, AEL CDT-path filters
@@ -636,16 +636,52 @@ def wait_for_set_visible():
             last_seen = seen
             await asyncio.sleep(interval)
         raise TimeoutError(
-            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
-            f"to set scan within {timeout}s"
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
         )
 
     return _wait
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def sync_wait_for_set_visible():
+    """Return a sync helper that polls a set scan until exactly ``expected`` records are visible.
+
+    Sync counterpart of :func:`wait_for_set_visible`. Uses ``seen == expected`` so
+    truncate lag or leftover rows cannot satisfy the check early.
+    """
+    def _wait(
+        session, ns, set_name, expected,
+        *, timeout=5.0, interval=0.05, settle=0.1,
+    ):
+        deadline = time.monotonic() + timeout
+        last_seen = -1
+        while time.monotonic() < deadline:
+            stream = session.query(ns, set_name).execute()
+            seen = 0
+            for _ in stream:
+                seen += 1
+            stream.close()
+            if seen == expected:
+                if settle > 0:
+                    time.sleep(settle)
+                return
+            last_seen = seen
+            time.sleep(interval)
+        raise TimeoutError(
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
+        )
+
+    return _wait
+
+
+@pytest.fixture(scope="session")
 def sync_wait_for_index():
     """Fixture returning a sync helper that retries until a secondary index is queryable.
+
+    Session-scoped so module- or session-scoped integration clients may depend on
+    it without a pytest scope mismatch.
 
     Usage::
 
@@ -801,33 +837,6 @@ async def supports_query_ops_projection_ext(server_version):
     when this is ``False``.
     """
     return server_version is not None and server_version >= SERVER_8_1_2
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_query_selection(aerospike_host, client_policy):
-    """``True`` when connected nodes report query-selection support via PAC.
-
-    Uses :func:`aerospike_sdk.query_selection.compute_query_selection_support`
-    (PAC ``Version.supports_query_selection()`` on every node), not the raw
-    server ``build`` string. Tests that exercise field ``44`` explain→execute
-    should ``pytest.skip`` when this is ``False``.
-    """
-    if not aerospike_host:
-        return False
-    from aerospike_sdk.feature_gates import PSDK_ENABLE_QUERY_SELECTION
-    from aerospike_sdk.query_selection import compute_query_selection_support
-
-    if not PSDK_ENABLE_QUERY_SELECTION:
-        return False
-
-    try:
-        client = await new_client(client_policy, aerospike_host)
-    except Exception:
-        return False
-    try:
-        return await compute_query_selection_support(client)
-    finally:
-        await client.close()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

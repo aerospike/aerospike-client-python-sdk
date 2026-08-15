@@ -47,35 +47,23 @@ class TestDefinitionContract:
         assert pool._factory is None
         assert [w for w in caught if issubclass(w.category, DeprecationWarning)] == []
 
-    def test_neither_definition_nor_factory_raises(self):
-        with pytest.raises(ValueError, match="cluster_definition is required"):
-            AsyncPool(loop_count=2)
+
+class TestDeprecatedFactoryAdapter:
+    """client_factory= still works for one deprecation cycle, with a warning."""
 
     def test_non_definition_non_callable_raises_type_error(self):
         with pytest.raises(TypeError, match="must be a ClusterDefinition"):
             AsyncPool("127.0.0.1:3000", loop_count=2)  # type: ignore[arg-type]
 
-    def test_monitor_interval_defaults_from_definition(self, unit_cluster_definition):
-        cluster_def = unit_cluster_definition.with_index_refresh_interval(2.5)
-        pool = AsyncPool(cluster_def, loop_count=2)
-        assert pool._shared_monitor._refresh_interval == 2.5
-
-    def test_monitor_interval_kwarg_overrides_definition(self, unit_cluster_definition):
-        cluster_def = unit_cluster_definition.with_index_refresh_interval(2.5)
-        pool = AsyncPool(cluster_def, loop_count=2, index_refresh_interval=0.5)
-        assert pool._shared_monitor._refresh_interval == 0.5
-
-
-class TestDeprecatedFactoryAdapter:
-    """client_factory= still works for one deprecation cycle, with a warning."""
+    def test_neither_definition_nor_factory_raises(self):
+        with pytest.raises(ValueError, match="cluster_definition is required"):
+            AsyncPool(loop_count=2)
 
     def test_factory_kwarg_warns_and_adapts(self, factory):
         with pytest.warns(DeprecationWarning, match="client_factory"):
             pool = AsyncPool(client_factory=factory, loop_count=2)
         assert pool._definition is None
         assert pool._factory is factory
-        # Legacy default for the shared monitor interval is preserved.
-        assert pool._shared_monitor._refresh_interval == 5.0
 
     def test_factory_positional_warns_and_adapts(self, factory):
         """The old positional shape AsyncPool(factory, N) shifts into the

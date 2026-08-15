@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import typing
 from typing import List
 
 from aerospike_sdk.aio.client import Client
@@ -26,9 +25,6 @@ from aerospike_sdk.aio.tls_builder import TlsBuilder
 from aerospike_sdk.cluster_shared import ClusterDefinitionBase, Host
 from aerospike_sdk.policy.sdk_config_loader import load_at_connect
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
-
-if typing.TYPE_CHECKING:
-    from aerospike_sdk.index_monitor import IndexesMonitor
 
 __all__ = ["ClusterDefinition", "Host"]
 
@@ -61,17 +57,15 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         """Return an async ``TlsBuilder`` bound to this definition."""
         return TlsBuilder(self)
 
-    def _build_pool_members(self, count: int, indexes_monitor: "IndexesMonitor") -> List[Client]:
+    def _build_pool_members(self, count: int) -> List[Client]:
         """Construct *count* unconnected pool-member clients (AsyncPool hook).
 
         All members share a single ``ClientPolicy`` built from this
         definition — which is exactly the shared-policy invariant AsyncPool's
-        one-shot ``per_client_runtime_workers`` mutation relies on — and the
-        pool's shared *indexes_monitor* (index metadata is cluster-scoped, so
-        one monitor serves the whole pool). Resolved SDK settings are applied
-        to every member; config-file hot-reload is not armed for pool members
-        (N file watchers for one process would be waste — pools should reload
-        by restart).
+        one-shot ``per_client_runtime_workers`` mutation relies on. Resolved
+        SDK settings are applied to every member; config-file hot-reload is
+        not armed for pool members (N file watchers for one process would be
+        waste — pools should reload by restart).
 
         Each member is connected later, on its own pool loop, via
         :meth:`Cluster._connect_and_wrap` — connecting here would bind every
@@ -86,7 +80,6 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
             client = Client(
                 seeds=seeds,
                 policy=policy,
-                indexes_monitor=indexes_monitor,
             )
             if settings is not None:
                 client._sdk_settings = settings
@@ -130,7 +123,6 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         return await Cluster._create(
             policy,
             seeds,
-            index_refresh_interval=self._index_refresh_interval,
             sdk_settings=settings,
             sdk_config_source=config_source,
         )

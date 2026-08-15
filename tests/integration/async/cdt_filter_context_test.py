@@ -24,6 +24,7 @@ not expose ``ctx`` yet.
 """
 
 import pytest
+
 from aerospike_sdk import CTX, Filter
 from aerospike_async import IndexType
 

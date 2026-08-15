@@ -18,6 +18,7 @@
 import os
 
 import pytest
+
 from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace

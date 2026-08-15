@@ -53,7 +53,6 @@ from aerospike_sdk.exceptions import (
     PacServerError,
     _convert_pac_exception,
 )
-from aerospike_sdk.feature_gates import cached_ael_capability_kwargs
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
@@ -638,7 +637,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             first.namespace,
             first.set_name,
             self._behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -647,10 +645,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
-            **cached_ael_capability_kwargs(
-                self._client._cached_supports_server_compiled_ael,
-                self._client._cached_supports_query_selection,
-            ),
         )
         qb._set_current_keys_from_varargs(keys)
         return UdfFunctionBuilder(qb)
@@ -723,7 +717,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace=first.namespace,
             set_name=first.set_name,
             behavior=self._behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -732,10 +725,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
-            **cached_ael_capability_kwargs(
-                self._client._cached_supports_server_compiled_ael,
-                self._client._cached_supports_query_selection,
-            ),
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
@@ -782,7 +771,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             key.namespace,
             key.set_name,
             behavior,
-            self._client._indexes_monitor,
             self._cached_read_policy,
             self._cached_write_policy,
             self._cached_read_policy_sc,
@@ -791,10 +779,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             self._resolve_namespace_mode,
             self._resolve_namespace_mode_blocking,
             self._client,
-            **cached_ael_capability_kwargs(
-                self._client._cached_supports_server_compiled_ael,
-                self._client._cached_supports_query_selection,
-            ),
         )
         builder._single_key = key
         return builder

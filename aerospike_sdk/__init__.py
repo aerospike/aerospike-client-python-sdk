@@ -64,9 +64,6 @@ from aerospike_async import (
 from aerospike_sdk.aio import AsyncPool, Session, TransactionalSession, ClusterDefinition, Host
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.ael.exceptions import AelParseException
-from aerospike_sdk.ael.filter_gen import Index, IndexContext, IndexTypeEnum, ParseResult
-from aerospike_sdk.ael.parser import parse_ctx, parse_ael, parse_ael_with_index
 from aerospike_sdk.exceptions import (
     AerospikeError,
     AuthenticationError,
@@ -186,7 +183,6 @@ __all__ = [
     "ElementNotFoundError",
     "Filter",
     "FilteredOutError",
-    "AelParseException",
     "ErrorHandler",
     "ErrorDetailVerbosity",
     "ErrorStrategy",
@@ -199,9 +195,6 @@ __all__ = [
     "Host",
     "HllConfig",
     "HLLWriteFlags",
-    "Index",
-    "IndexContext",
-    "IndexTypeEnum",
     "IndexAlreadyExistsError",
     "IndexNotFoundError",
     "InvalidNamespaceError",
@@ -220,10 +213,6 @@ __all__ = [
     "ModifyFlags",
     "OnError",
     "OperationResult",
-    "parse_ctx",
-    "parse_ael",
-    "parse_ael_with_index",
-    "ParseResult",
     "QueryDuration",
     "QueryHint",
     "QueryError",

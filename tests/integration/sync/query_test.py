@@ -37,8 +37,7 @@ def cluster(shared_cluster, enterprise):
     cluster = shared_cluster
     session = cluster.create_session()
     ds = DataSet.of(general_namespace(), "query_test")
-    for i in range(10):
-        session.delete(ds.id(i)).execute()
+    session.truncate(ds)
 
     for i in range(10):
         session.upsert(ds.id(i)).put({"id": i, "age": 20 + i, "name": f"User{i}"}).execute()

@@ -208,7 +208,6 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._tls_builder: Optional[_TB] = None
         self._system_settings: Optional[SystemSettings] = None
         self._app_id: Optional[str] = None
-        self._index_refresh_interval: float = 5.0
 
     # -- Per-leaf hook --------------------------------------------------------
 
@@ -221,28 +220,6 @@ class ClusterDefinitionBase(Generic[_TB]):
         raise NotImplementedError
 
     # -- Builder chain (pure state mutation) ----------------------------------
-
-    def with_index_refresh_interval(self, seconds: float) -> Self:
-        """Set how often the secondary-index metadata cache refreshes.
-
-        The client polls ``sindex-list`` / ``sindex-stat`` on this interval to
-        keep the per-namespace index cache current, which the AEL query planner
-        consults to pick secondary-index plans. Lower values pick up new indexes
-        faster at the cost of more background info traffic; the default is 5
-        seconds.
-
-        Args:
-            seconds: Refresh interval in seconds.
-
-        Returns:
-            This ClusterDefinition for method chaining.
-
-        Example::
-
-            cd = ClusterDefinition("localhost", 3000).with_index_refresh_interval(2.0)
-        """
-        self._index_refresh_interval = seconds
-        return self
 
     def app_id(self, app_id: str) -> Self:
         """Tag this client's traffic with an application identifier.

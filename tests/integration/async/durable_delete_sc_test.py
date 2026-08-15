@@ -37,6 +37,8 @@ import uuid
 from typing import Any
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 from aerospike_sdk import Filter, UDFLang
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
@@ -397,6 +399,7 @@ async def seed_background_task_rows(session_sc, ds_bg):
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestDurableDeleteBackgroundUdf:
+    @requires_server_compiled_ael
     async def test_background_udf_remove_uses_default_durable_delete_on_strong_consistency(
         self, session_sc, ds_sc, enterprise_sc, prepare_dd_udf_background,
     ):
@@ -733,6 +736,7 @@ class TestDurableDeleteDefaultPointDelete:
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestQueryExecuteDurableDelete:
+    @requires_server_compiled_ael
     async def test_query_execute(
         self, session_sc, ds_sc, enterprise_sc, prepare_query_execute,
     ):

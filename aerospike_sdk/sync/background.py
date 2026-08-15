@@ -88,7 +88,7 @@ class SyncBackgroundOperationBuilder:
         return self
 
     @overload
-    def where(self, expression: str) -> SyncBackgroundOperationBuilder: ...
+    def where(self, expression: str, *params: Any) -> SyncBackgroundOperationBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> SyncBackgroundOperationBuilder: ...
@@ -96,9 +96,10 @@ class SyncBackgroundOperationBuilder:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> SyncBackgroundOperationBuilder:
         """Restrict the scan with an AEL or filter predicate."""
-        self._inner.where(expression)
+        self._inner.where(expression, *params)
         return self
 
     def index_filters(self, *filters: Any) -> SyncBackgroundOperationBuilder:
@@ -215,7 +216,7 @@ class SyncBackgroundUdfBuilder:
         return self
 
     @overload
-    def where(self, expression: str) -> SyncBackgroundUdfBuilder: ...
+    def where(self, expression: str, *params: Any) -> SyncBackgroundUdfBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> SyncBackgroundUdfBuilder: ...
@@ -223,9 +224,10 @@ class SyncBackgroundUdfBuilder:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> SyncBackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""
-        self._inner.where(expression)
+        self._inner.where(expression, *params)
         return self
 
     def records_per_second(self, rps: int) -> SyncBackgroundUdfBuilder:

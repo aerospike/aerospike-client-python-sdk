@@ -28,6 +28,8 @@ Coverage:
 import asyncio
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 
 from aerospike_sdk import DataSet, Key
@@ -400,6 +402,7 @@ class TestQueryStacking:
         with pytest.raises(ValueError, match="cannot be stacked"):
             session.query(NS, SET).query(_key(1))
 
+    @requires_server_compiled_ael
     async def test_stacked_read_complex(self, session):
         """Stacked query mixing specific bins, all bins, no bins,
         select_from, missing bin, and missing key."""
@@ -487,6 +490,7 @@ class TestInvertedReads:
 
 class TestExpressionReads:
 
+    @requires_server_compiled_ael
     async def test_select_from_simple(self, session):
         rs = await (
             session.query(key=_key(1))
@@ -496,6 +500,7 @@ class TestExpressionReads:
         result = await rs.first_or_raise()
         assert result.record.bins["age_plus_20"] == 41
 
+    @requires_server_compiled_ael
     async def test_select_from_multiple(self, session):
         rs = await (
             session.query(key=_key(2))
@@ -507,6 +512,7 @@ class TestExpressionReads:
         assert result.record.bins["double_age"] == 44   # (20+2)*2
         assert result.record.bins["triple_score"] == 600  # 200*3
 
+    @requires_server_compiled_ael
     async def test_select_from_with_get(self, session):
         rs = await (
             session.query(key=_key(1))

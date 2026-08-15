@@ -5,11 +5,3 @@
    :members:
    :show-inheritance:
 ```
-
-## AEL exceptions
-
-```{eval-rst}
-.. automodule:: aerospike_sdk.ael.exceptions
-   :members:
-   :show-inheritance:
-```

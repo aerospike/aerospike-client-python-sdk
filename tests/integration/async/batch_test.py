@@ -27,7 +27,7 @@ import pytest_asyncio
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from tests.pac_compat import requires_client_side_ael, requires_server_compiled_ael
+from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 
@@ -606,6 +606,7 @@ class TestRecordResultIntegration:
 class TestBatchExpressionOps:
     """Test batch operations with expression reads and writes."""
 
+    @requires_server_compiled_ael
     async def test_batch_upsert_from(self, cluster, users: DataSet):
         """upsert_from across multiple batch keys."""
         session = cluster.create_session()
@@ -630,19 +631,8 @@ class TestBatchExpressionOps:
             rec = await rs.first_or_raise()
             assert rec.record.bins["C"] == (i + 1) * 10 + 1
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
-    async def test_batch_select_from(self, cluster, users: DataSet, sum_ael):
+    @requires_server_compiled_ael
+    async def test_batch_select_from(self, cluster, users: DataSet):
         """select_from (expression read) in batch context."""
         session = cluster.create_session()
         keys = [users.id(f"bexp_sel_{i}") for i in range(2)]
@@ -651,8 +641,8 @@ class TestBatchExpressionOps:
         await session.upsert(keys[1]).put({"A": 10, "B": 7}).execute()
 
         stream = await (
-            session.query(keys[0]).bin("sum").select_from(sum_ael)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
+            session.query(keys[0]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
             .execute()
         )
         results = await stream.collect()
@@ -660,6 +650,7 @@ class TestBatchExpressionOps:
         assert results[0].record.bins["sum"] == 8
         assert results[1].record.bins["sum"] == 17
 
+    @requires_server_compiled_ael
     async def test_batch_mixed_set_to_and_expression(
         self, cluster, users: DataSet,
     ):
@@ -712,20 +703,9 @@ class TestBatchStream:
             except Exception:
                 pass
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     async def test_stream_mixed_ops_yields_all(
-        self, cluster, users: DataSet, track_key, sum_ael,
+        self, cluster, users: DataSet, track_key,
     ):
         """Mixed writes + AEL read + delete in one streaming batch.
 
@@ -745,8 +725,8 @@ class TestBatchStream:
 
         stream = await (
             session.upsert(keys[0]).bin("A").set_to(99)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
-            .query(keys[2]).bin("sum").select_from(sum_ael)
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[2]).bin("sum").select_from("$.A:INT + $.B:INT")
             .delete(keys[3])
             .stream()
         )
@@ -783,20 +763,9 @@ class TestBatchStream:
         empty = await (await session.query(keys[3]).execute()).collect()
         assert empty == []
 
-    @pytest.mark.parametrize("sum_ael", [
-        pytest.param(
-            "$.A + $.B",
-            id="client-side",
-            marks=requires_client_side_ael,
-        ),
-        pytest.param(
-            "$.A:INT + $.B:INT",
-            id="server-side",
-            marks=requires_server_compiled_ael,
-        ),
-    ])
+    @requires_server_compiled_ael
     async def test_stream_read_only_ops_dispatch_as_reads(
-        self, cluster, users: DataSet, track_key, sum_ael,
+        self, cluster, users: DataSet, track_key,
     ):
         """AEL select_from under the read verb dispatches as BatchReadOp on
         the wire so the server accepts it, even in a lazy write-batch
@@ -809,8 +778,8 @@ class TestBatchStream:
             await session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = await (
-            session.query(keys[0]).bin("sum").select_from(sum_ael)
-            .query(keys[1]).bin("sum").select_from(sum_ael)
+            session.query(keys[0]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
             .stream()
         )
         results = await stream.collect()
