@@ -63,6 +63,7 @@ Shared types used by both async and sync APIs.
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
+| [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
 | [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
 
 ## Expressions
@@ -118,6 +119,7 @@ error-strategy
 expression-trace
 exceptions
 query-hint
+metrics
 loggers
 exp
 ```

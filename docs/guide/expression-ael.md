@@ -23,7 +23,7 @@ use server-led index selection: the server explains the AEL string, picks an
 index/plan, and the SDK executes with that plan. Use
 [`QueryHint`](../api/query-hint.md) to influence index choice.
 
-On older clusters, use the programmatic [`Exp`](exp.md) builder instead of string
+On older clusters, use the programmatic [`Exp`](../api/exp.md) builder instead of string
 AEL. Check capability at runtime:
 
 ```python

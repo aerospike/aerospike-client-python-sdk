@@ -26,6 +26,7 @@ from aerospike_async import ClientPolicy, UDFLang, Version
 from aerospike_sdk import capabilities
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
+from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 from aerospike_sdk.sync.client import SyncClient
@@ -266,6 +267,59 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         """Whether every node supports server-led index selection (>= 8.1.3)."""
         return capabilities.supports_query_selection(
             self._sdk_client._cluster_versions_blocking())
+
+    # -- Metrics ---------------------------------------------------------------
+    # Collection lives in the client core and is cluster-scoped; these
+    # configure it and pull snapshots.
+
+    def enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
+        """Enable metrics collection for this cluster.
+
+        Collection is off until enabled. Re-enabling with a changed latency
+        unit or histogram shape discards the accumulated latency samples;
+        counters are retained.
+
+        Args:
+            policy: Collection configuration. Defaults to
+                :class:`~aerospike_sdk.MetricsPolicy`'s milliseconds/7-column
+                scheme with every command recorded.
+
+        Example::
+
+            cluster.enable_metrics(MetricsPolicy(sampler=Sampler.probability(0.1)))
+
+        See Also:
+            :meth:`metrics`, :meth:`disable_metrics`
+        """
+        pac_policy = (policy if policy is not None else MetricsPolicy())._to_pac()
+        self._sdk_client.underlying_client.enable_metrics(pac_policy)
+
+    def disable_metrics(self) -> None:
+        """Disable metrics collection. Accumulated data is retained."""
+        self._sdk_client.underlying_client.disable_metrics()
+
+    def metrics_enabled(self) -> bool:
+        """Whether metrics collection is currently enabled."""
+        return self._sdk_client.underlying_client.metrics_enabled()
+
+    def metrics(self) -> MetricsSnapshot:
+        """Snapshot the accumulated cluster metrics.
+
+        Values are cumulative since metrics were enabled (connection gauges
+        are point-in-time). Snapshotting drains and aggregates per-node
+        state, so poll at an export interval rather than per operation.
+
+        Returns:
+            A :class:`~aerospike_sdk.MetricsSnapshot`; empty (zeroed) if
+            metrics were never enabled.
+
+        Example::
+
+            snapshot = cluster.metrics()
+            reads = snapshot.latency(LatencyType.READ)
+            print(f"{reads.count} reads, avg {reads.average:.1f}")
+        """
+        return MetricsSnapshot(self._sdk_client.underlying_client.metrics())
 
     def close(self) -> None:
         """
