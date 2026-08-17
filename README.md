@@ -151,6 +151,61 @@ message when it is absent:
 Connection variables are the same ones the test suite uses — see
 [Configuration](#configuration) for `aerospike.env`.
 
+## Vector bins and Top-K queries
+
+`Vector` is a native bin type for fixed-dimension numeric embeddings
+(`FLOAT16`/`INT32`/`FLOAT32`/`FLOAT64` elements via `VectorElementType`),
+constructible from a plain list or a 1-D numpy array. It round-trips through
+the same `put`/`get` paths as any other bin value — no dedicated write/read
+methods needed:
+
+```python
+from aerospike_async import Vector
+
+await session.upsert(key).bin("embedding").set_to(Vector([0.1, 0.2, 0.3, 0.4])).execute()
+stream = await session.query(key).bins(["embedding"]).execute()
+row = await stream.first_or_raise()
+row.record.bins["embedding"].numpy_value  # typed numpy array
+```
+
+`Exp.vector_bin`/`l2_squared_distance`/`dot_product`/`cosine_similarity`
+(reachable through `aerospike_sdk.exp.Exp`, the SDK's `FilterExpression`
+alias) build vector-distance expressions, projected into a named bin with
+the existing `.bin(name).select_from(expr)` mechanism. `.order_by(...)` /
+`.top_k(...)` on `QueryBuilder` add Top-K (`ORDER BY <bin> LIMIT k`)
+ranking — including hybrid search, by combining them with `.where(...)`:
+
+```python
+from aerospike_sdk import DataSet, Order, OrderByType
+from aerospike_sdk.exp import Exp
+
+query_vector = Vector(embed("running shoes for marathons"))
+products = DataSet.of("catalog", "products")
+
+stream = await (
+    session.query(products)
+    .where("$.category == 'footwear' and $.stock > 0")
+    .bin("d").select_from(Exp.cosine_similarity(query_vector, Exp.vector_bin("vec")))
+    .bins(["name", "stock", "d"])
+    .order_by("d", OrderByType.DOUBLE, Order.DESC)   # larger cosine similarity = closer
+    .top_k(10)
+    .execute()
+)
+async for row in stream:
+    print(row.record.bins)
+stream.close()
+```
+
+See [`examples/vector_topk_query.py`](examples/vector_topk_query.py) for a
+full example.
+
+**Work in progress:** Top-K's wire encode is capability-gated in the
+underlying native client and has no assigned minimum server version yet, so
+a query with `.order_by(...)`/`.top_k(...)` set currently fails fast
+client-side (`ValueError`) regardless of the server behind it. The vector
+distance expressions' wire contract is likewise implemented and unit-tested
+for packing, but not yet verified against server code.
+
 ## Performance modes
 
 PSDK offers two API shapes — pick based on what your code needs.

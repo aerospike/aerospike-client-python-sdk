@@ -83,6 +83,9 @@ from aerospike_async import (
     MapReturnType,
     MapWriteFlags,
     Operation,
+    Order,
+    OrderByFlags,
+    OrderByType,
     PartitionFilter,
     QueryDuration,
     QueryPolicy,
@@ -394,6 +397,8 @@ class _QueryBuilderBase:
     _with_no_bins: bool = False
     _filter_expression: Optional[FilterExpression] = None
     _query_hint: Optional[QueryHint] = None
+    _order_by: Optional[tuple] = None
+    _top_k: Optional[int] = None
     _where_ael: Optional[str] = None
     _policy: Optional[QueryPolicy] = None
     _partition_filter: Optional[PartitionFilter] = None
@@ -1161,6 +1166,53 @@ class _QueryBuilderBase:
         if self._query_hint is not None:
             raise ValueError("with_hint() can only be called once per query builder")
         self._query_hint = hint
+        return self
+
+    def order_by(
+        self,
+        bin_name: str,
+        order_by_type: "OrderByType",
+        order: "Order",
+        flags: Optional["OrderByFlags"] = None,
+    ) -> Self:
+        """Rank results by ``bin_name`` for a Top-K ("``ORDER BY <bin> LIMIT k``")
+        query — typically a vector-distance value projected via
+        ``.bin(name).select_from(...)``.
+
+        Must be paired with :meth:`top_k`; the native ``Statement`` validates
+        both together (bad bin name, ``CASE_INSENSITIVE`` on a non-``STRING``
+        order type, order-by bin missing from the projection, ``top_k``
+        without ``order_by``, ``k`` outside ``[1, 1000]``) the first time the
+        query executes.
+
+        Args:
+            bin_name: Name of the bin (or projected expression bin) to rank by.
+            order_by_type: The value type of ``bin_name`` (e.g. ``OrderByType.DOUBLE``).
+            order: ``Order.ASC`` or ``Order.DESC``.
+            flags: Optional ``OrderByFlags`` (e.g. ``CASE_INSENSITIVE`` for ``STRING`` bins).
+
+        Returns:
+            This builder for method chaining.
+
+        See Also:
+            :meth:`top_k`
+        """
+        self._order_by = (bin_name, order_by_type, order, flags)
+        return self
+
+    def top_k(self, k: int) -> Self:
+        """Limit a Top-K query (see :meth:`order_by`) to the ``k`` best-ranked records.
+
+        Args:
+            k: Number of records to return; must be in ``[1, 1000]``.
+
+        Returns:
+            This builder for method chaining.
+
+        See Also:
+            :meth:`order_by`
+        """
+        self._top_k = k
         return self
 
     def replica(self, replica: "Replica") -> Self:
@@ -2140,6 +2192,11 @@ class _QueryBuilderBase:
             statement.filters = filters
         if self._op_projection is not None:
             statement.set_operations(self._op_projection)
+        if self._order_by is not None:
+            bin_name, order_by_type, order, flags = self._order_by
+            statement.set_order_by(bin_name, order_by_type, order, flags)
+        if self._top_k is not None:
+            statement.set_top_k(self._top_k)
         return statement
 
     @staticmethod
