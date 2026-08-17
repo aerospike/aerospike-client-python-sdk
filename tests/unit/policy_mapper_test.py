@@ -22,6 +22,7 @@ from aerospike_async import (
     BatchPolicy,
     BatchReadPolicy,
     CommitLevel,
+    Concurrency,
     ReadModeAP,
     ReadModeSC,
     ReadPolicy,
@@ -185,12 +186,27 @@ class TestToBatchPolicy:
     def test_none_fields_not_set(self):
         p = to_batch_policy(Settings())
         assert isinstance(p, BatchPolicy)
+        # No knob -> core default (parallel), not sequential.
+        assert p.concurrency == Concurrency.PARALLEL
 
     def test_compression_threshold_propagates(self):
         s = Settings(use_compression=True, compression_threshold=4096)
         p = to_batch_policy(s)
         assert p.use_compression is True
         assert p.compression_threshold == 4096
+
+    def test_concurrency_one_maps_to_sequential(self):
+        p = to_batch_policy(Settings(max_concurrent_nodes=1))
+        assert p.concurrency == Concurrency.SEQUENTIAL
+
+    def test_concurrency_zero_maps_to_parallel(self):
+        p = to_batch_policy(Settings(max_concurrent_nodes=0))
+        assert p.concurrency == Concurrency.PARALLEL
+
+    def test_concurrency_bounded_n_maps_to_parallel(self):
+        # The batch wire has no bounded-concurrency mode; N > 1 is parallel.
+        p = to_batch_policy(Settings(max_concurrent_nodes=4))
+        assert p.concurrency == Concurrency.PARALLEL
 
 
 class TestToBatchReadPolicy:

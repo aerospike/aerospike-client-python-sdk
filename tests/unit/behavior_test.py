@@ -122,13 +122,29 @@ class TestBehaviorGetSettings:
 
     def test_default_batch_read_settings(self):
         s = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.BATCH, Mode.AP)
-        assert s.max_concurrent_nodes == 1
+        # 0 = parallel fan-out, matching the core's own batch default.
+        assert s.max_concurrent_nodes == 0
         assert s.allow_inline is True
         assert s.allow_inline_ssd is False
 
+    def test_default_query_read_fans_out_in_parallel(self):
+        # 0 = all nodes in parallel, the core's own query default. A serial
+        # default makes multi-node scans ~N× slower (bench-measured ~3× on
+        # 3 nodes).
+        s = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.QUERY, Mode.AP)
+        assert s.max_concurrent_nodes == 0
+        assert s.max_retries == 5
+        assert s.record_queue_size == 5000
+
+    def test_default_query_write_fans_out_in_parallel(self):
+        s = Behavior.DEFAULT.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, Mode.AP)
+        assert s.max_concurrent_nodes == 0
+
     def test_default_batch_write_settings(self):
         s = Behavior.DEFAULT.get_settings(OpKind.WRITE_RETRYABLE, OpShape.BATCH, Mode.AP)
-        assert s.max_concurrent_nodes == 1
+        # 0 = parallel fan-out, matching the core's own batch default.
+        assert s.max_concurrent_nodes == 0
         assert s.allow_inline is True
         assert s.allow_inline_ssd is False
 

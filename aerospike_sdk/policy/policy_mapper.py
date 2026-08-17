@@ -22,6 +22,7 @@ from typing import Optional
 from aerospike_async import (
     BatchPolicy,
     BatchReadPolicy,
+    Concurrency,
     ReadPolicy,
     QueryPolicy,
     WritePolicy,
@@ -169,6 +170,20 @@ def to_batch_read_policy(settings: Settings) -> BatchReadPolicy:
     return p
 
 
+def _batch_concurrency(max_concurrent_nodes: Optional[int]) -> Optional[Concurrency]:
+    """Map the ``max_concurrent_nodes`` knob onto batch concurrency.
+
+    Batch fan-out on the wire is binary (sequential vs parallel), unlike the
+    query path where ``max_concurrent_nodes`` is a true node count. Only the
+    value ``1`` means serial; ``0`` (unbounded) and any ``N > 1`` map to
+    parallel, since the wire has no bounded-concurrency batch mode. ``None``
+    leaves the core default (parallel) in place.
+    """
+    if max_concurrent_nodes is None:
+        return None
+    return Concurrency.SEQUENTIAL if max_concurrent_nodes == 1 else Concurrency.PARALLEL
+
+
 def to_batch_policy(settings: Settings) -> BatchPolicy:
     """Build a BatchPolicy from resolved Settings.
 
@@ -189,6 +204,7 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
         use_compression=settings.use_compression,
         compression_threshold=settings.compression_threshold,
         error_detail_verbosity=settings.error_detail_verbosity,
+        concurrency=_batch_concurrency(settings.max_concurrent_nodes),
     )
 
 

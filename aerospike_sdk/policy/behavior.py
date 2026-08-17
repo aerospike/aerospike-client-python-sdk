@@ -395,13 +395,24 @@ Behavior.DEFAULT = Behavior(
             max_concurrent_nodes=1,
             read_touch_ttl_percent=0,
         ),
+        # Batch and query shapes fan out to every node in parallel
+        # (max_concurrent_nodes=0 = unbounded), matching the core's own
+        # defaults, rather than the serial value (1) inherited from Scope.ALL.
+        # For batch, 0 maps to parallel concurrency on the wire; a per-scope or
+        # per-call value of 1 still selects sequential. For query, the serial
+        # default made multi-node scans ~N× slower.
         Scope.READS_BATCH: Settings(
             allow_inline=True,
             allow_inline_ssd=False,
+            max_concurrent_nodes=0,
         ),
         Scope.READS_QUERY: Settings(
             max_retries=5,
             record_queue_size=5000,
+            max_concurrent_nodes=0,
+        ),
+        Scope.WRITES_QUERY: Settings(
+            max_concurrent_nodes=0,
         ),
         Scope.WRITES_NON_RETRYABLE: Settings(
             max_retries=0,
@@ -415,6 +426,7 @@ Behavior.DEFAULT = Behavior(
         Scope.WRITES_BATCH: Settings(
             allow_inline=True,
             allow_inline_ssd=False,
+            max_concurrent_nodes=0,
         ),
     },
 )
