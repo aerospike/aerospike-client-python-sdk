@@ -61,6 +61,8 @@ from aerospike_async import (
     TxnState,
     UDFLang,
     UdfRemoveTask,
+    Vector,
+    VectorElementType,
     Version,
 )
 
@@ -265,6 +267,8 @@ __all__ = [
     "TxnState",
     "UDFLang",
     "UdfRemoveTask",
+    "Vector",
+    "VectorElementType",
     "Version",
     "map_keys",
     "map_values",

@@ -52,6 +52,7 @@ Shared types used by both async and sync APIs.
 |-------|-------------|
 | [`DataSet`](dataset.md) | Namespace + set pair, key factory |
 | [`HllConfig`](hll-config.md) | HyperLogLog bin precision (index + minhash bit counts) |
+| [`Vector`](../guide/writes.md#vector-bins) / `VectorElementType` | Embedding/feature vector bin value (`FLOAT32`, `FLOAT64`, `INT32`, `FLOAT16` via numpy) — re-exported from `aerospike_async` |
 | [`RecordResult`](record-result.md) | Single result from a query or batch |
 | [`OperationResult`](operation-result.md) | Typed-accessor wrapper around a single operation's value |
 | [`RecordStream`](record-stream.md) | Async iterator over query results |

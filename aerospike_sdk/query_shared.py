@@ -95,6 +95,8 @@ from aerospike_async import (
     StringRegexFlags,
     StringWriteFlags,
     Txn,
+    Vector,
+    VectorElementType,
     WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
@@ -2425,6 +2427,30 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             The parent :class:`WriteSegmentBuilder`.
         """
         return self._segment.set_to(self._bin, GeoJSON(geo_json))
+
+    def set_to_vector(
+        self, data: Any, element_type: VectorElementType | None = None,
+    ) -> WriteSegmentBuilder:
+        """Set the bin to a Vector value.
+
+        The bin's server-side particle type is VECTOR, not a plain list.
+        Equivalent to ``set_to(Vector(data, element_type))`` but reads
+        naturally for embedding/feature-vector data.
+
+        Args:
+            data: The vector's elements: a list of floats or ints, an
+                existing :class:`Vector`, or a 1-D ``numpy`` array (dtype
+                selects the element type; required for ``FLOAT16``).
+            element_type: The element encoding to use. Defaults to
+                ``VectorElementType.FLOAT32`` (a list of integers is stored
+                as floats unless ``INT32`` is passed explicitly). Ignored
+                when ``data`` is a ``numpy`` array, except to assert it
+                matches the array's dtype.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder`.
+        """
+        return self._segment.set_to(self._bin, Vector(data, element_type))
 
     def add(self, value: Any) -> WriteSegmentBuilder:
         """Add a numeric *value* to the bin (``Operation.add``)."""
