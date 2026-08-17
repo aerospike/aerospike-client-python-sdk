@@ -74,6 +74,80 @@ await (
 AeroCircle and Polygon values use the same method — only the GeoJSON string
 differs.
 
+## Vector Bins
+
+Use `set_to_vector(...)` to write a bin as a `Vector` value (e.g. an
+embedding/feature vector). The bin's server-side particle type is VECTOR,
+not a plain list.
+
+```python
+from aerospike_sdk import VectorElementType
+
+docs = DataSet.of("test", "documents")
+
+await (
+    session.upsert(docs.id("doc-1"))
+    .bin("embedding").set_to_vector([0.12, -0.48, 0.91, 0.03])
+    .execute()
+)
+```
+
+This is equivalent to `set_to(Vector([0.12, -0.48, 0.91, 0.03]))`. The
+default element type is `VectorElementType.FLOAT32`, so a list of integers is
+stored as 32-bit floats unless you pass an explicit `element_type` (`FLOAT64`,
+or `INT32` to keep integers):
+
+```python
+from aerospike_sdk import Vector, VectorElementType
+
+await (
+    session.upsert(docs.id("doc-2"))
+    .bin("embedding").set_to_vector([1, 2, 3], VectorElementType.INT32)
+    .execute()
+)
+```
+
+`Vector` values are ordinary `PythonValue`s, so they can also be embedded
+inside CDT operations — e.g. a list of embeddings or a map keyed by
+document id — using the regular collection builders:
+
+```python
+await (
+    session.upsert(docs.id("doc-1"))
+    .bin("embeddings").list_append(Vector([0.1, 0.2, 0.3]))
+    .bin("embeddings_by_model").map_upsert_items({"v1": Vector([0.1, 0.2, 0.3])})
+    .execute()
+)
+```
+
+Reading a vector bin back (e.g. via `session.query(...).bin("embedding").get()`
+or a plain `record.bin("embedding")` lookup) returns a `Vector` instance with
+`.value`, `.element_type`, and `.dimensions`.
+
+### FLOAT16 and numpy
+
+`Vector` also accepts a 1-D `numpy` array; its `dtype` selects the element
+type (`float16`, `float32`, `float64`, or `int32`), and an explicit
+`element_type` must match that dtype. `FLOAT16` has no Python-list form, so it
+can *only* be built from a `numpy.float16` array:
+
+```python
+import numpy as np
+from aerospike_sdk import Vector
+
+await (
+    session.upsert(docs.id("doc-3"))
+    .bin("embedding").set_to_vector(np.array([0.1, 0.2, 0.3], dtype=np.float16))
+    .execute()
+)
+```
+
+Read a `Vector`'s elements back as a plain Python list via `.value`, or as a
+typed `numpy` array via `.numpy_value`. `FLOAT16` is only readable through
+`.numpy_value`; `.value` raises `TypeError` for it. Both properties require
+the optional `numpy` extra (`pip install "aerospike-sdk[numpy]"`); `.numpy_value`
+raises `ImportError` if `numpy` isn't installed.
+
 ## HyperLogLog Bins
 
 [`HllConfig`](../api/hll-config.md) describes a sketch's precision
