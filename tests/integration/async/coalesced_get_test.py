@@ -26,13 +26,14 @@ import asyncio
 import pytest
 
 import aerospike_sdk.aio.session as session_mod
-from aerospike_async.exceptions import RecordNotFound
+from aerospike_sdk.exceptions import RecordNotFoundError
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
-_DS = DataSet.of("test", "coalesced_get")
+_DS = DataSet.of(general_namespace(), "coalesced_get")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def session(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as cluster:
         yield cluster.create_session()
@@ -57,8 +58,8 @@ async def test_sequential_gets_are_correct(session):
 
 
 async def test_missing_key_raises(session):
-    """A not-found read raises ``RecordNotFound`` — identical to a direct get."""
-    with pytest.raises(RecordNotFound):
+    """A not-found read raises ``RecordNotFoundError`` — identical to a direct get."""
+    with pytest.raises(RecordNotFoundError):
         await session.get(_DS.id(9_999_999))
 
 

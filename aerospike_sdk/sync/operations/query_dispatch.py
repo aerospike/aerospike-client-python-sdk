@@ -53,10 +53,7 @@ from aerospike_sdk.operations_shared import (
     _to_expiration,
 )
 
-from aerospike_sdk.query_shared import _OperationSpec  # noqa: E402
-
-log = logging.getLogger(SdkLoggers.QUERY)
-
+from aerospike_sdk.query_shared import _OperationSpec
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_query_policy,
@@ -79,13 +76,18 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
+log = logging.getLogger(SdkLoggers.QUERY)
+
 
 class _BlockingQueryDispatch:
     """Sync blocking dispatchers; see module docstring."""
 
-    def _implicit_txn_gate_blocking(self) -> bool:
+    def _implicit_txn_gate_blocking(self, keys: Sequence[Key]) -> bool:
         """Full gate for blocking dispatchers (precheck + MRT capability)."""
-        return self._implicit_txn_precheck() and self._sdk_client._supports_mrt_blocking()
+        return (
+            self._implicit_txn_precheck(keys)
+            and self._sdk_client._supports_mrt_blocking()
+        )
 
     def _ensure_namespace_mode_blocking(self) -> None:
         """Sync counterpart of :meth:`_ensure_namespace_mode`.
@@ -102,6 +104,26 @@ class _BlockingQueryDispatch:
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+
+    def _ensure_batch_namespace_modes_blocking(self) -> None:
+        """Sync counterpart of the async ``_ensure_batch_namespace_modes``.
+
+        Resolves modes for every namespace the finalized specs touch so
+        per-row batch policies scope to each key's mode and the parent
+        policy SC-escalates. Single-namespace batches exit after one scan.
+        """
+        if self._namespace_mode == Mode.SC:
+            self._batch_any_sc = True
+        extra = self._collect_extra_batch_namespaces()
+        if not extra:
+            return
+        resolver = self._namespace_mode_resolver_blocking
+        modes: dict = {}
+        for ns in extra:
+            modes[ns] = resolver(ns) if resolver is not None else Mode.AP
+        self._batch_namespace_modes = modes
+        if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
+            self._batch_any_sc = True
 
     def _execute_background_task_blocking(self) -> ExecuteTask:
         """Sync counterpart of :meth:`execute_background_task`.
@@ -169,9 +191,30 @@ class _BlockingQueryDispatch:
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        if self._spec_modes_mixed(spec):
+            # One UDF policy per call and no per-row UDF op in the mixed
+            # API — group keys by mode, apply per group, merge back into
+            # request order (mirrors the async counterpart).
+            groups: dict = {}
+            for i, key in enumerate(spec.keys):
+                groups.setdefault(
+                    self._mode_for_namespace(key.namespace), []).append((i, key))
+            merged: list = [None] * len(spec.keys)
+            try:
+                for mode, pairs in groups.items():
+                    recs = self._client.batch_apply_blocking(
+                        [k for _, k in pairs], pkg, fn, spec.udf_args,
+                        batch_policy=batch_policy,
+                        udf_policy=self._make_batch_udf_policy(spec, mode),
+                    )
+                    for (i, _), rec in zip(pairs, recs):
+                        merged[i] = rec
+            except Exception as e:
+                return self._handle_batch_error_list(spec.keys, e, disp, handler)
+            return self._filtered_batch_list(merged, disp, handler, op_type="udf")
         udf_policy = self._make_batch_udf_policy(spec)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_apply_blocking(
@@ -202,7 +245,7 @@ class _BlockingQueryDispatch:
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate_blocking(
@@ -431,6 +474,7 @@ class _BlockingQueryDispatch:
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         if not self._specs or len(self._specs) != 1:
             return None
@@ -539,6 +583,7 @@ class _BlockingQueryDispatch:
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         if not self._specs or len(self._specs) <= 1:
             return None
@@ -560,7 +605,7 @@ class _BlockingQueryDispatch:
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
             if (
-                self._implicit_txn_precheck()
+                self._implicit_txn_precheck(all_keys)
                 and any(not isinstance(op, BatchReadOp) for op in all_ops)
                 and self._sdk_client._supports_mrt_blocking()
             ):
@@ -592,7 +637,7 @@ class _BlockingQueryDispatch:
             ``(kind, payload)`` where ``kind`` is ``"recordset"`` for
             non-chunked or ``"chunked"`` for chunk-resumable queries. The
             payload for ``"recordset"`` is the PAC ``Recordset``; for
-            ``"chunked"`` it is ``(recordset, reexecute_callable)``.
+            ``"chunked"`` it is ``(recordset, reexecute_callable, total_limit)``.
             Returns ``None`` when the spec shape isn't a keyless dataset
             query (caller falls back).
         """
@@ -608,9 +653,9 @@ class _BlockingQueryDispatch:
         if not is_keyless:
             return None
 
-        recordset, reexecute = self._execute_dataset_query_blocking()
+        recordset, reexecute, chunk_total_limit = self._execute_dataset_query_blocking()
         if reexecute is not None:
-            return ("chunked", (recordset, reexecute))
+            return ("chunked", (recordset, reexecute, chunk_total_limit))
         return ("recordset", recordset)
 
     def _execute_batch_read_blocking(
@@ -647,17 +692,39 @@ class _BlockingQueryDispatch:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
         return self._filtered_batch_list(batch_records, disp, handler)
 
+    def _execute_spec_mixed_mode_batch_blocking(
+        self, spec: _OperationSpec,
+        disp: _ErrorDisposition, handler: ErrorHandler | None,
+        op_type: Optional[str] = None,
+    ) -> List[RecordResult]:
+        """Sync counterpart of :meth:`_execute_spec_mixed_mode_batch`.
+
+        Routes a spec whose keys span AP and SC namespaces through the
+        mixed-batch API so each row carries a policy scoped to its own
+        namespace mode (the single-policy blocking entries cannot).
+        """
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops = self._spec_to_batch_ops(spec)
+        try:
+            batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return self._handle_batch_error_list(spec.keys, e, disp, handler)
+        return self._filtered_batch_list(batch_records, disp, handler, op_type=op_type)
+
     def _execute_batch_write_blocking(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_write` — uses
         ``batch_operate_blocking``."""
+        if spec.contains_record_delete_op and self._spec_modes_mixed(spec):
+            return self._execute_spec_mixed_mode_batch_blocking(
+                spec, disp, handler, op_type=spec.op_type)
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_operate_blocking(
@@ -698,10 +765,13 @@ class _BlockingQueryDispatch:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_delete` — uses
         ``batch_delete_blocking``."""
+        if self._spec_modes_mixed(spec):
+            return self._execute_spec_mixed_mode_batch_blocking(
+                spec, disp, handler, op_type="delete")
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         bdp = self._make_batch_delete_policy(spec)
         try:
-            if self._implicit_txn_gate_blocking():
+            if self._implicit_txn_gate_blocking(spec.keys):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),
                     lambda txn: self._client.batch_delete_blocking(
@@ -730,15 +800,18 @@ class _BlockingQueryDispatch:
             ``None``. ``(recordset, reexecute_or_none)``.
 
         Note:
-            Mirrors the async path: when an AEL ``where()`` is present and
-            an :class:`IndexesMonitor` is attached, blocks until the
-            monitor's first refresh has completed so cached secondary-index
-            metadata is available for filter generation.
+            Builds the same policy + statement, then dispatches via PAC
+            ``query_blocking`` which returns a :class:`Recordset` with the
+            Python-iterator protocol (blocking ``__next__`` that releases the
+            GIL while waiting on the underlying Tokio stream). The caller wraps
+            the returned recordset in :class:`RecordStream`.
         """
         log.debug(
             "dataset query (blocking): %s.%s filter=%s chunk=%s hint=%s",
             self._namespace, self._set_name,
-            self._filter_expression is not None or bool(self._filter_records),
+            self._filter_expression is not None
+            or self._where_ael is not None
+            or bool(self._filter_records),
             self._chunk_size,
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
@@ -751,43 +824,49 @@ class _BlockingQueryDispatch:
                     OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
         else:
             policy = self._apply_txn(QueryPolicy())
+        chunk_total_limit = 0
         if self._chunk_size is not None and self._chunk_size > 0:
+            # Capture the caller's limit()/max_records() before chunk_size
+            # overwrites the field with the per-chunk fetch size; the total cap
+            # is enforced client-side by the stream's _chunk_limit below.
+            chunk_total_limit = policy.max_records or 0
             policy.max_records = self._chunk_size
-        if self._filter_expression is not None:
-            policy.filter_expression = self._filter_expression
-
         hint = self._query_hint
+        use_server_query_selection = self._use_server_query_selection(hint)
+        self._apply_dataset_query_policy_filter(
+            policy, use_server_query_selection=use_server_query_selection,
+        )
+
         if hint is not None and hint.query_duration is not None:
             policy.expected_duration = hint.query_duration
 
-        if self._where_ael is not None and self._indexes_monitor is not None:
-            # Lazy start (idempotent); mirrors the async path.
-            self._indexes_monitor.start(self._client)
-            self._indexes_monitor.wait_until_ready()
-
-        self._resolve_index_context()
-
         partition_filter = self._partition_filter or PartitionFilter.all()
-
-        if self._where_ael is not None and self._index_context is not None:
-            self._auto_generate_filters(hint, policy)
 
         statement = self._build_statement()
 
         try:
-            recordset = self._client.query_blocking(statement, partition_filter, policy=policy)
+            recordset, plan = self._run_dataset_query_blocking(
+                policy, partition_filter, hint, statement,
+                use_server_query_selection=use_server_query_selection,
+            )
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
 
-            def _reexecute_blocking(pf: PartitionFilter) -> Any:
-                return client.query_blocking(statement, pf, policy=policy)
+            if plan is not None:
+                def _reexecute_blocking(pf: PartitionFilter) -> Any:
+                    return client.query_with_plan_blocking(
+                        statement, pf, plan, policy=policy,
+                    )
+            else:
+                def _reexecute_blocking(pf: PartitionFilter) -> Any:
+                    return client.query_blocking(statement, pf, policy=policy)
 
-            return (recordset, _reexecute_blocking)
+            return (recordset, _reexecute_blocking, chunk_total_limit)
 
-        return (recordset, None)
+        return (recordset, None, 0)
     def _handle_error_blocking_singlekey(
         self,
         key: Key,

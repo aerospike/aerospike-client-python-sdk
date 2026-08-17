@@ -18,7 +18,10 @@ AerospikeError
 ├── BackoffError
 │   └── MaxErrorRate
 ├── QuotaError
-├── QueryTerminatedError
+├── QueryError
+│   └── QueryTerminatedError
+├── UdfError
+├── BatchError
 ├── RecordNotFoundError
 ├── RecordExistsError
 ├── RecordTooBigError
@@ -71,8 +74,14 @@ async for result in stream:
     if result.is_ok:
         print(result.record.bins)
     else:
-        print(f"Key failed: {result.result_code}")
+        print(f"Key failed: {result.exception or result.result_code}")
 ```
+
+Always branch on `is_ok`, not on `result_code`. A row that failed client-side —
+before the request reached the server — has no server result code, so its
+`result_code` reads `OK` and the failure is carried by `exception` instead.
+`is_ok` accounts for both, which is why the snippet above reports `exception`
+first.
 
 Or raise on any failure:
 
@@ -124,9 +133,11 @@ unique, so always interpret the `(result_code, sub_code)` pair together. The
 or later; older servers ignore the request and leave the attributes `None`.
 
 Batches report failures per record rather than raising, so the same detail
-travels as data instead: a failed batch row carries the subcode on
-`RecordResult.sub_code` (`None` for successful rows or when detail was not
-requested), and `RecordResult.or_raise()` attaches it to the raised error.
+travels as data instead: a failed batch row carries the full surface on
+`RecordResult` — `sub_code`, `server_message`, and `exp_trace` (each `None`
+for successful rows or when detail was not requested) — and
+`RecordResult.or_raise()` attaches all three to the raised error, matching
+the single-key exception shape.
 
 ## In-Doubt Writes
 
@@ -154,16 +165,82 @@ For batch operations with in-stream errors, the per-key flag is
 whether the commit itself may have landed (see
 [Transactions](transactions.md)).
 
-One caveat: the direct point-operation shortcuts — `session.get`,
-`session.put`, `session.get_many`, and `session.put_many` — trade the SDK
-error boundary for minimum per-op overhead. They surface the underlying
-client's exception types (from `aerospike_async.exceptions`), which do
-**not** inherit from this module's `AerospikeError`: `get`/`put` raise them,
-and the `_many` variants also deliver them as the per-key exception
-*instances* in their result lists. Those exceptions carry the same
-`in_doubt` attribute, but an `except TimeoutError` written against the
-SDK's class will not catch them. Use the builder path when typed handling
-matters, or handle the underlying client's types explicitly on these calls.
+The direct point-operation shortcuts — `session.get`, `session.put`,
+`session.get_many`, and `session.put_many` — raise the same SDK exception
+types as every other path: a failure that propagates out of them is
+converted at the boundary, so `except AerospikeError` (or a typed subclass
+like `TimeoutError`) works uniformly, `in_doubt` included. The one remaining
+distinction is the `_many` variants' **per-key result slots**: an exception
+instance delivered *in the result list* (not raised) is the underlying
+client's type from `aerospike_async.exceptions`, left unconverted so
+successful windows never pay a conversion scan. Those instances carry the
+same `in_doubt` attribute; check slots with `isinstance(slot, Exception)`
+rather than an SDK-typed `except`.
+
+## Client vs Server Timeouts
+
+`TimeoutError.client` tells you which side gave up. `True` means the
+client's own deadline fired (socket or total timeout expired locally) —
+the server may still be working, so pair it with `in_doubt` before
+retrying a write. `False` means the server itself reported the timeout
+result code, so the operation was accounted for on the server side.
+
+```python
+try:
+    await session.put(orders.id(order_id), payload)
+except TimeoutError as err:
+    if err.client and err.in_doubt:
+        ...  # local deadline on a sent write; read-verify before retrying
+    elif not err.client:
+        ...  # the server timed it out; look at server load, not the network
+```
+
+## Retry and Diagnostic Context
+
+Every `AerospikeError` also answers *where* and *how many times* the
+command failed:
+
+- `node` — the cluster node the failing attempt targeted, when the retry
+  loop recorded one (`None` for failures that never reached node
+  selection).
+- `iteration` — the number of attempts made before the command failed.
+- `sub_exceptions` — the errors of prior retry attempts, oldest first,
+  each converted into this hierarchy (empty when the command was not
+  retried).
+- `base_message` — the failure message without the retry-context
+  decoration the full message carries.
+
+```python
+try:
+    await session.put(orders.id(order_id), payload)
+except AerospikeError as err:
+    log.error(
+        "write failed on %s after %s attempts: %s",
+        err.node, err.iteration, err.base_message,
+    )
+    for attempt in err.sub_exceptions:
+        log.debug("prior attempt: %s", attempt)
+```
+
+### Design notes
+
+A few adjacent capabilities are intentionally *not* part of the exception
+surface; they are recorded here so the choices are visible:
+
+- **Resolved policy values** (`connect_timeout`, `socket_timeout`,
+  `total_timeout`, `max_retries`) are not echoed onto exceptions. Since
+  namespace-mode-aware policy selection happens inside the underlying
+  client, no SDK-level layer reliably knows which resolved policy the
+  failing command actually used — an echoed value that can be wrong is
+  worse than none. Reconstruct the resolved values from your `Behavior`
+  (`behavior.get_settings(...)`) when needed.
+- **Connection-recycling hints**: the underlying client decides internally
+  whether a failed command's connection is reusable; the signal is not
+  actionable from Python and is not exposed.
+- **Message format**: the human-readable message stays prose (with
+  `base_message` as the undecorated form) rather than encoding fields in a
+  positional prefix — the structured attributes carry every field the
+  message would otherwise need to encode.
 
 ## ErrorStrategy
 

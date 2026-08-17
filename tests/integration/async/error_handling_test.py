@@ -26,16 +26,21 @@ Covers:
 
 import pytest
 
+from aerospike_sdk import ErrorDetailVerbosity
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
+from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
+from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "error_handling")
+    return DataSet.of(general_namespace(), "error_handling")
 
 
 @pytest.fixture
@@ -309,6 +314,7 @@ class TestOpTypeErrors:
 
 class TestFailOnFilteredOut:
 
+    @requires_server_compiled_ael
     async def test_write_filtered_out_raises(self, session, ds):
         """Single-key upsert with where() + fail_on_filtered_out() raises
         FILTERED_OUT when the filter excludes the record."""
@@ -328,6 +334,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_write_filtered_out_passes_when_matched(self, session, ds):
         """Upsert with matching where() + fail_on_filtered_out() succeeds."""
         k = ds.id("fo_write_ok")
@@ -346,6 +353,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_read_filtered_out_raises(self, session, ds):
         """Query with where() + fail_on_filtered_out() raises FILTERED_OUT
         when the filter excludes the record."""
@@ -365,6 +373,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_read_filtered_out_passes_when_matched(self, session, ds):
         """Query with matching where() + fail_on_filtered_out() succeeds."""
         k = ds.id("fo_read_ok")
@@ -382,6 +391,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_delete_filtered_out_raises(self, session, ds):
         """Delete with non-matching where() + fail_on_filtered_out() raises."""
         k = ds.id("fo_del_1")
@@ -402,6 +412,7 @@ class TestFailOnFilteredOut:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_batch_filtered_out_in_stream(self, session, ds):
         """Batch with per-key where() + fail_on_filtered_out():
         matching key succeeds, non-matching gets FILTERED_OUT in stream."""
@@ -439,6 +450,7 @@ class TestFailOnFilteredOut:
 
 class TestFilteredDeletePaths:
 
+    @requires_server_compiled_ael
     async def test_delete_with_matching_where_succeeds(self, session, ds):
         """Delete with a matching where() filter actually deletes the record."""
         k = ds.id("fd_match")
@@ -454,6 +466,7 @@ class TestFilteredDeletePaths:
 
         await delete_keys_durable(session, [k])
 
+    @requires_server_compiled_ael
     async def test_delete_with_nonmatching_where_preserves(self, session, ds):
         """Delete with a non-matching where() filter leaves the record intact."""
         k = ds.id("fd_nomatch")
@@ -467,6 +480,7 @@ class TestFilteredDeletePaths:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_durable_delete_with_where_succeeds(self, session, ds, enterprise):
         """Durable delete with matching where() deletes the record."""
         if not enterprise:
@@ -489,6 +503,7 @@ class TestFilteredDeletePaths:
 
         await delete_keys_durable(session, [k])
 
+    @requires_server_compiled_ael
     async def test_durable_delete_with_where_filtered_out(self, session, ds, enterprise):
         """Durable delete with non-matching where() + fail_on_filtered_out()
         raises FILTERED_OUT."""
@@ -518,8 +533,13 @@ class TestFilteredDeletePaths:
 # Operate (write with where) / fail_on_filtered_out
 # ---------------------------------------------------------------------------
 
+# A read AEL string is compiled on its own, so the server-compiled path cannot borrow
+# the bin type from the accompanying ``where()`` and needs it pinned (``$.v:INT``).
+
+
 class TestOperateWithFilter:
 
+    @requires_server_compiled_ael
     async def test_operate_write_with_matching_where(self, session, ds):
         """Upsert + bin.set_to() with matching where() writes successfully."""
         k = ds.id("op_wr_ok")
@@ -540,6 +560,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_write_nonmatching_where_skips(self, session, ds):
         """Upsert + bin.set_to() with non-matching where() silently skips."""
         k = ds.id("op_wr_skip")
@@ -558,6 +579,7 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_write_filtered_out_raises(self, session, ds):
         """Upsert + bin.set_to() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT and doesn't write."""
@@ -580,23 +602,26 @@ class TestOperateWithFilter:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_read_with_matching_where(self, session, ds):
-        """Query + bin.select_from() with matching where() returns result."""
+        """Keyed operate: select_from() + where() on matching filter."""
         k = ds.id("op_rd_ok")
         await _cleanup(session, k)
         await session.upsert(k).put({"v": 1}).execute()
 
         rs = await (
             session.upsert(k)
-            .bin("result").select_from("$.v")
+            .bin("result").select_from("$.v:INT")
             .where("$.v == 1")
             .execute()
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
+        assert rr.record.bins["result"] == 1
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_operate_read_filtered_out_raises(self, session, ds):
         """Upsert + bin.select_from() with non-matching where() +
         fail_on_filtered_out() raises FILTERED_OUT."""
@@ -607,12 +632,49 @@ class TestOperateWithFilter:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.upsert(k)
-                .bin("result").select_from("$.v")
+                .bin("result").select_from("$.v:INT")
                 .where("$.v == 999")
                 .fail_on_filtered_out()
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
+
+        await _cleanup(session, k)
+
+    @requires_server_compiled_ael
+    async def test_untyped_select_from_with_where_extended_error(
+        self, cluster, ds, supports_error_detail,
+    ):
+        """Untyped read AEL + string where on keyed operate: server compile fails.
+
+        With ``error_detail_verbosity=MESSAGE`` the server folds an AEL diagnostic
+        into the raised error (not visible at default verbosity).
+        """
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+
+        behavior = Behavior(
+            "error-handling-untyped-select-from",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.MESSAGE)},
+        )
+        session = cluster.create_session(behavior=behavior)
+        k = ds.id("op_rd_untyped_err")
+        await _cleanup(session, k)
+        await session.upsert(k).put({"v": 1}).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.upsert(k)
+                .bin("result").select_from("$.v")
+                .where("$.v == 1")
+                .execute()
+            )
+
+        exc = exc_info.value
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.server_message is not None
+        assert "invalid expression in operation request" in exc.server_message
+        assert "unresolved bin type" in exc.server_message.lower()
 
         await _cleanup(session, k)
 
@@ -678,6 +740,7 @@ class TestWriteBinGet:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_expression_write_then_get(self, session, ds):
         """upsert_from() expression write followed by bin.get() reads back."""
         k = ds.id("wbb_exp_get")
@@ -700,6 +763,7 @@ class TestWriteBinGet:
 
         await _cleanup(session, k)
 
+    @requires_server_compiled_ael
     async def test_chained_write_then_query_with_get(self, session, ds):
         """Upsert a key, then query another key with bin.get()."""
         k1 = ds.id("wbb_chain_wr")
@@ -789,13 +853,12 @@ class TestTtlExpiry:
         assert rr is None
 
     async def test_record_with_no_ttl_persists(self, session, ds):
-        """Record with default TTL (0 = namespace default, effectively no
-        expiry on test namespace) persists beyond a short wait."""
+        """A record written with ``never_expire()`` persists beyond a short wait."""
         import asyncio
         k = ds.id("ttl_persist")
         await _cleanup(session, k)
 
-        await session.upsert(k).put({"v": 1}).execute()
+        await session.upsert(k).never_expire().put({"v": 1}).execute()
 
         await asyncio.sleep(3)
 

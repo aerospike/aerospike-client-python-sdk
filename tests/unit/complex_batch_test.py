@@ -25,10 +25,9 @@ Covers:
 """
 
 import pytest
-from unittest.mock import MagicMock
 
-from aerospike_sdk import Key
-from aerospike_async import FilterExpression as Exp, Operation, RecordExistsAction, WritePolicy
+from aerospike_sdk import Exp, Key
+from aerospike_async import RecordExistsAction, WritePolicy, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
     _OperationSpec,
@@ -39,11 +38,23 @@ from aerospike_sdk.aio.operations.query import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_server_compiled_ael_string(monkeypatch):
+    def _fake(ael, *, supports_server_compiled_ael=True):
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    monkeypatch.setattr(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        _fake,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_builder(**overrides) -> QueryBuilder:
+    overrides.setdefault("supports_server_compiled_ael", True)
     return QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
 
 def _make_key(i: int = 1) -> Key:
@@ -514,7 +525,7 @@ class TestChainLevelDefaults:
         qb._single_key = _make_key(1)
         qb.default_expire_record_after_seconds(600)
 
-        wsb = qb.upsert(_make_key(2))
+        qb.upsert(_make_key(2))
         qb._finalize_current_spec()
 
         assert qb._specs[1].ttl_seconds == 600

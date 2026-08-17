@@ -13,8 +13,7 @@ dependencies = [
     # PAC merge; promoted versions land on public PyPI at release. CI
     # resolves this from the internal index; see README "Local PAC checkout"
     # for working against a local PAC tree instead.
-    "aerospike-async==0.6.0a7.dev10",
-    "antlr4-python3-runtime>=4.13.0",
+    "aerospike-async==0.6.0a7.dev20",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]
@@ -65,13 +64,15 @@ include = ["aerospike_sdk*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# Module-scoped fixtures (e.g. the IndexesMonitor task on the SDK Client) must
-# share a single event loop with the tests that use them; otherwise the
-# monitor's background ``asyncio.sleep`` is starved while a function-scoped
-# test loop runs and the cache never refreshes.
+# Module-scoped fixtures must share a session-scoped event loop with the
+# tests that use them.
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 addopts = "-s"
+markers = [
+    "requires_server_compiled_ael: needs connected client with server-compiled AEL (see tests/integration/conftest.py)",
+    "requires_query_selection: needs connected client with field 44 query selection (see tests/integration/conftest.py)",
+]
 testpaths = ["tests"]
 python_files = ["*_test.py"]
 python_classes = ["Test*"]
@@ -89,6 +90,14 @@ reportMissingImports = false
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# The CDT builders pass one-line lambda factories straight into a constructor;
+# most are inline keyword arguments, and these are the same thunks that an
+# if/else forced into a named binding. A `def` would add no clarity here.
+"aerospike_sdk/query_shared.py" = ["E731"]
+"aerospike_sdk/aio/operations/cdt_read.py" = ["E731"]
+"aerospike_sdk/aio/operations/cdt_write.py" = ["E731"]
 
 [tool.mypy]
 python_version = "3.10"

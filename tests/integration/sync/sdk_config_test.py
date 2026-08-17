@@ -27,6 +27,8 @@ import time
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy import SystemSettings, TransactionSettings
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
 _IMPLICIT_FALSE_MAXCONNS = """
 system:
@@ -51,10 +53,11 @@ system:
 _MALFORMED = "system: [unbalanced : bracket\n"
 
 
-def _host_port() -> tuple[str, int]:
-    hostport = os.environ.get("AEROSPIKE_HOST", "127.0.0.1:3100")
-    host, port = hostport.split(":", 1)
-    return host, int(port)
+def _host_port(seed: str) -> tuple[str, int]:
+    """Split the fixture-routed seed; reading AEROSPIKE_HOST directly would
+    bypass the SC-leg routing that ``aerospike_host`` applies."""
+    host, _, port = seed.partition(":")
+    return host, int(port or 3000)
 
 
 def _write(tmp_path, name: str, text: str) -> str:
@@ -82,7 +85,7 @@ def _sdk_config_env(path: str | None):
 
 def _round_trip(cluster) -> dict:
     session = cluster.create_session(Behavior.DEFAULT)
-    key = DataSet.of("test", "sdkconf_it").id("k1")
+    key = DataSet.of(general_namespace(), "sdkconf_it").id("k1")
     session.upsert(key).put({"n": 1}).execute()
     return session.query(key).execute().first_or_raise().record.bins
 
@@ -92,20 +95,20 @@ def _bump_mtime(path: str) -> None:
     os.utime(path, (stat.st_atime, stat.st_mtime + 2))
 
 
-def test_config_reaches_client_and_policy(tmp_path):
+def test_config_reaches_client_and_policy(aerospike_host, tmp_path):
     """File settings land on the client holder and the built ClientPolicy."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", _IMPLICIT_FALSE_MAXCONNS)):
-        with ClusterDefinition(host, port).connect() as cluster:
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
             assert client._policy.max_conns_per_node == 77
             assert _round_trip(cluster) == {"n": 1}
 
 
-def test_file_wins_over_programmatic_per_field(tmp_path):
+def test_file_wins_over_programmatic_per_field(aerospike_host, tmp_path):
     """The file wins only for fields it provides; others keep programmatic values."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     programmatic = SystemSettings(
         max_connections_per_node=50,
         conn_pools_per_node=2,
@@ -113,7 +116,7 @@ def test_file_wins_over_programmatic_per_field(tmp_path):
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", _IMPLICIT_FALSE_MAXCONNS)):
         with (
-            ClusterDefinition(host, port)
+            apply_general_auth(ClusterDefinition(host, port))
             .with_system_settings(programmatic)
             .connect()
         ) as cluster:
@@ -125,25 +128,25 @@ def test_file_wins_over_programmatic_per_field(tmp_path):
             assert settings.transactions.number_of_attempts == 9
 
 
-def test_missing_file_fail_soft_defaults_apply(tmp_path):
+def test_missing_file_fail_soft_defaults_apply(aerospike_host, tmp_path):
     """A missing config file never blocks a connect; hard defaults apply."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     with _sdk_config_env(str(tmp_path / "nope.yaml")):
-        with ClusterDefinition(host, port).connect() as cluster:
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is True
             assert _round_trip(cluster) == {"n": 1}
 
 
-def test_malformed_file_fail_soft_programmatic_wins(tmp_path):
+def test_malformed_file_fail_soft_programmatic_wins(aerospike_host, tmp_path):
     """A malformed file is ignored; programmatic settings still apply."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     programmatic = SystemSettings(
         transactions=TransactionSettings(implicit_batch_write_transactions=False),
     )
     with _sdk_config_env(_write(tmp_path, "bad.yaml", _MALFORMED)):
         with (
-            ClusterDefinition(host, port)
+            apply_general_auth(ClusterDefinition(host, port))
             .with_system_settings(programmatic)
             .connect()
         ) as cluster:
@@ -152,12 +155,12 @@ def test_malformed_file_fail_soft_programmatic_wins(tmp_path):
             assert _round_trip(cluster) == {"n": 1}
 
 
-def test_hot_reload_swaps_transactions(tmp_path):
+def test_hot_reload_swaps_transactions(aerospike_host, tmp_path):
     """Rewriting the file swaps the live settings holder within the poll cadence."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     path = _write(tmp_path, "sdk.yaml", _IMPLICIT_TRUE)
     with _sdk_config_env(path):
-        with ClusterDefinition(host, port).connect() as cluster:
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is True
 
@@ -173,12 +176,12 @@ def test_hot_reload_swaps_transactions(tmp_path):
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
 
 
-def test_hot_reload_broken_file_keeps_last_good(tmp_path):
+def test_hot_reload_broken_file_keeps_last_good(aerospike_host, tmp_path):
     """A file that stops parsing mid-run keeps the last-good settings."""
-    host, port = _host_port()
+    host, port = _host_port(aerospike_host)
     path = _write(tmp_path, "sdk.yaml", _IMPLICIT_FALSE)
     with _sdk_config_env(path):
-        with ClusterDefinition(host, port).connect() as cluster:
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
 

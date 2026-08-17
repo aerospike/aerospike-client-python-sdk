@@ -13,15 +13,23 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync integration tests mirroring async idempotent-op and TTL guard paths."""
+"""Sync integration tests mirroring async idempotent-op, TTL guard, and bad-AEL paths."""
 
 import pytest
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
+from tests.pac_compat import (
+    assert_dataset_invalid_ael_rejected_sync,
+    assert_point_invalid_ael_rejected_sync,
+    requires_server_compiled_ael,
+)
+
+AEL_ERROR_SET = "sync_ael_errors"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
@@ -29,7 +37,7 @@ def cluster(aerospike_host, make_cluster_definition):
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "sync_error_handling")
+    return DataSet.of(general_namespace(), "sync_error_handling")
 
 
 def _cleanup(session, *keys):
@@ -87,3 +95,91 @@ class TestSyncTtlPreservation:
         assert r2.record.bins["v"] == 2
 
         _cleanup(session, k)
+
+
+@pytest.fixture(scope="module")
+def session_with_ael_row(cluster, sync_wait_for_set_visible):
+    """Session over a set holding one row, so invalid AEL reaches the parser.
+
+    Its own set (not the ``ds`` one above) keeps the exact-count visibility wait
+    deterministic against the other tests in this module.
+    """
+    session = cluster.create_session()
+    ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+    key = ds.id("row")
+    session.upsert(key).put({"age": 30, "A": 1}).execute()
+    sync_wait_for_set_visible(session, general_namespace(), AEL_ERROR_SET, 1)
+    yield session
+    _cleanup(session, key)
+
+
+class TestSyncAelErrorHandling:
+    """Sync twin of ``async/exp_test.py::TestAelErrorHandling``."""
+
+    @requires_server_compiled_ael
+    def test_dataset_invalid_ael_rejected(self, session_with_ael_row):
+        """Malformed dataset AEL surfaces as ``PARAMETER_ERROR`` from the server."""
+        assert_dataset_invalid_ael_rejected_sync(
+            lambda: session_with_ael_row.query(general_namespace(), AEL_ERROR_SET)
+            .where("$.age >")
+            .execute()
+        )
+
+    @requires_server_compiled_ael
+    def test_point_invalid_ael_rejected(self, session_with_ael_row):
+        """Malformed point-query AEL uses field **43** and raises ``PARAMETER_ERROR``."""
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        assert_point_invalid_ael_rejected_sync(
+            lambda: session_with_ael_row.query(ds.id("row")).where("$.A >").execute()
+        )
+
+
+class TestSyncPointReadStringFilter:
+    """A string filter must survive the virgin single-key read bypass.
+
+    Regression: that bypass tested only the materialized ``_filter_expression``,
+    so a string filter — which stays unresolved until execute — was dropped and
+    the read returned a row the server should have filtered out.
+    """
+
+    @requires_server_compiled_ael
+    def test_point_read_honors_string_where(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).where("$.A > 100").execute()
+        assert rs.first() is None
+
+    @requires_server_compiled_ael
+    def test_point_read_honors_string_default_where(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).default_where("$.A > 100").execute()
+        assert rs.first() is None
+
+
+class TestSyncAelParamBinding:
+    """Sync twin of ``async/exp_test.py::TestAelParamBinding``.
+
+    The seeded row is ``{age: 30, A: 1}``.
+    """
+
+    @requires_server_compiled_ael
+    def test_int_param_matches(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).where("$.age == %d", 30).execute()
+        assert rs.first() is not None
+
+    @requires_server_compiled_ael
+    def test_param_that_does_not_match_filters_out(self, session_with_ael_row):
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = session_with_ael_row.query(ds.id("row")).where("$.age > %d", 100).execute()
+        assert rs.first() is None
+
+    @requires_server_compiled_ael
+    def test_escaped_modulo_with_param(self, session_with_ael_row):
+        """``%%`` reaches the server as AEL's modulo operator, not a format spec."""
+        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
+        rs = (
+            session_with_ael_row.query(ds.id("row"))
+            .where("$.age %% 4 == 2 and $.A == %d", 1)
+            .execute()
+        )
+        assert rs.first() is not None

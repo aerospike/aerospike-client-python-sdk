@@ -22,10 +22,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
-from aerospike_sdk.loggers import SdkLoggers
-
-log = logging.getLogger(SdkLoggers.BACKGROUND)
-
 from aerospike_async import (
     Client,
     ExecuteTask,
@@ -34,18 +30,22 @@ from aerospike_async import (
     RecordExistsAction,
 )
 
+
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.background_shared import (
     dataset_statement,
     make_background_write_policy,
     reject_unsupported_background_write_ops,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.ael.parser import parse_ael
+from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
+
+log = logging.getLogger(SdkLoggers.BACKGROUND)
 
 
 class _OpType(enum.Enum):
@@ -201,6 +201,9 @@ class _BackgroundOperationBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
+        self._supports_server_compiled_ael = bool(
+            session.client.supports_server_compiled_ael,
+        )
 
     def default_with_durable_delete(self) -> BackgroundOperationBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
@@ -223,7 +226,7 @@ class _BackgroundOperationBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> BackgroundOperationBuilder: ...
+    def where(self, expression: str, *params: Any) -> BackgroundOperationBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> BackgroundOperationBuilder: ...
@@ -231,22 +234,34 @@ class _BackgroundOperationBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> BackgroundOperationBuilder:
         """Restrict the scan with an AEL or ``FilterExpression`` predicate.
+
+        Args:
+            expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`~aerospike_sdk.query_shared._QueryBuilderBase.where`
+                for the interpolation contract.
 
         Returns:
             This builder for chaining.
 
         Example::
             builder.where("$.status == 'inactive'")
+            builder.where("$.status == '%s'", status)
         """
         if self._index_filters:
             raise ValueError(
                 "where(...) cannot be combined with index_filters(...); "
                 "use one narrowing mechanism.",
             )
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=self._supports_server_compiled_ael,
+            )
         else:
             self._filter_expression = expression
         return self
@@ -542,6 +557,9 @@ class _BackgroundUdfBuilderBase:
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
+        self._supports_server_compiled_ael = bool(
+            session.client.supports_server_compiled_ael,
+        )
 
     def default_with_durable_delete(self) -> BackgroundUdfBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
@@ -576,7 +594,7 @@ class _BackgroundUdfBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> BackgroundUdfBuilder: ...
+    def where(self, expression: str, *params: Any) -> BackgroundUdfBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> BackgroundUdfBuilder: ...
@@ -584,10 +602,15 @@ class _BackgroundUdfBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._filter_expression = parse_ael(expression)
+            self._filter_expression = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=self._supports_server_compiled_ael,
+            )
         else:
             self._filter_expression = expression
         return self

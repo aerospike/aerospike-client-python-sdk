@@ -1,7 +1,0 @@
-# IndexesMonitor
-
-```{eval-rst}
-.. autoclass:: aerospike_sdk.index_monitor.IndexesMonitor
-   :members:
-   :show-inheritance:
-```

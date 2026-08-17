@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from aerospike_async import Key, Record
+from aerospike_async import ExpressionTrace, Key, Record
 from aerospike_async.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import _result_code_to_exception
@@ -46,6 +46,9 @@ class RecordResult:
         record: :class:`~aerospike_async.Record` payload, or ``None`` if not
             returned (errors, not found, or UDF error rows).
         result_code: Server :class:`~aerospike_async.exceptions.ResultCode`.
+            Reads ``OK`` on client-side failure rows too, since those never
+            reach the server to earn a code — test :attr:`is_ok` rather than
+            this field when deciding whether a row succeeded.
         in_doubt: ``True`` when a write may have completed despite an error.
         index: Batch position, or ``0`` / ``-1`` depending on origin.
         exception: Embedded :class:`~aerospike_sdk.exceptions.AerospikeError`
@@ -56,6 +59,13 @@ class RecordResult:
             error detail (``error_detail_verbosity``) and the server supplies
             it (8.1.3+). Subcode values are scoped to their parent
             :attr:`result_code` — interpret the pair together.
+        server_message: The server's human-readable explanation for this
+            row's failure, or ``None``. Populated on the same terms as
+            :attr:`sub_code` (and requires message-level verbosity).
+        exp_trace: Server-supplied expression build trace for this row, or
+            ``None`` when absent — only attached on expression build failures
+            at the highest verbosity. Populated on the same terms as
+            :attr:`sub_code`.
 
     Example::
 
@@ -80,13 +90,49 @@ class RecordResult:
     exception: AerospikeError | None = None
     udf_result: Any | None = None
     sub_code: int | None = None
+    server_message: str | None = None
+    exp_trace: ExpressionTrace | None = None
+
+    def __repr__(self) -> str:
+        # Compact, log-friendly summary. The default dataclass repr embeds the
+        # full Record (and its digest) alongside the Key's digest, doubling a
+        # ~40-byte array into hundreds of characters of noise; show the payload
+        # and outcome instead. `index` is kept when set — it identifies which
+        # batch slot a failed row came from, which is exactly what an error log
+        # needs — but stays hidden for single-key results, where it is the
+        # "no batch slot" sentinel rather than a real position.
+        parts = []
+        if self.index >= 0:
+            parts.append(f"index={self.index}")
+        parts.append(f"result_code={self.result_code}")
+        if self.record is not None:
+            parts.append(f"bins={self.record.bins!r}")
+        elif not self.is_ok:
+            parts.append("record=None")
+        if self.sub_code is not None:
+            parts.append(f"sub_code={self.sub_code}")
+        if self.server_message is not None:
+            parts.append(f"server_message={self.server_message!r}")
+        if self.in_doubt:
+            parts.append("in_doubt=True")
+        if self.exception is not None:
+            parts.append(f"exception={self.exception!r}")
+        if self.udf_result is not None:
+            parts.append(f"udf_result={self.udf_result!r}")
+        return f"RecordResult({', '.join(parts)})"
 
     @property
     def is_ok(self) -> bool:
-        """Whether :attr:`result_code` is ``ResultCode.OK``.
+        """Whether this row succeeded.
+
+        ``True`` only when :attr:`result_code` is ``ResultCode.OK`` *and* no
+        :attr:`exception` is attached. Client-side failures carry no server
+        result code, so a row reporting one is a failure even though its
+        code reads ``OK``.
 
         Returns:
-            ``True`` on success; ``False`` for any other result code.
+            ``True`` on success; ``False`` for any other result code, and for
+            client-side failures carrying an :attr:`exception`.
 
         Example::
 
@@ -94,7 +140,7 @@ class RecordResult:
             if row is not None and row.is_ok and row.record:
                 bins = row.record.bins
         """
-        return self.result_code == ResultCode.OK
+        return self.exception is None and self.result_code == ResultCode.OK
 
     def or_raise(self) -> RecordResult:
         """Return ``self`` if successful, else raise from :attr:`exception` or result code.
@@ -120,6 +166,8 @@ class RecordResult:
             raise _result_code_to_exception(
                 self.result_code, str(self.result_code), self.in_doubt,
                 sub_code=self.sub_code,
+                server_message=self.server_message,
+                exp_trace=self.exp_trace,
             )
         return self
 
@@ -288,6 +336,8 @@ def batch_records_to_results(
             in_doubt=br.in_doubt,
             index=i,
             sub_code=br.sub_code,
+            server_message=br.server_message,
+            exp_trace=br.exp_trace,
         )
         for i, br in enumerate(batch_records)
     ]

@@ -324,7 +324,6 @@ class TestSyncBuilderSmoke:
             .preferring_racks(1, 2)
             .validate_cluster_name_is("my-cluster")
             .fail_if_not_connected(False)
-            .with_index_refresh_interval(2.0)
         )
         assert cd.auth_mode == AuthMode.EXTERNAL
         assert cd._user_name == "ldap_user"
@@ -332,7 +331,6 @@ class TestSyncBuilderSmoke:
         assert cd._preferred_racks == [1, 2]
         assert cd._cluster_name == "my-cluster"
         assert cd._fail_if_not_connected is False
-        assert cd._index_refresh_interval == 2.0
 
     def test_sync_with_tls_config_of(self):
         cd = (

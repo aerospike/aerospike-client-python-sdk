@@ -38,9 +38,20 @@ from aerospike_sdk import DataSet
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
     NoStrongConsistencyNamespace,
+    pinned_namespace_env_hint,
     resolve_sc_namespace,
     skip_reason_no_sc_namespace,
 )
+
+
+async def _namespaces_on_cluster_hint(session) -> str:
+    try:
+        names = sorted(await session.info().namespaces())
+    except Exception:
+        return ""
+    if not names:
+        return ""
+    return f" Namespaces on this cluster: {', '.join(names)}."
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
@@ -62,7 +73,19 @@ async def session(cluster_sc, sc_namespace):
     """Session on the SC cluster; skips when the cluster cannot run MRTs."""
     if not await cluster_sc._client._supports_mrt():
         pytest.skip("cluster does not support multi-record transactions")
-    return cluster_sc.create_session()
+    sess = cluster_sc.create_session()
+    try:
+        status = await sess.namespace_sc_status(sc_namespace)
+    except Exception as exc:
+        pytest.skip(
+            f"SC namespace {sc_namespace!r} unreachable "
+            f"({exc}); set AEROSPIKE_HOST_SC / AEROSPIKE_SC_NAMESPACE or stand up SC"
+        )
+    if not status.is_sc:
+        ns_hint = await _namespaces_on_cluster_hint(sess)
+        pin = pinned_namespace_env_hint()
+        pytest.skip(f"{status.detail}{ns_hint}{pin} Implicit batch txn tests require SC.")
+    return sess
 
 
 @pytest.fixture
@@ -202,3 +225,24 @@ async def test_single_key_write_is_not_wrapped(session, ds, txn_spy):
     await session.upsert(key).put({"n": 1}).execute()
 
     assert txn_spy == []
+
+
+async def test_multi_namespace_batch_is_not_wrapped(session, ds, txn_spy):
+    """A batch spanning namespaces cannot be a transaction, so it goes
+    unwrapped and each key is answered on its own merits."""
+    good = ds.id(80)
+    bad = DataSet.of("no_such_namespace", ds.set_name).id(80)
+    await _reset(session, [good])
+
+    stream = await (
+        session.upsert(key=good).bin("n").set_to(9)
+        .upsert(bad).bin("n").set_to(9)
+        .execute()
+    )
+    rows = await stream.collect()
+
+    assert txn_spy == []
+    assert len(rows) == 2
+    assert rows[0].is_ok
+    assert not rows[1].is_ok
+    assert await _bin_values(session, [good], "n") == {80: 9}

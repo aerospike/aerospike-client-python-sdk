@@ -111,6 +111,46 @@ See the [Quick Start guide](https://aerospike.com/docs/develop/client/sdk/) for
 a deeper walkthrough; the [API reference](https://aerospike-python-sdk.readthedocs.io/)
 covers every public class and method in detail.
 
+## Examples
+
+Runnable, self-contained scripts live in [`examples/`](examples/) — one file per
+topic (`query_examples.py`, `string_operations_example.py`, `batch_example.py`,
+`common_example.py`, `multi_record_transaction_example.py`, the SDK-config set, and
+more). Each is a standalone program; run one directly or run them all:
+
+```bash
+python examples/query_examples.py     # a single example
+make examples                         # every example, in sequence
+```
+
+Every example opens its connection through the async context-manager convention
+shown in [Quick start](#quick-start) — `async with await _env.connect().connect()
+as cluster:` (sync examples use `with _env.sync_connect().connect() as cluster:`) —
+so the cluster is always closed cleanly on exit.
+
+`examples/_env.py` is a small **examples-only** helper (not part of the published
+package — the mirror of `benchmarks/_env.py`). It resolves connection settings from
+the environment so the scripts run with no edits and no manual exports: it loads
+`aerospike.env` if you made one, otherwise the committed `aerospike.env.example`,
+without clobbering variables you already exported. `_env.connect()` /
+`_env.sync_connect()` return a `ClusterDefinition` built from `AEROSPIKE_HOST`
+(default `localhost:3000`). A production application constructs `ClusterDefinition`
+directly — as the Quick start does — rather than importing `_env`.
+
+A few examples need more than a default AP cluster and degrade to a clean skip
+message when it is absent:
+
+- **Strong-consistency examples** (`multi_record_transaction_example.py`,
+  `roster_example.py`) connect via `_env.connect_sc()`, which reads
+  `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
+  `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).
+- **Server-version-gated examples** (e.g. `string_operations_example.py`, server
+  8.1.3+) check `_env.server_at_least(session, (8, 1, 3))` and skip if the cluster
+  is older.
+
+Connection variables are the same ones the test suite uses — see
+[Configuration](#configuration) for `aerospike.env`.
+
 ## Performance modes
 
 PSDK offers two API shapes — pick based on what your code needs.
@@ -157,7 +197,7 @@ async def main():
         )
 ```
 
-Tune `loop_count` based on your workload — `os.cpu_count()` is the default. Cluster-wide index metadata is shared via a single `IndexesMonitor` across the pool, so `sindex-list` load doesn't scale with `loop_count`.
+Tune `loop_count` based on your workload — `os.cpu_count()` is the default.
 
 For the full decision guide, the trade-offs, and measured TPS/latency across all modes, see [`docs/guide/performance.md`](docs/guide/performance.md). For the raw bench data and methodology, see [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md).
 
@@ -205,8 +245,7 @@ Persist it in `~/.config/pip/pip.conf` under `[global] extra-index-url`, or put
 the credentials in `~/.netrc` for `artifact.aerospike.io`, if you'd rather not
 set it per shell.
 
-With that in place, installing needs no repository checkout, no Java, and no
-ANTLR generation step — the parser ships inside the package:
+With that in place, installing needs no repository checkout:
 
 ```bash
 pip index versions aerospike-sdk --pre        # what's available
@@ -246,8 +285,7 @@ export AEROSPIKE_USE_SERVICES_ALTERNATE=false
 python -m benchmarks.benchmark -w RU,50 -k 100000 -z 32 -d 10
 ```
 
-Nothing here needs Java, Rust, or `make generate-ael`: the tools are plain
-scripts, and the generated parser arrives inside the installed package.
+Nothing here needs Rust: the tools are plain scripts against the installed package.
 
 Connection settings come from the environment. `benchmarks/_env.py` loads
 `aerospike.env` if you made one and otherwise the committed
@@ -268,10 +306,9 @@ recorded in that build's JFrog build-info.
 
 Use a sparse checkout rather than a full clone. `benchmarks/benchmark.py`
 prepends its parent directory to `sys.path`, so in a full checkout the
-repository's own `aerospike_sdk/` shadows the installed package — at best the
-run fails because the generated parser is absent from a fresh clone, and at
-worst it silently measures your working tree instead of the build you pinned.
-With only `benchmarks/` checked out there is nothing to shadow.
+repository's own `aerospike_sdk/` shadows the installed package — at worst it
+silently measures your working tree instead of the build you pinned. With only
+`benchmarks/` checked out there is nothing to shadow.
 
 `python -m benchmarks.compare` is a maintainer tool rather than a tester one: it
 drives several client repositories side by side and expects a pyenv environment
@@ -300,16 +337,12 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
   free-threaded build starts at 3.14t.)
 - **Aerospike server** — required for integration tests
 - **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
-- **Java 11+** — required for the one-time AEL parser build (`make generate-ael`)
 
 ### Setting up a dev environment
 
 ```bash
-make generate-ael          # one-time: build the ANTLR AEL parser (requires Java 11+)
 pip install -e ".[dev]"    # install with dev extras
 ```
-
-`make generate-ael` only needs to be re-run if `aerospike_sdk/ael/antlr4/Condition.g4` changes.
 
 On the `dev` branch, the pinned `aerospike-async` (PAC) version is a
 pre-release build published to Aerospike's internal package index rather

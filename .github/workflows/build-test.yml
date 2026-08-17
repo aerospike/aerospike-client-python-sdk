@@ -47,6 +47,26 @@ jobs:
             echo "::warning title=PAC pin not found in dev repo::aerospike-async==${version} has no wheels in ${{ vars.JFROG_PROJECT }}-pypi-dev-local. Fix the pin in pyproject.toml or publish the version from PAC."
           fi
 
+  # Lint gate: fails the build on any ruff error, so the tree-wide cleanup can't
+  # regress. Pure static check — no server or PAC dev-index needed. Ruff is
+  # pinned so a new release adding rules can't spuriously break CI.
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff==0.15.12
+
+      - name: Ruff check
+        run: ruff check .
+
   unit:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -87,9 +107,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Run unit tests
         run: python -m pytest tests/unit -v
@@ -162,12 +179,6 @@ jobs:
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
-      - name: Generate ANTLR parser
-        run: |
-          echo $PATH | sed 's/:/\n/g'
-          java -version
-          make generate-ael
-
       - name: Run integration tests
         env:
           AEROSPIKE_HOST: localhost:3000
@@ -226,9 +237,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Verify GIL stays disabled after import
         run: |
@@ -299,9 +307,6 @@ jobs:
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
-
-      - name: Generate ANTLR parser
-        run: make generate-ael
 
       - name: Verify GIL stays disabled after import
         run: |

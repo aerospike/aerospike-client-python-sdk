@@ -20,11 +20,7 @@ from aerospike_sdk import Filter, QueryDuration
 
 from aerospike_sdk import (
     Exp,
-    Index,
-    IndexContext,
-    IndexTypeEnum,
     QueryHint,
-    parse_ael_with_index,
 )
 from aerospike_sdk.aio.operations.query import QueryBuilder, _FilterRecord
 
@@ -40,13 +36,7 @@ class TestQueryHintValidation:
     def test_index_name_only(self):
         hint = QueryHint(index_name="my_idx")
         assert hint.index_name == "my_idx"
-        assert hint.bin_name is None
         assert hint.query_duration is None
-
-    def test_bin_name_only(self):
-        hint = QueryHint(bin_name="alt_bin")
-        assert hint.bin_name == "alt_bin"
-        assert hint.index_name is None
 
     def test_query_duration_only(self):
         hint = QueryHint(query_duration=QueryDuration.SHORT)
@@ -57,20 +47,38 @@ class TestQueryHintValidation:
         assert hint.index_name == "idx"
         assert hint.query_duration == QueryDuration.LONG
 
-    def test_bin_name_with_query_duration(self):
-        hint = QueryHint(bin_name="b", query_duration=QueryDuration.SHORT)
-        assert hint.bin_name == "b"
-        assert hint.query_duration == QueryDuration.SHORT
-
     def test_all_none_is_valid(self):
         hint = QueryHint()
         assert hint.index_name is None
         assert hint.bin_name is None
         assert hint.query_duration is None
 
+    def test_bin_name_only(self):
+        hint = QueryHint(bin_name="alt_bin")
+        assert hint.bin_name == "alt_bin"
+        assert hint.index_name is None
+
+    def test_bin_name_with_query_duration(self):
+        hint = QueryHint(bin_name="b", query_duration=QueryDuration.SHORT)
+        assert hint.bin_name == "b"
+        assert hint.query_duration == QueryDuration.SHORT
+
     def test_index_name_and_bin_name_raises(self):
         with pytest.raises(ValueError, match="mutually exclusive"):
             QueryHint(index_name="idx", bin_name="b")
+
+    def test_hard_hint_without_index_name_raises(self):
+        with pytest.raises(ValueError, match="hard_hint requires index_name"):
+            QueryHint(hard_hint=True)
+
+    def test_require_index_and_hard_hint_allowed(self):
+        hint = QueryHint(
+            index_name="age_idx",
+            require_index=True,
+            hard_hint=True,
+        )
+        assert hint.require_index is True
+        assert hint.hard_hint is True
 
     def test_frozen(self):
         hint = QueryHint(index_name="idx")
@@ -108,7 +116,8 @@ class TestWithHint:
         )
         assert result is builder
         assert builder._query_hint is not None
-        assert builder._filter_expression is not None
+        assert builder._where_ael == "$.age > 30"
+        assert builder._filter_expression is None
 
     def test_where_stores_ael_string(self):
         builder = _query_builder()
@@ -135,18 +144,6 @@ class TestFilterRecord:
         hint = QueryHint(index_name="age_idx")
         rebuilt = record.rebuild_for_hint(hint)
         expected = Filter.equal_by_index("age_idx", 30)
-        assert str(rebuilt) == str(expected)
-
-    def test_rebuild_with_bin_name(self):
-        record = _FilterRecord(
-            filter=Filter.equal("age", 30),
-            method="equal",
-            identifier="age",
-            args=(30,),
-        )
-        hint = QueryHint(bin_name="alt_age")
-        rebuilt = record.rebuild_for_hint(hint)
-        expected = Filter.equal("alt_age", 30)
         assert str(rebuilt) == str(expected)
 
     def test_rebuild_range_with_index_name(self):
@@ -178,53 +175,3 @@ class TestFilterRecord:
         hint = QueryHint(index_name="age_idx")
         with pytest.raises(ValueError, match="pre-built Filter"):
             record.rebuild_for_hint(hint)
-
-
-class TestFilterGenHintOverrides:
-    """parse_ael_with_index with hint_index_name and hint_bin_name overrides."""
-
-    def test_hint_index_name_produces_by_index_filter(self):
-        ctx = IndexContext.of("test", [
-            Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
-                  namespace="test", bin_values_ratio=1),
-        ])
-        result = parse_ael_with_index(
-            "$.age == 30", ctx, hint_index_name="age_idx",
-        )
-        assert result.filter is not None
-        expected = Filter.equal_by_index("age_idx", 30)
-        assert str(result.filter) == str(expected)
-
-    def test_hint_bin_name_overrides_filter_bin(self):
-        ctx = IndexContext.of("test", [
-            Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
-                  namespace="test", bin_values_ratio=1),
-        ])
-        result = parse_ael_with_index(
-            "$.age > 10", ctx, hint_bin_name="alt_age",
-        )
-        assert result.filter is not None
-        expected = Filter.range("alt_age", 11, 2**63 - 1)
-        assert str(result.filter) == str(expected)
-
-    def test_no_hint_uses_default_bin(self):
-        ctx = IndexContext.of("test", [
-            Index(bin="age", index_type=IndexTypeEnum.NUMERIC,
-                  namespace="test", bin_values_ratio=1),
-        ])
-        result = parse_ael_with_index("$.age == 42", ctx)
-        assert result.filter is not None
-        expected = Filter.equal("age", 42)
-        assert str(result.filter) == str(expected)
-
-    def test_hint_index_name_range_ge(self):
-        ctx = IndexContext.of("test", [
-            Index(bin="score", index_type=IndexTypeEnum.NUMERIC,
-                  namespace="test", bin_values_ratio=1),
-        ])
-        result = parse_ael_with_index(
-            "$.score >= 50", ctx, hint_index_name="score_idx",
-        )
-        assert result.filter is not None
-        expected = Filter.range_by_index("score_idx", 50, 2**63 - 1)
-        assert str(result.filter) == str(expected)

@@ -25,15 +25,17 @@ import asyncio
 
 import pytest
 
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import Exp
 from aerospike_sdk.dataset import DataSet
+
+from tests.integration.namespace import general_namespace
 
 
 REGION_SET = "georeg_psdk"
 INDEX_NAME = "geoidx_psdk"
 BIN_NAME = "loc"
-NAMESPACE = "test"
-
+NAMESPACE = general_namespace()
 # 3 km AeroCircles clustered around the San Francisco Peninsula.
 STARBUCKS = [
     (-122.1708441, 37.4241193),
@@ -60,58 +62,67 @@ def _aero_circle(lng: float, lat: float, radius_m: float = 3000.0) -> str:
     return f'{{"type":"AeroCircle","coordinates":[[{lng},{lat}],{radius_m}]}}'
 
 
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
+    async with await make_cluster_definition(aerospike_host).connect() as c:
+        yield c
+
+
 @pytest.fixture
-async def geo_seeded_cluster(aerospike_host, make_cluster_definition, enterprise):
+async def geo_seeded_cluster(shared_cluster, enterprise):
     """Set up a GEO2DSPHERE index plus 15 AeroCircle regions. Tear down on exit."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
-        session = cluster.create_session()
-        regions = DataSet.of(NAMESPACE, REGION_SET)
+    cluster = shared_cluster
+    session = cluster.create_session()
+    regions = DataSet.of(NAMESPACE, REGION_SET)
 
-        # Clean any leftover data from a previous run.
-        for i in range(len(STARBUCKS)):
-            try:
-                await session.delete(regions.id(i)).execute()
-            except Exception:
-                pass
+    # Clean any leftover data from a previous run.
+    for i in range(len(STARBUCKS)):
         try:
-            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.delete(regions.id(i)).execute()
         except Exception:
             pass
+    try:
+        await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+    except Exception:
+        pass
 
-        # Create the GEO2DSPHERE index.
+    # Create the GEO2DSPHERE index.
+    try:
+        await (
+            session.index(NAMESPACE, REGION_SET)
+            .named(INDEX_NAME)
+            .on_bin(BIN_NAME)
+            .geo2dsphere()
+            .create()
+        )
+    except Exception:
+        pass  # index may already exist if a prior run failed mid-teardown
+
+    # Insert AeroCircle regions via the new set_to_geo_json builder method.
+    for i, (lng, lat) in enumerate(STARBUCKS):
+        await (
+            session.upsert(regions.id(i))
+            .bin(BIN_NAME).set_to_geo_json(_aero_circle(lng, lat))
+            .execute()
+        )
+
+    # Give the secondary index a moment to populate on community edition.
+    await asyncio.sleep(0.5 if not enterprise else 0.05)
+
+    yield cluster
+
+    for i in range(len(STARBUCKS)):
         try:
-            await (
-                session.index(NAMESPACE, REGION_SET)
-                .named(INDEX_NAME)
-                .on_bin(BIN_NAME)
-                .geo2dsphere()
-                .create()
-            )
-        except Exception:
-            pass  # index may already exist if a prior run failed mid-teardown
-
-        # Insert AeroCircle regions via the new set_to_geo_json builder method.
-        for i, (lng, lat) in enumerate(STARBUCKS):
-            await (
-                session.upsert(regions.id(i))
-                .bin(BIN_NAME).set_to_geo_json(_aero_circle(lng, lat))
-                .execute()
-            )
-
-        # Give the secondary index a moment to populate on community edition.
-        await asyncio.sleep(0.5 if not enterprise else 0.05)
-
-        yield cluster
-
-        for i in range(len(STARBUCKS)):
-            try:
-                await session.delete(regions.id(i)).execute()
-            except Exception:
-                pass
-        try:
-            await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+            await session.delete(regions.id(i)).execute()
         except Exception:
             pass
+    try:
+        await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -122,6 +133,7 @@ async def session(geo_seeded_cluster):
 class TestGeoQuery:
     """``geoCompare(...)`` over a GEO2DSPHERE index returns the expected hits."""
 
+    @requires_server_compiled_ael
     async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
         stream = await (
@@ -135,25 +147,11 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
-    async def test_ael_with_explicit_get_type_geo(self, session):
-        """Same query expressed with explicit ``.get(type: GEO)`` cast on the bin."""
-        stream = await (
-            session.query(NAMESPACE, REGION_SET)
-            .where(f"geoCompare($.{BIN_NAME}.get(type: GEO), geoJson('{QUERY_POINT}'))")
-            .execute()
-        )
-        count = 0
-        async for _ in stream:
-            count += 1
-        stream.close()
-        assert count == 5
-
     async def test_programmatic_exp_geo_compare_returns_5(self, session):
         """Programmatic ``Exp.geo_compare(...)`` via ``.where(FilterExpression)``.
 
-        Bypasses the AEL parser so the underlying FilterExpression path is
-        exercised end-to-end against a live cluster. Equivalent in effect to
-        the AEL form above, but proves both surfaces independently.
+        Bypasses string AEL so the FilterExpression path is exercised end-to-end
+        against a live cluster. Equivalent in effect to the AEL form above.
         """
         filter_exp = Exp.geo_compare(
             Exp.geo_bin(BIN_NAME),
@@ -169,3 +167,4 @@ class TestGeoQuery:
             count += 1
         stream.close()
         assert count == 5
+

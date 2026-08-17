@@ -27,9 +27,11 @@ import pytest
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition, enterprise):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
@@ -37,7 +39,7 @@ def cluster(aerospike_host, make_cluster_definition, enterprise):
 
 @pytest.fixture
 def ds():
-    return DataSet.of("test", "sync_complex_batch")
+    return DataSet.of(general_namespace(), "sync_complex_batch")
 
 
 @pytest.fixture
@@ -101,6 +103,7 @@ class TestMixedReadWrite:
 
         _cleanup(session, k1, k2)
 
+    @requires_server_compiled_ael
     def test_query_expression_then_write(self, session, ds):
         k1 = ds.id("cb_rw_5")
         k2 = ds.id("cb_rw_6")
@@ -174,6 +177,7 @@ class TestMixedOpTypes:
 class TestWriteWithExpressions:
     """Expression-based writes in a chained context."""
 
+    @requires_server_compiled_ael
     def test_upsert_from_expression(self, session, ds):
         k = ds.id("cb_exp_1")
         _cleanup(session, k)
@@ -191,6 +195,7 @@ class TestWriteWithExpressions:
 
         _cleanup(session, k)
 
+    @requires_server_compiled_ael
     def test_expression_write_and_scalar_write(self, session, ds):
         k = ds.id("cb_exp_2")
         _cleanup(session, k)

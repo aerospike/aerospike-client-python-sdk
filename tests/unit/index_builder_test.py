@@ -18,8 +18,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_sdk import CollectionIndexType, CTX
-from aerospike_async import FilterExpression, IndexType
+from aerospike_sdk import CollectionIndexType, CTX, Exp
+from aerospike_async import IndexType
 
 from aerospike_sdk.aio.operations.index import IndexBuilder
 
@@ -34,7 +34,7 @@ def _async_builder() -> IndexBuilder:
 class TestOnExpressionChaining:
 
     def test_stores_prebuilt_filter_expression(self):
-        exp = FilterExpression.int_bin("age")
+        exp = Exp.int_bin("age")
         b = _async_builder()
         assert b.on_expression(exp) is b
         assert b._expression is exp
@@ -42,13 +42,13 @@ class TestOnExpressionChaining:
     def test_on_bin_first_raises(self):
         b = _async_builder().on_bin("age")
         with pytest.raises(ValueError, match="mutually exclusive"):
-            b.on_expression(FilterExpression.int_bin("age"))
+            b.on_expression(Exp.int_bin("age"))
 
 
 class TestExpressionCreateAsync:
 
     async def test_routes_to_expression_entry(self):
-        exp = FilterExpression.int_bin("age")
+        exp = Exp.int_bin("age")
         b = (
             _async_builder()
             .on_expression(exp)
@@ -62,7 +62,7 @@ class TestExpressionCreateAsync:
         b._client.create_index.assert_not_called()
 
     async def test_forwards_collection_index_type(self):
-        exp = FilterExpression.list_bin("tags")
+        exp = Exp.list_bin("tags")
         b = (
             _async_builder()
             .on_expression(exp)
@@ -77,7 +77,7 @@ class TestExpressionCreateAsync:
     async def test_on_expression_then_on_bin_raises_at_create(self):
         b = (
             _async_builder()
-            .on_expression(FilterExpression.int_bin("age"))
+            .on_expression(Exp.int_bin("age"))
             .on_bin("age")
             .named("idx")
             .numeric()
@@ -88,7 +88,7 @@ class TestExpressionCreateAsync:
     async def test_context_rejected(self):
         b = (
             _async_builder()
-            .on_expression(FilterExpression.int_bin("age"))
+            .on_expression(Exp.int_bin("age"))
             .named("idx")
             .numeric()
             .context([CTX.map_key("meta")])
@@ -97,12 +97,12 @@ class TestExpressionCreateAsync:
             await b.create()
 
     async def test_missing_name_raises(self):
-        b = _async_builder().on_expression(FilterExpression.int_bin("age")).numeric()
+        b = _async_builder().on_expression(Exp.int_bin("age")).numeric()
         with pytest.raises(ValueError, match="index_name"):
             await b.create()
 
     async def test_missing_index_type_raises(self):
-        b = _async_builder().on_expression(FilterExpression.int_bin("age")).named("idx")
+        b = _async_builder().on_expression(Exp.int_bin("age")).named("idx")
         with pytest.raises(ValueError, match="index_type"):
             await b.create()
 
@@ -121,7 +121,7 @@ class TestExpressionCreateSync:
         from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
 
         sync_client = MagicMock()
-        exp = FilterExpression.int_bin("age")
+        exp = Exp.int_bin("age")
         b = (
             SyncIB(sync_client, "test", "users")
             .on_expression(exp)

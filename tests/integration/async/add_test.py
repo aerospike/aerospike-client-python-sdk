@@ -18,11 +18,13 @@
 import pytest
 from aerospike_sdk.dataset import DataSet
 
+from tests.integration.namespace import general_namespace
+
 
 @pytest.fixture
 def test_set():
     """DataSet fixture for add tests."""
-    return DataSet.of("test", "add_test")
+    return DataSet.of(general_namespace(), "add_test")
 
 
 class TestAdd:

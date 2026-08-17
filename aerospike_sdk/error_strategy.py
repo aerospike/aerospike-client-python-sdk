@@ -110,6 +110,7 @@ def _filter_records_with_handler(
         if not r.is_ok:
             exc = r.exception or _result_code_to_exception(
                 r.result_code, str(r.result_code), r.in_doubt,
+                sub_code=r.sub_code,
             )
             handler(r.key, r.index, exc)
             continue

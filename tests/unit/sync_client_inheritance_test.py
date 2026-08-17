@@ -23,6 +23,7 @@ attempt left the single-key fast path returning an aio.QueryBuilder, so
 got :class:`AttributeError` on the next method call.
 """
 
+import time
 from unittest.mock import MagicMock
 
 from aerospike_sdk import Key
@@ -40,6 +41,9 @@ def _make_offline_sync_client() -> SyncClient:
     client = SyncClient("127.0.0.1:3000", policy=ClientPolicy())
     client._client = MagicMock()
     client._connected = True
+    client._cached_supports_query_selection = True
+    client._cached_supports_server_compiled_ael = True
+    client._routing_capability_stamp = time.monotonic()
     return client
 
 
@@ -82,3 +86,20 @@ class TestSyncSessionFactoryReturnTypes:
         session = _make_offline_sync_session()
         builder = session.query(namespace="test", set_name="users")
         assert isinstance(builder, SyncQueryBuilder)
+
+
+class TestSyncSessionCapabilityFlags:
+    """Fast-path QueryBuilder construction must inherit server capability flags."""
+
+    def test_single_key_fast_path_inherits_server_compiled_ael(self):
+        session = _make_offline_sync_session()
+        builder = session.query(Key("test", "users", 1))
+        assert builder._supports_server_compiled_ael is True
+        assert builder._supports_query_selection is True
+
+    def test_multi_key_fast_path_inherits_server_compiled_ael(self):
+        session = _make_offline_sync_session()
+        keys = [Key("test", "users", i) for i in range(2)]
+        builder = session.query(keys)
+        assert builder._supports_server_compiled_ael is True
+        assert builder._supports_query_selection is True

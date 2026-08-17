@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from aerospike_sdk import Key
-from aerospike_async import Expiration
+from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
@@ -32,6 +32,17 @@ from aerospike_sdk.error_strategy import (
 )
 from aerospike_sdk.operations_shared import _to_expiration
 from aerospike_sdk.record_result import RecordResult
+
+
+@pytest.fixture(autouse=True)
+def _mock_server_compiled_ael_string(monkeypatch):
+    def _fake(ael, *, supports_server_compiled_ael=True):
+        return FilterExpression.from_server_compiled_ael(ael)
+
+    monkeypatch.setattr(
+        "aerospike_sdk.query_shared.filter_expression_from_ael_string",
+        _fake,
+    )
 
 
 def _key(val: int = 1) -> Key:
@@ -145,6 +156,19 @@ class TestFilterRecordsWithHandler:
         assert isinstance(captured[0], AerospikeError)
         assert captured[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
+    def test_synthesized_exception_carries_sub_code(self):
+        """The handler-synthesized exception keeps the row's sub_code —
+        matching what ``RecordResult.or_raise`` raises for the same row."""
+        row = RecordResult(
+            key=_key(1), record=None,
+            result_code=ResultCode.OP_NOT_APPLICABLE, index=0, sub_code=2,
+        )
+        captured: list = []
+        _filter_records_with_handler(
+            [row], lambda k, i, e: captured.append(e),
+        )
+        assert captured[0].sub_code == 2
+
 
 # ---------------------------------------------------------------------------
 # RecordResult with exception field
@@ -200,6 +224,37 @@ class TestRecordResultException:
         with pytest.raises(TimeoutError):
             rr.record_or_raise()
 
+    def test_client_side_error_row_is_not_ok(self):
+        # Client-side failures never reach the server, so they carry no result
+        # code and the row's code reads OK. The attached exception is what
+        # makes the row a failure — reporting it as success would claim a
+        # write that never happened.
+        exc = AerospikeError("client rejected the command")
+        assert exc.result_code is None
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        assert rr.is_ok is False
+
+    def test_or_raise_raises_client_side_error_despite_ok_code(self):
+        exc = AerospikeError("client rejected the command")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        with pytest.raises(AerospikeError, match="client rejected"):
+            rr.or_raise()
+
+    def test_as_bool_raises_client_side_error_despite_ok_code(self):
+        exc = TimeoutError("client deadline expired", client=True)
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc,
+        )
+        with pytest.raises(TimeoutError, match="client deadline"):
+            rr.as_bool()
+
 
 # ---------------------------------------------------------------------------
 # Bucket 3: Builder flag wiring
@@ -213,6 +268,7 @@ class TestBuilderFlagWiring:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            supports_server_compiled_ael=True,
         )
         qb._op_type = "upsert"
         qb._single_key = _key()

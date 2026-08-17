@@ -48,6 +48,11 @@ from aerospike_sdk.aio.operations.query import (
 )
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import (
+    PacAerospikeError,
+    PacServerError,
+    _convert_pac_exception,
+)
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
@@ -224,8 +229,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Raises:
             AerospikeError: Server or client errors (including
-                ``KEY_NOT_FOUND_ERROR``) are raised from the underlying
-                client without being wrapped in a
+                ``KEY_NOT_FOUND_ERROR``) are raised as the SDK exception
+                type for the failure, without being wrapped in a
                 :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Example::
@@ -238,17 +243,21 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`query`: Builder-based reads for projections, streams, and secondary-index queries.
             :meth:`put`: Direct single-key upsert.
         """
-        if self._txn is None:
-            if _COALESCE and bins is None:
-                return await self._coalesced_get(key)
-            return await self._pac_client.get(
-                key, bins,
-                policy=self._cached_read_policy,
-                policy_sc=self._cached_read_policy_sc,
-            )
-        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
-        policy.txn = self._txn
-        return await self._pac_client.get(key, bins, policy=policy)
+        try:
+            if self._txn is None:
+                if _COALESCE and bins is None:
+                    return await self._coalesced_get(key)
+                return await self._pac_client.get(
+                    key, bins,
+                    policy=self._cached_read_policy,
+                    policy_sc=self._cached_read_policy_sc,
+                )
+            policy = to_read_policy(
+                self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+            policy.txn = self._txn
+            return await self._pac_client.get(key, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     async def _coalesced_get(self, key: Key) -> Record:
         """Opportunistic same-tick coalescing for a no-projection read.
@@ -400,8 +409,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             ``None`` on success.
 
         Raises:
-            AerospikeError: Server or client errors are raised from the
-                underlying client.
+            AerospikeError: Server or client errors are raised as the SDK
+                exception type for the failure.
 
         Example::
 
@@ -412,21 +421,24 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`upsert`: Builder-based writes with full feature set.
             :meth:`get`: Direct single-key point read.
         """
-        if self._txn is None:
-            if _COALESCE_WRITES:
-                await self._coalesced_put(key, bins)
+        try:
+            if self._txn is None:
+                if _COALESCE_WRITES:
+                    await self._coalesced_put(key, bins)
+                    return
+                await self._pac_client.put(
+                    key, bins,
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
                 return
-            await self._pac_client.put(
-                key, bins,
-                policy=self._cached_write_policy,
-                policy_sc=self._cached_write_policy_sc,
-            )
-            return
-        policy = to_write_policy(
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
-        policy.txn = self._txn
-        await self._pac_client.put(key, bins, policy=policy)
+            policy = to_write_policy(
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            policy.txn = self._txn
+            await self._pac_client.put(key, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     async def get_many(
         self, keys: List[Key], bins: Optional[List[str]] = None,
@@ -449,7 +461,15 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :class:`~aerospike_async.Record` for that key, or the exception
             instance (not raised) for that key — check with
             ``isinstance(slot, Exception)``. One failed key never fails its
-            window-mates.
+            window-mates. Slot instances carry the underlying client's
+            exception types (converting every slot would cost a scan of
+            each successful window); a failure that aborts the whole window
+            is raised as the SDK exception type.
+
+        Raises:
+            AerospikeError: When the whole-window submission fails (for
+                example, the client was closed); per-key failures land in
+                result slots instead.
 
         Example::
 
@@ -461,15 +481,20 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`get`: Single-key point read.
             :meth:`put_many`: Window counterpart for writes.
         """
-        if self._txn is None:
+        try:
+            if self._txn is None:
+                return await self._pac_client._submit_many_read(
+                    keys, bins,
+                    policy=self._cached_read_policy,
+                    policy_sc=self._cached_read_policy_sc,
+                )
+            policy = to_read_policy(
+                self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+            policy.txn = self._txn
             return await self._pac_client._submit_many_read(
-                keys, bins,
-                policy=self._cached_read_policy,
-                policy_sc=self._cached_read_policy_sc,
-            )
-        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
-        policy.txn = self._txn
-        return await self._pac_client._submit_many_read(keys, bins, policy=policy)
+                keys, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     async def put_many(
         self, keys: List[Key], bins: Dict[str, Any],
@@ -486,7 +511,14 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Returns:
             A list the same length as ``keys``: ``None`` for each success,
-            or the exception instance (not raised) for that key.
+            or the exception instance (not raised) for that key. Slot
+            instances carry the underlying client's exception types; a
+            failure that aborts the whole window is raised as the SDK
+            exception type.
+
+        Raises:
+            AerospikeError: When the whole-window submission fails; per-key
+                failures land in result slots instead.
 
         Example::
 
@@ -499,17 +531,21 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`put`: Single-key upsert.
             :meth:`get_many`: Window counterpart for reads.
         """
-        if self._txn is None:
+        try:
+            if self._txn is None:
+                return await self._pac_client._submit_many_write(
+                    keys, bins,
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+            policy = to_write_policy(
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            policy.txn = self._txn
             return await self._pac_client._submit_many_write(
-                keys, bins,
-                policy=self._cached_write_policy,
-                policy_sc=self._cached_write_policy_sc,
-            )
-        policy = to_write_policy(
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
-        policy.txn = self._txn
-        return await self._pac_client._submit_many_write(keys, bins, policy=policy)
+                keys, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     @property
     def client(self) -> Client:
@@ -601,7 +637,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             first.namespace,
             first.set_name,
             self._behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -682,7 +717,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace=first.namespace,
             set_name=first.set_name,
             behavior=self._behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -737,7 +771,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             key.namespace,
             key.set_name,
             behavior,
-            self._client._indexes_monitor,
             self._cached_read_policy,
             self._cached_write_policy,
             self._cached_read_policy_sc,

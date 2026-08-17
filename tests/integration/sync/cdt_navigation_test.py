@@ -19,21 +19,31 @@ import pytest
 
 from aerospike_sdk import ListOrderType, MapOrder
 
-from aerospike_sdk import DataSet, ListReturnType, MapReturnType
+from aerospike_sdk import DataSet, MapReturnType
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "cdt_navigation_sync"
 DS = DataSet.of(NS, SET)
 
 
-@pytest.fixture
-def cluster(aerospike_host, make_cluster_definition):
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
-        session = c.create_session()
-        for i in range(1, 40):
-            session.delete(DS.id(i)).execute()
         yield c
+
+
+@pytest.fixture
+def cluster(shared_cluster):
+    c = shared_cluster
+    session = c.create_session()
+    for i in range(1, 40):
+        session.delete(DS.id(i)).execute()
+    yield c
 
 
 def _key(n: int):
@@ -248,13 +258,6 @@ class TestValueSelectorChainingSync:
 
 
 class TestSpecialValueOpenRangeSync:
-
-    @pytest.fixture(autouse=True)
-    def _require_special_value(self):
-        try:
-            from aerospike_async import SpecialValue  # noqa: F401
-        except ImportError:
-            pytest.skip("aerospike_async.SpecialValue not available")
 
     def test_nested_map_key_range_to_infinity(self, cluster):
         from aerospike_sdk import SpecialValue

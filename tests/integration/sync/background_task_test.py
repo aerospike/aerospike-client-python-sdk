@@ -19,8 +19,10 @@ import pytest
 from aerospike_sdk import UDFLang
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
-NS = "test"
+NS = general_namespace()
 SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
@@ -54,18 +56,27 @@ def _wait_task(cluster, task) -> bool:
     return task.wait_till_complete_blocking()
 
 
-@pytest.fixture
-def cluster(aerospike_host, make_cluster_definition):
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
-        reg = c.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
-        reg.wait_till_complete_blocking()
-        session = c.create_session()
-        for i in range(1, 60):
-            try:
-                session.delete(DS.id(f"bg_{i}")).execute()
-            except Exception:
-                pass
         yield c
+
+
+@pytest.fixture
+def cluster(shared_cluster):
+    c = shared_cluster
+    reg = c.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
+    reg.wait_till_complete_blocking()
+    session = c.create_session()
+    for i in range(1, 60):
+        try:
+            session.delete(DS.id(f"bg_{i}")).execute()
+        except Exception:
+            pass
+    yield c
 
 
 def test_sync_background_update(cluster):
@@ -90,6 +101,7 @@ def test_sync_background_update(cluster):
         assert rr.record.bins.get(BG_BIN2) == "sync_updated"
 
 
+@requires_server_compiled_ael
 def test_sync_background_delete(cluster):
     session = cluster.create_session()
     for i in range(1, 11):

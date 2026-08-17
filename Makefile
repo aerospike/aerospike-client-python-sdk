@@ -1,33 +1,4 @@
-.PHONY: antlr generate-ael clean-ael test dev docs docs-clean docs-serve examples bench bench-quick bench-compare
-
-# ANTLR JAR location - download if not present
-ANTLR_JAR ?= antlr-4.13.0-complete.jar
-ANTLR_URL = https://www.antlr.org/download/$(ANTLR_JAR)
-
-# AEL grammar and output directories
-AEL_GRAMMAR = aerospike_sdk/ael/antlr4/Condition.g4
-AEL_OUTPUT = aerospike_sdk/ael/antlr4/generated
-AEL_GENERATED = $(AEL_OUTPUT)/ConditionLexer.py $(AEL_OUTPUT)/ConditionParser.py $(AEL_OUTPUT)/ConditionListener.py $(AEL_OUTPUT)/ConditionVisitor.py
-
-antlr-download:
-	@if [ ! -f $(ANTLR_JAR) ]; then \
-		echo "Downloading ANTLR JAR..."; \
-		curl -L -o $(ANTLR_JAR) $(ANTLR_URL); \
-	fi
-
-generate-ael: antlr-download
-	@echo "Checking Java version (requires Java 11+)..."
-	@java -version 2>&1 | head -1 || (echo "Error: Java is not installed or not in PATH. ANTLR requires Java 11 or higher." && exit 1)
-	@echo "Generating Python parser from ANTLR grammar..."
-	@mkdir -p $(AEL_OUTPUT)
-	@cd aerospike_sdk/ael/antlr4 && java -jar ../../../$(ANTLR_JAR) -Dlanguage=Python3 -o generated -visitor -listener Condition.g4
-	@touch $(AEL_OUTPUT)/__init__.py
-	@echo "Generated parser files in $(AEL_OUTPUT)/"
-
-clean-ael:
-	@echo "Cleaning generated AEL parser files..."
-	@rm -rf $(AEL_OUTPUT)
-	@echo "Cleaned AEL parser files"
+.PHONY: test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin test-sc
 
 dev:
 	pip install -e ".[dev]"
@@ -41,8 +12,22 @@ test-unit:
 test-int:
 	pytest tests/integration
 
+# run the integration suite against a SC namespace instead of the AP default.
+# AEROSPIKE_GENERAL_AUTH turns the default policy auth-aware
+# AEROSPIKE_NAMESPACE aims general_namespace() at the SC namespace
+# SC seed and AEROSPIKE_AUTH_* come from aerospike.env
+# point aerospike.env's AEROSPIKE_HOST at an SC-capable cluster if it isn't already.
+# Override the namespace name with `make test-sc SC_NAMESPACE=<name>`.
+SC_NAMESPACE ?= test_sc
+test-sc:
+	AEROSPIKE_GENERAL_AUTH=1 AEROSPIKE_NAMESPACE=$(SC_NAMESPACE) pytest tests/integration
+
+check-pin:
+	pytest tests/unit/pin_drift_test.py -q
+
 examples:
-	@for f in examples/*_example.py examples/operation_differences.py; do \
+	@for f in examples/*.py; do \
+		case "$$f" in examples/_env.py|examples/__init__.py) continue;; esac; \
 		echo "=== $$f ==="; \
 		python "$$f" || exit 1; \
 		echo; \

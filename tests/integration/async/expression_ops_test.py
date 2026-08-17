@@ -35,36 +35,49 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import ResultCode, ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
+from tests.pac_compat import requires_server_compiled_ael
+from tests.integration.namespace import general_namespace
 
-NS = "test"
+NS = general_namespace()
 SET = "exp_ops"
 KEY_A = "exp_A"
 KEY_B = "exp_B"
 
 
-@pytest.fixture
-async def cluster(aerospike_host, make_cluster_definition):
-    """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
+
+pytestmark = requires_server_compiled_ael
+@pytest.fixture(scope="module")
+async def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
     async with await make_cluster_definition(aerospike_host).connect() as c:
-        session = c.create_session()
-        # Clean slate
-        try:
-            await session.delete(_key(KEY_A)).execute()
-        except Exception:
-            pass
-        try:
-            await session.delete(_key(KEY_B)).execute()
-        except Exception:
-            pass
-
-        # Seed: keyA has A=1, D=2; keyB has B=2, D=2
-        await session.upsert(_key(KEY_A)).put({"A": 1, "D": 2}).execute()
-        await session.upsert(_key(KEY_B)).put({"B": 2, "D": 2}).execute()
-
-        # Brief pause so the query scan index reflects the committed writes under CI load
-        await asyncio.sleep(0.1)
-
         yield c
+
+
+@pytest.fixture
+async def cluster(shared_cluster):
+    """Function-scoped seed: writers mutate KEY_A/KEY_B; tests assume a clean slate each run."""
+    c = shared_cluster
+    session = c.create_session()
+    # Clean slate
+    try:
+        await session.delete(_key(KEY_A)).execute()
+    except Exception:
+        pass
+    try:
+        await session.delete(_key(KEY_B)).execute()
+    except Exception:
+        pass
+
+    # Seed: keyA has A=1, D=2; keyB has B=2, D=2
+    await session.upsert(_key(KEY_A)).put({"A": 1, "D": 2}).execute()
+    await session.upsert(_key(KEY_B)).put({"B": 2, "D": 2}).execute()
+
+    # Brief pause so the query scan index reflects the committed writes under CI load
+    await asyncio.sleep(0.1)
+
+    yield c
 
 
 @pytest.fixture
@@ -126,11 +139,12 @@ class TestSelectFrom:
         )
         result = await rs.first_or_raise()
         assert result.record.bins.get("ev") is None
-
     async def test_select_from_returns_nil(self, session):
         """select_from on missing bin with ignore_eval_failure returns None."""
         rs = await (
-            session.query(_key(KEY_B)).bin("ev").select_from("$.A", ignore_eval_failure=True)
+            session.query(_key(KEY_B)).bin("ev").select_from(
+                "$.A:INT", ignore_eval_failure=True,
+            )
             .execute()
         )
         result = await rs.first_or_raise()
@@ -261,14 +275,14 @@ class TestInsertFrom:
 # ===================================================================
 
 class TestCombinedExpression:
-
     async def test_upsert_from_and_select_from(self, cluster):
         """upsert_from + select_from in same execute."""
         session = cluster.create_session()
+
         stream = await (
             session.update(_key(KEY_A))
-            .bin("D").upsert_from("$.D + 10")
-            .bin("ev").select_from("$.A")
+            .bin("D").upsert_from("$.D:INT + 10")
+            .bin("ev").select_from("$.A:INT")
             .execute()
         )
         result = await stream.first_or_raise()
@@ -285,14 +299,16 @@ class TestCombinedExpression:
         result = await rec.first_or_raise()
         assert result is not None
         assert result.record.bins["C"] == 5
-
-    async def test_write_eval_error_with_ignore(self, cluster):
+    async def test_write_eval_error_with_ignore(
+        self, cluster,
+    ):
         """upsert_from + select_from with ignore_eval_failure on both."""
         session = cluster.create_session()
+
         stream = await (
             session.update(_key(KEY_B))
-            .bin("C").upsert_from("$.A + 4", ignore_eval_failure=True)
-            .bin("ev").select_from("$.A", ignore_eval_failure=True)
+            .bin("C").upsert_from("$.A:INT + 4", ignore_eval_failure=True)
+            .bin("ev").select_from("$.A:INT", ignore_eval_failure=True)
             .execute()
         )
         result = await stream.first_or_raise()

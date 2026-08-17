@@ -20,9 +20,10 @@ from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "cdt_write_sync"
 DS = DataSet.of(NS, SET)
 
@@ -74,13 +75,22 @@ def _assert_list_get_relative_batch(raw_bin):
         assert [int(x) for x in got] == exp
 
 
-@pytest.fixture
-def cluster(aerospike_host, make_cluster_definition):
+@pytest.fixture(scope="module")
+def shared_cluster(aerospike_host, make_cluster_definition):
+    """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
+    paid once per file. Per-test data freshness stays in the seeding fixtures,
+    which re-seed on every test against this shared cluster."""
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
-        session = c.create_session()
-        for key_id in range(1, 130):
-            session.delete(DS.id(key_id)).execute()
         yield c
+
+
+@pytest.fixture
+def cluster(shared_cluster):
+    c = shared_cluster
+    session = c.create_session()
+    for key_id in range(1, 130):
+        session.delete(DS.id(key_id)).execute()
+    yield c
 
 
 # ===================================================================

@@ -102,8 +102,6 @@ class SdkLoggers:
     INFO = "aerospike_sdk.info"
     #: Background task submission (background writes, background UDF).
     BACKGROUND = "aerospike_sdk.background"
-    #: Secondary-index cache refresh (:class:`~aerospike_sdk.index_monitor.IndexesMonitor`).
-    INDEX_MONITOR = "aerospike_sdk.index_monitor"
     #: Client connect / close on both the async and sync surfaces.
     LIFECYCLE = "aerospike_sdk.lifecycle"
     #: :class:`~aerospike_sdk.aio.pool.AsyncPool` start / stop and loop threads.

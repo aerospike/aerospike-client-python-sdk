@@ -15,17 +15,17 @@
 
 """Integration tests for HyperLogLog and bit-operation fluent builders."""
 
-import pytest
 import pytest_asyncio
 
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
-        test_ds = DataSet.of("test", "test")
+        test_ds = DataSet.of(general_namespace(), "test")
         await session.delete(test_ds.id("hll_bit_fluent_1")).execute()
         await session.delete(test_ds.id("hll_bit_fluent_2")).execute()
         yield c
@@ -34,7 +34,7 @@ async def cluster(aerospike_host, make_cluster_definition):
 async def test_hll_init_add_and_get_count(cluster):
     from aerospike_sdk import HllConfig
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id("hll_bit_fluent_1")
+    k = DataSet.of(general_namespace(), "test").id("hll_bit_fluent_1")
     await (
         session.upsert(k)
         .bin("hll")
@@ -53,7 +53,7 @@ async def test_hll_init_add_and_get_count(cluster):
 
 async def test_bit_resize_set_and_get(cluster):
     session = cluster.create_session()
-    k = DataSet.of("test", "test").id("hll_bit_fluent_2")
+    k = DataSet.of(general_namespace(), "test").id("hll_bit_fluent_2")
     await (
         session.upsert(k)
         .bin("bits")

@@ -21,10 +21,14 @@ These tests provide simple, focused examples for documentation.
 import asyncio
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet, Key
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster(aerospike_host):
     """Setup cluster for testing."""
     if ":" in aerospike_host:
@@ -34,7 +38,7 @@ async def cluster(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = await cluster_def.connect()
     yield cluster
     await cluster.close()
@@ -52,10 +56,12 @@ _ORPHAN_CUSTOMER_INDEXES = ("age_idx", "tags_idx")
 async def _drop_orphan_customer_indexes(session, customers):
     """Best-effort drop of indexes left over from prior runs.
 
-    AEL ``where()`` consults ``IndexesMonitor``; an orphaned ``age_idx``
-    on the cluster makes :func:`test_java_example_query_with_where` send
-    a sindex filter that the server may have already dropped, raising
-    ``IndexNotFound``.
+    :func:`test_java_example_index_operations` creates ``age_idx`` and
+    ``tags_idx`` on the Customers set. If a prior run exits before teardown,
+    those indexes can still exist when :func:`test_java_example_query_with_where`
+    runs. Server-led query selection (explain on field ``44``) may then plan
+    against a stale or partially dropped index and raise ``IndexNotFound`` or
+    return unexpected hits. Drop them up front so each test sees a clean set.
     """
     for name in _ORPHAN_CUSTOMER_INDEXES:
         try:
@@ -70,10 +76,10 @@ async def customer_dataset(session):
 
     This fixture ensures test data is in a known state before each test.
     It deletes and recreates keys 1, 2, 3 to ensure clean state, and
-    sweeps any leftover Customers-set indexes from prior runs so AEL's
-    auto-index path stays consistent.
+    sweeps any leftover Customers-set indexes from prior runs so string-AEL
+    dataset queries plan against a predictable secondary-index set.
     """
-    customers = DataSet.of("test", "Customers")
+    customers = DataSet.of(general_namespace(), "Customers")
     await _drop_orphan_customer_indexes(session, customers)
 
     # Always reset test data to known state before each test
@@ -115,7 +121,7 @@ async def test_java_example_connecting_basic(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = await cluster_def.connect()
     assert cluster.is_connected()
     await cluster.close()
@@ -134,7 +140,7 @@ async def test_java_example_connecting_with_credentials(aerospike_host):
         port = 3000
 
     # Note: Only test if credentials are actually needed
-    cluster_def = ClusterDefinition(hostname, port)
+    cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
     cluster = await cluster_def.connect()
     assert cluster.is_connected()
     await cluster.close()
@@ -153,7 +159,7 @@ async def test_java_example_connecting_with_ip_map(aerospike_host):
         port = 3000
 
     cluster = await (
-        ClusterDefinition(hostname, port)
+        apply_general_auth(ClusterDefinition(hostname, port))
         .using_services_alternate()
         .with_ip_map({"10.0.0.1": "3.72.54.187"})
         .connect()
@@ -171,7 +177,7 @@ async def test_java_example_connecting_context_manager(aerospike_host):
         hostname = aerospike_host
         port = 3000
 
-    cluster = await ClusterDefinition(hostname, port).connect()
+    cluster = await apply_general_auth(ClusterDefinition(hostname, port)).connect()
     async with cluster:
         assert cluster.is_connected()
         session = cluster.create_session(Behavior.DEFAULT)
@@ -204,9 +210,9 @@ async def test_java_example_sessions(cluster):
 # DataSet Examples # ============================================================================
 
 async def test_java_example_dataset_creation():
-    """Java: DataSet customerDataSet = DataSet.of("test", "Customers");"""
-    customer_dataset = DataSet.of("test", "Customers")
-    assert customer_dataset.namespace == "test"
+    """Java: DataSet customerDataSet = DataSet.of(general_namespace(), "Customers");"""
+    customer_dataset = DataSet.of(general_namespace(), "Customers")
+    assert customer_dataset.namespace == general_namespace()
     assert customer_dataset.set_name == "Customers"
 
 
@@ -243,7 +249,7 @@ async def test_java_example_dataset_id_from_digest(customer_dataset):
 
     assert isinstance(cust_by_digest, Key)
     assert cust_by_digest == original_key
-    assert cust_by_digest.namespace == "test"
+    assert cust_by_digest.namespace == general_namespace()
     assert cust_by_digest.set_name == "Customers"
 
 
@@ -311,8 +317,8 @@ async def test_java_example_query_varargs_keys(session, customer_dataset):
 
 
 async def test_java_example_query_namespace_set(session, customer_dataset):
-    """Java: session.query("test", "users")"""
-    stream = await session.query("test", "Customers").execute()
+    """Java: session.query(general_namespace(), "users")"""
+    stream = await session.query(general_namespace(), "Customers").execute()
     count = 0
     async for _ in stream:
         count += 1
@@ -322,6 +328,7 @@ async def test_java_example_query_namespace_set(session, customer_dataset):
     assert count > 0
 
 
+@requires_server_compiled_ael
 async def test_java_example_query_with_where(session, customer_dataset):
     """Java: rs = session.query(customerDataSet)
               .where(DSL.of("$.name == 'Tim' and $.age > 18"))
@@ -516,23 +523,6 @@ async def test_java_example_filter_control_with_chunk_size(session, customer_dat
     stream.close()
 
 
-async def test_java_example_filter_control_on_partitions(session, customer_dataset):
-    """Java: session.query(dataSet1).onPartitions(1, 2, 3)..."""
-    # Test that on_partitions can be called with partition IDs
-    stream = await (
-        session.query(customer_dataset)
-        .on_partitions(1, 2, 3)
-        .execute()
-    )
-
-    # Verify it executes and can be iterated
-    count = 0
-    async for _ in stream:
-        count += 1
-    assert count >= 0  # At least 0 records
-    stream.close()
-
-
 async def test_java_example_filter_control_on_partition(session, customer_dataset):
     """Java: query.onPartition(5)"""
     # Test that on_partition can be called with a single partition ID
@@ -561,28 +551,40 @@ async def test_java_example_filter_control_on_partition_range(session, customer_
     stream.close()
 
 
+@requires_server_compiled_ael
 async def test_java_example_filter_control_full(session, customer_dataset):
-    """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitions(1, 2, 3)
+    """Java: RecordSet myquery = session.query(dataSet1).chunkSize(100).onPartitionRange(1, 4)
               .where(DSL.of("$.bonus > 100 and $.person.age >= 18"));
     """
-    stream = await (
+    restricted = await (
         session.query(customer_dataset)
         .chunk_size(100)
-        .on_partitions(1, 2, 3)
+        .on_partition_range(1, 4)
         .where("$.age > 20")
         .execute()
     )
-
     count = 0
-    async for _ in stream:
+    async for _ in restricted:
         count += 1
-    stream.close()
-    assert count >= 0
+    restricted.close()
+
+    unrestricted = await (
+        session.query(customer_dataset)
+        .where("$.age > 20")
+        .execute()
+    )
+    total = 0
+    async for _ in unrestricted:
+        total += 1
+    unrestricted.close()
+
+    # Restricting to 3 of 4096 partitions can only narrow the matching set.
+    assert count <= total
 
 
 async def test_java_example_key_value_operations_direct_client(session, customer_dataset):
     """Java: session.upsert(key).put(...).execute(); Record rec = session.query(key).execute().first_or_raise().record;"""
-    ds = DataSet.of("test", "Customers")
+    ds = DataSet.of(general_namespace(), "Customers")
     key = ds.id("user123")
     await session.upsert(key).put({"name": "John", "age": 30}).execute()
     result = await (await session.query(key).execute()).first_or_raise()
@@ -646,7 +648,7 @@ async def test_java_example_index_operations(session, customer_dataset):
             pass  # Index may not exist
     finally:
         # Drop both indexes so later tests (and reruns) don't see orphans
-        # that mislead AEL's secondary-index auto-routing.
+        # that confuse server-led index selection on the Customers set.
         await _drop_orphan_customer_indexes(session, customer_dataset)
 
 

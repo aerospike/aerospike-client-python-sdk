@@ -17,28 +17,26 @@
 
 import pytest
 from aerospike_sdk.dataset import DataSet
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def test_set():
     """DataSet fixture for list/map tests."""
-    return DataSet.of("test", "listmap_test")
+    return DataSet.of(general_namespace(), "listmap_test")
 
 
 class TestListMap:
     """Test storing and retrieving list and map data types."""
 
-    async def test_list_strings(self, cluster, test_set: DataSet):
+    async def test_list_strings(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test storing and retrieving a list of strings."""
         session = cluster.create_session()
         key = test_set.id("listStrings")
         bin_name = "listbin1"
 
         # Delete if exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         # Create list
         list_data = ["string1", "string2", "string3"]
@@ -57,20 +55,17 @@ class TestListMap:
         assert received_list[1] == "string2"
         assert received_list[2] == "string3"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_list_complex(self, cluster, test_set: DataSet):
+    async def test_list_complex(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test storing and retrieving a list with mixed types."""
         session = cluster.create_session()
         key = test_set.id("listComplex")
         bin_name = "listbin2"
 
         # Delete if exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         # Create complex list
         blob = bytes([3, 52, 125])
@@ -91,20 +86,17 @@ class TestListMap:
         assert received_list[1] == 2
         assert received_list[2] == blob
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_map_strings(self, cluster, test_set: DataSet):
+    async def test_map_strings(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test storing and retrieving a map of strings."""
         session = cluster.create_session()
         key = test_set.id("mapStrings")
         bin_name = "mapbin1"
 
         # Delete if exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         # Create map
         map_data = {
@@ -127,20 +119,17 @@ class TestListMap:
         assert received_map["key2"] == "loooooooooooooooooooooooooongerstring2"
         assert received_map["key3"] == "string3"
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_map_complex(self, cluster, test_set: DataSet):
+    async def test_map_complex(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test storing and retrieving a map with mixed types."""
         session = cluster.create_session()
         key = test_set.id("mapComplex")
         bin_name = "mapbin2"
 
         # Delete if exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         # Create complex map
         blob = bytes([3, 52, 125])
@@ -179,19 +168,16 @@ class TestListMap:
         assert received_map["key5"] is True
         assert received_map["key6"] is False
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)
 
-    async def test_list_sorted(self, cluster, test_set: DataSet):
+    async def test_list_sorted(self, cluster, test_set: DataSet, sc_aware_delete):
         """Store a pre-sorted list and verify order is preserved on retrieval."""
         session = cluster.create_session()
         key = test_set.id("listSorted")
         bin_name = "sortedlistbin"
 
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         items = ["e", "d", "c", "b", "a"]
         items.sort()
@@ -204,18 +190,15 @@ class TestListMap:
         assert len(received) == 5
         assert received == ["a", "b", "c", "d", "e"]
 
-        await session.delete(key).execute()
+        await sc_aware_delete(session, key)
 
-    async def test_map_with_integer_keys(self, cluster, test_set: DataSet):
+    async def test_map_with_integer_keys(self, cluster, test_set: DataSet, sc_aware_delete):
         """Store a map with integer keys and mixed value types."""
         session = cluster.create_session()
         key = test_set.id("mapIntKeys")
         bin_name = "intkeymapbin"
 
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         map_data = {1: "one", 2: "two", 3: "three"}
         await session.upsert(key).bin(bin_name).set_to(map_data).execute()
@@ -228,17 +211,14 @@ class TestListMap:
         assert received[2] == "two"
         assert received[3] == "three"
 
-        await session.delete(key).execute()
+        await sc_aware_delete(session, key)
 
-    async def test_multiple_bin_list_and_map(self, cluster, test_set: DataSet):
+    async def test_multiple_bin_list_and_map(self, cluster, test_set: DataSet, sc_aware_delete):
         """Store list in one bin and map in another, verify independent retrieval."""
         session = cluster.create_session()
         key = test_set.id("multiBinListMap")
 
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         list_data = [10, 20, 30]
         map_data = {"x": 1, "y": 2}
@@ -256,17 +236,14 @@ class TestListMap:
         assert bins["mapbin"]["x"] == 1
         assert bins["mapbin"]["y"] == 2
 
-        await session.delete(key).execute()
+        await sc_aware_delete(session, key)
 
-    async def test_empty_list_and_map(self, cluster, test_set: DataSet):
+    async def test_empty_list_and_map(self, cluster, test_set: DataSet, sc_aware_delete):
         """Store and retrieve empty list and empty map."""
         session = cluster.create_session()
         key = test_set.id("emptyListMap")
 
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         await (
             session.upsert(key)
@@ -280,19 +257,16 @@ class TestListMap:
         assert bins["emptylist"] == []
         assert bins["emptymap"] == {}
 
-        await session.delete(key).execute()
+        await sc_aware_delete(session, key)
 
-    async def test_list_map_combined(self, cluster, test_set: DataSet):
+    async def test_list_map_combined(self, cluster, test_set: DataSet, sc_aware_delete):
         """Test storing and retrieving nested lists and maps."""
         session = cluster.create_session()
         key = test_set.id("listMapCombined")
         bin_name = "listmapbin"
 
         # Delete if exists
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
+        await sc_aware_delete(session, key)
 
         # Create nested structure
         blob = bytes([3, 52, 125])
@@ -330,5 +304,5 @@ class TestListMap:
         assert received_inner2[0] == "string2"
         assert received_inner2[1] == 5
 
-        # Cleanup
-        await session.delete(key).execute()
+        # Cleanup (durable on SC)
+        await sc_aware_delete(session, key)

@@ -19,9 +19,10 @@ import pytest
 
 from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "cdt_wopt"
 
 

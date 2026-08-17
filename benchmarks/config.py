@@ -67,6 +67,7 @@ class WorkloadConfig:
     warmup_intervals: int
     cooldown_intervals: int
     seed: int
+    load_before_run: bool = False
     truncate_before_run: bool = False
     truncate_after_run: bool = False
     # TLS / authentication
@@ -312,6 +313,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="RNG seed; 0 picks a random seed.",
     )
     p.add_argument(
+        "--load",
+        action="store_true",
+        default=False,
+        help="Populate keys 1..K before a read workload (RU/RR/RM*) so reads never "
+        "hit unwritten keys. Mirrors the load-then-run model: reads fetch real "
+        "records, and there are no not-found reads to distort read-TPS. No-op for "
+        "the insert (-w I) workload.",
+    )
+    p.add_argument(
         "--truncate",
         action="store_true",
         default=False,
@@ -513,6 +523,7 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
         warmup_intervals=max(0, ns.warmup),
         cooldown_intervals=max(0, ns.cooldown),
         seed=seed,
+        load_before_run=getattr(ns, "load", False),
         truncate_before_run=getattr(ns, "truncate", False),
         truncate_after_run=getattr(ns, "truncate_after", False),
         tls_ca_file=getattr(ns, "tls_ca_file", None),

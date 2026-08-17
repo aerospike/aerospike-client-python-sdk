@@ -171,6 +171,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and not self._specs
             and self._filter_expression is None
             and self._default_filter_expression is None
+            and self._where_ael is None
+            and self._default_where_ael is None
             and not self._filter_records
             and self._op_type is None
             and self._base_read_policy is not None
@@ -201,18 +203,18 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                             self._single_key.set_name, 1, cmd_t0, self._client,
                         )
                     if self._respond_all_keys:
-                        return RecordStream.from_list([RecordResult(
+                        return RecordStream._from_list([RecordResult(
                             key=self._single_key, record=None,
                             result_code=rc, exception=psdk_exc, index=0,
                         )])
-                    return RecordStream.from_list([])
+                    return RecordStream._from_list([])
                 raise psdk_exc from e
             if cmd_t0:
                 _cmd_done(
                     None, self._single_key.namespace,
                     self._single_key.set_name, 1, cmd_t0, self._client,
                 )
-            return RecordStream.from_list([RecordResult(
+            return RecordStream._from_list([RecordResult(
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
@@ -225,7 +227,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                     spec0.op_type, self._namespace, self._set_name,
                     len(spec0.keys), cmd_t0, self._client,
                 )
-            return RecordStream.from_list(fast)
+            return RecordStream._from_list(fast)
 
         multispec = self._execute_multispec_blocking(on_error)
         if multispec is not None:
@@ -234,7 +236,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                     "batch", self._namespace, self._set_name,
                     sum(len(s.keys) for s in self._specs), cmd_t0, self._client,
                 )
-            return RecordStream.from_list(multispec)
+            return RecordStream._from_list(multispec)
 
         stream_kind = self._execute_blocking_stream(on_error)
         if stream_kind is not None:
@@ -242,9 +244,9 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             if kind == "recordset":
                 return RecordStream._from_pac_recordset(payload)
             if kind == "chunked":
-                recordset, reexecute = payload
+                recordset, reexecute, chunk_total_limit = payload
                 return RecordStream._from_chunked_pac_recordset(
-                    recordset, reexecute, limit=0,
+                    recordset, reexecute, limit=chunk_total_limit,
                 )
 
         raise NotImplementedError(
@@ -280,6 +282,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         """
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
+        self._ensure_batch_namespace_modes_blocking()
 
         # Dataset/scan queries already stream lazily (Recordset); the
         # order-sensitive sequential-spec case can't collapse to one batch.
@@ -298,7 +301,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         try:
             pac_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
-            return RecordStream.from_list(
+            return RecordStream._from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
 
@@ -396,7 +399,7 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
                     self._qb._set_name, len(spec0.keys), cmd_t0,
                     self._qb._client,
                 )
-            return RecordStream.from_list(fast)
+            return RecordStream._from_list(fast)
         # Fall back to the QB's full sync dispatch (Tier 1b / 2).
         assert isinstance(self._qb, QueryBuilder)
         return self._qb.execute(on_error)
@@ -526,14 +529,14 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                             self._op_type_fast, self._key.namespace,
                             self._key.set_name, 1, cmd_t0, self._client_fast,
                         )
-                    return RecordStream.from_list([])
+                    return RecordStream._from_list([])
                 raise psdk_exc from e
             if cmd_t0:
                 _cmd_done(
                     self._op_type_fast, self._key.namespace,
                     self._key.set_name, 1, cmd_t0, self._client_fast,
                 )
-            return RecordStream.from_list([RecordResult(
+            return RecordStream._from_list([RecordResult(
                 key=self._key, record=record, result_code=ResultCode.OK,
             )])
         # Slow path: promote then defer to the sync QueryBuilder's blocking fast path.

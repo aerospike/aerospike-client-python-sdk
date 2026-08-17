@@ -24,12 +24,14 @@ not expose ``ctx`` yet.
 """
 
 import pytest
+
 from aerospike_sdk import CTX, Filter
 from aerospike_async import IndexType
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
-_NS = "test"
+_NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
 _INDEX = "pfc_cdt_fctx_map_num"
 _BIN = "mapbin"

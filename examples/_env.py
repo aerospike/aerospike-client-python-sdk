@@ -8,6 +8,7 @@ the user to manually export variables.
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 def _load_env_file(path: Path, *, override: bool = True) -> None:
     if not path.exists():
@@ -99,3 +100,61 @@ def sync_connect():
     if _services_alternate():
         cluster_def = cluster_def.using_services_alternate()
     return cluster_def
+
+
+def _apply_auth(cluster_def):
+    """Apply ``AEROSPIKE_AUTH_*`` credentials to a ClusterDefinition, if set."""
+    mode = os.environ.get("AEROSPIKE_AUTH_MODE", "").strip().upper()
+    if not mode:
+        return cluster_def
+    user = os.environ.get("AEROSPIKE_AUTH_USER", "")
+    password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
+    if mode == "EXTERNAL":
+        cluster_def.with_external_credentials(user, password)
+    elif mode == "PKI":
+        cluster_def.with_certificate_credentials()
+    else:  # INTERNAL
+        cluster_def.with_native_credentials(user, password)
+    return cluster_def
+
+
+def sc_host() -> Optional[str]:
+    """The strong-consistency seed, if configured (``AEROSPIKE_HOST_SC``)."""
+    return os.environ.get("AEROSPIKE_HOST_SC")
+
+
+def sc_namespace() -> str:
+    """The strong-consistency namespace to use for MRT/roster examples."""
+    return os.environ.get("AEROSPIKE_SC_NAMESPACE", "test_sc")
+
+
+def connect_sc():
+    """Async ClusterDefinition for the strong-consistency seed + auth.
+
+    Falls back to the default seed when ``AEROSPIKE_HOST_SC`` is unset, so
+    SC-requiring examples degrade to a clean capability skip rather than a
+    connection error.
+    """
+    from aerospike_sdk import ClusterDefinition
+
+    host = sc_host() or os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    hostname, port_str = host.split(":", 1) if ":" in host else (host, "3000")
+    cluster_def = ClusterDefinition(hostname, int(port_str))
+    if _services_alternate():
+        cluster_def = cluster_def.using_services_alternate()
+    return _apply_auth(cluster_def)
+
+
+async def server_at_least(session, version: tuple[int, ...]) -> bool:
+    """True if every node's build is >= ``version`` (e.g. ``(8, 1, 3)``)."""
+    from aerospike_sdk.aio.info import InfoCommands
+
+    builds = await InfoCommands(session).build()
+
+    def parse(b: str) -> tuple[int, ...]:
+        parts = []
+        for piece in b.split("."):
+            parts.append(int("".join(c for c in piece if c.isdigit()) or 0))
+        return tuple(parts)
+
+    return all(parse(b) >= version for b in builds)

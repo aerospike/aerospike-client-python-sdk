@@ -30,6 +30,8 @@ SC enforcement, batch wiring) live in the integration suite.
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from aerospike_sdk import Key
 
 from aerospike_sdk.aio.background import (
@@ -46,7 +48,11 @@ from aerospike_sdk.aio.operations.udf import UdfBuilder
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder, SyncWriteSegmentBuilder
+from aerospike_sdk.sync.operations.query import (
+    SyncQueryBuilder,
+    SyncWriteSegmentBuilder,
+    _SingleKeyWriteSegment as _SyncSingleKeyWriteSegment,
+)
 
 
 def _key(val: int = 1) -> Key:
@@ -162,6 +168,70 @@ class TestSingleKeyWriteSegment:
         assert qb._durable_delete is False
         assert seg.default_without_durable_delete() is seg
         assert qb._durable_delete_command_default is False
+
+
+class _PromotedSignal(Exception):
+    """Raised by a stubbed ``_promote`` to prove the slow path was taken."""
+
+
+class TestSingleKeyRecordDeletePromotion:
+    """``delete_record()`` must force the segment off the single-key hot path.
+
+    The hot-path operate hands PAC an explicit ``durable_delete`` keyword,
+    which overrides whatever the mode-resolved policy carries — only the
+    promoted ``QueryBuilder`` path resolves the durable-delete default from
+    the namespace mode. A record-delete that stayed on the hot path would be
+    silently non-durable, which SC namespaces reject. That failure is only
+    observable against an SC cluster, so these tests pin the promotion itself:
+    a segment holding a record-delete op must reach ``_promote()`` without
+    ever calling the fast-path client entry.
+    """
+
+    def test_delete_record_sets_flag_without_promoting(self):
+        seg = _SingleKeyWriteSegment(
+            client=MagicMock(), key=_key(), op_type="upsert",
+            behavior=Behavior.DEFAULT, write_policy=None,
+        )
+        assert seg._record_delete_in_fast_ops is False
+        assert seg.delete_record() is seg
+        assert seg._record_delete_in_fast_ops is True
+        assert seg._qb is None  # promotion is deferred to execute()
+
+    async def test_async_execute_with_record_delete_promotes(self):
+        client = MagicMock()
+        seg = _SingleKeyWriteSegment(
+            client=client, key=_key(), op_type="upsert",
+            behavior=Behavior.DEFAULT,
+            # Both cached policies set = hot-path eligible; the record-delete
+            # alone must force promotion.
+            write_policy=MagicMock(), write_policy_sc=MagicMock(),
+        )
+        seg.delete_record()
+
+        def _signal() -> None:
+            raise _PromotedSignal
+
+        seg._promote = _signal
+        with pytest.raises(_PromotedSignal):
+            await seg.execute()
+        client.operate.assert_not_called()
+
+    def test_sync_execute_with_record_delete_promotes(self):
+        client = MagicMock()
+        seg = _SyncSingleKeyWriteSegment(
+            client=client, key=_key(), op_type="upsert",
+            behavior=Behavior.DEFAULT,
+            write_policy=MagicMock(), write_policy_sc=MagicMock(),
+        )
+        seg.delete_record()
+
+        def _signal() -> None:
+            raise _PromotedSignal
+
+        seg._promote = _signal
+        with pytest.raises(_PromotedSignal):
+            seg.execute()
+        client.operate_blocking.assert_not_called()
 
 
 class TestBackgroundOperationBuilder:

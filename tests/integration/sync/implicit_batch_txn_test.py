@@ -32,9 +32,20 @@ from aerospike_sdk import DataSet
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
     NoStrongConsistencyNamespace,
+    pinned_namespace_env_hint,
     resolve_sc_namespace_sync,
     skip_reason_no_sc_namespace,
 )
+
+
+def _namespaces_on_cluster_hint(session) -> str:
+    try:
+        names = sorted(session.info().namespaces())
+    except Exception:
+        return ""
+    if not names:
+        return ""
+    return f" Namespaces on this cluster: {', '.join(names)}."
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +77,19 @@ def session(cluster_sc, sc_namespace):
     # MRT support probe has no Cluster surface; reach through to the client.
     if not cluster_sc._client._supports_mrt_blocking():
         pytest.skip("cluster does not support multi-record transactions")
-    return cluster_sc.create_session()
+    sess = cluster_sc.create_session()
+    try:
+        status = sess.namespace_sc_status(sc_namespace)
+    except Exception as exc:
+        pytest.skip(
+            f"SC namespace {sc_namespace!r} unreachable "
+            f"({exc}); set AEROSPIKE_HOST_SC / AEROSPIKE_SC_NAMESPACE or stand up SC"
+        )
+    if not status.is_sc:
+        ns_hint = _namespaces_on_cluster_hint(sess)
+        pin = pinned_namespace_env_hint()
+        pytest.skip(f"{status.detail}{ns_hint}{pin} Implicit batch txn tests require SC.")
+    return sess
 
 
 @pytest.fixture

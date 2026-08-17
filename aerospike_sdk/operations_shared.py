@@ -58,7 +58,8 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.ael.parser import parse_ael
+
+from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
@@ -364,9 +365,37 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     # is tier-neutral but lives in aio.operations.query, so we avoid the
     # cross-tier reverse import).
     _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
+    _ssael_flag: Optional[bool] = None
 
     def __init__(self, qb: _QB) -> None:
         self._qb: _QB = qb
+
+    def _resolve_ssael_flag(self) -> bool:
+        """Lazy snapshot of server-compiled AEL support for this segment's lifetime."""
+        flag = self._ssael_flag
+        if flag is None:
+            if self._qb is not None:
+                flag = self._qb._supports_server_compiled_ael
+            else:
+                client = getattr(self, "_sdk_client_fast", None)
+                flag = (
+                    bool(client.supports_server_compiled_ael)
+                    if client is not None
+                    else False
+                )
+            self._ssael_flag = flag
+        return flag
+
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
+        if not isinstance(expression, str):
+            return expression
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=self._resolve_ssael_flag(),
+        )
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this write into (or out of) a specific transaction.
@@ -384,7 +413,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
         return self
 
     @overload
-    def where(self, expression: str) -> Self: ...
+    def where(self, expression: str, *params: Any) -> Self: ...
 
     @overload
     def where(self, expression: FilterExpression) -> Self: ...
@@ -392,17 +421,21 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Set a filter expression on the current write segment.
 
         Args:
             expression: AEL string or pre-built FilterExpression.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`QueryBuilder.where` for the interpolation contract.
 
         Returns:
             self for method chaining.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._qb._filter_expression = parse_ael(expression)
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
         return self
@@ -669,7 +702,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     ) -> Self:
         """Read a computed value into a bin using an AEL expression."""
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.read(bin_name, expr, flags))
 
     def insert_from(
@@ -686,7 +719,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.CREATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
@@ -703,7 +736,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.UPDATE_ONLY, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
@@ -720,7 +753,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             ExpWriteFlags.DEFAULT, ignore_op_failure,
             ignore_eval_failure, delete_if_null,
         )
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        expr = self._expression_from_ael_string_for_ops(expression)
         return self._add_op(ExpOperation.write(bin_name, expr, flags))
 
     def query(
@@ -941,9 +974,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._dd_override = True
         return self
 
-    def where(self, expression):
+    def where(self, expression, *params):
         self._promote()
-        return super().where(expression)
+        return super().where(expression, *params)
 
     def expire_record_after_seconds(self, seconds):
         self._promote()
@@ -977,6 +1010,10 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super().include_missing_keys()
 
+    def respond_all_keys(self):
+        self._promote()
+        return super().respond_all_keys()
+
     def fail_on_filtered_out(self):
         self._promote()
         return super().fail_on_filtered_out()
@@ -1005,7 +1042,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                 raise pfc_exc from exc
         elif rc != ResultCode.FILTERED_OUT:
             raise pfc_exc from exc
-        return RecordStream.from_list([])
+        return RecordStream._from_list([])
 
     def _get_write_policy(self) -> WritePolicy:
         wp = self._write_policy

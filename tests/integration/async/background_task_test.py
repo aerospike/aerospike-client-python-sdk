@@ -16,13 +16,16 @@
 """Integration tests for session.background_task() (async)."""
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 from aerospike_sdk import UDFLang
 from aerospike_async import Operation
 
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
-NS = "test"
+NS = general_namespace()
 SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
@@ -102,6 +105,7 @@ async def test_background_update(cluster):
         assert rr.record.bins.get(BG_BIN2) == "updated"
 
 
+@requires_server_compiled_ael
 async def test_background_update_with_where(cluster):
     session = cluster.create_session()
     for i in range(1, 11):
@@ -129,6 +133,7 @@ async def test_background_update_with_where(cluster):
             assert rr.record.bins.get(BG_BIN2) == "original"
 
 
+@requires_server_compiled_ael
 async def test_background_delete(cluster):
     session = cluster.create_session()
     for i in range(1, 11):
@@ -218,6 +223,7 @@ async def test_background_udf_with_args(cluster):
         assert rr.record.bins.get(BG_BIN) == i + 100
 
 
+@requires_server_compiled_ael
 async def test_background_udf_with_where(cluster):
     session = cluster.create_session()
     for i in range(1, 11):

@@ -26,8 +26,11 @@ from aerospike_sdk import Behavior, UDFLang
 from aerospike_sdk.exceptions import AerospikeError, ResultCode, TimeoutError
 from aerospike_sdk import ClusterDefinition, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
+from tests.pac_compat import requires_server_compiled_ael
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 DS = DataSet.of(NS, SET)
 LUA_FILE = os.path.normpath(
@@ -37,7 +40,7 @@ SERVER_PATH = "record_example.lua"
 MODULE = "record_example"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_with_udf(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
@@ -169,6 +172,7 @@ async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
         assert r.result_code == ResultCode.UDF_BAD_RESPONSE
         assert r.record is not None
 
+@requires_server_compiled_ael
 async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_rak_1")
@@ -406,7 +410,10 @@ async def test_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     assert not rows[2].is_ok
     assert rows[2].key == k3
     assert rows[2].result_code == ResultCode.UDF_BAD_RESPONSE
-    assert rows[2].record is None
+    # Multiple UDF segments fold into one batch, so the server's UDF failure
+    # detail is surfaced as a FAILURE bin rather than dropped.
+    assert rows[2].record is not None
+    assert "FAILURE" in rows[2].record.bins
     r1 = await (
         await session.query(k1).bins(["cx"]).execute()
     ).first_or_raise()
@@ -500,7 +507,7 @@ async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     with open(LUA_FILE, "rb") as f:
         body = f.read()
 
-    cluster = await ClusterDefinition(hostname, port).connect()
+    cluster = await apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         try:
             rm = await cluster.remove_udf(path)
@@ -607,7 +614,7 @@ SLEEP_SERVER_PATH = "sleep_example.lua"
 SLEEP_MODULE = "sleep_example"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
@@ -656,3 +663,40 @@ async def test_udf_client_timeout_marks_in_doubt(cluster_with_sleep_udf):
             .execute()
         )
     assert exc_info.value.in_doubt is True
+
+
+async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
+    """A retried client timeout surfaces the full retry context, SDK-typed.
+
+    Same deterministic shape as the in-doubt test above (client socket timer
+    racing a longer server-side UDF sleep, no server deadline), with retries
+    enabled so prior attempts are recorded. Asserts the Phase carried by the
+    boundary conversion: ``client`` provenance, ``node``, ``iteration``,
+    ``base_message``, and ``sub_exceptions`` converted into the SDK hierarchy.
+    """
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "udf_retry_context",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=2,
+        ),
+    )
+    session = cluster_with_sleep_udf.create_session(behavior)
+    k = DS.id("udf_retry_ctx_1")
+    with pytest.raises(TimeoutError) as exc_info:
+        await (
+            session.execute_udf(k)
+            .function(SLEEP_MODULE, "sleep")
+            .passing(1000)
+            .execute()
+        )
+    err = exc_info.value
+    assert err.in_doubt is True
+    assert err.client is True
+    assert err.node, "expected the attempted node on the exception"
+    assert err.iteration is not None and err.iteration >= 1
+    assert err.base_message
+    assert err.sub_exceptions, "expected prior attempts in sub_exceptions"
+    assert all(isinstance(s, TimeoutError) for s in err.sub_exceptions)
+    assert all(isinstance(s, AerospikeError) for s in err.sub_exceptions)

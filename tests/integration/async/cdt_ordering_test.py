@@ -15,14 +15,14 @@
 
 """Tests proving K-ordered map key ordering is preserved through native Python dict."""
 
-import pytest
 import pytest_asyncio
 from aerospike_sdk import MapOrder, MapReturnType
 from aerospike_async import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
+from tests.integration.namespace import general_namespace
 
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 BIN = "mapbin"
 DS = DataSet.of(NS, SET)
@@ -437,7 +437,6 @@ class TestEdgeCases:
         """get_by_rank_range on K-ordered map returns values in rank order."""
         key = 16
         k = DS.id(key)
-        session = cluster.create_session()
         pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
@@ -500,7 +499,6 @@ class TestCdtOrdering:
         """get_by_key_range on K-ordered map returns keys in sorted order."""
         key = 18
         k = DS.id(key)
-        session = cluster.create_session()
         pac = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 

@@ -20,8 +20,8 @@ typically a PAC :class:`Recordset`, a list of ``BatchRecord``, or a
 materialized list of :class:`RecordResult`.
 
 Factory classmethods mirror :class:`aerospike_sdk.record_stream.RecordStream`
-so callers that already use ``from_list`` / ``from_batch_records`` /
-``from_single`` / ``from_error`` / ``chain`` keep the same shape. The
+so callers that already use ``_from_list`` / ``_from_batch_records`` /
+``_from_single`` / ``_from_error`` / ``chain`` keep the same shape. The
 producer adapters that wrap a live PAC recordset / batch stream are private
 plumbing (``_from_pac_recordset`` / ``_from_chunked_pac_recordset`` /
 ``_from_pac_batch_stream``), driven by the query/batch dispatch code.
@@ -85,14 +85,14 @@ class RecordStream:
     # -- factory constructors ------------------------------------------------
 
     @classmethod
-    def from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
+    def _from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
         """Wrap an already-materialized list of results."""
         return cls(iter(results))
 
     @classmethod
-    def from_batch_records(cls, batch_records: Sequence) -> "RecordStream":
+    def _from_batch_records(cls, batch_records: Sequence) -> "RecordStream":
         """Wrap a list of PAC ``BatchRecord`` objects."""
-        return cls.from_list(batch_records_to_results(list(batch_records)))
+        return cls._from_list(batch_records_to_results(list(batch_records)))
 
     @classmethod
     def _from_pac_batch_stream(
@@ -121,7 +121,9 @@ class RecordStream:
                     rc = br.result_code if br.result_code is not None else ResultCode.OK
                     if on_error is not None and rc != ResultCode.OK:
                         on_error(br.key, idx, _result_code_to_exception(
-                            rc, str(rc), br.in_doubt, sub_code=br.sub_code))
+                            rc, str(rc), br.in_doubt, sub_code=br.sub_code,
+                            server_message=br.server_message,
+                            exp_trace=br.exp_trace))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -130,6 +132,8 @@ class RecordStream:
                         in_doubt=br.in_doubt,
                         index=idx,
                         sub_code=br.sub_code,
+                        server_message=br.server_message,
+                        exp_trace=br.exp_trace,
                     )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
@@ -195,7 +199,7 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_single(
+    def _from_single(
         cls, key: Key, record: Optional["Record"],
     ) -> "RecordStream":
         """Wrap a single-key result.
@@ -210,7 +214,7 @@ class RecordStream:
         return inst
 
     @classmethod
-    def from_error(
+    def _from_error(
         cls,
         key: Key,
         result_code: ResultCode,
@@ -218,7 +222,7 @@ class RecordStream:
         exception: "Optional[AerospikeError]" = None,
     ) -> "RecordStream":
         """Wrap a single-key error as a one-element stream."""
-        return cls.from_list([RecordResult(
+        return cls._from_list([RecordResult(
             key=key,
             record=None,
             result_code=result_code,
@@ -373,10 +377,11 @@ class RecordStream:
         if 0 < self._chunk_limit <= self._chunk_count:  # type: ignore[attr-defined]
             return False
 
-        # PAC Recordset's partition_filter() is currently async. For the
-        # sync path we rely on the recordset object to expose a
-        # `partition_filter_sync()` method, OR the reexecute callable to
-        # handle the cursor advance internally and return None when done.
+        # PAC's async `partition_filter()` can't be awaited on the blocking
+        # path, so the sync cursor is read via `partition_filter_sync()` (it
+        # blocks on PAC's per-thread runtime). The getattr guard keeps this
+        # degrading cleanly — rather than raising — against a PAC too old to
+        # expose it; the pin requires a build that does.
         pf_getter = getattr(self._chunk_recordset, "partition_filter_sync", None)  # type: ignore[attr-defined]
         if pf_getter is None:
             return False

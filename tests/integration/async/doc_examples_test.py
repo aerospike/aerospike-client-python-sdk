@@ -7,6 +7,8 @@ Each test is tagged with the doc page and section it validates.
 import os
 
 import pytest
+
+from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 
 from aerospike_sdk import (
@@ -14,9 +16,11 @@ from aerospike_sdk import (
     ClusterDefinition,
     DataSet,
 )
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth, general_seed
 
-SEEDS = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
-USERS = DataSet.of("test", "doc_smoke")
+SEEDS = general_seed()
+USERS = DataSet.of(general_namespace(), "doc_smoke")
 
 
 def _use_services_alternate() -> bool:
@@ -42,6 +46,7 @@ async def session(make_cluster_definition):
 # docs/index.md — Quick Example (async)
 # ------------------------------------------------------------------
 
+@requires_server_compiled_ael
 @pytest.mark.asyncio(loop_scope="session")
 async def test_quick_example_async(session):
     """docs/index.md — Quick Example (async tab)."""
@@ -98,7 +103,7 @@ def test_quick_example_sync(make_cluster_definition):
 async def test_cluster_definition_connect():
     """docs/guide/connecting.md — ClusterDefinition section."""
     host, port = SEEDS.split(",")[0].rsplit(":", 1)
-    cluster_def = ClusterDefinition(host, int(port))
+    cluster_def = apply_general_auth(ClusterDefinition(host, int(port)))
     if _use_services_alternate():
         cluster_def = cluster_def.using_services_alternate()
     mode_str = os.environ.get("AEROSPIKE_AUTH_MODE", "").strip().upper()
@@ -200,6 +205,7 @@ async def test_batch_read(session):
 # docs/guide/writes.md — Conditional writes
 # ------------------------------------------------------------------
 
+@requires_server_compiled_ael
 @pytest.mark.asyncio(loop_scope="session")
 async def test_conditional_write(session):
     """docs/guide/writes.md — Conditional Writes with where()."""

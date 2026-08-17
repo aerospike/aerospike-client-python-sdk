@@ -15,7 +15,9 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_sdk.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.aio.session import _parse_namespace_info_body
+from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -90,11 +92,47 @@ def pytest_configure(config):
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
 
+    config.addinivalue_line(
+        "markers",
+        "requires_mode(mode): run only when the general namespace's server-derived mode "
+        "('ap' or 'sc') matches; enforced by the _enforce_requires_mode fixture.",
+    )
+
     host = os.environ.get("AEROSPIKE_HOST", "localhost:3000").strip()
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
-    if sc and host == sc:
+    pinned = os.environ.get("AEROSPIKE_SC_NAMESPACE", "").strip()
+    # State the routing unconditionally. The SC suites silently fall back to
+    # AEROSPIKE_HOST when AEROSPIKE_HOST_SC is unset, which otherwise makes a
+    # green run indistinguishable from one that never reached an SC namespace.
+    # The namespace half is confirmed later, on a live connection, by
+    # :func:`_report_sc_routing`.
+    # Mode-axis SC leg (AEROSPIKE_GENERAL_AUTH): the *general* suites are auth-aware and
+    # routed to the SC seed + AEROSPIKE_NAMESPACE, so report that, not the AP seed —
+    # otherwise a green SC-leg run looks like it ran against the AP default.
+    sc_leg = _general_auth_enabled()
+    general_seed = (sc or host) if sc_leg else host
+    general_ns = os.environ.get("AEROSPIKE_NAMESPACE", "").strip() or "test"
+    general_note = (
+        f" [SC leg: auth on, namespace {general_ns!r}]" if sc_leg
+        else f" [namespace {general_ns!r}]"
+    )
+    sc_seed_note = (
+        "(AEROSPIKE_HOST_SC)" if sc
+        else "(AEROSPIKE_HOST_SC unset - fell back to AEROSPIKE_HOST)"
+    )
+    ns_note = (
+        f"{pinned!r} (pinned via AEROSPIKE_SC_NAMESPACE)" if pinned
+        else "auto-select (AEROSPIKE_SC_NAMESPACE unset)"
+    )
+    print(
+        "\nIntegration routing:\n"
+        f"  general suites -> {general_seed!r}{general_note}\n"
+        f"  SC suites      -> {(sc or host)!r} {sc_seed_note}\n"
+        f"  SC namespace   -> {ns_note}\n",
+    )
+    if sc and host == sc and not sc_leg:
         print(
-            f"\nIntegration routing: AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
+            f"AEROSPIKE_HOST and AEROSPIKE_HOST_SC both resolve to "
             f"{host!r}, so general tests hit the same seed as SC suites. Point "
             "AEROSPIKE_HOST at your AP/default cluster and AEROSPIKE_HOST_SC at SC only.\n",
         )
@@ -137,18 +175,28 @@ def _apply_auth_to_definition(cluster_def) -> None:
 
     Mirror of :func:`_apply_auth_from_env` for the ``ClusterDefinition``
     entry path (async or sync — both expose the same credential methods).
+    Delegates to :mod:`tests.integration.general_auth`, the single source
+    for the definition-path auth contract (raw-definition test sites import
+    it directly).
     """
-    mode_str = os.environ.get('AEROSPIKE_AUTH_MODE', '').strip().upper()
-    if not mode_str or mode_str not in _AUTH_MODES:
-        return
-    user = os.environ.get('AEROSPIKE_AUTH_USER', '')
-    password = os.environ.get('AEROSPIKE_AUTH_PASSWORD', '')
-    if mode_str == "INTERNAL":
-        cluster_def.with_native_credentials(user, password)
-    elif mode_str == "EXTERNAL":
-        cluster_def.with_external_credentials(user, password)
-    else:  # PKI
-        cluster_def.with_certificate_credentials()
+    from tests.integration.general_auth import apply_auth_to_definition
+    apply_auth_to_definition(cluster_def)
+
+
+def _general_auth_enabled() -> bool:
+    """Whether the *general* (default) suites should authenticate — opt-in only.
+
+    Controlled by ``AEROSPIKE_GENERAL_AUTH`` (the ``make test-sc`` leg sets it). The
+    default AP fast path stays **no-auth** (unset): sending credentials to a cluster
+    that does not require them costs ~1s per ``new_client`` on some configs, which is
+    exactly what :func:`client_policy`'s no-auth contract protects. When set, the
+    default :func:`client_policy` / :func:`make_cluster_definition` apply
+    ``AEROSPIKE_AUTH_*`` just like the SC/SEC fixtures, so the general suites can reach
+    an auth-required SC seed for the Mode axis. New env var, so it
+    is not clobbered by ``aerospike.env`` (which loads ``override=True``).
+    """
+    from tests.integration.general_auth import general_auth_enabled
+    return general_auth_enabled()
 
 
 @pytest.fixture(scope="session")
@@ -160,6 +208,11 @@ def make_cluster_definition():
     :func:`client_policy`); ``auth=True`` applies ``AEROSPIKE_AUTH_*`` (the
     :func:`client_policy_sc` / :func:`client_policy_sec` contract);
     ``sync=True`` returns the ``aerospike_sdk.sync`` cluster_def.
+
+    The default (``auth=False``) path *also* applies ``AEROSPIKE_AUTH_*`` when the
+    :func:`_general_auth_enabled` opt-in (``AEROSPIKE_GENERAL_AUTH``) is set, so the
+    general suites can reach an auth-required SC seed on the Mode-axis ``make test-sc``
+    leg without disturbing the no-auth AP fast path.
     """
     from aerospike_sdk import ClusterDefinition, Host
     from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
@@ -172,7 +225,7 @@ def make_cluster_definition():
             cluster_def = ClusterDefinition(hosts=Host.parse_hosts(seed, 3000))
         if _use_services_alternate_from_env():
             cluster_def.using_services_alternate()
-        if auth:
+        if auth or _general_auth_enabled():
             _apply_auth_to_definition(cluster_def)
         return cluster_def
 
@@ -184,12 +237,19 @@ def client_policy():
     """Default ClientPolicy for the AP test seed (``AEROSPIKE_HOST``).
 
     Reads only ``AEROSPIKE_USE_SERVICES_ALTERNATE``. Does **not** apply
-    ``AEROSPIKE_AUTH_*`` env vars; the AP/default cluster is expected
+    ``AEROSPIKE_AUTH_*`` env vars by default; the AP/default cluster is expected
     to allow unauthenticated access. SC / SEC fixtures use their own
     auth-aware policies instead.
+
+    Exception: the :func:`_general_auth_enabled` opt-in (``AEROSPIKE_GENERAL_AUTH``,
+    set by the Mode-axis ``make test-sc`` leg) makes this default policy apply
+    ``AEROSPIKE_AUTH_*`` too, so the general suites can reach an auth-required SC seed.
+    The no-auth AP fast path is unchanged whenever the opt-in is unset.
     """
     policy = ClientPolicy()
     policy.use_services_alternate = _use_services_alternate_from_env()
+    if _general_auth_enabled():
+        _apply_auth_from_env(policy)
     return policy
 
 
@@ -226,12 +286,203 @@ def aerospike_host():
 
     Reads ``AEROSPIKE_HOST`` (default ``localhost:3000``). SC-only suites use
     :func:`aerospike_host_sc` instead.
+
+    On the Mode-axis SC leg (:func:`_general_auth_enabled` / ``AEROSPIKE_GENERAL_AUTH``
+    set, via ``make test-sc``) the general suites target ``AEROSPIKE_HOST_SC`` when it
+    is set, so they reach the SC seed. This reuses the established SC-seed var and
+    sidesteps ``aerospike.env``'s ``override=True`` (which would ignore an inline
+    ``AEROSPIKE_HOST``); it falls back to ``AEROSPIKE_HOST`` on single-cluster setups
+    where ``AEROSPIKE_HOST_SC`` is unset.
     """
-    return os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    from tests.integration.general_auth import general_seed
+    return general_seed()
 
 
 @pytest.fixture(scope="session")
-def aerospike_host_sc():
+def general_namespace_is_sc(aerospike_host, pytestconfig):
+    """Server-derived: is the general suites' target namespace strong-consistency?
+
+    Probes the general seed once and runs the same ``namespace/<ns>`` info scan as
+    :func:`_report_sc_routing` on ``general_namespace()``. Drives ``@requires_mode`` and
+    :func:`sc_aware_delete` off the *server's* verdict rather than the
+    ``AEROSPIKE_NAMESPACE`` string (which would misclassify a differently-named SC
+    namespace). Returns ``False`` (treat as AP) on any probe failure.
+    """
+    from tests.integration.namespace import general_namespace
+
+    ns = general_namespace()
+    probe = ClientPolicy()
+    probe.use_services_alternate = _use_services_alternate_from_env()
+    if _general_auth_enabled():
+        _apply_auth_from_env(probe)
+    probe.timeout = 2000
+
+    def _degraded(reason: str) -> bool:
+        # Announce, never infer. Silently failing open to AP would turn the SC leg into an
+        # AP-shaped run — sc_aware_delete stops issuing durable deletes (FailForbidden,
+        # swallowed → cleanup stops), @requires_mode('sc') skips and @requires_mode('ap')
+        # runs on SC — the exact invisible coverage loss this axis exists to prevent.
+        emit = _terminal_emit(pytestconfig)
+        emit("")
+        if _general_auth_enabled():
+            emit(
+                f"Mode axis: SC-mode probe FAILED for {ns!r} on {aerospike_host!r} ({reason}). "
+                f"The SC leg is DEGRADED to AP-shaped behavior — treat this run's SC results as "
+                f"INVALID until the probe succeeds.",
+            )
+        else:
+            emit(f"Mode axis: {ns!r} treated as AP (SC probe unavailable: {reason}).")
+        return False
+
+    try:
+        client = new_client_blocking(probe, aerospike_host)
+    except Exception as exc:
+        return _degraded(f"connect error: {exc}")
+    try:
+        missing = False
+        sc_val = None
+        for body in client.info_blocking(f"namespace/{ns}").values():
+            if not body:
+                continue
+            exists, sc_opt = _parse_namespace_info_body(body)
+            if not exists:
+                missing = True
+                break
+            if sc_opt is not None:
+                sc_val = sc_opt
+        if missing:
+            return _degraded("namespace not present on the seed")
+        return bool(sc_val)
+    except Exception as exc:
+        return _degraded(f"info scan error: {exc}")
+    finally:
+        client.close_blocking()
+
+
+@pytest.fixture(scope="session")
+def sc_aware_delete(general_namespace_is_sc):
+    """Best-effort cleanup delete that is durable when the target namespace is SC.
+
+    Non-durable delete is ``FailForbidden`` on strong-consistency namespaces; issuing a
+    durable delete there keeps setup/teardown working in both modes without marking the
+    test AP-only. Errors are swallowed — this is teardown, not an assertion. Reserve
+    ``@requires_mode`` for tests whose *assertion* is mode-specific.
+    """
+    async def _del(session, *keys):
+        for k in keys:
+            builder = session.delete(k)
+            if general_namespace_is_sc:
+                builder = builder.with_durable_delete()
+            try:
+                await builder.execute()
+            except Exception:
+                pass
+
+    return _del
+
+
+@pytest.fixture(autouse=True)
+def _enforce_requires_mode(request):
+    """Skip a ``@requires_mode(...)`` test when the general namespace's mode doesn't match.
+
+    Resolves the server-derived mode lazily (only for marked tests), so unmarked tests
+    never pay the probe.
+    """
+    marker = request.node.get_closest_marker("requires_mode")
+    if marker is None:
+        return
+    from tests.integration.namespace import requires_mode_skip_reason
+
+    reason = requires_mode_skip_reason(
+        marker.args[0], request.getfixturevalue("general_namespace_is_sc"),
+    )
+    if reason:
+        pytest.skip(reason)
+
+
+def _terminal_emit(config):
+    """Return a writer that bypasses pytest's per-test output capture.
+
+    SC routing lines are emitted from session-scoped fixtures, where a bare
+    ``print`` is captured and only surfaces under ``-s`` or on failure. The
+    terminal reporter writes straight to the console; fall back to ``print``
+    when it is absent (``-p no:terminal``).
+    """
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    return reporter.write_line if reporter is not None else print
+
+
+def _report_sc_routing(client, config) -> None:
+    """Report which namespace the SC suites will use, and whether it is really SC.
+
+    Positive confirmation, so a green SC run cannot be mistaken for one that
+    quietly skipped or landed on an AP namespace. Mirrors
+    ``resolve_sc_namespace``'s choice (a pinned ``AEROSPIKE_SC_NAMESPACE`` wins,
+    otherwise the lone SC namespace) and reports the same ``namespace/<name>``
+    verdict the suites gate on, rather than a second opinion. Diagnostic only —
+    it never fails a run.
+    """
+    emit = _terminal_emit(config)
+
+    pinned = os.environ.get("AEROSPIKE_SC_NAMESPACE", "").strip()
+    try:
+        verdicts = {}
+        for ns in sorted(SyncInfoCommands(client).namespaces()):
+            # Same multi-node scan as ``Session.namespace_sc_status``: a node
+            # reporting the namespace as unknown wins, otherwise the last node
+            # to report ``strong-consistency`` decides.
+            missing = False
+            sc_val = None
+            for body in client.info_blocking(f"namespace/{ns}").values():
+                if not body:
+                    continue
+                exists, sc_opt = _parse_namespace_info_body(body)
+                if not exists:
+                    missing = True
+                    break
+                if sc_opt is not None:
+                    sc_val = sc_opt
+            verdicts[ns] = not missing and bool(sc_val)
+    except Exception as exc:
+        emit("")
+        emit(f"SC routing: namespace check unavailable ({exc})")
+        return
+
+    table = ", ".join(f"{ns}(is_sc={v})" for ns, v in verdicts.items()) or "(none reported)"
+    emit("")
+    emit(f"SC routing: namespaces on SC seed: {table}")
+
+    sc_names = [ns for ns, is_sc in verdicts.items() if is_sc]
+    if pinned:
+        chosen, why = pinned, "pinned"
+    elif len(sc_names) == 1:
+        chosen, why = sc_names[0], "auto-selected"
+    else:
+        reason = (
+            "several SC namespaces - set AEROSPIKE_SC_NAMESPACE"
+            if sc_names else
+            "no namespace has strong-consistency"
+        )
+        emit(f"SC routing: unresolved ({reason}) -> SC suites will SKIP")
+        return
+
+    is_sc = verdicts.get(chosen)
+    if is_sc:
+        emit(f"SC routing: SC suites will use namespace {chosen!r} ({why}) -> is_sc=True")
+    elif is_sc is False:
+        emit(
+            f"SC routing: namespace {chosen!r} ({why}) is AP mode (is_sc=False) "
+            "-> SC suites will SKIP",
+        )
+    else:
+        emit(
+            f"SC routing: namespace {chosen!r} ({why}) is not present on this seed "
+            "-> SC suites will SKIP",
+        )
+
+
+@pytest.fixture(scope="session")
+def aerospike_host_sc(pytestconfig):
     """Seed for SC / MRT / durable-delete integration tests.
 
     Uses ``AEROSPIKE_HOST_SC`` when set; otherwise the same seed as
@@ -240,7 +491,8 @@ def aerospike_host_sc():
     Probes the seed once at session scope and ``pytest.skip``s every
     dependent test when the SC cluster is unreachable, rather than
     surfacing a connect error per test. Uses :func:`new_client_blocking`
-    so we don't need an asyncio loop just to probe.
+    so we don't need an asyncio loop just to probe — and therefore catches
+    PAC's ``ConnectionError``, not the SDK-level one it converts to.
     """
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
     seed = sc if sc else os.environ.get("AEROSPIKE_HOST", "localhost:3000")
@@ -257,6 +509,14 @@ def aerospike_host_sc():
     try:
         client = new_client_blocking(probe_policy, seed)
     except PacConnectionError as exc:
+        # Announce it as well as skipping: a bare skip is a single 's' unless the
+        # run asked for -rs, which makes "no SC cluster" look like a green SC run.
+        emit = _terminal_emit(pytestconfig)
+        emit("")
+        emit(
+            f"SC routing: SC seed {seed!r} is UNREACHABLE "
+            "-> every SC suite will SKIP",
+        )
         pytest.skip(
             f"SC cluster at {seed!r} is unreachable "
             f"(AEROSPIKE_HOST_SC={os.environ.get('AEROSPIKE_HOST_SC', '')!r}). "
@@ -264,6 +524,7 @@ def aerospike_host_sc():
             f"AEROSPIKE_HOST. Underlying error: {exc}"
         )
     else:
+        _report_sc_routing(client, pytestconfig)
         client.close_blocking()
 
     return seed
@@ -336,14 +597,14 @@ def wait_for_index():
 
 @pytest.fixture(scope="session")
 def wait_for_set_visible():
-    """Return an async helper that polls a set scan until ``expected`` records are visible.
+    """Return an async helper that polls a set scan until exactly ``expected`` records are visible.
 
     Point writes ack as soon as they are committed, but set scans / SI queries
     can lag a few milliseconds behind the ack as the partition map and any
     secondary-index entries catch up. Fixtures that insert N records and then
     expect a scan to see them should call this before yielding to tests so the
-    suite is robust to CI runner load. Replaces fixed ``asyncio.sleep`` waits
-    that previously guessed a wall-clock value.
+    suite is robust to CI runner load. Uses ``seen == expected`` (not ``>=``) so
+    truncate lag or leftover rows from a prior run cannot satisfy the check early.
 
     Usage::
 
@@ -361,7 +622,7 @@ def wait_for_set_visible():
             async for _ in stream:
                 seen += 1
             stream.close()
-            if seen >= expected:
+            if seen == expected:
                 # Brief settle pause — scan-count visibility precedes CDT-bin
                 # storage / filter-expression readiness by a few tens of ms
                 # on busier CI runners. Without this, AEL CDT-path filters
@@ -375,16 +636,52 @@ def wait_for_set_visible():
             last_seen = seen
             await asyncio.sleep(interval)
         raise TimeoutError(
-            f"{ns}.{set_name}: only {last_seen}/{expected} records visible "
-            f"to set scan within {timeout}s"
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
         )
 
     return _wait
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def sync_wait_for_set_visible():
+    """Return a sync helper that polls a set scan until exactly ``expected`` records are visible.
+
+    Sync counterpart of :func:`wait_for_set_visible`. Uses ``seen == expected`` so
+    truncate lag or leftover rows cannot satisfy the check early.
+    """
+    def _wait(
+        session, ns, set_name, expected,
+        *, timeout=5.0, interval=0.05, settle=0.1,
+    ):
+        deadline = time.monotonic() + timeout
+        last_seen = -1
+        while time.monotonic() < deadline:
+            stream = session.query(ns, set_name).execute()
+            seen = 0
+            for _ in stream:
+                seen += 1
+            stream.close()
+            if seen == expected:
+                if settle > 0:
+                    time.sleep(settle)
+                return
+            last_seen = seen
+            time.sleep(interval)
+        raise TimeoutError(
+            f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
+            f"last saw {last_seen} within {timeout}s"
+        )
+
+    return _wait
+
+
+@pytest.fixture(scope="session")
 def sync_wait_for_index():
     """Fixture returning a sync helper that retries until a secondary index is queryable.
+
+    Session-scoped so module- or session-scoped integration clients may depend on
+    it without a pytest scope mismatch.
 
     Usage::
 

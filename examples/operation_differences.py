@@ -34,10 +34,9 @@ def check(test_id: str, passed: bool, description: str) -> None:
 
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
 
-    try:
         await session.truncate(SET)
         await asyncio.sleep(0.2)
         await setup_test_data(session)
@@ -52,8 +51,6 @@ async def main() -> None:
         print(SEPARATOR)
         print(f"SUMMARY: {failed_tests}/{total_tests} tests show spec/implementation differences")
         print(SEPARATOR)
-    finally:
-        await cluster.close()
 
 
 async def setup_test_data(session) -> None:
@@ -133,8 +130,8 @@ async def test_2a_let_then(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expression:  let (x = $.x, y = $.y) then (${{x}} + ${{y}})")
-            print(f"      Expected:    30")
+            print("      Expression:  let (x = $.x, y = $.y) then (${x} + ${y})")
+            print("      Expected:    30")
             print(f"      Actual:      {result}")
             check("2a-let-then", result == 30, "let...then produces correct result")
         else:
@@ -168,12 +165,12 @@ async def test_2b_name_identifier_too_permissive(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    val_from_int_key_1 (integer key 1)")
+            print("      Expected:    val_from_int_key_1 (integer key 1)")
             print(f"      Actual:      {result or 'null (key not found)'}")
             check("2b-int-key-lookup", result == "val_from_int_key_1",
                   "AEL looks up string key '1' instead of integer key 1")
         else:
-            print(f"      Actual:      record filtered/missing (eval failure)")
+            print("      Actual:      record filtered/missing (eval failure)")
             check("2b-int-key-lookup", False, "integer key lookup returned nothing")
     except Exception as e:
         print(f"      ERROR: {type(e).__name__}: {e}")
@@ -191,7 +188,7 @@ async def test_2b_name_identifier_too_permissive(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      $.m.1 per spec should return: INTEGER_KEY_1")
+            print("      $.m.1 per spec should return: INTEGER_KEY_1")
             print(f"      $.m.1 actually returns:       {result}")
             check("2b-ambiguous-key", result == "INTEGER_KEY_1",
                   "AEL resolves to string key instead of integer key")
@@ -219,8 +216,9 @@ async def test_2c_right_shift_reversed(session) -> None:
     expected_arithmetic = -8 >> 1  # -4
     expected_logical = (-8 % (1 << 64)) >> 1  # unsigned interpretation
 
-    print(f"  [A] Negative number: -8 >> 1")
-    print(f"      Python -8 >> 1  (arithmetic): {expected_arithmetic}")
+    print("  [A] Negative number: -8 >> 1")
+    print(f"      Python -8 >> 1   (arithmetic): {expected_arithmetic}")
+    print(f"      Python unsigned  (logical):    {expected_logical}")
     try:
         stream = await (
             session.query(SET.id(1))
@@ -255,7 +253,7 @@ async def test_2c_right_shift_reversed(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    8")
+            print("      Expected:    8")
             print(f"      Actual:      {result}")
             check("2c-rshift-positive", result == 8, "positive shift works")
         else:
@@ -347,7 +345,7 @@ async def test_2d_exists_silently_ignored(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    True (boolean)")
+            print("      Expected:    True (boolean)")
             print(f"      Actual:      {result} (type: {type(result).__name__})")
             check("2d-exists-read-expr", isinstance(result, bool) and result is True,
                   "should return boolean existence check")
@@ -391,7 +389,7 @@ async def test_2e_mutation_operations_ignored(session) -> None:
             result = first.record.bins.get("sortedList")
             original = first.record.bins.get("listBin")
             print(f"      Original:    {original}")
-            print(f"      Expected:    [10, 20, 30, 40, 50] (sorted list)")
+            print("      Expected:    [10, 20, 30, 40, 50] (sorted list)")
             print(f"      Actual:      {result}")
             is_sorted = isinstance(result, list) and len(result) == 5 and result[0] == 10
             check("2e-sort", is_sorted, "sort() implementation")
@@ -414,7 +412,7 @@ async def test_2e_mutation_operations_ignored(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("removedList")
-            print(f"      Expected:    [50, 10, 40, 20] (list without 30)")
+            print("      Expected:    [50, 10, 40, 20] (list without 30)")
             print(f"      Actual:      {result}")
             check("2e-remove", isinstance(result, list) and len(result) == 4,
                   "remove() implementation")
@@ -432,7 +430,7 @@ async def test_2e_mutation_operations_ignored(session) -> None:
     if first and first.is_ok:
         list_bin = first.record.bins.get("listBin")
         print(f"      listBin now:  {list_bin}")
-        print(f"      Original was: [50, 10, 40, 20, 30]")
+        print("      Original was: [50, 10, 40, 20, 30]")
         if isinstance(list_bin, list) and len(list_bin) == 5:
             print("      Original data is unchanged")
     print()
@@ -459,11 +457,11 @@ async def test_casting_as_int_as_float(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    error (type mismatch)")
+            print("      Expected:    error (type mismatch)")
             print(f"      Actual:      {result} (type: {type(result).__name__ if result else 'null'})")
             check("cast-mixed-no-cast", False, "mixed-type arithmetic should require explicit cast")
         else:
-            print(f"      Expression failed/filtered (expected for mixed types)")
+            print("      Expression failed/filtered (expected for mixed types)")
             check("cast-mixed-no-cast", True, "mixed types correctly rejected without cast")
     except Exception as e:
         print(f"      Actual:      {type(e).__name__}: {e}")
@@ -482,7 +480,7 @@ async def test_casting_as_int_as_float(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    13")
+            print("      Expected:    13")
             print(f"      Actual:      {result}")
             check("cast-asInt", result == 13, "asInt() casts float to int for arithmetic")
         else:
@@ -504,7 +502,7 @@ async def test_casting_as_int_as_float(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    13.5")
+            print("      Expected:    13.5")
             print(f"      Actual:      {result}")
             check("cast-asFloat", isinstance(result, float) and abs(result - 13.5) < 0.001,
                   "asFloat() casts int to float for arithmetic")
@@ -526,7 +524,7 @@ async def test_casting_as_int_as_float(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    10 (unchanged)")
+            print("      Expected:    10 (unchanged)")
             print(f"      Actual:      {result}")
             check("cast-noop-int", result == 10, "asInt() on int is a no-op")
         else:
@@ -547,7 +545,7 @@ async def test_casting_as_int_as_float(session) -> None:
         first = await stream.first()
         if first and first.is_ok:
             result = first.record.bins.get("result")
-            print(f"      Expected:    3.5 (unchanged)")
+            print("      Expected:    3.5 (unchanged)")
             print(f"      Actual:      {result}")
             check("cast-noop-float", isinstance(result, float) and abs(result - 3.5) < 0.001,
                   "asFloat() on float is a no-op")

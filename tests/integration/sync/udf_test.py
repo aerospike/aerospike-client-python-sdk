@@ -26,8 +26,11 @@ from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
+from tests.integration.namespace import general_namespace
+from tests.integration.general_auth import apply_general_auth
+from tests.pac_compat import requires_server_compiled_ael
 
-NS = "test"
+NS = general_namespace()
 SET = "test"
 DS = DataSet.of(NS, SET)
 LUA_FILE = os.path.normpath(
@@ -42,7 +45,7 @@ def _wait_task(cluster, task) -> bool:
     return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cluster_with_udf(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
         udf_session = cluster.create_session()
@@ -116,7 +119,7 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     with open(LUA_FILE, "rb") as f:
         body = f.read()
 
-    cluster = ClusterDefinition(hostname, port).connect()
+    cluster = apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         try:
             rm = cluster.remove_udf(path)
@@ -157,6 +160,7 @@ def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
         assert r.record is not None
 
 
+@requires_server_compiled_ael
 def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")
@@ -295,7 +299,10 @@ def test_sync_chained_udf_three_specs_mixed_ok_and_udf_bad_response(
     assert not rows[2].is_ok
     assert rows[2].key == k3
     assert rows[2].result_code == ResultCode.UDF_BAD_RESPONSE
-    assert rows[2].record is None
+    # Multiple UDF segments fold into one batch, so the server's UDF failure
+    # detail is surfaced as a FAILURE bin rather than dropped.
+    assert rows[2].record is not None
+    assert "FAILURE" in rows[2].record.bins
     r1 = session.query(k1).bins(["cx"]).execute().first_or_raise()
     assert r1.record is not None
     assert r1.record.bins.get("cx") == "ok1"

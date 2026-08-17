@@ -23,11 +23,12 @@ import pytest
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
+from tests.integration.namespace import general_namespace
 
 
 @pytest.fixture
 def dataset():
-    return DataSet.of("test", "behavior_test")
+    return DataSet.of(general_namespace(), "behavior_test")
 
 
 @pytest.fixture

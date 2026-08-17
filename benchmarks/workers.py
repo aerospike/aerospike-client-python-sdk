@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import threading
 import time
@@ -33,6 +34,7 @@ from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
+from aerospike_sdk.exceptions import RecordNotFoundError as _SdkRecordNotFound
 from aerospike_sdk.exceptions import TimeoutError as AsTimeoutError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
@@ -65,9 +67,8 @@ _SELF_TEST_VAL = 0x5AFEC0DE
 # phase — without this, a PAC retry loop on an unroutable partition keeps
 # the bench process alive forever even though no real op makes progress.
 # Override via `BENCH_SELFTEST_TIMEOUT_SEC` env var (positive float seconds).
-import os as _os  # local import — only the workers module needs it for this
 def _selftest_timeout_default() -> float:
-    raw = _os.environ.get("BENCH_SELFTEST_TIMEOUT_SEC", "").strip()
+    raw = os.environ.get("BENCH_SELFTEST_TIMEOUT_SEC", "").strip()
     if raw:
         try:
             v = float(raw)
@@ -207,11 +208,21 @@ async def _self_test_pac_async(client: Any, dataset: DataSet) -> None:
 
 def _is_not_found(exc: BaseException) -> bool:
     """A cache miss on a point read — counted as success-with-no-record,
-    not as an error. PAC/PSDK fast-path raise ``RecordNotFound``; the
-    legacy ``aerospike`` C client raises its own ``RecordNotFound``
-    (checked separately inside ``run_legacy_sync``).
+    not as an error. PAC's blocking/async get raises
+    ``aerospike_async.exceptions.RecordNotFound``; PSDK's fast-path
+    ``session.get`` raises ``aerospike_sdk.exceptions.RecordNotFoundError``
+    (a distinct type — both must be recognized here). The legacy
+    ``aerospike`` C client raises its own ``RecordNotFound`` (checked
+    separately inside ``run_legacy_sync``).
     """
-    return isinstance(exc, _AsRecordNotFound)
+    if isinstance(exc, (_AsRecordNotFound, _SdkRecordNotFound)):
+        return True
+    # Robust cross-type fallback: match on the server result code name so a
+    # not-found never masquerades as a hard error regardless of which layer
+    # raised it. Real exceptions (connection/timeout/server errors) still flow
+    # through to the error counters unchanged.
+    rc = getattr(exc, "result_code", None)
+    return getattr(rc, "name", str(rc)) == "KeyNotFoundError"
 
 
 def _classify_exc(exc: BaseException) -> Tuple[bool, bool]:
@@ -1688,8 +1699,6 @@ def run_legacy_sync(
     if cfg.batch_size > 1:
         raise NotImplementedError("legacy-sync mode does not support --batch-size > 1.")
 
-    import os as _os
-
     try:
         import aerospike
     except ImportError as e:
@@ -1711,7 +1720,7 @@ def run_legacy_sync(
     use_services_alt = (
         cli_alt
         if cli_alt is not None
-        else _os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
+        else os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").lower() == "true"
     )
     config: dict = {"hosts": hosts}
     if use_services_alt:

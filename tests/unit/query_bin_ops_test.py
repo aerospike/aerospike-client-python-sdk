@@ -24,7 +24,6 @@ Covers:
 """
 
 import pytest
-from unittest.mock import MagicMock
 
 from aerospike_sdk import Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode
@@ -74,7 +73,10 @@ class TestCdtReadBuilder:
     def _build(self, *, is_map: bool = True):
         parent = _OpCollector()
         captured = []
-        factory = lambda rt: (captured.append(rt), f"op_{rt}")[1]
+        def factory(rt):
+            captured.append(rt)
+            return f"op_{rt}"
+
         rt_cls = MapReturnType if is_map else ListReturnType
         builder = CdtReadBuilder(parent, factory, rt_cls, is_map=is_map)
         return builder, parent, captured
@@ -152,7 +154,10 @@ class TestCdtReadInvertableBuilder:
     def _build(self, *, is_map: bool = True):
         parent = _OpCollector()
         captured = []
-        factory = lambda rt: (captured.append(rt), f"op_{rt}")[1]
+        def factory(rt):
+            captured.append(rt)
+            return f"op_{rt}"
+
         rt_cls = MapReturnType if is_map else ListReturnType
         builder = CdtReadInvertableBuilder(parent, factory, rt_cls, is_map=is_map)
         return builder, parent, captured

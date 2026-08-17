@@ -25,8 +25,11 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
+from tests.pac_compat import requires_server_compiled_ael
+from tests.integration.namespace import general_namespace
 
-@pytest.fixture
+
+@pytest.fixture(scope="module")
 def cluster(aerospike_host, make_cluster_definition, enterprise):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         yield c
@@ -34,7 +37,7 @@ def cluster(aerospike_host, make_cluster_definition, enterprise):
 
 @pytest.fixture
 def users():
-    return DataSet.of("test", "sync_batch_test")
+    return DataSet.of(general_namespace(), "sync_batch_test")
 
 
 class TestSyncBatchOperations:
@@ -97,6 +100,7 @@ class TestSyncBatchOperations:
 
 class TestSyncBatchExpressionOps:
 
+    @requires_server_compiled_ael
     def test_batch_upsert_from(self, cluster: Cluster, users: DataSet, enterprise):
         session = cluster.create_session()
         keys = [users.id(f"sbx_{i}") for i in range(2)]
@@ -146,6 +150,7 @@ class TestSyncBatchStream:
             except Exception:
                 pass
 
+    @requires_server_compiled_ael
     def test_stream_mixed_ops_yields_all(
         self, cluster: Cluster, users: DataSet, track_key,
     ):
@@ -156,7 +161,7 @@ class TestSyncBatchStream:
         Verifies:
         - All 4 ops yield a RecordResult (set-equality on input indices).
         - The streamed expression-read result carries the computed value
-          (`select_from "$.A + $.B"` → sum bin).
+          (`select_from` bin+bin sum → sum bin).
         - Post-batch persisted state matches op semantics: the WRITE
           actually flipped its bin; the two READS did NOT persist a
           `sum` bin (select_from is a read, not a write); the DELETE
@@ -169,8 +174,8 @@ class TestSyncBatchStream:
 
         stream = (
             session.upsert(keys[0]).bin("A").set_to(99)
-            .query(keys[1]).bin("sum").select_from("$.A + $.B")
-            .query(keys[2]).bin("sum").select_from("$.A + $.B")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[2]).bin("sum").select_from("$.A:INT + $.B:INT")
             .delete(keys[3])
             .stream()
         )
@@ -205,6 +210,7 @@ class TestSyncBatchStream:
         empty = list(session.query(keys[3]).execute())
         assert empty == []
 
+    @requires_server_compiled_ael
     def test_stream_read_only_ops_dispatch_as_reads(
         self, cluster: Cluster, users: DataSet, track_key,
     ):
@@ -218,8 +224,8 @@ class TestSyncBatchStream:
             session.upsert(k).put({"A": 5 + i, "B": 3}).execute()
 
         stream = (
-            session.query(keys[0]).bin("sum").select_from("$.A + $.B")
-            .query(keys[1]).bin("sum").select_from("$.A + $.B")
+            session.query(keys[0]).bin("sum").select_from("$.A:INT + $.B:INT")
+            .query(keys[1]).bin("sum").select_from("$.A:INT + $.B:INT")
             .stream()
         )
         results = list(stream)
@@ -388,3 +394,9 @@ class TestSyncBatchErrorDetail:
         assert results[0].sub_code == 1
         assert results[1].is_ok
         assert results[1].sub_code is None
+        # MESSAGE verbosity: the failed row also carries the server's
+        # explanation; the sync stream is an independent implementation, so
+        # assert the full surface here too.
+        assert results[0].server_message and "out of bounds" in results[0].server_message
+        assert results[0].exp_trace is None
+        assert results[1].server_message is None

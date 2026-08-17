@@ -31,6 +31,7 @@ import argparse
 import math
 import os
 import random
+import re
 import resource
 import sys
 import threading
@@ -80,7 +81,6 @@ def _parse_host_port(hosts: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 _rng = random.Random()
-import re
 _TOKEN_RE = re.compile(r"^([ISB])(\d+)$", re.IGNORECASE)
 
 

@@ -33,14 +33,15 @@ imported from ``aerospike_async`` directly.
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import CdtOperation, CTX, Filter
-from aerospike_async import ExpOperation, ExpReadFlags, ExpWriteFlags, FilterExpression as Exp, Operation
+from aerospike_sdk import CdtOperation, CTX, Exp, Filter
+from aerospike_async import ExpOperation, ExpReadFlags, ExpWriteFlags, Operation
 from aerospike_sdk import DataSet
 # The rejects tests catch both the PSDK error type and the raw PAC error
 # (streams can propagate the PAC type unconverted); PacAerospikeError is
 # the PAC alias the exceptions module binds.
 from aerospike_sdk.exceptions import AerospikeError as SdkAerospikeError
 from aerospike_sdk.exceptions import PacAerospikeError
+from tests.integration.namespace import general_namespace
 
 # Errors raised by the core's wire encoder during stream iteration surface as
 # raw PAC ``AerospikeError`` (not yet wrapped by the SDK command pipeline).
@@ -48,7 +49,7 @@ from aerospike_sdk.exceptions import PacAerospikeError
 _AnyAerospikeError = (SdkAerospikeError, PacAerospikeError)
 
 
-_NS = "test"
+_NS = general_namespace()
 _SET = "qopproj"
 _KEY_PREFIX = "qopproj_"
 _BIN1 = "tqobin1"
@@ -111,7 +112,7 @@ async def cluster(aerospike_host, make_cluster_definition, wait_for_index, wait_
         await _drop_qopproj_index(c)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def cluster_812(
     aerospike_host_812_required, make_cluster_definition, wait_for_index, wait_for_set_visible,
 ):

@@ -34,6 +34,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     Generic,
     List,
     Optional,
@@ -53,6 +54,7 @@ from aerospike_async import (
     BatchPolicy,
     BatchReadOp,
     BatchReadPolicy,
+    BatchUDFOp,
     BatchUDFPolicy,
     BatchWriteOp,
     BatchWritePolicy,
@@ -84,6 +86,7 @@ from aerospike_async import (
     PartitionFilter,
     QueryDuration,
     QueryPolicy,
+    QueryWhereFlags,
     ReadPolicy,
     Replica,
     Statement,
@@ -95,6 +98,7 @@ from aerospike_async import (
     WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
+
 
 from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
@@ -122,6 +126,33 @@ from aerospike_sdk.operations_shared import (
     _to_expiration,
     _WriteVerbs,
 )
+from aerospike_sdk.policy.policy_mapper import (
+    resolve_durable_delete,
+    to_batch_policy,
+    to_read_policy,
+    to_write_policy,
+)
+from aerospike_sdk.background_shared import (
+    make_background_write_policy,
+    reject_unsupported_background_write_ops,
+)
+from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
+from aerospike_sdk.error_strategy import (
+    ErrorHandler,
+    OnError,
+    _ErrorDisposition,
+)
+from aerospike_sdk.hll_config import HllConfig
+from aerospike_sdk.implicit_txn import (
+    implicit_txn_enabled,
+)
+from aerospike_sdk.exceptions import (
+    _convert_pac_exception,
+    _result_code_to_exception,
+)
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
+from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:
     # Leaf classes, referenced here only in annotations (safe circular
@@ -180,44 +211,25 @@ def _resolve_hll_flags(
     return flags
 
 
-
-from aerospike_sdk.policy.policy_mapper import (
-    resolve_durable_delete,
-    to_batch_policy,
-    to_read_policy,
-    to_write_policy,
-)
-
-from aerospike_sdk.background_shared import (
-    make_background_write_policy,
-    reject_unsupported_background_write_ops,
-)
-from aerospike_sdk.ael.parser import parse_ael, parse_ael_with_index
-from aerospike_sdk.error_strategy import (
-    ErrorHandler,
-    OnError,
-    _ErrorDisposition,
-)
-from aerospike_sdk.hll_config import HllConfig
-from aerospike_sdk.implicit_txn import (
-    implicit_txn_enabled,
-)
-from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
-    _result_code_to_exception,
-)
-from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
-from aerospike_sdk.record_stream import RecordStream
-
 @dataclass(frozen=True)
 class QueryHint:
     """Hint for influencing secondary index selection and query scheduling.
 
-    Provide ``index_name`` to force a specific named secondary index, or
-    ``bin_name`` to redirect the filter to a different bin's index.  These two
-    are mutually exclusive.  ``query_duration`` overrides the policy's
-    ``expected_duration`` for this query only.
+    Provide ``index_name`` as a soft explain hint on the server-led path, or
+    ``bin_name`` to opt out of server-led selection and send the AEL on the
+    plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
+    mutually exclusive.
+
+    On clusters that support field ``44`` query selection (>= 8.1.3),
+    ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
+
+    .. deprecated:: alpha
+        ``bin_name`` is a legacy opt-out that skips server-led selection in
+        favor of the field ``43`` route. The bin name itself is not sent
+        anywhere. The Query Optimizer PRD specifies the index *name* as the sole
+        hint shape, so this is expected to be removed once product signs off.
+        Prefer ``index_name``, or :meth:`QueryBuilder.filter` when you want to
+        bypass the planner.
 
     Example::
 
@@ -227,18 +239,21 @@ class QueryHint:
         )
         stream = await (
             session.query(dataset)
-                .filter(Filter.equal("age", 30))
+                .where("$.age > 30")
                 .with_hint(hint)
                 .execute()
         )
 
     Args:
-        index_name: Force the query to use the named secondary index.
-        bin_name: Redirect the filter to use a different bin's index.
+        index_name: Soft index name hint (field ``21`` on explain).
+        bin_name: Opt out of explain; send the AEL on field ``43``. Deprecated.
         query_duration: Override ``expected_duration`` on the query policy.
+        require_index: Explain flag — reject primary-index fallback.
+        hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
-        ValueError: If both ``index_name`` and ``bin_name`` are provided.
+        ValueError: If both ``index_name`` and ``bin_name`` are provided, or
+            ``hard_hint`` is set without ``index_name``.
 
     See Also:
         :meth:`QueryBuilder.with_hint`
@@ -247,12 +262,17 @@ class QueryHint:
     index_name: Optional[str] = None
     bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
+    require_index: bool = False
+    hard_hint: bool = False
 
     def __post_init__(self) -> None:
         if self.index_name is not None and self.bin_name is not None:
             raise ValueError(
-                "index_name and bin_name are mutually exclusive; provide one or neither, not both"
+                "index_name and bin_name are mutually exclusive; "
+                "provide one or neither, not both"
             )
+        if self.hard_hint and not self.index_name:
+            raise ValueError("hard_hint requires index_name")
 
 
 @dataclass
@@ -266,19 +286,15 @@ class _FilterRecord:
     ctx: Optional[List[CTX]] = None
 
     def rebuild_for_hint(self, hint: QueryHint) -> Filter:
-        """Reconstruct this filter with the hint's index_name or bin_name override."""
+        """Reconstruct this filter with the hint's ``index_name`` override."""
         if self.method is None or self.args is None:
             raise ValueError(
-                "Cannot apply index_name/bin_name hint to a pre-built Filter. "
-                "Use Filter.*_by_index() directly or let the PSDK generate the "
-                "filter via parse_ael_with_index()."
+                "Cannot apply index_name hint to a pre-built Filter. "
+                "Use Filter.*_by_index() directly."
             )
         if hint.index_name is not None:
             factory = getattr(Filter, f"{self.method}_by_index")
             f = factory(hint.index_name, *self.args)
-        elif hint.bin_name is not None:
-            factory = getattr(Filter, self.method)
-            f = factory(hint.bin_name, *self.args)
         else:
             return self.filter
         if self.ctx:
@@ -287,8 +303,6 @@ class _FilterRecord:
 
 
 if TYPE_CHECKING:
-    from aerospike_sdk.ael.filter_gen import IndexContext
-    from aerospike_sdk.index_monitor import IndexesMonitor
     from aerospike_sdk.policy.behavior import Behavior
 
 @dataclass(slots=True)
@@ -379,7 +393,6 @@ class _QueryBuilderBase:
     _filter_expression: Optional[FilterExpression] = None
     _query_hint: Optional[QueryHint] = None
     _where_ael: Optional[str] = None
-    _index_context: Optional["IndexContext"] = None
     _policy: Optional[QueryPolicy] = None
     _partition_filter: Optional[PartitionFilter] = None
     _chunk_size: Optional[int] = None
@@ -401,6 +414,14 @@ class _QueryBuilderBase:
     # Set by with_txn(None): the caller explicitly opted out of any
     # transaction, so the implicit batch-write wrap must not fire either.
     _txn_opted_out: bool = False
+    _default_where_ael: Optional[str] = None
+    _supports_server_compiled_ael: bool = False
+    _supports_query_selection: bool = False
+    # Mixed-mode batch state: modes for key namespaces beyond the builder's
+    # own (populated only when a batch actually spans namespaces), and
+    # whether any key in the batch lands in an SC namespace.
+    _batch_namespace_modes: Optional[Dict[str, Mode]] = None
+    _batch_any_sc: bool = False
 
     def __init__(
         self,
@@ -408,7 +429,6 @@ class _QueryBuilderBase:
         namespace: str,
         set_name: str,
         behavior: Optional[Behavior] = None,
-        indexes_monitor: Optional["IndexesMonitor"] = None,
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         cached_read_policy_sc: Optional[ReadPolicy] = None,
@@ -417,6 +437,8 @@ class _QueryBuilderBase:
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
         sdk_client: Optional[Any] = None,
+        supports_server_compiled_ael: Optional[bool] = None,
+        supports_query_selection: Optional[bool] = None,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -426,8 +448,6 @@ class _QueryBuilderBase:
             namespace: The namespace name.
             set_name: The set name.
             behavior: Optional Behavior for deriving policies.
-            indexes_monitor: Optional monitor providing cached index metadata
-                for transparent filter generation from AEL expressions.
             cached_read_policy: Pre-computed read policy from the session.
             cached_write_policy: Pre-computed write policy from the session.
             txn: Optional active :class:`~aerospike_async.Txn` captured from
@@ -450,7 +470,6 @@ class _QueryBuilderBase:
         self._namespace = namespace
         self._set_name = set_name
         self._behavior = behavior
-        self._indexes_monitor = indexes_monitor
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
         # Mutable-list fields need per-instance copies (cannot live as
         # class defaults — first mutation would leak across instances).
@@ -470,6 +489,22 @@ class _QueryBuilderBase:
         self._namespace_mode_resolver = namespace_mode_resolver
         self._namespace_mode: Optional[Mode] = None
         self._sdk_client = sdk_client
+        if supports_server_compiled_ael is True:
+            self._supports_server_compiled_ael = True
+        elif (
+            supports_server_compiled_ael is None
+            and sdk_client is not None
+            and sdk_client.supports_server_compiled_ael
+        ):
+            self._supports_server_compiled_ael = True
+        if supports_query_selection is True:
+            self._supports_query_selection = True
+        elif (
+            supports_query_selection is None
+            and sdk_client is not None
+            and sdk_client.supports_query_selection
+        ):
+            self._supports_query_selection = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -482,6 +517,39 @@ class _QueryBuilderBase:
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+
+    def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
+        return filter_expression_from_ael_string(
+            ael,
+            supports_server_compiled_ael=self._supports_server_compiled_ael,
+        )
+
+    def _resolve_where_filter_expression(self) -> None:
+        """Materialize a pending string ``where()`` into ``_filter_expression``."""
+        if self._where_ael is not None and self._filter_expression is None:
+            self._filter_expression = self._filter_expression_from_ael(self._where_ael)
+
+    def _resolve_default_filter_expression(self) -> None:
+        """Materialize a pending string ``default_where()``."""
+        if self._default_where_ael is not None and self._default_filter_expression is None:
+            self._default_filter_expression = self._filter_expression_from_ael(
+                self._default_where_ael,
+            )
+
+    def _effective_filter_expression(self) -> Optional[FilterExpression]:
+        """Return the active filter, materializing pending AEL strings on demand."""
+        # Hot path: spec finalization calls this once per segment. When no
+        # string AEL is pending (the common case), answer with attribute
+        # reads only — the resolve helpers would each re-check and return.
+        if self._where_ael is None:
+            if self._default_where_ael is None:
+                return self._filter_expression or self._default_filter_expression
+            self._resolve_default_filter_expression()
+            return self._filter_expression or self._default_filter_expression
+        self._resolve_where_filter_expression()
+        self._resolve_default_filter_expression()
+        return self._filter_expression or self._default_filter_expression
+
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -502,19 +570,28 @@ class _QueryBuilderBase:
             policy.txn = self._txn
         return policy
 
-    def _implicit_txn_precheck(self) -> bool:
+    def _implicit_txn_precheck(self, keys: Sequence[Key]) -> bool:
         """Cheap synchronous half of the implicit batch-write txn gate.
 
         The multi-key write dispatchers are inherently write-bearing, so
         the has-writes condition is implied; this checks SC namespace, no
-        explicit txn (and no ``with_txn(None)`` opt-out), and the setting.
-        Callers confirm cluster MRT capability afterward — async paths
-        via ``await sdk_client._supports_mrt()``, so the coroutine is only
+        explicit txn (and no ``with_txn(None)`` opt-out), the setting, and
+        that every key shares the builder's namespace. Callers confirm
+        cluster MRT capability afterward — async paths via
+        ``await sdk_client._supports_mrt()``, so the coroutine is only
         created once the cheap conditions pass.
         """
-        return not self._txn_opted_out and implicit_txn_enabled(
+        if self._txn_opted_out or not implicit_txn_enabled(
             self._sdk_client, self._txn, self._namespace_mode
-        )
+        ):
+            return False
+        # A transaction cannot span namespaces. Wrapping is SDK-initiated,
+        # so decline it for a mixed-namespace batch instead of turning a
+        # request the server would answer per key into a whole-batch
+        # client-side rejection. Scanned last: the checks above reject the
+        # overwhelmingly common AP case before we touch the keys.
+        namespace = self._namespace
+        return all(key.namespace == namespace for key in keys)
 
     def _implicit_txn_settings(self) -> Any:
         """Live transaction settings from the owning SDK client."""
@@ -523,6 +600,63 @@ class _QueryBuilderBase:
     def _resolved_namespace_mode(self) -> Mode:
         assert self._namespace_mode is not None
         return self._namespace_mode
+
+    # -- Mixed-mode batch resolution ------------------------------------------
+    # A batch may span namespaces whose consistency modes differ (AP vs SC).
+    # Mode-scoped settings must resolve per key — durable-delete defaults on
+    # SC are the sharp edge — while batch-level knobs resolve with SC
+    # escalation: if any key is SC, the parent policy uses SC-scoped settings.
+
+    def _collect_extra_batch_namespaces(self) -> Optional[set]:
+        """Distinct key namespaces beyond the builder's own, or ``None``.
+
+        ``None`` (the overwhelmingly common single-namespace case) means no
+        further resolution work is needed.
+        """
+        extra: Optional[set] = None
+        namespace = self._namespace
+        for spec in self._specs:
+            for key in spec.keys:
+                ns = key.namespace
+                if ns != namespace:
+                    if extra is None:
+                        extra = set()
+                    extra.add(ns)
+        return extra
+
+    def _mode_for_namespace(self, namespace: str) -> Mode:
+        """Resolved mode for one key's namespace (falls back to the builder's)."""
+        modes = self._batch_namespace_modes
+        if modes is not None and namespace != self._namespace:
+            mode = modes.get(namespace)
+            if mode is not None:
+                return mode
+        return self._resolved_namespace_mode()
+
+    def _resolved_batch_mode(self) -> Mode:
+        """Mode for batch-level (parent) policy resolution.
+
+        SC-escalated: when any key in the batch lands in an SC namespace,
+        the parent policy resolves with SC-scoped settings, mirroring the
+        per-record/parent split the batch wire protocol itself has.
+        """
+        if self._batch_any_sc:
+            return Mode.SC
+        return self._resolved_namespace_mode()
+
+    def _spec_modes_mixed(self, spec: "_OperationSpec") -> bool:
+        """Whether one spec's keys span both consistency modes."""
+        modes = self._batch_namespace_modes
+        if modes is None:
+            return False
+        first: Optional[Mode] = None
+        for key in spec.keys:
+            mode = self._mode_for_namespace(key.namespace)
+            if first is None:
+                first = mode
+            elif mode is not first:
+                return True
+        return False
 
     def _make_batch_policy(
         self, settings: Optional[Any],
@@ -721,7 +855,7 @@ class _QueryBuilderBase:
         return self
 
     @overload
-    def where(self, expression: str) -> QueryBuilder: ...
+    def where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
     def where(self, expression: FilterExpression) -> QueryBuilder: ...
@@ -729,54 +863,45 @@ class _QueryBuilderBase:
     def where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Apply a server-side filter for dataset queries or keyed reads that support it.
 
-        String arguments are parsed with the AEL; prefer f-strings for
-        dynamic literals. Pass a pre-built :class:`~aerospike_async.FilterExpression`
-        when constructing filters programmatically.
+        String arguments are AEL, compiled by the server. Pass a pre-built
+        :class:`~aerospike_async.FilterExpression` when constructing filters
+        programmatically.
+
+        Supplying *params* interpolates them into the template with printf
+        syntax. Only trusted values belong here — interpolation does not quote
+        or escape, so it is no safer than an f-string.
 
         Args:
             expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template.
 
         Returns:
             This builder for chaining.
 
+        Raises:
+            TypeError: If *params* accompany a ``FilterExpression``.
+            ValueError: If the template is not a valid printf format string.
+
         Example::
 
             qb = session.query(ds).where("$.status == 'active'")
+            qb = session.query(ds).where("$.score > %d", min_score)
             qb = session.query(ds).where(f"$.score > {min_score}")
 
         See Also:
             :meth:`default_where`: Default filter for chained operations without their own.
             :meth:`filter_expression`: Attach an expression without AEL parsing.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._where_ael = expression
-            self._filter_expression = parse_ael(expression)
         else:
             self._where_ael = None
             self._filter_expression = expression
-        return self
-
-    def with_index_context(self, index_context: "IndexContext") -> Self:
-        """Explicitly override the secondary index metadata used for filter generation.
-
-        Most applications do **not** need this method. The client automatically
-        discovers and caches secondary index metadata from the cluster in the
-        background. Use this only when you need to force a specific index
-        context that differs from the live cluster state.
-
-        Args:
-            index_context: Index metadata for the query's namespace.
-
-        Returns:
-            This builder for method chaining.
-
-        See Also:
-            :class:`~aerospike_sdk.ael.filter_gen.IndexContext`
-        """
-        self._index_context = index_context
         return self
 
     def with_policy(self, policy: QueryPolicy) -> Self:
@@ -822,74 +947,53 @@ class _QueryBuilderBase:
         self._partition_filter = partition_filter
         return self
 
-    def on_partitions(self, *partition_ids: int) -> Self:
-        """
-        Set partitions to query by partition IDs.
-        
-        Args:
-            *partition_ids: One or more partition IDs to query.
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
-
-                query = session.query(dataset).on_partitions(1, 2, 3)
-        """
-        if len(partition_ids) == 1:
-            self._partition_filter = PartitionFilter.by_id(partition_ids[0])
-        else:
-            # For multiple partitions, we need to use a range or multiple filters
-            # Since PartitionFilter.by_id only takes one ID, we'll use by_range
-            # for now. This is a limitation of the underlying client.
-            min_id = min(partition_ids)
-            max_id = max(partition_ids)
-            self._partition_filter = PartitionFilter.by_range(min_id, max_id + 1)
-        return self
-
     def on_partition(self, part_id: int) -> Self:
         """
         Target a specific partition for the query.
-        
+
         This method restricts the query to a single partition. This can be useful
         for load balancing or when you know the data distribution across partitions.
-        
+
         Args:
             part_id: The partition ID to target (0-4095)
-        
+
         Returns:
             self for method chaining
-            
+
         Raises:
             ValueError: If part_id is out of range
-            
+
         Example::
 
                 query = session.query(dataset).on_partition(5)
+
+        See Also:
+            :meth:`on_partition_range`: Target a contiguous span of partitions.
+            :meth:`partition`: Apply a pre-built partition filter.
         """
         return self.on_partition_range(part_id, part_id + 1)
 
     def on_partition_range(self, start_incl: int, end_excl: int) -> Self:
         """
         Target a range of partitions for the query.
-        
+
         This method restricts the query to a specific range of partitions. This
         can be useful for load balancing, parallel processing, or when you know
         the data distribution across partitions.
-        
+
         The partition range can only be set once per query. Subsequent calls
         with different ranges will overwrite the previous range.
-        
+
         Args:
             start_incl: Start partition (inclusive, 0-4095)
             end_excl: End partition (exclusive, 1-4096)
-        
+
         Returns:
             self for method chaining
-            
+
         Raises:
             ValueError: If partition range is invalid
-            
+
         Example::
 
                 # Query partitions 0-2047 (first half)
@@ -897,6 +1001,10 @@ class _QueryBuilderBase:
 
                 # Query partitions 100-199
                 query = session.query(dataset).on_partition_range(100, 200)
+
+        See Also:
+            :meth:`on_partition`: Target a single partition.
+            :meth:`partition`: Apply a pre-built partition filter.
         """
         # Partition range validation
         if start_incl < 0 or start_incl >= 4096:
@@ -907,8 +1015,10 @@ class _QueryBuilderBase:
             raise ValueError(
                 f"Start partition ({start_incl}) must be < end partition ({end_excl})"
             )
-        
-        self._partition_filter = PartitionFilter.by_range(start_incl, end_excl)
+
+        # PartitionFilter.by_range takes (begin, count), not (begin, end):
+        # convert the exclusive end bound into a partition count.
+        self._partition_filter = PartitionFilter.by_range(start_incl, end_excl - start_incl)
         return self
 
     def chunk_size(self, chunk_size: int) -> Self:
@@ -1020,9 +1130,9 @@ class _QueryBuilderBase:
     def with_hint(self, hint: QueryHint) -> Self:
         """Attach a query hint for secondary index selection or scheduling.
 
-        A hint can redirect which secondary index is used (``index_name``),
-        remap the filter to a different bin (``bin_name``), or override the
-        expected query duration (``query_duration``).  Only one call to
+        A hint can redirect which secondary index is used (``index_name``)
+        or override the expected query duration (``query_duration``).
+        Only one call to
         ``with_hint`` is allowed per builder.
 
         Example::
@@ -1135,7 +1245,7 @@ class _QueryBuilderBase:
         return self.include_missing_keys()
 
     @overload
-    def default_where(self, expression: str) -> QueryBuilder: ...
+    def default_where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
     def default_where(self, expression: FilterExpression) -> QueryBuilder: ...
@@ -1143,6 +1253,7 @@ class _QueryBuilderBase:
     def default_where(
         self,
         expression: Union[str, FilterExpression],
+        *params: Any,
     ) -> Self:
         """Set a filter applied to any chained operation that does not call :meth:`where`.
 
@@ -1166,16 +1277,25 @@ class _QueryBuilderBase:
 
         Args:
             expression: AEL string or ``FilterExpression``.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`where` for the interpolation contract.
 
         Returns:
             This builder for chaining.
 
+        Raises:
+            TypeError: If *params* accompany a ``FilterExpression``.
+            ValueError: If the template is not a valid printf format string.
+
         See Also:
             :meth:`where`: Per-operation filter on the current operation.
         """
+        expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._default_filter_expression = parse_ael(expression)
+            self._default_where_ael = expression
+            self._default_filter_expression = None
         else:
+            self._default_where_ael = None
             self._default_filter_expression = expression
         return self
 
@@ -1278,7 +1398,14 @@ class _QueryBuilderBase:
         else:
             return
 
-        filt = self._filter_expression or self._default_filter_expression
+        # Inline the no-AEL fast path: this runs once per segment, and the
+        # resolver chain is only needed when a string ``where()`` is pending.
+        filt = self._filter_expression
+        if filt is None:
+            if self._where_ael is None and self._default_where_ael is None:
+                filt = self._default_filter_expression
+            else:
+                filt = self._effective_filter_expression()
         ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
 
         # Hand off the current operations list directly; allocate a fresh
@@ -1305,6 +1432,7 @@ class _QueryBuilderBase:
         self._bins = None
         self._with_no_bins = False
         self._filter_expression = None
+        self._where_ael = None
         self._op_type = None
         self._generation = None
         self._ttl_seconds = None
@@ -1336,7 +1464,7 @@ class _QueryBuilderBase:
             keys = list(self._keys)
         else:
             return
-        filt = self._filter_expression or self._default_filter_expression
+        filt = self._effective_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
         )
@@ -1370,14 +1498,22 @@ class _QueryBuilderBase:
         self._clear_pending_udf_state()
 
     def _specs_require_sequential_run(self) -> bool:
-        return any(spec.op_type == "udf" for spec in self._specs)
+        # A single homogeneous UDF apply (one ``execute_udf`` over many keys)
+        # uses the dedicated apply-many path — already a single round-trip.
+        # Every other UDF combination — multiple UDF segments, or a UDF mixed
+        # with other op types — folds into one mixed batch call where each UDF
+        # row becomes a ``BatchUDFOp``, matching the single-round-trip behavior
+        # of every other batch.
+        return len(self._specs) == 1 and self._specs[0].op_type == "udf"
 
-    def _make_batch_udf_policy(self, spec: _OperationSpec) -> Optional[BatchUDFPolicy]:
+    def _make_batch_udf_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchUDFPolicy]:
         settings = (
             self._behavior.get_settings(
                 OpKind.WRITE_NON_RETRYABLE,
                 OpShape.BATCH,
-                self._resolved_namespace_mode(),
+                mode if mode is not None else self._resolved_namespace_mode(),
             )
             if self._behavior is not None else None
         )
@@ -1464,7 +1600,7 @@ class _QueryBuilderBase:
         Thin wrapper over :meth:`_filtered_batch_list` for async callers
         that hand the result back to streaming code.
         """
-        return RecordStream.from_list(
+        return RecordStream._from_list(
             self._filtered_batch_list(batch_records, disp, handler, op_type),
         )
 
@@ -1508,12 +1644,12 @@ class _QueryBuilderBase:
                 raise pfc_exc from exc
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, index, pfc_exc)
-                return RecordStream.from_list([])
+                return RecordStream._from_list([])
 
         if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream.from_list([])
+            return RecordStream._from_list([])
 
-        return RecordStream.from_error(key, rc, in_doubt, exception=pfc_exc)
+        return RecordStream._from_error(key, rc, in_doubt, exception=pfc_exc)
 
     def _handle_batch_error_list(
         self,
@@ -1560,7 +1696,7 @@ class _QueryBuilderBase:
         When the entire batch call fails (e.g. timeout, connection error),
         we create one error result per key.
         """
-        return RecordStream.from_list(
+        return RecordStream._from_list(
             self._handle_batch_error_list(keys, exc, disp, handler),
         )
 
@@ -1638,15 +1774,21 @@ class _QueryBuilderBase:
             wp.durable_delete = False
         return wp
 
-    def _make_batch_write_policy(self, spec: _OperationSpec) -> Optional[BatchWritePolicy]:
+    def _make_batch_write_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` for multi-key batch writes.
 
         Carries ``record_exists_action`` so write verbs enforce record
         existence on the wire for the buffered single-spec path exactly as
-        the mixed-spec and streaming paths do.
+        the mixed-spec and streaming paths do. *mode* scopes the
+        durable-delete default to the row's namespace mode.
         """
         rea = _OP_TYPE_TO_REA.get(spec.op_type or "upsert")
-        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
+        eff = (
+            self._batch_write_effective_dd(spec, mode)
+            if spec.contains_record_delete_op else False
+        )
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -1675,65 +1817,143 @@ class _QueryBuilderBase:
             bwp.durable_delete = eff
         return bwp
 
-    def _resolve_index_context(self) -> None:
-        """Auto-populate ``_index_context`` from the monitor when not set.
+    def _dataset_set_name(self) -> Optional[str]:
+        return self._set_name or None
 
-        The monitor's cached :class:`IndexContext` is at namespace granularity
-        and has no ``query_set``. We derive a per-query copy with
-        ``query_set=self._set_name`` so filter selection rejects indexes
-        defined on a different set; cross-set indexes (those without a
-        set name) remain eligible.
-        """
-        if self._index_context is not None:
-            return
-        if self._indexes_monitor is None:
-            return
-        ctx = self._indexes_monitor.get_index_context(self._namespace)
-        if ctx is None:
-            return
-        if self._set_name and ctx.query_set != self._set_name:
-            from aerospike_sdk.ael.filter_gen import IndexContext as _IndexContext
-            ctx = _IndexContext.with_query_set(ctx.namespace, self._set_name, ctx.indexes)
-        self._index_context = ctx
+    def _query_explain_index_hint(self, hint: Optional[QueryHint]) -> Optional[str]:
+        if hint is None:
+            return None
+        return hint.index_name
 
-    def _auto_generate_filters(
-        self,
-        hint: Optional[QueryHint],
-        policy: QueryPolicy,
-    ) -> None:
-        """Parse AEL with index context to generate Filter + Exp.
+    def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
+        if hint is None:
+            return None
+        flags = QueryWhereFlags.EXPLAIN
+        if hint.require_index:
+            flags |= QueryWhereFlags.REQUIRE_INDEX
+        if hint.hard_hint:
+            flags |= QueryWhereFlags.HARD_HINT
+        if flags == QueryWhereFlags.EXPLAIN:
+            return None
+        return int(flags)
 
-        When a hint provides ``index_name`` or ``bin_name``, those overrides
-        are forwarded to the filter generation pipeline.
-        """
-        if self._where_ael is None or self._index_context is None:
-            return
-
-        hint_index = hint.index_name if hint is not None else None
-        hint_bin = hint.bin_name if hint is not None else None
-
-        result = parse_ael_with_index(
-            self._where_ael,
-            self._index_context,
-            hint_index_name=hint_index,
-            hint_bin_name=hint_bin,
-        )
-        if result.filter is not None:
-            self._filter_records.append(_FilterRecord(filter=result.filter))
-            log.debug(
-                "Auto-selected secondary index filter for query on %s.%s",
-                self._namespace,
-                self._set_name,
+    def _raise_if_filtered_out_plan(self, plan: Any) -> None:
+        """Phase-1 plan with no matching records; do not run execute."""
+        if plan.is_filtered_out:
+            raise _result_code_to_exception(
+                ResultCode.FILTERED_OUT,
+                "Query plan filtered out by server",
             )
-        if result.exp is not None:
-            policy.filter_expression = result.exp
+
+    def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
+        """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
+        if self._where_ael is None:
+            return False
+        if self._filter_records:
+            return False
+        if hint is not None and hint.bin_name is not None:
+            return False
+        return self._supports_query_selection
+
+    def _apply_dataset_query_policy_filter(
+        self,
+        policy: QueryPolicy,
+        *,
+        use_server_query_selection: bool,
+    ) -> None:
+        if use_server_query_selection:
+            return
+        self._resolve_where_filter_expression()
+        if self._filter_expression is not None:
+            policy.filter_expression = self._filter_expression
+
+    async def _run_dataset_query_async(
+        self,
+        policy: QueryPolicy,
+        partition_filter: PartitionFilter,
+        hint: Optional[QueryHint],
+        statement: Statement,
+        *,
+        use_server_query_selection: bool,
+    ) -> tuple[Any, Any | None]:
+        """Run dataset query; returns (recordset, plan) when server selection was used."""
+        if not use_server_query_selection:
+            recordset = await self._client.query(
+                statement, partition_filter, policy=policy,
+            )
+            return recordset, None
+
+        assert self._where_ael is not None
+        plan = await self._client.query_explain(
+            self._namespace,
+            self._where_ael,
+            set_name=self._dataset_set_name(),
+            index_name_hint=self._query_explain_index_hint(hint),
+            explain_where_flags=self._query_explain_where_flags(hint),
+            policy=policy,
+        )
+        log.debug(
+            "Server query selection: explain→execute for %s.%s selection=%s index=%s",
+            self._namespace,
+            self._set_name,
+            plan.selection,
+            plan.index_name,
+        )
+        self._raise_if_filtered_out_plan(plan)
+        recordset = await self._client.query_with_plan(
+            statement, partition_filter, plan, policy=policy,
+        )
+        return recordset, plan
+
+    def _run_dataset_query_blocking(
+        self,
+        policy: QueryPolicy,
+        partition_filter: PartitionFilter,
+        hint: Optional[QueryHint],
+        statement: Statement,
+        *,
+        use_server_query_selection: bool,
+    ) -> tuple[Any, Any | None]:
+        if not use_server_query_selection:
+            recordset = self._client.query_blocking(
+                statement, partition_filter, policy=policy,
+            )
+            return recordset, None
+
+        assert self._where_ael is not None
+        plan = self._client.query_explain_blocking(
+            self._namespace,
+            self._where_ael,
+            set_name=self._dataset_set_name(),
+            index_name_hint=self._query_explain_index_hint(hint),
+            explain_where_flags=self._query_explain_where_flags(hint),
+            policy=policy,
+        )
+        log.debug(
+            "Server query selection: explain→execute for %s.%s selection=%s index=%s",
+            self._namespace,
+            self._set_name,
+            plan.selection,
+            plan.index_name,
+        )
+        self._raise_if_filtered_out_plan(plan)
+        recordset = self._client.query_with_plan_blocking(
+            statement, partition_filter, plan, policy=policy,
+        )
+        return recordset, plan
+
     def _batch_policy_for(
         self, op_kind: "OpKind", op_shape: "OpShape",
     ) -> Optional[BatchPolicy]:
-        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings."""
+        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings.
+
+        Resolves with :meth:`_resolved_batch_mode` — SC-escalated when the
+        batch spans an SC namespace — since the parent policy applies to
+        every key in the batch.
+        """
         settings = (
             self._behavior.get_settings(
-                op_kind, op_shape, self._resolved_namespace_mode())
+                op_kind, op_shape, self._resolved_batch_mode())
             if self._behavior is not None else None
         )
         return self._make_batch_policy(settings)
@@ -1908,9 +2128,7 @@ class _QueryBuilderBase:
         statement = Statement(self._namespace, self._set_name, bins)
         if self._filter_records:
             hint = self._query_hint
-            needs_rebuild = hint is not None and (
-                hint.index_name is not None or hint.bin_name is not None
-            )
+            needs_rebuild = hint is not None and hint.index_name is not None
             filters = []
             for rec in self._filter_records:
                 if needs_rebuild and hint is not None and rec.method is not None:
@@ -1970,7 +2188,14 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
-    def _batch_write_effective_dd(self, spec: _OperationSpec) -> bool:
+    def _batch_write_effective_dd(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> bool:
+        """Effective durable-delete for one batch row.
+
+        *mode* is the row's namespace mode; ``None`` falls back to the
+        builder's resolved mode (single-namespace batches).
+        """
         if self._behavior is None:
             return resolve_durable_delete(
                 None,
@@ -1979,7 +2204,7 @@ class _QueryBuilderBase:
             )
         bset = self._behavior.get_settings(
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
-            self._resolved_namespace_mode(),
+            mode if mode is not None else self._resolved_namespace_mode(),
         )
         return resolve_durable_delete(
             bset.durable_delete,
@@ -1987,9 +2212,14 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
-    def _make_batch_delete_policy(self, spec: _OperationSpec) -> Optional[BatchDeletePolicy]:
-        """Build a ``BatchDeletePolicy`` for multi-key batch deletes."""
-        eff = self._batch_write_effective_dd(spec)
+    def _make_batch_delete_policy(
+        self, spec: _OperationSpec, mode: Optional[Mode] = None,
+    ) -> Optional[BatchDeletePolicy]:
+        """Build a ``BatchDeletePolicy`` for multi-key batch deletes.
+
+        *mode* scopes the durable-delete default to the row's namespace mode.
+        """
+        eff = self._batch_write_effective_dd(spec, mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
@@ -2011,9 +2241,16 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> list:
         """Convert one spec into a list of ``BatchReadOp`` / ``BatchWriteOp``
-        / ``BatchDeleteOp`` objects for the PAC mixed-batch API."""
+        / ``BatchDeleteOp`` objects for the PAC mixed-batch API.
+
+        Write-family row policies are mode-scoped (SC defaults durable
+        delete), so when the batch spans namespaces the policy is resolved
+        per row's mode — at most one policy object per mode per spec. The
+        single-namespace case keeps the one-policy-shared-by-all-rows shape.
+        """
         ops: list = []
         op_type = spec.op_type
+        mixed = self._batch_namespace_modes is not None
 
         if op_type is None:
             brp = self._make_batch_read_policy(spec)
@@ -2023,22 +2260,64 @@ class _QueryBuilderBase:
                 else:
                     ops.append(BatchReadOp(key, bins=spec.bins, policy=brp))
         elif op_type == "delete":
-            bdp = self._make_batch_delete_policy(spec)
-            for key in spec.keys:
-                ops.append(BatchDeleteOp(key, policy=bdp))
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_delete_policy(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bdp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchDeleteOp(key, policy=bdp))
+            else:
+                bdp = self._make_batch_delete_policy(spec)
+                for key in spec.keys:
+                    ops.append(BatchDeleteOp(key, policy=bdp))
         elif op_type == "touch":
-            bwp = self._make_batch_write_policy_mixed(spec)
             touch_ops = [Operation.touch()]
-            for key in spec.keys:
-                ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_write_policy_mixed(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bwp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
+            else:
+                bwp = self._make_batch_write_policy_mixed(spec)
+                for key in spec.keys:
+                    ops.append(BatchWriteOp(key, touch_ops, policy=bwp))
         elif op_type == "exists":
             brp = self._make_batch_read_policy(spec)
             for key in spec.keys:
                 ops.append(BatchReadOp(key, bins=[], policy=brp))
+        elif op_type == "udf":
+            pkg, fn, udf_args = spec.udf_package, spec.udf_function, spec.udf_args
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_udf_policy(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    up = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchUDFOp(key, pkg, fn, udf_args, policy=up))
+            else:
+                up = self._make_batch_udf_policy(spec)
+                for key in spec.keys:
+                    ops.append(BatchUDFOp(key, pkg, fn, udf_args, policy=up))
         else:
-            bwp = self._make_batch_write_policy_mixed(spec)
-            for key in spec.keys:
-                ops.append(BatchWriteOp(key, list(spec.operations), policy=bwp))
+            write_ops = list(spec.operations)
+            if mixed:
+                per_mode = {
+                    mode: self._make_batch_write_policy_mixed(spec, mode)
+                    for mode in (Mode.AP, Mode.SC)
+                }
+                for key in spec.keys:
+                    bwp = per_mode[self._mode_for_namespace(key.namespace)]
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
+            else:
+                bwp = self._make_batch_write_policy_mixed(spec)
+                for key in spec.keys:
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
         return ops
 
     @staticmethod
@@ -2055,12 +2334,19 @@ class _QueryBuilderBase:
     def _make_batch_write_policy_mixed(
         self,
         spec: _OperationSpec,
+        mode: Optional[Mode] = None,
     ) -> Optional[BatchWritePolicy]:
         """Build a ``BatchWritePolicy`` that includes ``record_exists_action``
-        for use in mixed-batch calls."""
+        for use in mixed-batch calls.
+
+        *mode* scopes the durable-delete default to the row's namespace mode.
+        """
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        eff = self._batch_write_effective_dd(spec) if spec.contains_record_delete_op else False
+        eff = (
+            self._batch_write_effective_dd(spec, mode)
+            if spec.contains_record_delete_op else False
+        )
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -5015,7 +5301,10 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             The parent builder for method chaining.
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parse_ael(expression) if isinstance(expression, str) else expression
+        if isinstance(expression, str):
+            expr = self._parent._filter_expression_from_ael(expression)  # type: ignore[union-attr]
+        else:
+            expr = expression
         self._parent.add_operation(ExpOperation.read(self._bin, expr, flags))  # type: ignore[union-attr]
         return self._parent
 

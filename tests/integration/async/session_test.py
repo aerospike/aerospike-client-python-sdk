@@ -16,13 +16,14 @@
 """Tests for Session wrapper."""
 
 import logging
-
-import pytest
 from datetime import timedelta
 
-log = logging.getLogger(__name__)
+import pytest
 
 from aerospike_sdk import Behavior, DataSet
+from tests.integration.namespace import general_namespace
+
+log = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ async def test_session_repr(session):
 
 async def test_session_upsert_with_key(session):
     """Test session.upsert() with Key object."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("user123")
 
     await session.upsert(key).put({"name": "John", "age": 30}).execute()
@@ -77,7 +78,7 @@ async def test_session_upsert_with_key(session):
 
 async def test_session_upsert_with_dataset(session):
     """Test session.upsert() with DataSet."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     await session.upsert(dataset=users, key_value="user456").put(
         {"name": "Jane", "age": 25}
@@ -94,9 +95,9 @@ async def test_session_upsert_with_namespace_set(session):
     """Test session.upsert() with explicit namespace/set."""
     from aerospike_sdk import Key
 
-    key = Key("test", "users", "user789")
+    key = Key(general_namespace(), "users", "user789")
     await session.upsert(
-        namespace="test", set_name="users", key_value="user789"
+        namespace=general_namespace(), set_name="users", key_value="user789"
     ).put({"name": "Bob", "age": 35}).execute()
 
     stream = await session.query(key).execute()
@@ -107,7 +108,7 @@ async def test_session_upsert_with_namespace_set(session):
 
 async def test_session_insert(session):
     """Test session.insert() method."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("insert_test")
 
     try:
@@ -125,7 +126,7 @@ async def test_session_insert(session):
 
 async def test_session_update(session):
     """Test session.update() method."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("update_test")
 
     await session.upsert(key).put({"name": "Original", "age": 20}).execute()
@@ -139,7 +140,7 @@ async def test_session_update(session):
 
 async def test_session_delete(session):
     """Test session.delete() method."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("delete_test")
 
     await session.upsert(key).put({"name": "ToDelete"}).execute()
@@ -157,7 +158,7 @@ async def test_session_delete(session):
 
 async def test_session_touch(session):
     """Test session.touch() method."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("touch_test")
 
     await session.upsert(key).put({"name": "TouchMe"}).execute()
@@ -170,7 +171,7 @@ async def test_session_touch(session):
 
 async def test_session_exists(session):
     """Test session.exists() method."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("exists_test")
 
     await session.delete(key).execute()
@@ -188,7 +189,7 @@ async def test_session_exists(session):
 
 async def test_session_query_delegation(session):
     """Test that session.query() delegates to client correctly."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("query_test")
 
     await session.upsert(key).put({"name": "QueryTest", "value": 42}).execute()
@@ -201,7 +202,7 @@ async def test_session_query_delegation(session):
 
 async def test_session_key_value_delegation(session):
     """Test that session.upsert/query work correctly for key-value operations."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
     key = users.id("kv_test")
 
     await session.upsert(key).put({"name": "KVTest"}).execute()
@@ -214,11 +215,11 @@ async def test_session_key_value_delegation(session):
 
 async def test_session_index_delegation(session):
     """Test that session.index() delegates to client correctly."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     index_builder = session.index(dataset=users)
     assert index_builder is not None
-    assert index_builder._namespace == "test"
+    assert index_builder._namespace == general_namespace()
     assert index_builder._set_name == "users"
 
 
@@ -266,7 +267,7 @@ async def test_session_behavior_immutability(session):
 
 async def test_session_query_with_dataset(session):
     """Test session.query() with DataSet."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     key = users.id("dataset_query_test")
     await session.upsert(key).put({"name": "DatasetQuery"}).execute()
@@ -279,7 +280,7 @@ async def test_session_query_with_dataset(session):
 
 async def test_session_query_with_multiple_keys(session):
     """Test session.query() with multiple keys."""
-    users = DataSet.of("test", "users")
+    users = DataSet.of(general_namespace(), "users")
 
     keys = users.ids("batch1", "batch2", "batch3")
     for key in keys:
@@ -303,7 +304,7 @@ async def test_session_truncate(session):
     records written *after* the truncate (whose timestamps exceed the
     cutoff) are immediately readable.
     """
-    users = DataSet.of("test", "trunc_test")
+    users = DataSet.of(general_namespace(), "trunc_test")
 
     key1 = users.id("trunc_old1")
     key2 = users.id("trunc_old2")

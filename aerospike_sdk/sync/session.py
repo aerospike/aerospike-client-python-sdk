@@ -28,6 +28,11 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 from aerospike_async import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import (
+    PacAerospikeError,
+    PacServerError,
+    _convert_pac_exception,
+)
 from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -112,8 +117,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Raises:
             AerospikeError: Server or client errors (including
-                ``KEY_NOT_FOUND_ERROR``) are raised from the underlying
-                client without being wrapped in a
+                ``KEY_NOT_FOUND_ERROR``) are raised as the SDK exception
+                type for the failure, without being wrapped in a
                 :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Example::
@@ -126,35 +131,47 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`query`: Builder-based reads for projections, streams, and secondary-index queries.
             :meth:`put`: Direct single-key upsert.
         """
-        if self._txn is None:
-            return self._pac_client.get_blocking(
-                key, bins,
-                policy=self._cached_read_policy,
-                policy_sc=self._cached_read_policy_sc,
-            )
-        # Under MRT the cached policies are skipped (txn not stamped);
-        # rebuild a per-call policy from behavior.
-        policy = to_read_policy(self._behavior.get_settings(OpKind.READ, OpShape.POINT))
-        policy.txn = self._txn
-        return self._pac_client.get_blocking(key, bins, policy=policy)
+        try:
+            if self._txn is None:
+                return self._pac_client.get_blocking(
+                    key, bins,
+                    policy=self._cached_read_policy,
+                    policy_sc=self._cached_read_policy_sc,
+                )
+            # Under MRT the cached policies are skipped (txn not stamped);
+            # rebuild a per-call policy from behavior.
+            policy = to_read_policy(
+                self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+            policy.txn = self._txn
+            return self._pac_client.get_blocking(key, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     def put(self, key: Key, bins: Dict[str, Any]) -> None:
         """Direct single-key upsert — no builder, no stream — synchronous.
 
         Passes the AP + SC cached policies; PAC picks the right one based
         on the key's namespace mode.
+
+        Raises:
+            AerospikeError: Server or client errors are raised as the SDK
+                exception type for the failure.
         """
-        if self._txn is None:
-            self._pac_client.put_blocking(
-                key, bins,
-                policy=self._cached_write_policy,
-                policy_sc=self._cached_write_policy_sc,
-            )
-            return
-        policy = to_write_policy(
-            self._behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
-        policy.txn = self._txn
-        self._pac_client.put_blocking(key, bins, policy=policy)
+        try:
+            if self._txn is None:
+                self._pac_client.put_blocking(
+                    key, bins,
+                    policy=self._cached_write_policy,
+                    policy_sc=self._cached_write_policy_sc,
+                )
+                return
+            policy = to_write_policy(
+                self._behavior.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+            policy.txn = self._txn
+            self._pac_client.put_blocking(key, bins, policy=policy)
+        except (PacServerError, PacAerospikeError) as e:
+            raise _convert_pac_exception(e) from e
 
     def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
         """Truncate a set, synchronously (PAC ``truncate_blocking``)."""
@@ -273,7 +290,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace=key.namespace,
                 set_name=key.set_name,
                 behavior=behavior,
-                indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
@@ -294,7 +310,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 namespace=ns,
                 set_name=sn,
                 behavior=behavior,
-                indexes_monitor=self._client._indexes_monitor,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
@@ -320,7 +335,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace=namespace,
             set_name=set_name,
             behavior=behavior,
-            indexes_monitor=self._client._indexes_monitor,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,

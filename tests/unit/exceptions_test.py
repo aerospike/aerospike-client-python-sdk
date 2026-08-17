@@ -39,7 +39,9 @@ from aerospike_sdk.exceptions import (
     IndexNotFoundError,
     InvalidNamespaceError,
     InvalidNodeError,
+    BatchError,
     KeyBusyError,
+    QueryError,
     QueryTerminatedError,
     QuotaError,
     RecordExistsError,
@@ -52,6 +54,7 @@ from aerospike_sdk.exceptions import (
     SerializationError,
     TimeoutError,
     TransactionError,
+    UdfError,
 )
 # The dependency-converter tests construct real PAC exceptions. PSDK's own
 # AerospikeError/ConnectionError/TimeoutError shadow the PAC names, so pull
@@ -64,9 +67,6 @@ from aerospike_sdk.exceptions import (
     PacTimeoutError,
     PacUDFBadResponse,
 )
-
-from aerospike_sdk.ael.exceptions import NoApplicableFilterError
-
 
 class TestExceptionHierarchy:
     """Verify the inheritance tree matches the design."""
@@ -318,7 +318,7 @@ class TestConvertPacException:
     def test_pac_udf_bad_response(self):
         pac = PacUDFBadResponse("1000:Invalid value")
         pfc = _convert_pac_exception(pac)
-        assert type(pfc) is AerospikeError
+        assert type(pfc) is UdfError
         assert pfc.result_code == ResultCode.UDF_BAD_RESPONSE
 
     def test_pac_generic_aerospike_error(self):
@@ -349,13 +349,159 @@ class TestConvertPacException:
             assert caught.__cause__ is pac
 
 
-class TestNoApplicableFilterError:
-    """Verify NoApplicableFilterError is independent of AerospikeError."""
+class TestRetryContextPropagation:
+    """Retry/diagnostic context flows from PAC exceptions onto the base."""
 
-    def test_is_exception(self):
-        assert issubclass(NoApplicableFilterError, Exception)
-        assert not issubclass(NoApplicableFilterError, AerospikeError)
+    def test_defaults_when_pac_lacks_fields(self):
+        pfc = _convert_pac_exception(PacTimeoutError("timed out"))
+        assert pfc.node is None
+        assert pfc.iteration is None
+        assert pfc.base_message is None
+        assert pfc.sub_exceptions == ()
 
-    def test_raise_and_catch(self):
-        with pytest.raises(NoApplicableFilterError):
-            raise NoApplicableFilterError("no filter for this expression")
+    def test_client_side_fields_propagated(self):
+        pac = PacTimeoutError("Error 9: retried out")
+        pac.node = "BB9020011AC4202"
+        pac.iteration = 3
+        pac.base_message = "Client Timeout: Timeout after 3 tries"
+        pac.sub_exceptions = [PacTimeoutError("attempt 1"), PacTimeoutError("attempt 2")]
+
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TimeoutError
+        assert pfc.node == "BB9020011AC4202"
+        assert pfc.iteration == 3
+        assert pfc.base_message == "Client Timeout: Timeout after 3 tries"
+        assert len(pfc.sub_exceptions) == 2
+        # Prior attempts are converted into this hierarchy too.
+        assert all(isinstance(s, TimeoutError) for s in pfc.sub_exceptions)
+        assert all(isinstance(s, AerospikeError) for s in pfc.sub_exceptions)
+
+    def test_server_error_fields_propagated(self):
+        pac = PacServerError(
+            "fail", ResultCode.GENERATION_ERROR, True, 2, "conflict", None,
+            "BB9020011AC4202", 4, "Server error: GenerationError", None,
+        )
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is GenerationError
+        assert pfc.node == "BB9020011AC4202"
+        assert pfc.iteration == 4
+        assert pfc.base_message == "Server error: GenerationError"
+        assert pfc.sub_exceptions == ()
+        assert pfc.sub_code == 2
+        assert pfc.server_message == "conflict"
+
+    def test_server_error_sub_exceptions_converted(self):
+        pac = PacServerError(
+            "fail", ResultCode.TIMEOUT, False, None, None, None,
+            None, 2, None, [PacTimeoutError("attempt 1")],
+        )
+        pfc = _convert_pac_exception(pac)
+        assert len(pfc.sub_exceptions) == 1
+        assert isinstance(pfc.sub_exceptions[0], TimeoutError)
+
+
+class TestTimeoutProvenance:
+    """The client/server discriminator on TimeoutError."""
+
+    def test_default_is_server(self):
+        assert TimeoutError("t").client is False
+
+    def test_pac_client_timeout_sets_client_true(self):
+        pfc = _convert_pac_exception(PacTimeoutError("deadline"))
+        assert type(pfc) is TimeoutError
+        assert pfc.client is True
+
+    def test_server_timeout_code_keeps_client_false(self):
+        pac = PacServerError("timeout", ResultCode.TIMEOUT, True)
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TimeoutError
+        assert pfc.client is False
+
+    def test_query_timeout_is_server_side(self):
+        pfc = _result_code_to_exception(ResultCode.QUERY_TIMEOUT, "qt")
+        assert type(pfc) is TimeoutError
+        assert pfc.client is False
+
+
+class TestSubsystemTypedMappings:
+    """Result-code coverage added with the subsystem classes."""
+
+    def test_udf_query_batch_quota(self):
+        expected = {
+            ResultCode.UDF_BAD_RESPONSE: UdfError,
+            ResultCode.QUERY_GENERIC: QueryError,
+            ResultCode.SCAN_ABORT: QueryError,
+            ResultCode.QUERY_NETIO_ERR: QueryError,
+            ResultCode.QUERY_DUPLICATE: QueryError,
+            ResultCode.QUERY_ABORTED: QueryTerminatedError,
+            ResultCode.BATCH_DISABLED: BatchError,
+            ResultCode.BATCH_QUEUES_FULL: CapacityError,
+            ResultCode.BATCH_MAX_REQUESTS_EXCEEDED: CapacityError,
+            ResultCode.QUOTA_EXCEEDED: QuotaError,
+            ResultCode.QUOTAS_NOT_ENABLED: QuotaError,
+            ResultCode.INVALID_QUOTA: QuotaError,
+        }
+        for code, cls in expected.items():
+            assert type(_result_code_to_exception(code)) is cls, code
+
+    def test_security_family_split(self):
+        authn = [
+            ResultCode.INVALID_PASSWORD, ResultCode.INVALID_CREDENTIAL,
+            ResultCode.EXPIRED_PASSWORD, ResultCode.NOT_AUTHENTICATED,
+            ResultCode.INVALID_USER,
+        ]
+        authz = [ResultCode.ROLE_VIOLATION, ResultCode.NOT_ALLOWLISTED]
+        flat = [
+            ResultCode.EXPIRED_SESSION, ResultCode.INVALID_ROLE,
+            ResultCode.ROLE_ALREADY_EXISTS, ResultCode.INVALID_PRIVILEGE,
+            ResultCode.INVALID_ALLOWLIST,
+        ]
+        for code in authn:
+            assert type(_result_code_to_exception(code)) is AuthenticationError, code
+        for code in authz:
+            assert type(_result_code_to_exception(code)) is AuthorizationError, code
+        for code in flat:
+            assert type(_result_code_to_exception(code)) is SecurityError, code
+        # All of them are catchable as SecurityError.
+        for code in authn + authz + flat:
+            assert isinstance(_result_code_to_exception(code), SecurityError)
+
+    def test_query_terminated_is_a_query_error(self):
+        assert issubclass(QueryTerminatedError, QueryError)
+
+
+class TestTypedCoverageMatchesDependency:
+    """Every result code the dependency types must be typed here too.
+
+    Guards the two maps against drifting: a code PAC gives a dedicated
+    subclass should never fall through to the bare base in this SDK.
+    """
+
+    def test_pac_typed_codes_are_typed_here(self):
+        from aerospike_async.exceptions import _RC_TO_CLS
+        from aerospike_sdk.exceptions import _RC_TO_TYPE
+
+        untyped = [code for code in _RC_TO_CLS if code not in _RC_TO_TYPE]
+        # PARAMETER_ERROR is deliberate: PAC types it (InvalidRequest) while
+        # this SDK keeps it on the base pending a dedicated class decision.
+        allowed = {ResultCode.PARAMETER_ERROR}
+        assert set(untyped) <= allowed, f"codes typed by PAC but not here: {untyped}"
+
+
+class TestSubCodeCatalogReExport:
+    """The SubCode catalog is a re-export, never a hand-kept copy."""
+
+    def test_identity(self):
+        import aerospike_async
+        import aerospike_sdk
+
+        assert aerospike_sdk.SubCode is aerospike_async.SubCode
+
+    def test_spec_named_families_present(self):
+        from aerospike_sdk import SubCode
+
+        for name in (
+            "NONE", "OPNOT_CDT_INDEX_OUT_OF_BOUNDS", "PARAM_TTL_INVALID",
+            "FORBID_TRUNCATED", "UNSUPP_FEAT_GENERIC",
+        ):
+            assert hasattr(SubCode, name), name

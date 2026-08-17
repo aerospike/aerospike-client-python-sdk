@@ -197,22 +197,24 @@ stream = await session.query(users).where(expr).execute()
 
 ## Partition Filtering
 
-Query specific partitions for parallel consumption:
+Query a single partition:
 
 ```python
 stream = await (
     session.query(users)
-    .on_partitions(0, 1, 2)
+    .on_partition(10)
     .execute()
 )
 ```
 
-Or a contiguous range:
+Or a contiguous range, given an inclusive start and an exclusive end. This is
+how you split a scan across parallel workers — here, the first quarter of the
+4096-partition space:
 
 ```python
 stream = await (
     session.query(users)
-    .on_partition_range(begin=0, count=1024)
+    .on_partition_range(0, 1024)
     .execute()
 )
 ```
@@ -243,8 +245,13 @@ async for result in stream:
         record = result.record
         print(record.key, record.bins, record.generation, record.expiration)
     else:
-        print(f"Error: {result.result_code}")
+        print(f"Error: {result.exception or result.result_code}")
 ```
+
+Branch on `is_ok` rather than comparing `result_code` to `OK`: a client-side
+failure never reaches the server to earn a code, so it arrives with `result_code`
+reading `OK` and an `exception` attached. See
+[Error Handling](error-handling.md).
 
 Use `record_or_raise()` to raise on error results:
 

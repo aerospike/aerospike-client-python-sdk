@@ -13,10 +13,9 @@ from aerospike_sdk import Behavior, DataSet
 
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    users = DataSet.of("test", "users")
+    async with await _env.connect().connect() as cluster:
+        users = DataSet.of("test", "users")
 
-    try:
         # Default session
         session = cluster.create_session(Behavior.DEFAULT)
         key = users.id("user123")
@@ -74,8 +73,6 @@ async def main() -> None:
         # Cleanup
         await session.delete(key2).execute()
         print("\nAll operations completed successfully!")
-    finally:
-        await cluster.close()
 
 
 if __name__ == "__main__":

@@ -18,6 +18,12 @@
 import pytest
 import pytest_asyncio
 from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    RecordNotFoundError,
+    ResultCode,
+)
+from tests.integration.namespace import general_namespace
 
 
 _SHARED_KEYS = (1, 2, "user1")
@@ -27,13 +33,13 @@ _SHARED_KEYS = (1, 2, "user1")
 async def _clean_shared_keys(cluster):
     """Wipe the keys these tests share so each one starts from a clean slate.
 
-    The whole file deliberately reuses ``DataSet.of("test", "test").id(...)``
+    The whole file deliberately reuses ``DataSet.of(general_namespace(), "test").id(...)``
     for ``1``, ``2``, and ``"user1"``, so without a per-test wipe a prior
     ``upsert({"name": ..., "age": ...})`` leaves bins behind that pollute
     later assertions on the same key.
     """
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     for key in _SHARED_KEYS:
         try:
             await session.delete(ds.id(key)).execute()
@@ -45,7 +51,7 @@ async def _clean_shared_keys(cluster):
 async def test_session_put_get(cluster):
     """Test session put and get operations."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John", "age": 30}).execute()
 
@@ -58,7 +64,7 @@ async def test_session_put_get(cluster):
 async def test_session_multiple_operations(cluster):
     """Test multiple operations using the same session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     await session.upsert(ds.id(1)).put({"name": "John"}).execute()
     await session.upsert(ds.id(2)).put({"name": "Jane"}).execute()
 
@@ -76,7 +82,7 @@ async def test_session_multiple_operations(cluster):
 async def test_session_get_with_bins(cluster):
     """Test getting specific bins with session query."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John", "age": 30, "city": "NYC"}).execute()
 
@@ -90,7 +96,7 @@ async def test_session_get_with_bins(cluster):
 async def test_session_delete(cluster):
     """Test delete operation with session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John"}).execute()
 
@@ -105,7 +111,7 @@ async def test_session_delete(cluster):
 async def test_session_exists(cluster):
     """Test exists operation with session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
 
     exists_stream = await session.exists(key).execute()
@@ -124,7 +130,7 @@ async def test_session_exists(cluster):
 async def test_session_increment(cluster):
     """Test increment operation with session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     await session.upsert(key).put({"counter": 10}).execute()
 
@@ -139,7 +145,7 @@ async def test_session_increment(cluster):
 async def test_session_append_prepend(cluster):
     """Test append and prepend operations with session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
     await session.upsert(key).put({"name": "John"}).execute()
 
@@ -155,7 +161,7 @@ async def test_session_append_prepend(cluster):
 async def test_session_string_keys(cluster):
     """Test using string keys with session."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     key = ds.id("user1")
     await session.upsert(key).put({"name": "John"}).execute()
 
@@ -168,7 +174,7 @@ async def test_session_string_keys(cluster):
 async def test_transactional_session_basic(cluster):
     """Test basic TransactionalSession usage."""
     session = cluster.create_session()
-    ds = DataSet.of("test", "test")
+    ds = DataSet.of(general_namespace(), "test")
     await session.upsert(ds.id(1)).put({"name": "John"}).execute()
     await session.upsert(ds.id(2)).put({"name": "Jane"}).execute()
 
@@ -198,3 +204,44 @@ async def test_transactional_session_context_manager(cluster):
         pytest.xfail(f"Requires SC cluster for MRT commit: {exc}")
 
     assert tx_session.active is False
+
+
+async def test_fast_path_get_missing_key_raises_sdk_type(cluster):
+    """A fast-path failure is catchable as the SDK's typed hierarchy.
+
+    ``session.get`` reaches the client in one await; the raised
+    ``KEY_NOT_FOUND_ERROR`` must arrive as :class:`RecordNotFoundError`
+    (an :class:`AerospikeError`), not as the underlying client's type.
+    Exercises the default (coalesced) dispatch.
+    """
+    session = cluster.create_session()
+    key = DataSet.of(general_namespace(), "test").id("fastpath-missing-key")
+    try:
+        await session.delete(key).execute()
+    except Exception:
+        pass
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await session.get(key)
+    assert isinstance(exc_info.value, RecordNotFoundError)
+    assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+    # Retry context rides along: the failing attempt's node is recorded.
+    assert exc_info.value.node
+    assert exc_info.value.iteration is not None
+
+
+async def test_fast_path_get_with_projection_raises_sdk_type(cluster):
+    """The direct (non-coalesced) dispatch converts identically.
+
+    A bin projection bypasses the coalescer, so this pins the other
+    fast-path branch.
+    """
+    session = cluster.create_session()
+    key = DataSet.of(general_namespace(), "test").id("fastpath-missing-key")
+    try:
+        await session.delete(key).execute()
+    except Exception:
+        pass
+
+    with pytest.raises(RecordNotFoundError):
+        await session.get(key, bins=["name"])

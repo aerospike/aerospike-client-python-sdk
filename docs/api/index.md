@@ -63,18 +63,17 @@ Shared types used by both async and sync APIs.
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
-| [`IndexesMonitor`](indexes-monitor.md) | Background secondary index discovery |
+| [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
 | [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
 
-## AEL
-
-Aerospike Expression Language parsing and filter generation.
+## Expressions
 
 | Class / Function | Description |
 |-----------------|-------------|
-| [`parse_ael`](ael-parser.md) | Parse AEL strings into filter expressions |
-| [`FilterGenerator`](ael-filter-gen.md) | Secondary index filter generation |
-| [`Exp`](exp.md) | Programmatic expression builder |
+| [`Exp`](exp.md) | Programmatic expression builder (all server versions) |
+
+String AEL for `.where()` is compiled on the server (field 43) when the cluster
+supports it — see the [AEL guide](../guide/expression-ael.md).
 
 ```{toctree}
 :hidden:
@@ -120,9 +119,7 @@ error-strategy
 expression-trace
 exceptions
 query-hint
-indexes-monitor
+metrics
 loggers
-ael-parser
-ael-filter-gen
 exp
 ```

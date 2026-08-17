@@ -10,18 +10,17 @@ import asyncio
 
 import _env
 from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.aio.operations.query import QueryHint
+from aerospike_sdk.exceptions import AerospikeError
 
 SET = DataSet.of("test", "set")
 
 
 async def main() -> None:
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
 
-    try:
         await run_examples(session)
-    finally:
-        await cluster.close()
 
 
 async def run_examples(session) -> None:
@@ -33,7 +32,7 @@ async def run_examples(session) -> None:
     await asyncio.sleep(0.2)
 
     # ------------------------------------------------------------------
-    # Upsert single record
+    # Write a single record
     # ------------------------------------------------------------------
     print("Write 1 record")
     await (
@@ -44,30 +43,27 @@ async def run_examples(session) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Upsert multiple records (individual calls)
+    # Write multiple records — one batched call, not a call per record
     # ------------------------------------------------------------------
     print("Write 3 records")
-    for pk, name, age in [(1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46)]:
-        await (
-            session.upsert(SET.id(pk))
-            .bin("name").set_to(name)
-            .bin("age").set_to(age)
-            .execute()
-        )
+    await (
+        session.upsert(SET.id(1)).bin("name").set_to("Tim").bin("age").set_to(312)
+        .upsert(SET.id(2)).bin("name").set_to("Bob").bin("age").set_to(25)
+        .upsert(SET.id(3)).bin("name").set_to("Jane").bin("age").set_to(46)
+        .execute()
+    )
 
+    # Ten records is the same one call, built in a loop rather than spelled out.
     print("Write 10 records")
+    batch = session
     for pk, name, age in [
         (10, "Tim", 312), (11, "Bob", 25), (12, "Jane", 46),
         (13, "Tim", 200), (14, "User1", 201), (15, "User2", 202),
         (16, "User3", 203), (17, "User4", 204), (18, "User5", 205),
         (19, "User6", 206),
     ]:
-        await (
-            session.upsert(SET.id(pk))
-            .bin("name").set_to(name)
-            .bin("age").set_to(age)
-            .execute()
-        )
+        batch = batch.upsert(SET.id(pk)).bin("name").set_to(name).bin("age").set_to(age)
+    await batch.execute()
 
     # ------------------------------------------------------------------
     # Read 1 record (point read)
@@ -193,8 +189,6 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     # fail_on_filtered_out
     # ------------------------------------------------------------------
-    from aerospike_sdk.exceptions import AerospikeError
-
     try:
         stream = await (
             session.query(SET.id(2))
@@ -239,7 +233,7 @@ async def run_examples(session) -> None:
     stream = await session.query(SET).where("$.age > 200").execute()
     count = 0
     async for result in stream:
-        print(f"  {result}")
+        print(f"  {result.record.bins}")
         count += 1
     stream.close()
     print(f"  Query count: {count}")
@@ -286,7 +280,7 @@ async def run_examples(session) -> None:
         .execute()
     )
     async for rr in stream:
-        print(f"  Upsert with expressions: {rr}")
+        print(f"  Upsert with expressions: {rr.record.bins}")
     stream.close()
 
     # Single read expression: compute $.age + 20
@@ -312,8 +306,6 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     # Query hints
     # ------------------------------------------------------------------
-    from aerospike_sdk.aio.operations.query import QueryHint
-
     print("\nQuery with hint")
     stream = await (
         session.query(SET)

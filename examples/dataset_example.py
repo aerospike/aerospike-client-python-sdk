@@ -18,7 +18,7 @@ async def main() -> None:
     key_str = users.id("user123")
     key_int = users.id(456)
     key_bytes = users.id(b"bytes_key")
-    print(f"\nSingle keys:")
+    print("\nSingle keys:")
     print(f"  String key: {key_str}")
     print(f"  Integer key: {key_int}")
     print(f"  Bytes key: {key_bytes}")
@@ -31,16 +31,15 @@ async def main() -> None:
     original = users.id(123)
     digest = original.digest
     from_digest = users.id_from_digest(digest)
-    print(f"\nKey from digest:")
+    print("\nKey from digest:")
     print(f"  Original: {original}")
     print(f"  From digest: {from_digest}")
     print(f"  Equal: {original == from_digest}")
 
     # Use with live server
-    cluster = await _env.connect().connect()
-    session = cluster.create_session(Behavior.DEFAULT)
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
 
-    try:
         key = users.id("example_user")
         await session.upsert(key).put({"name": "John Doe", "age": 30}).execute()
 
@@ -50,8 +49,6 @@ async def main() -> None:
 
         await session.delete(key).execute()
         print("Cleaned up")
-    finally:
-        await cluster.close()
 
 
 if __name__ == "__main__":
