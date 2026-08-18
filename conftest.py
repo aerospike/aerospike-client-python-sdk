@@ -585,7 +585,10 @@ def wait_for_index():
                     return
                 await asyncio.sleep(interval)
             except Exception as exc:
-                if "IndexNotReadable" not in str(exc):
+                # IndexNotReadable (203) = registered but still building;
+                # IndexNotFound (201) = the create has not yet registered on
+                # this node. Both are transient just after create_index — retry.
+                if not any(s in str(exc) for s in ("IndexNotReadable", "IndexNotFound")):
                     raise
                 hits = 0  # a flicker resets the streak
                 last_err = exc

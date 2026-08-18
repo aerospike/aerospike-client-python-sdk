@@ -151,6 +151,9 @@ class TestSyncQueryExecute:
             query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
             .bins([BIN_COUNTRY])
             .where("$.country == 'US'")
+            # No secondary index on country -> primary-index scan; opt into it
+            # past the strict allow_scans_with_where default.
+            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         countries = []

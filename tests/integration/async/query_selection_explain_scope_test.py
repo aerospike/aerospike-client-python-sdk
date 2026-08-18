@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     NS,
@@ -114,6 +114,9 @@ class TestQuerySelectionExplainScope:
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
             .bins([SCOPE_MAP_BIN])
             .where(where)
+            # map-keys-exists has no secondary index -> primary-index scan; opt
+            # into it past the strict allow_scans_with_where default.
+            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         count = 0

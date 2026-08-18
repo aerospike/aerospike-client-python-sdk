@@ -98,7 +98,10 @@ def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
     if hint is None:
         return None
     flags = QueryWhereFlags.EXPLAIN
-    if hint.require_index:
+    # PAC-level helper: pass through only an explicit disallow. The strict
+    # Behavior default (unset -> reject fallback) lives in the SDK layer, not
+    # here, so unset hints leave the primary-index fallback available.
+    if hint.allow_scans_with_where is False:
         flags |= QueryWhereFlags.REQUIRE_INDEX
     if hint.hard_hint:
         flags |= QueryWhereFlags.HARD_HINT

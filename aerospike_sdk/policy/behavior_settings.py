@@ -94,6 +94,7 @@ class Settings:
 
     max_concurrent_nodes: Optional[int] = None
     record_queue_size: Optional[int] = None
+    allow_scans_with_where: Optional[bool] = None
     allow_inline: Optional[bool] = None
     allow_inline_ssd: Optional[bool] = None
 
@@ -119,6 +120,9 @@ class Settings:
             compression_threshold=_pick(override.compression_threshold, base.compression_threshold),
             max_concurrent_nodes=_pick(override.max_concurrent_nodes, base.max_concurrent_nodes),
             record_queue_size=_pick(override.record_queue_size, base.record_queue_size),
+            allow_scans_with_where=_pick(
+                override.allow_scans_with_where, base.allow_scans_with_where
+            ),
             allow_inline=_pick(override.allow_inline, base.allow_inline),
             allow_inline_ssd=_pick(override.allow_inline_ssd, base.allow_inline_ssd),
             read_touch_ttl_percent=_pick(override.read_touch_ttl_percent, base.read_touch_ttl_percent),

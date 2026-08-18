@@ -21,13 +21,17 @@ import pytest
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
 from aerospike_sdk import QueryHint, ResultCode
+from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
     HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
+    NS,
     QuerySelection,
+    QueryWhereFlags,
+    count_records_sync,
     explain_plan_blocking,
 )
 from tests.pac_compat import requires_query_selection
@@ -36,28 +40,31 @@ from tests.pac_compat import requires_query_selection
 
 class TestSyncQuerySelectionHintFlags:
     @requires_query_selection
-    def test_require_index_on_primary_index_plan_fails_explain(self, query_selection_cluster):
+    def test_disallow_scans_on_primary_index_plan_fails_explain(self, query_selection_cluster):
         pac = query_selection_cluster.client.underlying_client
         with pytest.raises(IndexNotFound) as exc_info:
             explain_plan_blocking(
                 pac,
                 "$.country == 'US'",
                 set_name=HINT_SET_NAME,
-                hint=QueryHint(require_index=True),
+                hint=QueryHint(allow_scans_with_where=False),
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
     @requires_query_selection
-    def test_require_index_with_soft_hint_selects_secondary_index(self, query_selection_cluster):
+    def test_disallow_scans_with_soft_hint_selects_secondary_index(self, query_selection_cluster):
         pac = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(
             pac,
             "$.age == 25",
             set_name=HINT_SET_NAME,
-            hint=QueryHint(require_index=True, index_name=HINT_SCORE_INDEX_NAME),
+            hint=QueryHint(allow_scans_with_where=False, index_name=HINT_SCORE_INDEX_NAME),
         )
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == HINT_INDEX_NAME
+        assert plan.where_flags == int(
+            QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX
+        )
 
     @requires_query_selection
     def test_hard_hint_with_matching_index_selects_hinted_index(self, query_selection_cluster):
@@ -72,7 +79,7 @@ class TestSyncQuerySelectionHintFlags:
         assert plan.index_name == HINT_INDEX_NAME
 
     @requires_query_selection
-    def test_require_index_and_hard_hint_selects_hinted_index(self, query_selection_cluster):
+    def test_disallow_scans_and_hard_hint_selects_hinted_index(self, query_selection_cluster):
         pac = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(
             pac,
@@ -80,11 +87,16 @@ class TestSyncQuerySelectionHintFlags:
             set_name=HINT_SET_NAME,
             hint=QueryHint(
                 index_name=HINT_INDEX_NAME,
-                require_index=True,
+                allow_scans_with_where=False,
                 hard_hint=True,
             ),
         )
         assert plan.index_name == HINT_INDEX_NAME
+        assert plan.where_flags == int(
+            QueryWhereFlags.EXPLAIN
+            | QueryWhereFlags.REQUIRE_INDEX
+            | QueryWhereFlags.HARD_HINT
+        )
 
     @requires_query_selection
     def test_hard_hint_with_wrong_index_fails_explain(self, query_selection_cluster):
@@ -107,3 +119,39 @@ class TestSyncQuerySelectionHintFlags:
         with pytest.raises(InvalidRequest) as exc_info:
             explain_plan_blocking(pac, "$.age > 30 and", set_name=HINT_SET_NAME)
         assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+class TestSyncQuerySelectionBuilderScanBlocking:
+    """``allow_scans_with_where`` enforced through the real SDK query builder
+    (``session.query().where().execute()``), not the PAC explain helper."""
+
+    @requires_query_selection
+    def test_disallow_scans_via_builder_rejects_scan(self, query_selection_cluster):
+        with pytest.raises(AerospikeError) as exc_info:
+            (
+                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.country == 'US'")
+                .with_hint(QueryHint(allow_scans_with_where=False))
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+
+    @requires_query_selection
+    def test_strict_default_via_builder_rejects_scan(self, query_selection_cluster):
+        with pytest.raises(AerospikeError) as exc_info:
+            (
+                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.country == 'US'")
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+
+    @requires_query_selection
+    def test_allow_scans_via_builder_permits_scan(self, query_selection_cluster):
+        stream = (
+            query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+            .where("$.country == 'US'")
+            .with_hint(QueryHint(allow_scans_with_where=True))
+            .execute()
+        )
+        count_records_sync(stream)

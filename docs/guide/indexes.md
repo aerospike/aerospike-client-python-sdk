@@ -127,6 +127,31 @@ stream = await (
 )
 ```
 
+### Blocking primary-index (full-set) scans
+
+By default a `.where()` query that no secondary index can satisfy is **rejected**
+rather than allowed to fall back to a primary-index (full-set) scan — a full-set
+scan is dangerous at scale. This is the `allow_scans_with_where` query setting,
+which defaults to `False` in `Behavior.DEFAULT`. Queries **without** a `.where()`
+clause (intentional scans) are unaffected, and this only applies on clusters with
+query selection (field 44).
+
+Allow the fallback per query with a hint, or change it on the `Behavior`:
+
+```python
+# Permit the primary-index fallback for this one query
+stream = await (
+    session.query(users)
+    .where("$.age > 25")
+    .with_hint(QueryHint(allow_scans_with_where=True))
+    .execute()
+)
+```
+
+`QueryHint.allow_scans_with_where` is tri-state: `None` (default) inherits the
+`Behavior`, `True` permits the fallback, `False` rejects it. A per-query hint
+always wins over the `Behavior` setting.
+
 ### Opting out of server-led selection
 
 `bin_name` skips the server's explain step and sends the AEL as a plain filter

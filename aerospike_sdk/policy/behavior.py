@@ -410,6 +410,12 @@ Behavior.DEFAULT = Behavior(
             max_retries=5,
             record_queue_size=5000,
             max_concurrent_nodes=0,
+            # Strict by default: a where-clause query that would fall back to a
+            # primary-index (full-set) scan is rejected on the server-selection
+            # path. Set True (on the Behavior or a per-query hint) to allow the
+            # primary-index fallback. Only affects clusters supporting field 44
+            # query selection; queries without a where clause are unaffected.
+            allow_scans_with_where=False,
         ),
         Scope.WRITES_QUERY: Settings(
             max_concurrent_nodes=0,
