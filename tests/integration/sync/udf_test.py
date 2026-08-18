@@ -421,3 +421,44 @@ def test_sync_cluster_register_udf_from_resource(
         rm = cluster.remove_udf(server_path)
         _wait_task(cluster, rm)
         assert not any(m["name"] == server_path for m in cluster.list_udf())
+
+
+class TestBatchApplyExpiration:
+    """``BatchUDFPolicy.expiration`` — a batch-apply TTL reaches the record (sync).
+
+    The plain multi-key apply round-trip is covered elsewhere in this module;
+    these add only the TTL dimension.
+    """
+
+    def test_batch_apply_sets_record_ttl(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k1, k2 = DS.id("sapply_ttl_1"), DS.id("sapply_ttl_2")
+        session.delete(k1).execute()
+        session.delete(k2).execute()
+
+        stream = (
+            session.execute_udf(k1, k2)
+            .function(MODULE, "writeBin").passing("mbin", 42)
+            .expire_record_after_seconds(300)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+
+        for k in (k1, k2):
+            rec = session.query(k).execute().first_or_raise().record
+            assert 270 <= rec.ttl <= 305
+
+    def test_batch_apply_never_expire(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k = DS.id("sapply_ttl_never")
+        session.delete(k).execute()
+
+        stream = (
+            session.execute_udf(k)
+            .function(MODULE, "writeBin").passing("mbin", 7)
+            .never_expire()
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+        rec = session.query(k).execute().first_or_raise().record
+        assert rec.ttl is None

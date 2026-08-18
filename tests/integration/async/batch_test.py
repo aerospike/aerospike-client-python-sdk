@@ -1036,3 +1036,74 @@ class TestBatchVerbExistenceEnforcement:
         for r in results:
             assert not r.is_ok
             assert r.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
+class TestBatchGeneration:
+    """Generation policy on batch delete + write (``BatchDelete/WritePolicy``).
+
+    The single-key generation contract lives in ``generation_test.py``; these
+    exercise the batch sub-policy path — an expected generation becomes a
+    per-row CAS check carried on the batch write/delete policy.
+    """
+
+    async def test_batch_delete_matching_generation_deletes_all(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_ok_1"), users.id("del_gen_ok_2")
+        await session.upsert(k1).put({"n": 1}).execute()
+        await session.upsert(k2).put({"n": 2}).execute()
+        gen1 = (await (await session.query(k1).execute()).first_or_raise()).record.generation
+        gen2 = (await (await session.query(k2).execute()).first_or_raise()).record.generation
+        assert gen1 == gen2  # freshly seeded once
+
+        stream = await session.delete(k1, k2).ensure_generation_is(gen1).execute()
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+        for k in (k1, k2):
+            assert [rr async for rr in await session.query(k).execute()] == []
+
+    async def test_batch_delete_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_bad_1"), users.id("del_gen_bad_2")
+        await session.upsert(k1).put({"n": 1}).execute()
+        await session.upsert(k2).put({"n": 2}).execute()
+
+        stream = await (
+            session.delete(k1, k2).ensure_generation_is(9999).include_missing_keys().execute()
+        )
+        results = {rr.key.value: rr async for rr in stream}
+        assert results["del_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["del_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        for k in (k1, k2):
+            assert len([rr async for rr in await session.query(k).execute()]) == 1
+
+    async def test_batch_write_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_bad_1"), users.id("wr_gen_bad_2")
+        await session.upsert(k1).put({"n": 1}).execute()
+        await session.upsert(k2).put({"n": 2}).execute()
+
+        stream = await (
+            session.update(k1).put({"n": 10}).ensure_generation_is(9999)
+            .update(k2).put({"n": 20}).ensure_generation_is(9999)
+            .execute()
+        )
+        results = {rr.key.value: rr async for rr in stream}
+        assert results["wr_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["wr_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        r1 = await (await session.query(k1).execute()).first_or_raise()
+        assert r1.record.bins.get("n") == 1
+
+    async def test_batch_write_matching_generation_writes(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_ok_1"), users.id("wr_gen_ok_2")
+        await session.upsert(k1).put({"n": 1}).execute()
+        await session.upsert(k2).put({"n": 2}).execute()
+        gen = (await (await session.query(k1).execute()).first_or_raise()).record.generation
+
+        stream = await (
+            session.update(k1).put({"n": 10}).ensure_generation_is(gen)
+            .update(k2).put({"n": 20}).ensure_generation_is(gen)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+        r1 = await (await session.query(k1).execute()).first_or_raise()
+        assert r1.record.bins.get("n") == 10
