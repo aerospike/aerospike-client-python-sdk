@@ -154,6 +154,7 @@ _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "allowInlineMemoryAccess": ("allow_inline", bool),
     "allowInlineSsdAccess": ("allow_inline_ssd", bool),
     "recordQueueSize": ("record_queue_size", int),
+    "allowScansWithWhere": ("allow_scans_with_where", bool),
     "errorDetailVerbosity": ("error_detail_verbosity", int),
 }
 

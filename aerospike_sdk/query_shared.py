@@ -221,7 +221,10 @@ class QueryHint:
     mutually exclusive.
 
     On clusters that support field ``44`` query selection (>= 8.1.3),
-    ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
+    ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
+    explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
+    Behavior default (strict — primary-index fallback rejected), ``True``
+    allows the fallback for this query, ``False`` rejects it.
 
     .. deprecated:: alpha
         ``bin_name`` is a legacy opt-out that skips server-led selection in
@@ -248,7 +251,10 @@ class QueryHint:
         index_name: Soft index name hint (field ``21`` on explain).
         bin_name: Opt out of explain; send the AEL on field ``43``. Deprecated.
         query_duration: Override ``expected_duration`` on the query policy.
-        require_index: Explain flag — reject primary-index fallback.
+        allow_scans_with_where: Tri-state override for whether a where-clause
+            query may fall back to a primary-index scan. ``None`` (default)
+            inherits the Behavior; ``True`` allows the fallback, ``False``
+            rejects it (sets ``REQUIRE_INDEX`` on explain).
         hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
@@ -262,7 +268,7 @@ class QueryHint:
     index_name: Optional[str] = None
     bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
-    require_index: bool = False
+    allow_scans_with_where: Optional[bool] = None
     hard_hint: bool = False
 
     def __post_init__(self) -> None:
@@ -1825,13 +1831,43 @@ class _QueryBuilderBase:
             return None
         return hint.index_name
 
+    def effective_allow_scans_with_where(self) -> bool:
+        """Resolve whether this query may fall back to a primary-index scan.
+
+        Applies the wire precedence: the query's hint wins when it sets
+        ``allow_scans_with_where``, otherwise the resolved Behavior query
+        setting, otherwise the strict default (reject the fallback).
+
+        Returns:
+            ``True`` if a where-clause query may fall back to a primary-index
+            (full-set) scan, ``False`` if it is rejected.
+
+        See Also:
+            :attr:`QueryHint.allow_scans_with_where`
+        """
+        return self._effective_allow_scans_with_where(self._query_hint)
+
+    def _effective_allow_scans_with_where(self, hint: Optional[QueryHint]) -> bool:
+        """Whether a where-clause query may fall back to a primary-index scan.
+
+        A per-query hint wins; otherwise the resolved Behavior query setting;
+        otherwise the strict default (``False`` — reject the fallback).
+        """
+        if hint is not None and hint.allow_scans_with_where is not None:
+            return hint.allow_scans_with_where
+        if self._behavior is not None:
+            resolved = self._behavior.get_settings(
+                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
+            ).allow_scans_with_where
+            if resolved is not None:
+                return resolved
+        return False
+
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
-        if hint is None:
-            return None
         flags = QueryWhereFlags.EXPLAIN
-        if hint.require_index:
+        if not self._effective_allow_scans_with_where(hint):
             flags |= QueryWhereFlags.REQUIRE_INDEX
-        if hint.hard_hint:
+        if hint is not None and hint.hard_hint:
             flags |= QueryWhereFlags.HARD_HINT
         if flags == QueryWhereFlags.EXPLAIN:
             return None
