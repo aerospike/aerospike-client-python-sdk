@@ -11,7 +11,7 @@ users = DataSet.of("test", "users")
 
 # Numeric index
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("age")
     .named("users_age_idx")
     .numeric()
@@ -20,20 +20,22 @@ await (
 
 # String index
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("city")
     .named("users_city_idx")
     .string()
     .create()
 )
 
-# Collection index (list elements)
+# Collection index (list elements). collection() selects the container shape;
+# pair it with the element type.
 from aerospike_sdk import CollectionIndexType
 
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("tags")
     .named("users_tags_idx")
+    .string()
     .collection(CollectionIndexType.LIST)
     .create()
 )
@@ -41,7 +43,7 @@ await (
 # GEO2DSPHERE index (for GeoJSON bins)
 places = DataSet.of("test", "places")
 await (
-    session.index(places)
+    session.index(dataset=places)
     .on_bin("loc")
     .named("places_loc_idx")
     .geo2dsphere()
@@ -50,7 +52,7 @@ await (
 
 # Blob index (for bytes bins; server 7.0+)
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("avatar_hash")
     .named("users_avatar_hash_idx")
     .blob()
@@ -72,7 +74,7 @@ from aerospike_sdk import Exp, Filter
 expr = Exp.int_bin("age")
 
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_expression(expr)
     .named("users_age_exp_idx")
     .numeric()
@@ -94,7 +96,7 @@ navigation inside the expression instead.
 ## Dropping Indexes
 
 ```python
-await session.index(users).named("users_age_idx").drop()
+await session.index(dataset=users).named("users_age_idx").drop()
 ```
 
 ## Listing Indexes

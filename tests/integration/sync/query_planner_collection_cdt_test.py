@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     CDT_LIST_BIN,
@@ -62,7 +62,8 @@ class TestSyncQueryPlannerCollectionCdt:
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
 
         map_stream = (
-            session.query(ds).bins([CDT_MAP_BIN]).where(map_where).execute()
+            session.query(ds).bins([CDT_MAP_BIN]).where(map_where)
+            .with_hint(QueryHint(allow_scans_with_where=True)).execute()
         )
         map_count = 0
         try:
@@ -75,7 +76,8 @@ class TestSyncQueryPlannerCollectionCdt:
         assert map_count == 10
 
         list_stream = (
-            session.query(ds).bins([CDT_LIST_BIN]).where(list_where).execute()
+            session.query(ds).bins([CDT_LIST_BIN]).where(list_where)
+            .with_hint(QueryHint(allow_scans_with_where=True)).execute()
         )
         list_count = 0
         try:

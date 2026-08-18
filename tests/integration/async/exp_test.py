@@ -23,7 +23,7 @@ import base64
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import Exp, in_list, map_keys, map_values, val
+from aerospike_sdk import Exp, QueryHint, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
 from tests.pac_compat import (
@@ -514,8 +514,29 @@ class TestExpWithQuery:
         assert len(records) == 0
 
 
+def _set_keys(set_name, *ids):
+    ds = DataSet.of(general_namespace(), set_name)
+    return tuple(ds.id(k) for k in ids)
+
+
+# The seeding fixtures below populate these keys; the AEL ``where()`` tests query
+# them directly — a filter expression on a keyed read needs no secondary index
+# and never scans — instead of scanning the set.
+_EXP_SET_KEYS = _set_keys("exp_test", "A", "B", "C")
+_CDT_SET_KEYS = _set_keys("cdt_test", "rec1", "rec2", "rec3")
+_LIST_SET_KEYS = _set_keys("list_ael_test", "rec1", "rec2", "rec3", "rec4")
+_MAP_SET_KEYS = _set_keys("map_ael_test", "rec1", "rec2", "rec3")
+_NESTED_SET_KEYS = _set_keys("nested_ael_test", "rec1", "rec2")
+_REL_RANGE_SET_KEYS = _set_keys("rel_range_test", "rec1", "rec2", "rec3")
+
+
 class TestExpWithAel:
     """Test AEL string expressions with where() method.
+
+    These query the seeded keys directly (a filter expression on a keyed read):
+    an AEL ``where()`` needs no secondary index and never scans, so it is
+    unaffected by the strict ``allow_scans_with_where`` default. A dedicated
+    set-scan-with-``where()`` case lives in ``TestAelScanFilter``.
 
     Type inference: Bin types are automatically inferred from comparison operands.
     For example, `$.A == 1` infers A is an int_bin because 1 is an integer.
@@ -527,7 +548,7 @@ class TestExpWithAel:
     async def test_where_eq_int(self, session_with_data):
         """Test AEL equality with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.A == 1")
             .execute()
         )
@@ -543,7 +564,7 @@ class TestExpWithAel:
     async def test_where_gt_int(self, session_with_data):
         """Test AEL greater-than with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.A > 1")
             .execute()
         )
@@ -559,7 +580,7 @@ class TestExpWithAel:
     async def test_where_and_int(self, session_with_data):
         """Test AEL AND expression with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.A == 1 and $.D == 1")
             .execute()
         )
@@ -575,7 +596,7 @@ class TestExpWithAel:
     async def test_where_or_int(self, session_with_data):
         """Test AEL OR expression with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.A == 1 or $.A == 2")
             .execute()
         )
@@ -590,7 +611,7 @@ class TestExpWithAel:
     async def test_where_not_int(self, session_with_data):
         """Test AEL NOT expression with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("not ($.A == 0)")
             .execute()
         )
@@ -605,7 +626,7 @@ class TestExpWithAel:
     async def test_where_arithmetic_int(self, session_with_data):
         """Test AEL arithmetic expression with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("($.A + $.D) == 2")
             .execute()
         )
@@ -620,7 +641,7 @@ class TestExpWithAel:
     async def test_where_string(self, session_with_data):
         """Test AEL string comparison with automatic string inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.C == 'abcde'")
             .execute()
         )
@@ -636,7 +657,7 @@ class TestExpWithAel:
     async def test_where_complex_int(self, session_with_data):
         """Test complex AEL expression with automatic int inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("($.A > 0 and $.D == 1) or $.A == 0")
             .execute()
         )
@@ -651,7 +672,7 @@ class TestExpWithAel:
     async def test_where_explicit_cast_still_works(self, session_with_data):
         """Test that asInt()/toInt() casts a float bin to int for comparison."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.B:FLOAT.toInt() == 1")
             .execute()
         )
@@ -667,7 +688,7 @@ class TestExpWithAel:
     async def test_where_float_comparison(self, session_with_data):
         """Test AEL float comparison with automatic float inference."""
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(*_EXP_SET_KEYS)
             .where("$.B > 1.0")
             .execute()
         )
@@ -679,6 +700,34 @@ class TestExpWithAel:
         assert len(records) == 2
         for rec in records:
             assert rec.bins["B"] > 1.0
+
+
+class TestAelScanFilter:
+    """Server-side AEL filter over a full set scan.
+
+    The keyed-read cases in :class:`TestExpWithAel` cover AEL correctness; this
+    pins the distinct set-scan path, where ``where()`` filters records
+    server-side while scanning the whole set. Under the strict
+    ``allow_scans_with_where`` default a scanning ``where()`` must opt in — via
+    the per-query hint here, exactly as a caller would. This is the one AEL
+    ``where()`` case that legitimately scans (and so still depends on
+    ``wait_for_set_visible``).
+    """
+
+    @requires_server_compiled_ael
+    async def test_scan_with_where_filters_server_side(self, session_with_data):
+        stream = await (
+            session_with_data.query(general_namespace(), "exp_test")
+            .where("$.A == 1")
+            .with_hint(QueryHint(allow_scans_with_where=True))
+            .execute()
+        )
+        records = [result.record async for result in stream]
+        stream.close()
+
+        assert len(records) == 1
+        assert records[0].bins["A"] == 1
+
 
 async def _seed_cdt_data(cluster, *, wait_for_set_visible):
     """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
@@ -832,7 +881,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers.[0] == 10")
             .execute()
         )
@@ -851,7 +900,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[-1] not [-1]
         """
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers.[-1] == 50")
             .execute()
         )
@@ -867,7 +916,7 @@ class TestCdtPathWithAel:
     async def test_map_key_access(self, session_with_cdt_data):
         """Test AEL map key access: $.info.age == 30"""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.info.age == 30")
             .execute()
         )
@@ -883,7 +932,7 @@ class TestCdtPathWithAel:
     async def test_map_key_string_comparison(self, session_with_cdt_data):
         """Test AEL map key access with string comparison: $.info.city == 'NYC'"""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.info.city == 'NYC'")
             .execute()
         )
@@ -903,7 +952,7 @@ class TestCdtPathWithAel:
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers.[0] > 50")
             .execute()
         )
@@ -919,7 +968,7 @@ class TestCdtPathWithAel:
     async def test_map_key_with_and(self, session_with_cdt_data):
         """Test AEL map key with AND: $.info.age > 25 and $.info.city == 'NYC'"""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.info.age > 25 and $.info.city == 'NYC'")
             .execute()
         )
@@ -943,7 +992,7 @@ class TestExistsAndCount:
         """Test $.binName.exists() for checking bin existence."""
         # All records have "numbers" bin
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers.exists()")
             .execute()
         )
@@ -959,7 +1008,7 @@ class TestExistsAndCount:
         """Test $.listBin.count() for getting list size."""
         # rec1 has 5 numbers, rec2 has 5 numbers, rec3 has 3 numbers
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers:LIST.count() > 3")
             .execute()
         )
@@ -977,7 +1026,7 @@ class TestExistsAndCount:
         """Test $.listBin.count() == value."""
         # rec3 has exactly 3 numbers
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers:LIST.count() == 3")
             .execute()
         )
@@ -994,7 +1043,7 @@ class TestExistsAndCount:
         """Test count on names list."""
         # rec1: 3 names, rec2: 2 names, rec3: 1 name
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.names:LIST.count() >= 2")
             .execute()
         )
@@ -1011,7 +1060,7 @@ class TestExistsAndCount:
     async def test_exists_with_and(self, session_with_cdt_data):
         """Test exists() combined with other conditions."""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("$.numbers.exists() and $.info.age > 30")
             .execute()
         )
@@ -1030,7 +1079,7 @@ class TestExistsAndCount:
         # Count of numbers + count of names > 5
         # rec1: 5+3=8, rec2: 5+2=7, rec3: 3+1=4
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("($.numbers:LIST.count() + $.names:LIST.count()) > 5")
             .execute()
         )
@@ -1093,7 +1142,7 @@ class TestAdvancedListAel:
         # [#-1] gets the largest value
         # rec1: 50, rec2: 45, rec3: 200, rec4: 5
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values.[#-1] > 100")
             .execute()
         )
@@ -1111,7 +1160,7 @@ class TestAdvancedListAel:
         # [#0] gets the smallest value
         # rec1: 10, rec2: 5, rec3: 30, rec4: 1
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values.[#0] < 5")
             .execute()
         )
@@ -1128,7 +1177,7 @@ class TestAdvancedListAel:
         """Test $.list.[=value] to find items containing specific value."""
         # rec1 and rec3 have 30 in their values list
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values:LIST.[=30,].count() > 0")
             .execute()
         )
@@ -1149,7 +1198,7 @@ class TestAdvancedListAel:
         # We can't directly compare the returned list in AEL,
         # but we can verify it parses and executes without error
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values:LIST.[1:3].count() == 2")
             .execute()
         )
@@ -1171,7 +1220,7 @@ class TestAdvancedListAel:
         # rec3: [200] (1 item - only 3 elements total)
         # rec4: [3, 4, 5] (3 items)
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values:LIST.[2:].count() == 3")
             .execute()
         )
@@ -1190,7 +1239,7 @@ class TestAdvancedListAel:
         # rec1: [10, 20, 30, 40, 50] -> [10, 20, 30] (3 items)
         # rec2: [5, 15, 25, 35, 45] -> [15, 25, 35] (3 items)
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values:LIST.[=10:40].count() == 3")
             .execute()
         )
@@ -1206,7 +1255,7 @@ class TestAdvancedListAel:
         """Test $.list.[#0:2] to get smallest 2 items by rank."""
         # [#0:2] gets rank 0 and 1 (2 smallest items)
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.values:LIST.[#0:2].count() == 2")
             .execute()
         )
@@ -1223,7 +1272,7 @@ class TestAdvancedListAel:
         """Test $.list.[=a,b,c] to find items matching value list."""
         # Find records where tags contain "alpha"
         stream = await (
-            session_with_list_data.query(general_namespace(), "list_ael_test")
+            session_with_list_data.query(*_LIST_SET_KEYS)
             .where("$.tags:LIST.[=alpha,].count() > 0")
             .execute()
         )
@@ -1283,7 +1332,7 @@ class TestAdvancedMapAel:
         """Test $.map.{=value} to find entries with specific value."""
         # Find records where scores contains value 100
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{=100,}.count() > 0")
             .execute()
         )
@@ -1300,7 +1349,7 @@ class TestAdvancedMapAel:
         """Test $.map.{0:2} to get first 2 entries by index."""
         # Get first 2 entries (count=2)
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{0:2}.count() == 2")
             .execute()
         )
@@ -1321,7 +1370,7 @@ class TestAdvancedMapAel:
         # rec2: eve=80 (1 item)
         # rec3: heidi=88 (1 item)
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{=80:95}.count() == 2")
             .execute()
         )
@@ -1337,7 +1386,7 @@ class TestAdvancedMapAel:
         """Test $.map.{#0:2} to get smallest 2 values by rank."""
         # Get 2 smallest values
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{#0:2}.count() == 2")
             .execute()
         )
@@ -1403,7 +1452,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].[1] - nested list index access."""
         # nested_list[0][1] = 20 for rec1, 10 for rec2
         stream = await (
-            session_with_nested_data.query(general_namespace(), "nested_ael_test")
+            session_with_nested_data.query(*_NESTED_SET_KEYS)
             .where("$.nested_list.[0].[1] == 20")
             .execute()
         )
@@ -1420,7 +1469,7 @@ class TestNestedCdtAel:
         """Test $.map.a.aa - nested map key access."""
         # nested_map.a.aa = 100 for rec1, 50 for rec2
         stream = await (
-            session_with_nested_data.query(general_namespace(), "nested_ael_test")
+            session_with_nested_data.query(*_NESTED_SET_KEYS)
             .where("$.nested_map.a.aa == 100")
             .execute()
         )
@@ -1437,7 +1486,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].count() - count of nested list."""
         # nested_list[0] has 3 elements for rec1, 2 for rec2
         stream = await (
-            session_with_nested_data.query(general_namespace(), "nested_ael_test")
+            session_with_nested_data.query(*_NESTED_SET_KEYS)
             .where("$.nested_list.[0]:LIST.count() == 3")
             .execute()
         )
@@ -1453,7 +1502,7 @@ class TestNestedCdtAel:
     async def test_list_size_simple(self, session_with_nested_data):
         """Test $.list.count() - basic list size."""
         stream = await (
-            session_with_nested_data.query(general_namespace(), "nested_ael_test")
+            session_with_nested_data.query(*_NESTED_SET_KEYS)
             .where("$.simple_list:LIST.count() == 5")
             .execute()
         )
@@ -1469,7 +1518,7 @@ class TestNestedCdtAel:
         """Test $.list.[0].[#-1] - rank in nested list."""
         # nested_list[0] largest: 30 for rec1, 10 for rec2
         stream = await (
-            session_with_nested_data.query(general_namespace(), "nested_ael_test")
+            session_with_nested_data.query(*_NESTED_SET_KEYS)
             .where("$.nested_list.[0].[#-1] == 30")
             .execute()
         )
@@ -1490,7 +1539,7 @@ class TestMapKeyOperationsAel:
         """Test $.map.{a,b,c} - get entries by key list."""
         # Get entries for keys alice and bob from scores
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
@@ -1507,7 +1556,7 @@ class TestMapKeyOperationsAel:
         """Test $.map.{@a:b} - map key range (server AEL; bare {a:b} is index-only)."""
         # Get entries with keys from 'a' to 'd' (alice, bob, charlie)
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{@alice:dave}.count() >= 2")
             .execute()
         )
@@ -1569,7 +1618,7 @@ class TestRelativeRangeAel:
         # Get items with rank 0 to 2 (count=2) relative to value 5
         # For rec1 [0, 4, 5, 9, 11, 15]: value 5 is at index 2, rank 0-2 relative gets [5,9]
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.numbers:LIST.[#0:2~5].count() >= 1")
             .execute()
         )
@@ -1586,7 +1635,7 @@ class TestRelativeRangeAel:
         """Test $.list.[#rank:~value] - list value-relative rank range without end count."""
         # Get all items from rank 0 relative to value 5
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.numbers:LIST.[#0:~5].count() >= 1")
             .execute()
         )
@@ -1603,7 +1652,7 @@ class TestRelativeRangeAel:
         """Test $.list.[!#rank:end~value] - inverted list value-relative rank range."""
         # Get items NOT in rank range
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.numbers:LIST.[!#0:2~5].count() >= 1")
             .execute()
         )
@@ -1620,7 +1669,7 @@ class TestRelativeRangeAel:
         """Test $.map.{#rank:end~value} - map value-relative rank range."""
         # Get map entries with rank relative to value 80
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{#-1:1~80}.count() >= 1")
             .execute()
         )
@@ -1635,7 +1684,7 @@ class TestRelativeRangeAel:
     async def test_map_rank_range_relative_no_count(self, session_with_relative_range_data):
         """Test $.map.{#rank:~value} - map value-relative rank range without end count."""
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{#-2:~80}.count() >= 2")
             .execute()
         )
@@ -1650,7 +1699,7 @@ class TestRelativeRangeAel:
     async def test_map_rank_range_relative_inverted(self, session_with_relative_range_data):
         """Test $.map.{!#rank:end~value} - inverted map value-relative rank range."""
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{!#-1:1~80}.count() >= 1")
             .execute()
         )
@@ -1666,7 +1715,7 @@ class TestRelativeRangeAel:
         """Test $.map.{start:end~key} - map key-relative index range."""
         # Get map entries at index 0 to 1 relative to key "bob"
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{0:1~bob}.count() >= 1")
             .execute()
         )
@@ -1681,7 +1730,7 @@ class TestRelativeRangeAel:
     async def test_map_index_range_relative_no_count(self, session_with_relative_range_data):
         """Test $.map.{start:~key} - map key-relative index range without end count."""
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{0:~bob}.count() >= 1")
             .execute()
         )
@@ -1696,7 +1745,7 @@ class TestRelativeRangeAel:
     async def test_map_index_range_relative_inverted(self, session_with_relative_range_data):
         """Test $.map.{!start:end~key} - inverted map key-relative index range."""
         stream = await (
-            session_with_relative_range_data.query(general_namespace(), "rel_range_test")
+            session_with_relative_range_data.query(*_REL_RANGE_SET_KEYS)
             .where("$.scores:MAP.{!0:1~bob}.count() >= 1")
             .execute()
         )
@@ -1949,7 +1998,7 @@ class TestInExpressionAel:
     async def test_string_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: "bob" in $.names — should match rec1 only."""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where('"bob" in $.names')
             .execute()
         )
@@ -1964,7 +2013,7 @@ class TestInExpressionAel:
     async def test_int_in_list_bin_with_ael(self, session_with_cdt_data):
         """Filter via AEL: 20 in $.numbers — matches rec1 only (numbers=[10,20,30,40,50])."""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where("20 in $.numbers")
             .execute()
         )
@@ -1979,7 +2028,7 @@ class TestInExpressionAel:
     async def test_in_combined_with_and(self, session_with_cdt_data):
         """Filter: "alice" in $.names and $.info.age == 30 — rec1 only."""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where('"alice" in $.names and $.info.age == 30')
             .execute()
         )
@@ -1995,7 +2044,7 @@ class TestInExpressionAel:
     async def test_in_no_match(self, session_with_cdt_data):
         """Filter: "nonexistent" in $.names — should match nothing."""
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
+            session_with_cdt_data.query(*_CDT_SET_KEYS)
             .where('"nonexistent" in $.names')
             .execute()
         )
@@ -2121,7 +2170,7 @@ class TestAelMapBlobIntegrationQueries:
     async def test_map_ael_numeric_field_filters_tier(self, session_with_map_data):
         """Map value filter on ``level`` (``type`` is reserved in the AEL grammar)."""
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.metadata.level != 1")
             .execute()
         )
@@ -2137,7 +2186,7 @@ class TestAelMapBlobIntegrationQueries:
     async def test_map_ael_key_list_count_on_server(self, session_with_map_data):
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
-            session_with_map_data.query(general_namespace(), "map_ael_test")
+            session_with_map_data.query(*_MAP_SET_KEYS)
             .where("$.scores:MAP.{alice,bob}.count() == 2")
             .execute()
         )
@@ -2169,7 +2218,7 @@ class TestAelMapBlobIntegrationQueries:
         await wait_for_set_visible(session, general_namespace(), "ael_blob_srv_it", 1)
 
         stream = await (
-            session.query(general_namespace(), "ael_blob_srv_it")
+            session.query(k)
             .where(_hex_blob_expr(payload))
             .execute()
         )

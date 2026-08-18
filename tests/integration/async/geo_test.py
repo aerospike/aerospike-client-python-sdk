@@ -136,8 +136,9 @@ class TestGeoQuery:
     @requires_server_compiled_ael
     async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
+        regions = DataSet.of(NAMESPACE, REGION_SET)
         stream = await (
-            session.query(NAMESPACE, REGION_SET)
+            session.query(*(regions.id(i) for i in range(len(STARBUCKS))))
             .where(f"geoCompare($.{BIN_NAME}, geoJson('{QUERY_POINT}'))")
             .execute()
         )

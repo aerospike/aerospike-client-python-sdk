@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     CDT_LIST_BIN,
@@ -67,6 +67,7 @@ class TestQueryPlannerCollectionCdt:
             session.query(ds)
             .bins([CDT_MAP_BIN])
             .where(map_where)
+            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         map_count = 0
@@ -83,6 +84,7 @@ class TestQueryPlannerCollectionCdt:
             session.query(ds)
             .bins([CDT_LIST_BIN])
             .where(list_where)
+            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         list_count = 0

@@ -20,8 +20,9 @@ from __future__ import annotations
 import pytest
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import QueryHint, ResultCode
+from aerospike_sdk import Behavior, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy.behavior_settings import Settings
 
 from tests.integration.query_selection_helpers import (
     HINT_BOGUS_INDEX_NAME,
@@ -155,3 +156,21 @@ class TestSyncQuerySelectionBuilderScanBlocking:
             .execute()
         )
         count_records_sync(stream)
+
+    @requires_query_selection
+    def test_disallow_hint_overrides_permissive_behavior(self, query_selection_cluster):
+        # Resolution runs through the sync client's own create_session(behavior):
+        # a hint rejecting the fallback beats a Behavior that allows it.
+        permissive = Behavior.DEFAULT.derive_with_changes(
+            name="permissive_scans_sync",
+            reads_query=Settings(allow_scans_with_where=True),
+        )
+        session = query_selection_cluster.client.create_session(permissive)
+        with pytest.raises(AerospikeError) as exc_info:
+            (
+                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.country == 'US'")
+                .with_hint(QueryHint(allow_scans_with_where=False))
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND

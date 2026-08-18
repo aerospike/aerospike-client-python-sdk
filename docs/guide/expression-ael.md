@@ -7,6 +7,12 @@ Pass an AEL string to `.where()` on any query or write builder.
 stream = await session.query(users).where("$.age > 18").execute()
 ```
 
+The examples on this page assume a secondary index covers the bin being
+filtered. On clusters with query selection, a `.where()` query that no index
+can satisfy is rejected rather than run as a full-set scan; see
+[Secondary Indexes](indexes.md) to create one or to opt a query into the
+primary-index fallback.
+
 ## How string AEL is executed
 
 The SDK does **not** parse AEL strings locally. When the connected cluster
