@@ -371,9 +371,14 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
             all_ops: list = []
             all_keys: List[Key] = []
+            row_op_types: List[Optional[str]] = []
             for spec in self._specs:
                 all_keys.extend(spec.keys)
-                all_ops.extend(self._spec_to_batch_ops(spec))
+                spec_ops = self._spec_to_batch_ops(spec)
+                all_ops.extend(spec_ops)
+                # Rows come back in op order, so this pairs each row with the
+                # verb that produced it.
+                row_op_types.extend([spec.op_type] * len(spec_ops))
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 if (
@@ -394,7 +399,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     "batch", self._namespace, self._set_name,
                     len(all_keys), cmd_t0, self._client,
                 )
-            return self._filtered_batch_stream(batch_records, disp, handler)
+            return self._filtered_batch_stream(
+                batch_records, disp, handler, row_op_types=row_op_types)
 
         # Dataset query path (no keys were specified)
         if self._operations:

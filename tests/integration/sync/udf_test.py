@@ -161,7 +161,7 @@ def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
 
 
 @requires_server_compiled_ael
-def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+def test_sync_batch_udf_reports_filtered_out_row_without_opt_in(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")
     k2 = DS.id("sync_batch_udf_rak_2")
@@ -177,9 +177,13 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
         .execute()
     )
     results = stream.collect()
-    assert len(results) == 1
-    assert results[0].key == k1
-    assert results[0].is_ok
+    # A UDF apply is a write, so the filtered-out row reports its outcome even
+    # though include_missing_keys was never set.
+    assert len(results) == 2
+    assert next(r for r in results if r.key == k1).is_ok
+    assert next(
+        r for r in results if r.key == k2
+    ).result_code == ResultCode.FILTERED_OUT
 
     stream = (
         session.execute_udf(k1, k2)
@@ -190,6 +194,7 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
         .execute()
     )
     results = stream.collect()
+    # Opting in changes nothing for a write batch: same rows, same codes.
     assert len(results) == 2
     r1 = next(r for r in results if r.key == k1)
     r2 = next(r for r in results if r.key == k2)

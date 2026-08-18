@@ -627,14 +627,23 @@ class TestBatchDeleteEdgeCases:
     """Edge-case tests for batch deletes."""
 
     async def test_batch_delete_single_not_found(self, session, ds):
-        """Deleting keys that don't exist yields an empty stream."""
+        """Deleting missing keys reports a not-found row per key.
+
+        A delete names the key it expects to remove, so the row reports its
+        outcome without any opt-in — dropping it would report success by
+        omission.
+        """
         first_key = 98929923
         keys = [ds.id(first_key + i) for i in range(10)]
         await _cleanup(session, *keys)
 
         rs = await session.delete(keys).execute()
         results = await rs.collect()
-        assert len(results) == 0
+        assert len(results) == len(keys)
+        assert all(
+            r.result_code == ResultCode.KEY_NOT_FOUND_ERROR for r in results
+        )
+        assert not any(r.is_ok for r in results)
 
 
 class TestBatchWriteComplex:

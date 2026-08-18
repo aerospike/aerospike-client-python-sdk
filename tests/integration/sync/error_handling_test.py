@@ -65,13 +65,17 @@ class TestSyncIdempotentOps:
         rs = session.query(k).execute()
         assert rs.first() is None
 
-    def test_batch_delete_all_missing_returns_empty(self, cluster, ds):
+    def test_batch_delete_all_missing_reports_a_row_per_key(self, cluster, ds):
+        """Sync mirror: every named key gets a not-found row, not silence."""
         k1 = ds.id("sidm_bd_1")
         k2 = ds.id("sidm_bd_2")
         _cleanup(cluster.create_session(), k1, k2)
         session = cluster.create_session()
         results = session.delete([k1, k2]).execute().collect()
-        assert len(results) == 0
+        assert len(results) == 2
+        assert all(
+            r.result_code == ResultCode.KEY_NOT_FOUND_ERROR for r in results
+        )
 
 
 class TestSyncTtlPreservation:

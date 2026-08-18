@@ -600,9 +600,14 @@ class _BlockingQueryDispatch:
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
+        row_op_types: List[Optional[str]] = []
         for spec in self._specs:
             all_keys.extend(spec.keys)
-            all_ops.extend(self._spec_to_batch_ops(spec))
+            spec_ops = self._spec_to_batch_ops(spec)
+            all_ops.extend(spec_ops)
+            # Rows come back in op order, so this pairs each row with the
+            # verb that produced it.
+            row_op_types.extend([spec.op_type] * len(spec_ops))
         try:
             if (
                 self._implicit_txn_precheck(all_keys)
@@ -617,7 +622,8 @@ class _BlockingQueryDispatch:
                 batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return self._handle_batch_error_list(all_keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler)
+        return self._filtered_batch_list(
+            batch_records, disp, handler, row_op_types=row_op_types)
 
     def _execute_blocking_stream(
         self,

@@ -1579,17 +1579,21 @@ class _QueryBuilderBase:
         result_code: ResultCode,
         respond_all_keys: bool,
         fail_on_filtered_out: bool,
+        has_write: bool = False,
     ) -> bool:
-        """Decide whether to include a result in the stream.
+        """Decide whether to include a per-key result in the stream.
 
-        Decides whether to include a per-key result in the stream.
+        A write row always reports its outcome: the caller named that key and
+        asked to change it, so omitting the row would report success by
+        omission. A read row stays opt-in — a missing key is an ordinary
+        outcome there, surfaced with ``include_missing_keys``.
         """
         if result_code == ResultCode.OK:
             return True
         if result_code == ResultCode.KEY_NOT_FOUND_ERROR:
-            return respond_all_keys
+            return has_write or respond_all_keys
         if result_code == ResultCode.FILTERED_OUT:
-            return fail_on_filtered_out or respond_all_keys
+            return has_write or fail_on_filtered_out or respond_all_keys
         return True
 
     def _filtered_batch_list(
@@ -1598,6 +1602,7 @@ class _QueryBuilderBase:
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
+        row_op_types: Optional[Sequence[Optional[str]]] = None,
     ) -> List[RecordResult]:
         """Filter batch records by disposition; return as a plain list.
 
@@ -1608,9 +1613,17 @@ class _QueryBuilderBase:
         skip the :class:`RecordStream` wrapping.
         """
         all_results = batch_records_to_results(list(batch_records))
+        # A folded chain carries one verb per row (rows follow segment order);
+        # a homogeneous batch shares a single verb across every row.
+        per_row = (
+            row_op_types
+            if row_op_types is not None and len(row_op_types) == len(all_results)
+            else None
+        )
         filtered: list[RecordResult] = []
-        for r in all_results:
-            if not r.is_ok and self._is_actionable(r.result_code, op_type):
+        for i, r in enumerate(all_results):
+            row_op = per_row[i] if per_row is not None else op_type
+            if not r.is_ok and self._is_actionable(r.result_code, row_op):
                 if disp is _ErrorDisposition.THROW:
                     raise _result_code_to_exception(r.result_code, str(r.result_code), r.in_doubt)
                 if disp is _ErrorDisposition.HANDLER and handler is not None:
@@ -1619,7 +1632,8 @@ class _QueryBuilderBase:
                     continue
 
             if not self._should_include_result(
-                r.result_code, self._respond_all_keys, self._fail_on_filtered_out
+                r.result_code, self._respond_all_keys, self._fail_on_filtered_out,
+                has_write=row_op is not None,
             ):
                 continue
 
@@ -1632,6 +1646,7 @@ class _QueryBuilderBase:
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
+        row_op_types: Optional[Sequence[Optional[str]]] = None,
     ) -> RecordStream:
         """Convert batch records to a filtered RecordStream.
 
@@ -1639,7 +1654,8 @@ class _QueryBuilderBase:
         that hand the result back to streaming code.
         """
         return RecordStream._from_list(
-            self._filtered_batch_list(batch_records, disp, handler, op_type),
+            self._filtered_batch_list(
+                batch_records, disp, handler, op_type, row_op_types),
         )
 
     def _is_actionable(self, rc: ResultCode, op_type: Optional[str]) -> bool:

@@ -173,7 +173,7 @@ async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
         assert r.record is not None
 
 @requires_server_compiled_ael
-async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+async def test_batch_udf_reports_filtered_out_row_without_opt_in(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_rak_1")
     k2 = DS.id("batch_udf_rak_2")
@@ -181,7 +181,6 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
     await session.upsert(k1).put({"v": 5}).execute()
     await session.upsert(k2).put({"v": 20}).execute()
 
-    # Without include_missing_keys: filtered-out key is omitted
     stream = await (
         session.execute_udf(k1, k2)
         .function(MODULE, "writeBin")
@@ -190,11 +189,14 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
         .execute()
     )
     results = await stream.collect()
-    assert len(results) == 1
-    assert results[0].key == k1
-    assert results[0].is_ok
+    # A UDF apply is a write, so the filtered-out row reports its outcome even
+    # though include_missing_keys was never set.
+    assert len(results) == 2
+    assert next(r for r in results if r.key == k1).is_ok
+    assert next(
+        r for r in results if r.key == k2
+    ).result_code == ResultCode.FILTERED_OUT
 
-    # With include_missing_keys: filtered-out key appears in stream
     stream = await (
         session.execute_udf(k1, k2)
         .function(MODULE, "writeBin")
@@ -204,6 +206,7 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
         .execute()
     )
     results = await stream.collect()
+    # Opting in changes nothing for a write batch: same rows, same codes.
     assert len(results) == 2
     r1 = next(r for r in results if r.key == k1)
     r2 = next(r for r in results if r.key == k2)

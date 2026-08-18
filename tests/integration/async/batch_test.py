@@ -1143,3 +1143,37 @@ class TestSameKeyChainOrdering:
             await session.query(k).bins(["seed"]).execute()
         ).first_or_raise()
         assert after.record.bins["seed"] == "new"
+
+
+class TestBatchWriteMissingKeyRows:
+    """A batch write reports a missing key with no opt-in required.
+
+    The verb names a key it expects to exist, so dropping the row would report
+    success by omission: the caller sees a shorter stream and no error. Read
+    rows stay opt-in, where a missing key is an ordinary outcome.
+    """
+
+    async def test_update_missing_key_reports_row_without_opt_in(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        present, missing = users.id("wmk_present"), users.id("wmk_missing")
+        await session.upsert(present).put({"v": 1}).execute()
+        await session.delete(missing).execute()
+
+        stream = await (
+            session.update(present).bin("v").set_to(2)
+            .update(missing).bin("v").set_to(2)
+            .execute()
+        )
+        rows = {r.key.value: r for r in await stream.collect()}
+
+        # Default disposition, no include_missing_keys: both rows are present.
+        assert len(rows) == 2
+        assert rows["wmk_present"].result_code == ResultCode.OK
+        assert rows["wmk_missing"].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+        # The applied half persisted; the missing key was not created.
+        after = await (await session.query(present).bins(["v"]).execute()).first_or_raise()
+        assert after.record.bins["v"] == 2
+        assert [r async for r in await session.query(missing).execute()] == []

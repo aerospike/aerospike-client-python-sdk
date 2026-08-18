@@ -813,15 +813,23 @@ class TestIdempotentOps:
         rr = await rs.first()
         assert rr is None
 
-    async def test_batch_delete_all_missing_returns_empty(self, session, ds):
-        """Batch delete where all keys are missing returns an empty stream."""
+    async def test_batch_delete_all_missing_reports_a_row_per_key(self, session, ds):
+        """Batch delete of missing keys reports not-found per key, not silence.
+
+        Deleting an absent key is idempotent, but the stream still accounts for
+        every key the caller named — a shorter stream would be indistinguishable
+        from success.
+        """
         k1 = ds.id("idm_bd_miss1")
         k2 = ds.id("idm_bd_miss2")
         await _cleanup(session, k1, k2)
 
         rs = await session.delete([k1, k2]).execute()
         results = await rs.collect()
-        assert len(results) == 0
+        assert len(results) == 2
+        assert all(
+            r.result_code == ResultCode.KEY_NOT_FOUND_ERROR for r in results
+        )
 
 
 # ---------------------------------------------------------------------------
