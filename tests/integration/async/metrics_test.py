@@ -28,9 +28,9 @@ async def metrics_cluster(aerospike_host, make_cluster_definition):
 
 
 # The core builds node metrics with its default histogram shape
-# (microseconds / 24 columns); enabling with the same shape keeps every part
-# of the snapshot populated. The ms-default detail path is pinned by the
-# xfail below until the core reshape fix ships.
+# (microseconds / 24 columns); enabling with the same shape keeps every part of
+# the snapshot populated, since a shape change resets the accumulated counts.
+# The ms-default detail path is covered by test_default_policy_detailed_metrics.
 _SHAPE_SAFE = MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS, latency_columns=24)
 
 
@@ -177,12 +177,6 @@ class TestMetricsSnapshot:
         assert agg["get-metrics"]["count"] >= 1
         metrics_cluster.disable_metrics()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="core reshape bug: detail created after a column-count change keeps "
-        "the stale shape and aggregation drops it; fixed in core (unreleased) — "
-        "remove this marker on the next PAC pin bump",
-    )
     async def test_default_policy_detailed_metrics(
         self, aerospike_host, make_cluster_definition
     ):
