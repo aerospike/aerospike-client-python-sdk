@@ -741,9 +741,9 @@ class Client(RoutingCapabilitiesMixin):
     ) -> RegisterTask:
         """Register a UDF from a Python package resource (``importlib.resources``).
 
-        The Pythonic analog of the Java client's classpath/resource registration —
-        for a module shipped as package data (e.g. a ``.lua`` bundled inside a
-        library). Reads the resource bytes and delegates to :meth:`register_udf`.
+        For a module shipped as package data — e.g. a ``.lua`` bundled inside a
+        library — rather than read from the filesystem. Reads the resource bytes
+        and delegates to :meth:`register_udf`.
 
         Args:
             package: Importable package holding the resource (e.g. ``"myapp.udfs"``).

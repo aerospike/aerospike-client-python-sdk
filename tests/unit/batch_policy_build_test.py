@@ -13,15 +13,28 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Mixed-mode batch resolution: per-row policies + parent SC escalation.
+"""Batch write/delete/UDF policy building from behavior + chain.
 
-A batch may span namespaces whose consistency modes differ. Mode-scoped
-settings (durable-delete defaults on SC) must resolve per key, and the
-batch-level parent policy must resolve with SC-scoped settings whenever any
-key lands in an SC namespace. These tests drive the sync chain against a
-recording fake client — the resolution logic is shared with the async chain
-via ``query_shared``. Order-independence is the core regression: resolving
-from ``keys[0]`` alone applied one namespace's mode to every key.
+Unit coverage for how the sync chain assembles per-row ``BatchWritePolicy`` /
+``BatchDeletePolicy`` / ``BatchUDFPolicy`` objects against a recording fake
+client; the assembly logic is shared with the async chain via ``query_shared``.
+
+Two themes:
+
+* **Mixed-mode resolution** — a batch may span namespaces whose consistency
+  modes differ. Mode-scoped settings (durable-delete defaults on SC) resolve
+  per key, and the batch-level parent policy escalates to SC-scoped settings
+  whenever any key lands in an SC namespace. Order-independence is the core
+  regression: resolving from ``keys[0]`` alone applied one namespace's mode to
+  every key.
+* **Fold vs sequential dispatch** — a key spanning segments forces per-segment
+  execution; disjoint chains keep the single-round-trip fold.
+* **Sub-policy field flow** — commit level (from behavior), the generation
+  policy (from an expected generation), and the record expiration (from the
+  chain's TTL verbs) each thread onto the per-row policy. Commit level has no
+  observable single-node wire effect, so it is pinned here at the policy-shape
+  level; generation and TTL effects are additionally exercised end-to-end in
+  the integration suites.
 """
 
 from datetime import timedelta
@@ -29,7 +42,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from aerospike_async import Key
+from aerospike_async import (
+    CommitLevel,
+    Expiration,
+    GenerationPolicy,
+    Key,
+)
 
 import aerospike_sdk.query_shared as query_shared
 
@@ -275,3 +293,149 @@ class TestMixedModeUdf:
         # Merged results come back in request order despite the split — the
         # fake returns the very Key objects it was handed, so identity pins it.
         assert [r.key for r in results] == keys
+
+
+def _commit_master():
+    """Behavior whose batch writes resolve to a non-default COMMIT_MASTER."""
+    return Behavior.DEFAULT.derive_with_changes(
+        "commit_master_batch",
+        writes_batch=Settings(commit_level=CommitLevel.COMMIT_MASTER),
+    )
+
+
+def _run_udf_apply(pac, apply_verbs, behavior=Behavior.DEFAULT):
+    """Drive a two-key AP UDF apply; return the captured ``udf_policy``.
+
+    *apply_verbs* receives the ``UdfBuilder`` to chain TTL/other verbs onto.
+    """
+    builder = _builder(pac, namespace=AP_NS, behavior=behavior)
+    builder._keys = [_k_ap(1), _k_ap(2)]
+    builder._op_type = "execute_udf"
+    ub = UdfFunctionBuilder(builder).function("m", "f")
+    apply_verbs(ub)
+    ub.execute()
+    return pac.batch_apply_calls[0][2]  # single AP mode -> one apply call
+
+
+class TestCommitLevel:
+    """Non-default behavior commit level threads onto each batch sub-policy."""
+
+    def test_batch_write_carries_non_default_commit_level(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac, behavior=_commit_master())
+            .insert(_k_ap(1)).put({"b": 1})
+            .insert(_k_ap(2)).put({"b": 2})
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].policy.commit_level == CommitLevel.COMMIT_MASTER
+
+    def test_batch_delete_carries_non_default_commit_level(self):
+        pac = _RecordingClient()
+        _builder(pac, behavior=_commit_master()).delete(_k_ap(1), _k_ap(2)).execute()
+        _, _, bdp = pac.batch_delete_calls[0]
+        assert bdp is not None and bdp.commit_level == CommitLevel.COMMIT_MASTER
+
+    def test_batch_udf_carries_non_default_commit_level(self):
+        pac = _RecordingClient()
+        up = _run_udf_apply(pac, lambda ub: None, behavior=_commit_master())
+        assert up is not None and up.commit_level == CommitLevel.COMMIT_MASTER
+
+    def test_default_commit_level_keeps_no_policy_fast_path(self):
+        # AP default resolves COMMIT_ALL, which equals core's own default, so a
+        # plain batch delete needs no policy object at all.
+        pac = _RecordingClient()
+        _builder(pac, namespace=AP_NS).delete(_k_ap(1), _k_ap(2)).execute()
+        _, _, bdp = pac.batch_delete_calls[0]
+        assert bdp is None
+
+
+class TestGenerationPolicy:
+    """An expected generation sets ``generation_policy`` on write + delete."""
+
+    def test_batch_delete_with_expected_generation(self):
+        pac = _RecordingClient()
+        _builder(pac).delete(_k_ap(1), _k_ap(2)).ensure_generation_is(7).execute()
+        _, _, bdp = pac.batch_delete_calls[0]
+        assert bdp.generation_policy == GenerationPolicy.EXPECT_GEN_EQUAL
+        assert bdp.generation == 7
+
+    def test_batch_write_with_expected_generation(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .update(_k_ap(1)).put({"b": 1}).ensure_generation_is(3)
+            .update(_k_ap(2)).put({"b": 2}).ensure_generation_is(3)
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].policy.generation_policy == GenerationPolicy.EXPECT_GEN_EQUAL
+        assert ops[0].policy.generation == 3
+
+    def test_batch_delete_without_generation_leaves_policy_gen_none(self):
+        pac = _RecordingClient()
+        _builder(pac).delete(_k_ap(1), _k_ap(2)).with_durable_delete().execute()
+        _, _, bdp = pac.batch_delete_calls[0]
+        assert bdp.generation_policy == GenerationPolicy.NONE
+
+
+class TestBatchUdfExpiration:
+    """The chain's TTL verbs reach ``BatchUDFPolicy.expiration``."""
+
+    def test_seconds_ttl_reaches_udf_policy(self):
+        pac = _RecordingClient()
+        up = _run_udf_apply(pac, lambda ub: ub.expire_record_after_seconds(600))
+        assert up.expiration == Expiration.seconds(600)
+
+    def test_never_expire_reaches_udf_policy(self):
+        pac = _RecordingClient()
+        up = _run_udf_apply(pac, lambda ub: ub.never_expire())
+        assert up.expiration == Expiration.NEVER_EXPIRE
+
+    def test_no_ttl_keeps_no_policy_fast_path(self):
+        pac = _RecordingClient()
+        up = _run_udf_apply(pac, lambda ub: None)
+        assert up is None
+
+
+class TestSameKeyChainFolding:
+    """A key spanning segments forces sequential dispatch; disjoint chains fold.
+
+    Batch sub-transactions against one key are unordered server-side, so folding
+    an overlapping chain lets a later segment race an earlier one. The fold is
+    what keeps the common (disjoint) chain a single round trip, so both
+    directions are pinned.
+    """
+
+    def test_overlapping_key_runs_segments_sequentially(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            .upsert(_k_ap(2), _k_ap(3)).bin("a").set_to(2)
+            .execute()
+        )
+        # k2 spans both segments: no combined batch, one dispatch per segment.
+        assert pac.batch_mixed_calls == []
+        assert len(pac.batch_operate_calls) == 2
+
+    def test_disjoint_keys_keep_the_single_batch_fold(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            .upsert(_k_ap(3), _k_ap(4)).bin("a").set_to(2)
+            .execute()
+        )
+        # No shared key: both segments fold into one round trip.
+        assert len(pac.batch_mixed_calls) == 1
+        assert pac.batch_operate_calls == []
+
+    def test_single_segment_never_pays_the_overlap_scan(self):
+        # The common high-volume shape is one segment; the check short-circuits
+        # before touching any key.
+        builder = _builder(_RecordingClient())
+        builder.upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+        builder._finalize_current_spec()
+        assert builder._specs_overlap_on_a_key() is False

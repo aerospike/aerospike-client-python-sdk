@@ -700,3 +700,48 @@ async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
     assert err.sub_exceptions, "expected prior attempts in sub_exceptions"
     assert all(isinstance(s, TimeoutError) for s in err.sub_exceptions)
     assert all(isinstance(s, AerospikeError) for s in err.sub_exceptions)
+
+
+class TestBatchApplyExpiration:
+    """``BatchUDFPolicy.expiration`` — a batch-apply TTL reaches the record.
+
+    The plain multi-key apply round-trip is covered by :func:`test_batch_udf`;
+    these add only the TTL dimension.
+    """
+
+    async def test_batch_apply_sets_record_ttl(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k1, k2 = DS.id("apply_ttl_1"), DS.id("apply_ttl_2")
+        await session.delete(k1).execute()
+        await session.delete(k2).execute()
+
+        stream = await (
+            session.execute_udf(k1, k2)
+            .function(MODULE, "writeBin").passing("mbin", 42)
+            .expire_record_after_seconds(300)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+
+        # The apply carried the requested TTL onto every row — not the
+        # namespace default. A generous band absorbs server-clock jitter.
+        for k in (k1, k2):
+            rec = (await (await session.query(k).execute()).first_or_raise()).record
+            assert 270 <= rec.ttl <= 305
+
+    async def test_batch_apply_never_expire(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k = DS.id("apply_ttl_never")
+        await session.delete(k).execute()
+
+        stream = await (
+            session.execute_udf(k)
+            .function(MODULE, "writeBin").passing("mbin", 7)
+            .never_expire()
+            .execute()
+        )
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+        rec = (await (await session.query(k).execute()).first_or_raise()).record
+        # The never-expire sentinel round-trips: a non-expiring record reports
+        # no remaining TTL, distinct from the positive value above.
+        assert rec.ttl is None

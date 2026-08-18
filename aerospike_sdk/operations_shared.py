@@ -178,9 +178,9 @@ def _seconds_from_timedelta(duration: timedelta) -> int:
 def _seconds_until(when: datetime) -> int:
     """Convert an absolute ``datetime`` into an integer TTL in seconds from now.
 
-    A naive ``when`` is interpreted in local time (matching the Java SDK's
-    ``LocalDateTime`` semantics); an aware ``when`` is compared against the
-    current time in its own timezone.
+    A naive ``when`` is interpreted in local time, as bare ``datetime.now()``
+    does; an aware ``when`` is compared against the current time in its own
+    timezone.
 
     Raises:
         ValueError: If ``when`` is not strictly in the future.
@@ -346,7 +346,89 @@ def _build_exp_write_flags(
     return flags
 
 
-class _WriteSegmentBuilderBase(Generic[_QB]):
+class _ExpirationVerbs(Generic[_QB]):
+    """Record-expiration (TTL) chaining shared by write-segment and UDF builders.
+
+    Each verb stamps the pending TTL on the wrapped query builder (``_qb``); it
+    is materialized into the write / UDF policy's ``expiration`` when the
+    operation is built. Mixed into both :class:`_WriteSegmentBuilderBase` and
+    the UDF builder so the two surfaces stay identical.
+    """
+
+    __slots__ = ()
+
+    _qb: _QB
+
+    def expire_record_after_seconds(self, seconds: int) -> Self:
+        """Set the TTL on the current operation.
+
+        Args:
+            seconds: Time-to-live in seconds. A positive value sets an explicit
+                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
+                and namespace-default respectively (see :meth:`never_expire`,
+                :meth:`with_no_change_in_expiration`, and
+                :meth:`expiry_from_server_default` for named equivalents). The
+                value is not range-checked here — one the client cannot
+                represent is rejected when the operation is built.
+
+        Returns:
+            self for method chaining.
+        """
+        self._qb._ttl_seconds = seconds
+        return self
+
+    def expire_record_after(self, duration: timedelta) -> Self:
+        """Set the TTL using a :class:`datetime.timedelta`.
+
+        Equivalent to :meth:`expire_record_after_seconds` with seconds derived
+        from ``duration`` — convenient when the caller already has a
+        ``timedelta`` (``timedelta(days=30)``, etc.). A ``timedelta`` resolving
+        to -1, -2, or 0 seconds selects the corresponding TTL sentinel.
+
+        Args:
+            duration: Time-to-live.
+
+        Returns:
+            self for method chaining.
+        """
+        self._qb._ttl_seconds = _seconds_from_timedelta(duration)
+        return self
+
+    def expire_record_at(self, when: datetime) -> Self:
+        """Set the TTL so the record expires at an absolute point in time.
+
+        A naive ``when`` is interpreted in local time; pass a timezone-aware
+        ``datetime`` for explicit UTC or other zones.
+
+        Args:
+            when: Future point at which the record should expire.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            ValueError: If ``when`` is not strictly in the future.
+        """
+        self._qb._ttl_seconds = _seconds_until(when)
+        return self
+
+    def never_expire(self) -> Self:
+        """Set this record to never expire (TTL = -1)."""
+        self._qb._ttl_seconds = _TTL_NEVER_EXPIRE
+        return self
+
+    def with_no_change_in_expiration(self) -> Self:
+        """Preserve the record's existing TTL (TTL = -2)."""
+        self._qb._ttl_seconds = _TTL_DONT_UPDATE
+        return self
+
+    def expiry_from_server_default(self) -> Self:
+        """Use the namespace's default TTL for this record (TTL = 0)."""
+        self._qb._ttl_seconds = _TTL_SERVER_DEFAULT
+        return self
+
+
+class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
     """State + chaining shared by async and sync write-segment builders.
 
     Holds the wrapped query-builder reference (``_qb``) and the chaining
@@ -438,74 +520,6 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
             self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
         else:
             self._qb._filter_expression = expression
-        return self
-
-    def expire_record_after_seconds(self, seconds: int) -> Self:
-        """Set the TTL on the current write segment.
-
-        Args:
-            seconds: Time-to-live in seconds. A positive value sets an explicit
-                TTL; the sentinels -1, -2, and 0 select never-expire, no-change,
-                and namespace-default respectively (see :meth:`never_expire`,
-                :meth:`with_no_change_in_expiration`, and
-                :meth:`expiry_from_server_default` for named equivalents). The
-                value is not range-checked here — one the client cannot
-                represent is rejected when the write is built.
-
-        Returns:
-            self for method chaining.
-        """
-        self._qb._ttl_seconds = seconds
-        return self
-
-    def expire_record_after(self, duration: timedelta) -> Self:
-        """Set the TTL using a :class:`datetime.timedelta`.
-
-        Equivalent to :meth:`expire_record_after_seconds` with seconds derived
-        from ``duration`` — convenient when the caller already has a
-        ``timedelta`` (``timedelta(days=30)``, etc.). A ``timedelta`` resolving
-        to -1, -2, or 0 seconds selects the corresponding TTL sentinel.
-
-        Args:
-            duration: Time-to-live.
-
-        Returns:
-            self for method chaining.
-        """
-        self._qb._ttl_seconds = _seconds_from_timedelta(duration)
-        return self
-
-    def expire_record_at(self, when: datetime) -> Self:
-        """Set the TTL so the record expires at an absolute point in time.
-
-        A naive ``when`` is interpreted in local time; pass a timezone-aware
-        ``datetime`` for explicit UTC or other zones.
-
-        Args:
-            when: Future point at which the record should expire.
-
-        Returns:
-            self for method chaining.
-
-        Raises:
-            ValueError: If ``when`` is not strictly in the future.
-        """
-        self._qb._ttl_seconds = _seconds_until(when)
-        return self
-
-    def never_expire(self) -> Self:
-        """Set this record to never expire (TTL = -1)."""
-        self._qb._ttl_seconds = _TTL_NEVER_EXPIRE
-        return self
-
-    def with_no_change_in_expiration(self) -> Self:
-        """Preserve the record's existing TTL (TTL = -2)."""
-        self._qb._ttl_seconds = _TTL_DONT_UPDATE
-        return self
-
-    def expiry_from_server_default(self) -> Self:
-        """Use the namespace's default TTL for this record (TTL = 0)."""
-        self._qb._ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
     def ensure_generation_is(self, generation: int) -> Self:

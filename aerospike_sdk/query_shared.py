@@ -64,6 +64,7 @@ from aerospike_async import (
     BitWriteFlags,
     CTX,
     Client,
+    CommitLevel,
     ExpOperation,
     ExpReadFlags,
     Filter,
@@ -1474,6 +1475,7 @@ class _QueryBuilderBase:
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
         )
+        ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
         self._specs.append(_OperationSpec(
             keys=keys,
             operations=[],
@@ -1481,7 +1483,7 @@ class _QueryBuilderBase:
             filter_expression=filt,
             op_type="udf",
             generation=None,
-            ttl_seconds=None,
+            ttl_seconds=ttl,
             durable_delete=self._durable_delete,
             durable_delete_command_default=self._durable_delete_command_default,
             contains_record_delete_op=False,
@@ -1510,7 +1512,30 @@ class _QueryBuilderBase:
         # with other op types — folds into one mixed batch call where each UDF
         # row becomes a ``BatchUDFOp``, matching the single-round-trip behavior
         # of every other batch.
-        return len(self._specs) == 1 and self._specs[0].op_type == "udf"
+        if len(self._specs) == 1 and self._specs[0].op_type == "udf":
+            return True
+        return self._specs_overlap_on_a_key()
+
+    def _specs_overlap_on_a_key(self) -> bool:
+        """True when one key appears in more than one segment of the chain.
+
+        Batch sub-transactions against the same key are unordered server-side,
+        so folding such a chain into a single batch lets a segment race an
+        earlier one — a read of a key written earlier in the same chain can
+        miss its own write. Those chains run segment by segment instead;
+        non-overlapping chains keep the single-round-trip fold.
+        """
+        if len(self._specs) < 2:
+            return False
+        seen: set[tuple[str, str]] = set()
+        for spec in self._specs:
+            # Identity is namespace + digest: the digest already folds in the
+            # set name and user key.
+            spec_keys = {(key.namespace, key.digest) for key in spec.keys}
+            if seen & spec_keys:
+                return True
+            seen |= spec_keys
+        return False
 
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
@@ -1528,10 +1553,13 @@ class _QueryBuilderBase:
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             spec.filter_expression is not None
+            or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or eff
         )
         if not has_settings:
@@ -1539,6 +1567,10 @@ class _QueryBuilderBase:
         up = BatchUDFPolicy()
         if spec.filter_expression is not None:
             up.filter_expression = spec.filter_expression
+        if spec.ttl_seconds is not None:
+            up.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            up.commit_level = commit_level
         up.durable_delete = eff
         return up
 
@@ -1795,6 +1827,7 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -1802,6 +1835,7 @@ class _QueryBuilderBase:
             or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -1816,9 +1850,12 @@ class _QueryBuilderBase:
         if spec.filter_expression is not None:
             bwp.filter_expression = spec.filter_expression
         if spec.generation is not None:
+            bwp.generation_policy = GenerationPolicy.EXPECT_GEN_EQUAL
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            bwp.commit_level = commit_level
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp
@@ -2210,6 +2247,8 @@ class _QueryBuilderBase:
         )
         if spec.filter_expression is not None:
             wp.filter_expression = spec.filter_expression
+        if spec.ttl_seconds is not None:
+            wp.expiration = _to_expiration(spec.ttl_seconds)
         return wp
 
     def _effective_point_durable_delete(
@@ -2248,6 +2287,26 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
+    def _batch_commit_level(self, mode: Optional[Mode] = None) -> Optional[CommitLevel]:
+        """Resolved commit level for a batch write row, or ``None`` to keep the default.
+
+        The behavior's commit level applies to batch writes exactly as it does
+        to point writes. Core's batch sub-policy default is already
+        ``COMMIT_ALL``, so a resolved ``COMMIT_ALL`` (or an unset SC value)
+        needs no explicit set — returning ``None`` lets the row keep the
+        zero-allocation no-policy fast path. Only a non-default level (e.g.
+        ``COMMIT_MASTER``) is threaded through.
+        """
+        if self._behavior is None:
+            return None
+        cl = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
+        ).commit_level
+        if cl is None or cl == CommitLevel.COMMIT_ALL:
+            return None
+        return cl
+
     def _make_batch_delete_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchDeletePolicy]:
@@ -2256,11 +2315,13 @@ class _QueryBuilderBase:
         *mode* scopes the durable-delete default to the row's namespace mode.
         """
         eff = self._batch_write_effective_dd(spec, mode)
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or eff
         )
         if not has_settings:
@@ -2269,7 +2330,10 @@ class _QueryBuilderBase:
         if spec.filter_expression is not None:
             bdp.filter_expression = spec.filter_expression
         if spec.generation is not None:
+            bdp.generation_policy = GenerationPolicy.EXPECT_GEN_EQUAL
             bdp.generation = spec.generation
+        if commit_level is not None:
+            bdp.commit_level = commit_level
         bdp.durable_delete = eff
         return bdp
 
@@ -2383,6 +2447,7 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2390,6 +2455,7 @@ class _QueryBuilderBase:
             or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2408,6 +2474,8 @@ class _QueryBuilderBase:
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            bwp.commit_level = commit_level
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp

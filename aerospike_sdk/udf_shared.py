@@ -31,6 +31,7 @@ from typing_extensions import Self
 
 from aerospike_async import FilterExpression, Key
 
+from aerospike_sdk.operations_shared import _ExpirationVerbs
 from aerospike_sdk.server_filter import bind_ael_params
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
@@ -48,8 +49,7 @@ def parse_udf_list(raw: str) -> list[dict[str, str]]:
 
     The server returns modules as ``filename=<name>,hash=<sha>,type=<lang>``
     entries joined by ``;`` (empty when nothing is registered). Each entry
-    becomes a dict with ``name`` / ``hash`` / ``type`` keys, matching the
-    shape the legacy Python client's ``udf_list`` returns.
+    becomes a dict with ``name`` / ``hash`` / ``type`` keys.
     """
     modules: list[dict[str, str]] = []
     for entry in raw.split(";"):
@@ -112,7 +112,7 @@ class _UdfFunctionBuilderBase(Generic[_QB]):
         return type(self)._udf_builder_cls(self._qb)
 
 
-class _UdfBuilderBase(Generic[_QB]):
+class _UdfBuilderBase(_ExpirationVerbs[_QB]):
     """State + chaining shared by the async and sync UdfBuilder.
 
     Subclasses inject their tier-appropriate ``UdfFunctionBuilder`` class
@@ -120,6 +120,10 @@ class _UdfBuilderBase(Generic[_QB]):
     runtime-agnostic. Write-verb and ``query`` transitions delegate to the
     wrapped query builder, whose overrides already return the right tier's
     segment/builder types.
+
+    Inherits the record-expiration verbs (:meth:`expire_record_after_seconds`
+    and siblings) so a UDF apply can set the record TTL, which is carried into
+    the batch/point apply policy's ``expiration``.
     """
 
     __slots__ = ("_qb",)

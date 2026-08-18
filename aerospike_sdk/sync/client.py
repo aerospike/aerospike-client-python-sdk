@@ -371,9 +371,9 @@ class SyncClient(RoutingCapabilitiesMixin):
     ) -> RegisterTask:
         """Register a UDF from a Python package resource (synchronous).
 
-        The Pythonic analog of the Java client's classpath/resource registration;
-        reads the resource bytes via ``importlib.resources`` and delegates to
-        :meth:`register_udf`. See
+        For a module shipped as package data rather than read from the
+        filesystem; reads the resource bytes via ``importlib.resources`` and
+        delegates to :meth:`register_udf`. See
         :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`.
         """
         body = resources.files(package).joinpath(resource).read_bytes()

@@ -400,3 +400,106 @@ class TestSyncBatchErrorDetail:
         assert results[0].server_message and "out of bounds" in results[0].server_message
         assert results[0].exp_trace is None
         assert results[1].server_message is None
+
+
+class TestBatchGeneration:
+    """Generation policy on batch delete + write (``BatchDelete/WritePolicy``, sync).
+
+    Sync mirror of the async coverage; the single-key contract lives in the
+    generation suite. Sync is an independent implementation, so the batch
+    sub-policy path is exercised here too.
+    """
+
+    def test_batch_delete_matching_generation_deletes_all(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_ok_1"), users.id("del_gen_ok_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+        gen1 = session.query(k1).execute().first_or_raise().record.generation
+        gen2 = session.query(k2).execute().first_or_raise().record.generation
+        assert gen1 == gen2
+
+        stream = session.delete(k1, k2).ensure_generation_is(gen1).execute()
+        assert all(rr.is_ok for rr in stream)
+        for k in (k1, k2):
+            assert list(session.query(k).execute()) == []
+
+    def test_batch_delete_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_bad_1"), users.id("del_gen_bad_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+
+        stream = (
+            session.delete(k1, k2).ensure_generation_is(9999).include_missing_keys().execute()
+        )
+        results = {rr.key.value: rr for rr in stream}
+        assert results["del_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["del_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        for k in (k1, k2):
+            assert len(list(session.query(k).execute())) == 1
+
+    def test_batch_write_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_bad_1"), users.id("wr_gen_bad_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+
+        stream = (
+            session.update(k1).put({"n": 10}).ensure_generation_is(9999)
+            .update(k2).put({"n": 20}).ensure_generation_is(9999)
+            .execute()
+        )
+        results = {rr.key.value: rr for rr in stream}
+        assert results["wr_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["wr_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        assert session.query(k1).execute().first_or_raise().record.bins.get("n") == 1
+
+    def test_batch_write_matching_generation_writes(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_ok_1"), users.id("wr_gen_ok_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+        gen = session.query(k1).execute().first_or_raise().record.generation
+
+        stream = (
+            session.update(k1).put({"n": 10}).ensure_generation_is(gen)
+            .update(k2).put({"n": 20}).ensure_generation_is(gen)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+        assert session.query(k1).execute().first_or_raise().record.bins.get("n") == 10
+
+
+class TestSameKeyChainOrdering:
+    """A key spanning chain segments must observe the earlier segments' writes.
+
+    Batch sub-transactions against one key are unordered server-side, so a
+    chain that writes a key and then reads it back cannot fold into a single
+    batch — the read would race its own write and miss it, and the resulting
+    not-found row is dropped from the stream, leaving only a short result.
+    """
+
+    def test_read_segment_sees_write_from_earlier_segment(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        k = users.id("chain_same_key_rw")
+        session.delete(k).execute()
+
+        stream = (
+            session.upsert(k).put({"seed": "new"})
+            .query(k).bins(["seed"])
+            .execute()
+        )
+        rows = stream.collect()
+
+        # One row per segment, in order, with nothing dropped.
+        assert len(rows) == 2
+        assert [r.result_code for r in rows] == [ResultCode.OK, ResultCode.OK]
+        # The read observed the write issued earlier in the same chain.
+        assert rows[1].record.bins["seed"] == "new"
+
+        # Persisted state, read back through a separate chain.
+        after = session.query(k).bins(["seed"]).execute().first_or_raise()
+        assert after.record.bins["seed"] == "new"
