@@ -469,3 +469,37 @@ class TestBatchGeneration:
         )
         assert all(rr.is_ok for rr in stream)
         assert session.query(k1).execute().first_or_raise().record.bins.get("n") == 10
+
+
+class TestSameKeyChainOrdering:
+    """A key spanning chain segments must observe the earlier segments' writes.
+
+    Batch sub-transactions against one key are unordered server-side, so a
+    chain that writes a key and then reads it back cannot fold into a single
+    batch — the read would race its own write and miss it, and the resulting
+    not-found row is dropped from the stream, leaving only a short result.
+    """
+
+    def test_read_segment_sees_write_from_earlier_segment(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        k = users.id("chain_same_key_rw")
+        session.delete(k).execute()
+
+        stream = (
+            session.upsert(k).put({"seed": "new"})
+            .query(k).bins(["seed"])
+            .execute()
+        )
+        rows = stream.collect()
+
+        # One row per segment, in order, with nothing dropped.
+        assert len(rows) == 2
+        assert [r.result_code for r in rows] == [ResultCode.OK, ResultCode.OK]
+        # The read observed the write issued earlier in the same chain.
+        assert rows[1].record.bins["seed"] == "new"
+
+        # Persisted state, read back through a separate chain.
+        after = session.query(k).bins(["seed"]).execute().first_or_raise()
+        assert after.record.bins["seed"] == "new"

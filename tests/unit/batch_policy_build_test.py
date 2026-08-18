@@ -27,6 +27,8 @@ Two themes:
   whenever any key lands in an SC namespace. Order-independence is the core
   regression: resolving from ``keys[0]`` alone applied one namespace's mode to
   every key.
+* **Fold vs sequential dispatch** — a key spanning segments forces per-segment
+  execution; disjoint chains keep the single-round-trip fold.
 * **Sub-policy field flow** — commit level (from behavior), the generation
   policy (from an expected generation), and the record expiration (from the
   chain's TTL verbs) each thread onto the per-row policy. Commit level has no
@@ -395,3 +397,45 @@ class TestBatchUdfExpiration:
         pac = _RecordingClient()
         up = _run_udf_apply(pac, lambda ub: None)
         assert up is None
+
+
+class TestSameKeyChainFolding:
+    """A key spanning segments forces sequential dispatch; disjoint chains fold.
+
+    Batch sub-transactions against one key are unordered server-side, so folding
+    an overlapping chain lets a later segment race an earlier one. The fold is
+    what keeps the common (disjoint) chain a single round trip, so both
+    directions are pinned.
+    """
+
+    def test_overlapping_key_runs_segments_sequentially(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            .upsert(_k_ap(2), _k_ap(3)).bin("a").set_to(2)
+            .execute()
+        )
+        # k2 spans both segments: no combined batch, one dispatch per segment.
+        assert pac.batch_mixed_calls == []
+        assert len(pac.batch_operate_calls) == 2
+
+    def test_disjoint_keys_keep_the_single_batch_fold(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            .upsert(_k_ap(3), _k_ap(4)).bin("a").set_to(2)
+            .execute()
+        )
+        # No shared key: both segments fold into one round trip.
+        assert len(pac.batch_mixed_calls) == 1
+        assert pac.batch_operate_calls == []
+
+    def test_single_segment_never_pays_the_overlap_scan(self):
+        # The common high-volume shape is one segment; the check short-circuits
+        # before touching any key.
+        builder = _builder(_RecordingClient())
+        builder.upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+        builder._finalize_current_spec()
+        assert builder._specs_overlap_on_a_key() is False

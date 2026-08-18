@@ -1512,7 +1512,30 @@ class _QueryBuilderBase:
         # with other op types — folds into one mixed batch call where each UDF
         # row becomes a ``BatchUDFOp``, matching the single-round-trip behavior
         # of every other batch.
-        return len(self._specs) == 1 and self._specs[0].op_type == "udf"
+        if len(self._specs) == 1 and self._specs[0].op_type == "udf":
+            return True
+        return self._specs_overlap_on_a_key()
+
+    def _specs_overlap_on_a_key(self) -> bool:
+        """True when one key appears in more than one segment of the chain.
+
+        Batch sub-transactions against the same key are unordered server-side,
+        so folding such a chain into a single batch lets a segment race an
+        earlier one — a read of a key written earlier in the same chain can
+        miss its own write. Those chains run segment by segment instead;
+        non-overlapping chains keep the single-round-trip fold.
+        """
+        if len(self._specs) < 2:
+            return False
+        seen: set[tuple[str, str]] = set()
+        for spec in self._specs:
+            # Identity is namespace + digest: the digest already folds in the
+            # set name and user key.
+            spec_keys = {(key.namespace, key.digest) for key in spec.keys}
+            if seen & spec_keys:
+                return True
+            seen |= spec_keys
+        return False
 
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
