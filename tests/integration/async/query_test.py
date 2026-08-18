@@ -342,11 +342,16 @@ async def test_query_with_filter_expression_and(session):
 # Metadata-based query tests 
 # ============================================================================
 
+_QUERY_KEYS = tuple(
+    DataSet.of(general_namespace(), "query_test").id(i) for i in range(10)
+)
+
+
 @requires_server_compiled_ael
 async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where("$.age >= 25")
         .execute()
     )
@@ -364,7 +369,7 @@ async def test_query_with_ael_where(session):
 async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where('$.age >= 22 and $.age <= 26')
         .execute()
     )
@@ -382,7 +387,7 @@ async def test_query_ael_and_or(session):
 async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where('not ($.age >= 25)')
         .execute()
     )
@@ -472,11 +477,11 @@ async def test_query_ael_set_name_matches_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
+            lambda: session.query(no_set_key, named_key).where(f"$.probe == '{probe}'"),
             {"no-set", "named-set"},
         )
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(
+            lambda: session.query(no_set_key, named_key).where(
                 f"$.probe == '{probe}' and $.setName() == ''",
             ),
             {"no-set"},

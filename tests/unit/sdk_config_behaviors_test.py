@@ -56,6 +56,7 @@ behaviors:
       maxConcurrentServers: 6
     query:
       recordQueueSize: 5000
+      allowScansWithWhere: true
 """
 
 
@@ -112,6 +113,7 @@ class TestParseBehaviors:
         assert spec.patches[Scope.READS_BATCH].allow_inline_ssd is False
         assert spec.patches[Scope.WRITES_BATCH].max_concurrent_nodes == 6
         assert spec.patches[Scope.READS_QUERY].record_queue_size == 5000
+        assert spec.patches[Scope.READS_QUERY].allow_scans_with_where is True
 
     def test_parent_captured(self):
         specs = loader.parse_behaviors(
@@ -170,6 +172,17 @@ class TestApplyBehaviors:
         settings = registered.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.AP)
         assert settings.max_retries == 2
         assert settings.total_timeout == timedelta(seconds=1)
+
+    def test_query_scan_permission_resolves_from_config(self):
+        """Config can lift the strict primary-index-fallback default."""
+        loader.apply_behaviors(loader.parse_behaviors(_FULL))
+        registered = behavior_registry.get_behavior("high-performance")
+        resolved = registered.get_settings(OpKind.READ, OpShape.QUERY, Mode.AP)
+        assert resolved.allow_scans_with_where is True
+        # The shipped default stays strict; only the configured behavior differs.
+        assert Behavior.DEFAULT.get_settings(
+            OpKind.READ, OpShape.QUERY, Mode.AP,
+        ).allow_scans_with_where is False
 
     def test_forward_declared_parent_resolves(self):
         specs = loader.parse_behaviors(

@@ -20,8 +20,9 @@ from __future__ import annotations
 import pytest
 from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
-from aerospike_sdk import QueryHint, ResultCode
+from aerospike_sdk import Behavior, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy.behavior_settings import Settings
 
 from tests.integration.query_selection_helpers import (
     HINT_BOGUS_INDEX_NAME,
@@ -36,6 +37,12 @@ from tests.integration.query_selection_helpers import (
 )
 from tests.pac_compat import requires_query_selection
 
+# Behavior.DEFAULT is strict; this one opens the primary-index fallback so the
+# Behavior leg of the precedence chain can be exercised in both directions.
+PERMISSIVE_SCANS = Behavior.DEFAULT.derive_with_changes(
+    name="permissive_scans",
+    reads_query=Settings(allow_scans_with_where=True),
+)
 
 
 class TestQuerySelectionHintFlags:
@@ -171,3 +178,42 @@ class TestQuerySelectionBuilderScanBlocking:
             .execute()
         )
         await count_records_async(stream)
+
+    @requires_query_selection
+    async def test_permissive_behavior_permits_scan(self, query_selection_cluster):
+        # The Behavior alone opens the fallback — no hint involved.
+        session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
+        stream = await (
+            session.query(namespace=NS, set_name=HINT_SET_NAME)
+            .where("$.country == 'US'")
+            .execute()
+        )
+        await count_records_async(stream)
+
+    @requires_query_selection
+    async def test_disallow_hint_overrides_permissive_behavior(
+        self, query_selection_cluster,
+    ):
+        # Precedence in the direction the strict default cannot show: a hint
+        # rejecting the fallback beats a Behavior that allows it.
+        session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.country == 'US'")
+                .with_hint(QueryHint(allow_scans_with_where=False))
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+
+    @requires_query_selection
+    async def test_strict_behavior_leaves_unfiltered_scan_alone(
+        self, query_selection_cluster,
+    ):
+        # The setting is scoped to where-clause queries: a deliberate bare scan
+        # under the strict default still runs.
+        stream = await (
+            query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+            .execute()
+        )
+        assert await count_records_async(stream) > 0

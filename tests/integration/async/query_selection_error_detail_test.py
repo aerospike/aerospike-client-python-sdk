@@ -54,5 +54,5 @@ class TestQuerySelectionErrorDetail:
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-        # The rejection carries no refining sub_code (JSDK: SubCode.NONE).
+        # The rejection carries no refining sub_code.
         assert exc_info.value.sub_code in (None, 0)

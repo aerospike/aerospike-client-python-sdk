@@ -109,6 +109,30 @@ async def test_cluster_definition_services_alternate(aerospike_host):
         await cluster.close()
 
 
+async def test_cluster_definition_with_ip_map(aerospike_host):
+    """Test ClusterDefinition with an IP translation map."""
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname = aerospike_host
+        port = 3000
+
+    # The mapping targets an address the local cluster never advertises, so a
+    # connection still succeeds — translation only rewrites addresses it matches.
+    cluster_def = (
+        apply_general_auth(ClusterDefinition(hostname, port))
+        .using_services_alternate()
+        .with_ip_map({"10.0.0.1": "3.72.54.187"})
+    )
+    cluster = await cluster_def.connect()
+
+    try:
+        assert cluster.is_connected()
+    finally:
+        await cluster.close()
+
+
 async def test_cluster_definition_preferring_racks(aerospike_host, enterprise):
     """Test ClusterDefinition with preferred racks."""
     if not enterprise:
