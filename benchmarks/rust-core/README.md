@@ -11,11 +11,18 @@ of the PyO3 + Python boundary.
 Note: at `aerospike-core` defaults, rust-core async lands around 290K @ t=32
 and shows an apparent plateau as concurrency rises. That plateau is
 **client-side** — two stacked defaults (per-op Tokio timer-wheel registration
-and `max_conns_per_node = 256`) cap throughput before the cluster does. The
-real cluster ceiling on the reference 3-VM bench is ≥580K @ t=512 with both
+and `max_conns_per_node`) cap throughput before the cluster does. The real
+cluster ceiling on the reference 3-VM bench is ≥580K @ t=512 with both
 addressed (`MAX_CONNS_PER_NODE=512` env knob exposed here; the timer fix lives
 upstream in `aerospike-core`). Don't read these numbers as "cluster capacity"
 without that context.
+
+**Always set `MAX_CONNS_PER_NODE` explicitly when benching concurrency.** An
+unset run inherits the `aerospike-core` default, which is **100** per node —
+lowered from 256 on 2026-07-14 for cross-client parity. Leaving it unset caps
+throughput silently: the pool pins at 100/node and the plateau reads as a
+cluster ceiling. The effective value is echoed on the first output line, so
+every run self-documents its cap; check it before trusting a number.
 
 ## Build
 

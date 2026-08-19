@@ -91,6 +91,15 @@ class SystemSettings:
             .connect()
         )
 
+    Connection-pool sizing is the group most worth setting explicitly. Left
+    unset, the hard defaults are ``min_connections_per_node=0``,
+    ``max_connections_per_node=100``, and ``conn_pools_per_node=1``. The
+    maximum is a fail-fast cap rather than a queue, so a client whose
+    concurrency outgrows it becomes pool-bound -- throughput flattens and
+    latency climbs while the cluster still has headroom. Size it to total
+    client concurrency, not to concurrency divided by node count, since
+    bursts do not spread evenly across nodes.
+
     See Also:
         :class:`TransactionSettings`: The SDK-runtime transaction group.
         :meth:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition.with_system_settings`
