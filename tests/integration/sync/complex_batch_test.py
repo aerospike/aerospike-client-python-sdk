@@ -47,6 +47,27 @@ def session(cluster):
     return cluster.create_session()
 
 
+def _by_key(results):
+    """Index rows by ``(namespace, user key)``.
+
+    Batch rows are matched by key rather than position: a chain's segment order
+    is not a promise about row order. Chains where one key spans several
+    segments cannot use this — the rows are indistinguishable by key — but those
+    run segment by segment, so position is the contract there.
+    """
+    return {(r.key.namespace, r.key.value): r for r in results}
+
+
+def _row(rows, key):
+    """Return the row for *key*, reporting what did come back if it is absent."""
+    ident = (key.namespace, key.value)
+    assert ident in rows, (
+        f"no row for {key.value!r}; returned rows: "
+        + ", ".join(f"{k[1]!r}={v.result_code}" for k, v in rows.items())
+    )
+    return rows[ident]
+
+
 def _cleanup(session, *keys):
     for k in keys:
         try:
@@ -71,10 +92,12 @@ class TestMixedReadWrite:
             .upsert(k2).bin("status").set_to("active")
             .execute()
         ).collect()
-        # Input order preserved: read (k1) first, write (k2) second — and the
-        # read is NOT dropped (the finalize-first fix).
+        # Distinct keys, so rows are matched by key rather than position; the
+        # read must be present at all (the finalize-first fix).
         assert len(results) == 2
-        assert results[0].record.bins["name"] == "Alice"
+        rows = _by_key(results)
+        assert _row(rows, k1).record.bins["name"] == "Alice"
+        assert _row(rows, k2).result_code == ResultCode.OK
 
         r2 = session.query(k2).execute().first_or_raise().record
         assert r2.bins["status"] == "active"
@@ -95,9 +118,10 @@ class TestMixedReadWrite:
             .execute()
         ).collect()
         assert len(results) == 2
-        assert results[0].result_code == ResultCode.OK
+        rows = _by_key(results)
+        assert _row(rows, k1).result_code == ResultCode.OK
 
-        read_result = results[1].record
+        read_result = _row(rows, k2).record
         assert read_result.bins.get("x") == 10
         assert "y" not in read_result.bins
 
@@ -117,7 +141,10 @@ class TestMixedReadWrite:
             .upsert(k2).bin("tag").set_to("written")
             .execute()
         ).collect()
-        assert results[0].record.bins["doubled"] == 100
+        assert len(results) == 2
+        rows = _by_key(results)
+        assert _row(rows, k1).record.bins["doubled"] == 100
+        assert _row(rows, k2).result_code == ResultCode.OK
 
         r2 = session.query(k2).execute().first_or_raise().record
         assert r2.bins["tag"] == "written"
@@ -167,7 +194,11 @@ class TestMixedOpTypes:
             .insert(k).bin("x").set_to(999)
             .execute()
         ).collect()
-        assert results[1].result_code != ResultCode.OK
+        # One key spans both segments, so rows cannot be told apart by key;
+        # such chains run segment by segment, making position the contract.
+        assert len(results) == 2
+        assert results[0].result_code == ResultCode.OK
+        assert results[1].result_code == ResultCode.KEY_EXISTS_ERROR
 
         assert session.query(k).execute().first_or_raise().record.bins["x"] == 1
 
@@ -259,7 +290,10 @@ class TestDeleteInChain:
             .execute()
         ).collect()
         assert len(results) == 3
-        assert results[0].record.bins["name"] == "Alice"
+        rows = _by_key(results)
+        assert _row(rows, k1).record.bins["name"] == "Alice"
+        assert _row(rows, k2).result_code == ResultCode.OK
+        assert _row(rows, k3).result_code == ResultCode.OK
 
         assert session.query(k2).execute().first_or_raise().record.bins["created"] is True
         assert session.query(k3).execute().collect() == []
@@ -304,8 +338,10 @@ class TestPerSpecSettings:
             .ensure_generation_is(gen)
             .execute()
         ).collect()
-        # results[0] = read (OK), results[1] = write (OK)
+        # One key spans both segments, so position is the contract (those
+        # chains run segment by segment): results[0] = read, results[1] = write.
         assert len(results) == 2
+        assert results[0].result_code == ResultCode.OK
         assert results[1].result_code == ResultCode.OK
 
         assert session.query(k).execute().first_or_raise().record.bins["v"] == 2
@@ -326,7 +362,8 @@ class TestPerSpecSettings:
             .ensure_generation_is(999)
             .execute()
         ).collect()
-        # results[0] = read (OK), results[1] = write (generation error)
+        # One key spans both segments, so position is the contract (those
+        # chains run segment by segment): results[0] = read, results[1] = write.
         assert len(results) == 2
         assert results[0].result_code == ResultCode.OK
         assert results[1].result_code == ResultCode.GENERATION_ERROR

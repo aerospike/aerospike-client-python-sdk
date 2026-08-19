@@ -37,6 +37,31 @@ async def session(cluster):
     return cluster.create_session()
 
 
+def _by_key(results):
+    """Index rows by ``(namespace, user key)``.
+
+    Batch rows are matched by key rather than position: a chain's segment order
+    is not a promise about row order, and the invalid-namespace row in
+    particular has moved between versions. The namespace is part of the
+    identity because a valid and an invalid key can share a user key.
+
+    Chains where one key spans several segments cannot use this — the rows are
+    indistinguishable by key — but those run segment by segment, so position is
+    the contract there.
+    """
+    return {(r.key.namespace, r.key.value): r for r in results}
+
+
+def _row(rows, key):
+    """Return the row for *key*, reporting what did come back if it is absent."""
+    ident = (key.namespace, key.value)
+    assert ident in rows, (
+        f"no row for {key.value!r}; returned rows: "
+        + ", ".join(f"{k[1]!r}={v.result_code}" for k, v in rows.items())
+    )
+    return rows[ident]
+
+
 async def _cleanup(session, *keys):
     for k in keys:
         try:
@@ -63,9 +88,9 @@ class TestMixedReadWrite:
         )
         results = await rs.collect()
         assert len(results) == 2
-
-        r1 = results[0].record
-        assert r1.bins["name"] == "Alice"
+        rows = _by_key(results)
+        assert _row(rows, k1).record.bins["name"] == "Alice"
+        assert _row(rows, k2).result_code == ResultCode.OK
 
         r2_result = await (await session.query(k2).execute()).first_or_raise()
         r2 = r2_result.record
@@ -88,11 +113,10 @@ class TestMixedReadWrite:
         )
         results = await rs.collect()
         assert len(results) == 2
+        rows = _by_key(results)
+        assert _row(rows, k1).result_code == ResultCode.OK
 
-        upsert_result = results[0]
-        assert upsert_result.result_code == ResultCode.OK
-
-        read_result = results[1].record
+        read_result = _row(rows, k2).record
         assert read_result.bins.get("x") == 10
         assert "y" not in read_result.bins
 
@@ -113,8 +137,11 @@ class TestMixedReadWrite:
             .execute()
         )
         results = await rs.collect()
+        assert len(results) == 2
+        rows = _by_key(results)
+        assert _row(rows, k2).result_code == ResultCode.OK
 
-        read_result = results[0].record
+        read_result = _row(rows, k1).record
         assert read_result.bins["doubled"] == 100
 
         r2_result = await (await session.query(k2).execute()).first_or_raise()
@@ -175,9 +202,11 @@ class TestMixedOpTypes:
             .execute()
         )
         results = await rs.collect()
-
-        write_result = results[1]
-        assert write_result.result_code != ResultCode.OK
+        # One key spans both segments, so rows cannot be told apart by key;
+        # such chains run segment by segment, making position the contract.
+        assert len(results) == 2
+        assert results[0].result_code == ResultCode.OK
+        assert results[1].result_code == ResultCode.KEY_EXISTS_ERROR
 
         rec_result = await (await session.query(k).execute()).first_or_raise()
         rec = rec_result.record
@@ -287,8 +316,10 @@ class TestDeleteInChain:
         )
         results = await rs.collect()
         assert len(results) == 3
-
-        assert results[0].record.bins["name"] == "Alice"
+        rows = _by_key(results)
+        assert _row(rows, k1).record.bins["name"] == "Alice"
+        assert _row(rows, k2).result_code == ResultCode.OK
+        assert _row(rows, k3).result_code == ResultCode.OK
 
         r2_result = await (await session.query(k2).execute()).first_or_raise()
         r2 = r2_result.record
@@ -344,8 +375,10 @@ class TestPerSpecSettings:
             .execute()
         )
         results = await rs.collect()
-        # results[0] = read (OK), results[1] = write (OK)
+        # One key spans both segments, so position is the contract (such chains
+        # run segment by segment): results[0] = read, results[1] = write.
         assert len(results) == 2
+        assert results[0].result_code == ResultCode.OK
         assert results[1].result_code == ResultCode.OK
 
         rec2_result = await (await session.query(k).execute()).first_or_raise()
@@ -369,7 +402,8 @@ class TestPerSpecSettings:
             .execute()
         )
         results = await rs.collect()
-        # results[0] = read (OK), results[1] = write (generation error)
+        # One key spans both segments, so position is the contract (such chains
+        # run segment by segment): results[0] = read, results[1] = write.
         assert len(results) == 2
         assert results[0].result_code == ResultCode.OK
         assert results[1].result_code == ResultCode.GENERATION_ERROR
@@ -550,22 +584,24 @@ class TestBatchReadComplex:
         )
         results = await rs.collect()
 
-        assert results[0].record.bins[BIN_NAME] == f"{VALUE_PREFIX}1"
-        assert len(results[0].record.bins) == 1
+        # Missing key omitted → 6 rows, each matched to the key that asked for it.
+        assert len(results) == 6
+        rows = _by_key(results)
 
-        assert results[1].record.bins[BIN_NAME] == f"{VALUE_PREFIX}2"
+        assert _row(rows, k1).record.bins[BIN_NAME] == f"{VALUE_PREFIX}1"
+        assert len(_row(rows, k1).record.bins) == 1
 
-        assert results[2].record.bins == {} or not results[2].record.bins
+        assert _row(rows, k2).record.bins[BIN_NAME] == f"{VALUE_PREFIX}2"
 
-        assert results[3].record.bins[BIN_NAME] == f"{VALUE_PREFIX}4"
+        no_bins = _row(rows, k3).record.bins
+        assert no_bins == {} or not no_bins
+
+        assert _row(rows, k4).record.bins[BIN_NAME] == f"{VALUE_PREFIX}4"
 
         # Expression: $.bbin * 8 on key 6 (bbin=6) → 48
-        assert results[4].record.bins[BIN_NAME] == 48
+        assert _row(rows, k6).record.bins[BIN_NAME] == 48
 
-        assert results[5].record.bins.get(BIN_NAME) is None
-
-        # Missing key omitted → 6 results
-        assert len(results) == 6
+        assert _row(rows, k7).record.bins.get(BIN_NAME) is None
 
     async def test_batch_read_complex_include_missing_keys(self, session, ds, seed_data):
         """Missing key appears when include_missing_keys is set."""
@@ -581,8 +617,9 @@ class TestBatchReadComplex:
         )
         results = await rs.collect()
         assert len(results) == 2
-        assert results[0].result_code == ResultCode.OK
-        assert results[1].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        rows = _by_key(results)
+        assert _row(rows, k1).result_code == ResultCode.OK
+        assert _row(rows, k_missing).result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
 
 class TestBatchReadGuards:
@@ -667,9 +704,12 @@ class TestBatchWriteComplex:
         )
         results = await rs.collect()
 
-        assert results[0].result_code == ResultCode.OK
-        assert results[1].result_code == ResultCode.INVALID_NAMESPACE
-        assert results[2].result_code == ResultCode.OK
+        assert len(results) == 4
+        rows = _by_key(results)
+        assert _row(rows, k1).result_code == ResultCode.OK
+        assert _row(rows, k_invalid).result_code == ResultCode.INVALID_NAMESPACE
+        assert _row(rows, k6).result_code == ResultCode.OK
+        assert _row(rows, k_del).result_code == ResultCode.OK
 
         # Verify by reading back
         rs2 = await (
@@ -682,9 +722,11 @@ class TestBatchWriteComplex:
         )
         verify = await rs2.collect()
 
-        assert verify[0].record.bins[BIN_NAME2] == 100
-        assert verify[1].record.bins[BIN_NAME3] == 1006
-        assert verify[2].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        assert len(verify) == 3
+        read = _by_key(verify)
+        assert _row(read, k1).record.bins[BIN_NAME2] == 100
+        assert _row(read, k6).record.bins[BIN_NAME3] == 1006
+        assert _row(read, k_del).result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_batch_write_invalid_namespace(self, session, ds, seed_data):
         """A chain targeting an invalid namespace embeds the error in the
@@ -702,8 +744,9 @@ class TestBatchWriteComplex:
         )
         results = await rs.collect()
         assert len(results) == 2
-        errors = [r for r in results if not r.is_ok]
-        assert len(errors) >= 1
+        rows = _by_key(results)
+        assert _row(rows, k1).result_code == ResultCode.OK
+        assert _row(rows, k_invalid).result_code == ResultCode.INVALID_NAMESPACE
 
     async def test_batch_write_delete_nonexistent(self, session, ds, seed_data):
         """Delete of a nonexistent key in a write chain."""
@@ -718,7 +761,11 @@ class TestBatchWriteComplex:
         )
         results = await rs.collect()
 
-        assert results[0].result_code == ResultCode.OK
+        assert len(results) == 2
+        rows = _by_key(results)
+        assert _row(rows, k_good).result_code == ResultCode.OK
+        # The delete names a key it expects to exist, so its row reports too.
+        assert _row(rows, k_gone).result_code == ResultCode.KEY_NOT_FOUND_ERROR
         rec_result = await (await session.query(k_good).execute()).first_or_raise()
         rec = rec_result.record
         assert rec.bins[BIN_NAME2] == 200
