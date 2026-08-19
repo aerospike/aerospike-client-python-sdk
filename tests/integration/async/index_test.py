@@ -172,7 +172,7 @@ async def test_create_duplicate_index_fails(cluster):
         pass
 
 
-async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index):
+async def test_create_index_with_cdt_context(cluster, enterprise):
     """Create a numeric index on a nested map element via chainable .context()."""
     index_name = "test_ctx_idx"
     bin_name = "payload"
@@ -198,7 +198,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
         .execute()
     )
 
-    await (
+    index_task = await (
         cluster.create_session().index(general_namespace(), "test")
         .on_bin(bin_name)
         .named(index_name)
@@ -206,9 +206,10 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
         .context([CTX.map_key("inner")])
         .create()
     )
+    # The build task is authoritative; a query probe only infers readiness.
+    await index_task.wait_till_complete()
 
     flt = Filter.equal(bin_name, 10).context([CTX.map_key("inner")])
-    await wait_for_index(cluster, general_namespace(), "test", flt)
 
     try:
         stream = await session.query(general_namespace(), "test").filter(flt).bins([bin_name]).execute()
@@ -229,7 +230,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
             pass
 
 
-async def test_create_expression_index_and_query(cluster, server_version, wait_for_index):
+async def test_create_expression_index_and_query(cluster, server_version):
     """Create an expression-based index, list it, query through it, drop it."""
     if server_version is None or server_version < (8, 1, 2, 0):
         pytest.skip("expression-based indexes require server 8.1.2+")
@@ -251,13 +252,15 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
 
     expr = Exp.int_bin("age")
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_expression(expr)
             .named(index_name)
             .numeric()
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         listed = [i for i in await session.list_indexes() if i["name"] == index_name]
         assert listed, "expression index not visible in list_indexes"
@@ -265,7 +268,6 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
         assert listed[0]["set"] == set_name
 
         flt = Filter.range("age", 31, 33).expression(expr)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["age"]).execute()
         ages = sorted(
@@ -282,7 +284,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
         i["name"] == index_name for i in await session.list_indexes()
     ), "expression index still listed after drop"
 
-async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_for_index):
+async def test_create_blob_index_and_query(cluster, supports_blob_index):
     """Create a blob index on a bytes bin, query through it, drop it."""
     if not supports_blob_index:
         pytest.skip("blob secondary indexes require server 7.0+")
@@ -306,16 +308,17 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         await session.upsert(k).put({"payload": blob}).execute()
 
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_bin("payload")
             .named(index_name)
             .blob()
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         flt = Filter.equal("payload", needle)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payload"]).execute()
         matches = [r.record.bins["payload"] async for r in stream if r.is_ok and r.record]
@@ -327,7 +330,7 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         except Exception:
             pass
 
-async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index, wait_for_index):
+async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index):
     """Blob index over LIST collection elements: create, query via contains, drop."""
     if not supports_blob_index:
         pytest.skip("blob secondary indexes require server 7.0+")
@@ -355,7 +358,7 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
         await session.upsert(k).put({"payloads": blobs}).execute()
 
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_bin("payloads")
             .named(index_name)
@@ -363,9 +366,10 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
             .collection(CollectionIndexType.LIST)
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         flt = Filter.contains("payloads", needle, CollectionIndexType.LIST)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payloads"]).execute()
         matches = [r.record.bins["payloads"] async for r in stream if r.is_ok and r.record]

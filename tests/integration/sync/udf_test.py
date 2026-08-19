@@ -42,7 +42,7 @@ MODULE = "record_example"
 
 def _wait_task(cluster, task) -> bool:
     """Wait for ``task`` synchronously via PAC's blocking sibling."""
-    return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+    return task.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
 
 
 @pytest.fixture(scope="module")
@@ -123,18 +123,18 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     try:
         try:
             rm = cluster.remove_udf(path)
-            rm.wait_till_complete_blocking(sleep_time=0.1, max_attempts=20)
+            rm.wait_till_complete_blocking(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         reg = cluster.register_udf(body, path, UDFLang.LUA)
-        assert reg.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+        assert reg.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
 
         session = cluster.create_session()
         assert any(m["name"] == path for m in session.list_udf())
 
         rm = session.remove_udf(path)
-        assert rm.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+        assert rm.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
         assert not any(m["name"] == path for m in cluster.list_udf())
     finally:
         cluster.close()

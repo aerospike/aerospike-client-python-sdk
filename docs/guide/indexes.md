@@ -9,14 +9,19 @@ with AEL `.where()` on clusters that support query selection (field 44).
 ```python
 users = DataSet.of("test", "users")
 
-# Numeric index
-await (
+# Numeric index. create() returns an IndexTask: the server builds the index
+# asynchronously, so wait on it before querying through the index.
+task = await (
     session.index(dataset=users)
     .on_bin("age")
     .named("users_age_idx")
     .numeric()
     .create()
 )
+await task.wait_till_complete()
+
+# Every create() below returns the same kind of task; the waits are omitted
+# here for brevity. See "Waiting for a build".
 
 # String index
 await (
@@ -93,10 +98,28 @@ stream = await session.query(users).filter(flt).execute()
 `context()` is not supported with expression indexes — encode CDT
 navigation inside the expression instead.
 
+## Waiting for an index to build
+
+`create()` returns as soon as the server accepts the request; the index is built
+in the background. Querying through an index that is still building can miss
+records that are already written, so wait on the returned task first:
+
+```python
+task = await session.index(dataset=users).on_bin("age").named("users_age_idx").numeric().create()
+await task.wait_till_complete()          # raises TimeoutError past the budget
+await task.wait_till_complete(timeout=None)   # or wait indefinitely
+```
+
+The synchronous builder returns the same task; call
+`wait_till_complete_blocking()` on it. `wait_till_complete` takes a `timeout` in
+seconds (default 60) and raises `TimeoutError` if the build has not finished by
+then — pass `timeout=None` to wait as long as it takes.
+
 ## Dropping Indexes
 
 ```python
-await session.index(dataset=users).named("users_age_idx").drop()
+task = await session.index(dataset=users).named("users_age_idx").drop()
+await task.wait_till_complete()
 ```
 
 ## Listing Indexes

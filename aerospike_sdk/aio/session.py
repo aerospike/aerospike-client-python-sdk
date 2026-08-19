@@ -580,7 +580,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 .where("$.flag == 1")
                 .execute()
             )
-            await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+            await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         See Also:
             :meth:`execute_udf`: Foreground UDF on explicit keys.

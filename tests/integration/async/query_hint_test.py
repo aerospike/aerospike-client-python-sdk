@@ -34,7 +34,7 @@ INDEX_NAME = "pfc_qhint_age_idx"
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(
     aerospike_host, make_cluster_definition, enterprise,
-    wait_for_index, wait_for_set_visible,
+    wait_for_set_visible,
 ):
     """Setup cluster, data, and a secondary index for hint tests."""
     cluster_def = make_cluster_definition(aerospike_host)
@@ -62,7 +62,7 @@ async def cluster(
         await wait_for_set_visible(session, general_namespace(), SET_NAME, 10)
 
         try:
-            await (
+            index_task = await (
                 session.index(general_namespace(), SET_NAME)
                 .on_bin("age")
                 .named(INDEX_NAME)
@@ -70,9 +70,12 @@ async def cluster(
                 .create()
             )
         except Exception:
-            pass
+            # Already present from an earlier run, so its build is long done and
+            # there is no task to wait on.
+            index_task = None
 
-        await wait_for_index(c, general_namespace(), SET_NAME, Filter.range("age", 20, 29))
+        if index_task is not None:
+            await index_task.wait_till_complete()
 
         yield c
 

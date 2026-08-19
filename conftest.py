@@ -553,52 +553,6 @@ async def enterprise_sc(aerospike_host_sc, client_policy_sc):
 
 
 @pytest.fixture(scope="session")
-def wait_for_index():
-    """Return an async helper that retries until a secondary index is queryable.
-
-    Session-scoped so module-scoped integration clients may depend on it without
-    a pytest scope mismatch.
-
-    Usage::
-
-        await wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
-    """
-    async def _wait(
-        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
-    ):
-        # Server-side SI readiness is not monotonic right after create/drop —
-        # a single successful probe can be followed by a brief IndexNotReadable
-        # window. Require `stable` consecutive readable probes so the very next
-        # query in the test does not race that flicker.
-        deadline = time.monotonic() + timeout
-        last_err = None
-        hits = 0
-        session = client.create_session()
-        while time.monotonic() < deadline:
-            try:
-                stream = await session.query(ns, set_name).filter(sindex_filter).execute()
-                async for _ in stream:
-                    break
-                stream.close()
-                hits += 1
-                if hits >= stable:
-                    return
-                await asyncio.sleep(interval)
-            except Exception as exc:
-                # IndexNotReadable (203) = registered but still building;
-                # IndexNotFound (201) = the create has not yet registered on
-                # this node. Both are transient just after create_index — retry.
-                if not any(s in str(exc) for s in ("IndexNotReadable", "IndexNotFound")):
-                    raise
-                hits = 0  # a flicker resets the streak
-                last_err = exc
-                await asyncio.sleep(interval)
-        raise last_err  # type: ignore[misc]
-
-    return _wait
-
-
-@pytest.fixture(scope="session")
 def wait_for_set_visible():
     """Return an async helper that polls a set scan until exactly ``expected`` records are visible.
 
@@ -675,49 +629,6 @@ def sync_wait_for_set_visible():
             f"{ns}.{set_name}: expected exactly {expected} records visible to set scan, "
             f"last saw {last_seen} within {timeout}s"
         )
-
-    return _wait
-
-
-@pytest.fixture(scope="session")
-def sync_wait_for_index():
-    """Fixture returning a sync helper that retries until a secondary index is queryable.
-
-    Session-scoped so module- or session-scoped integration clients may depend on
-    it without a pytest scope mismatch.
-
-    Usage::
-
-        sync_wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
-    """
-    def _wait(
-        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
-    ):
-        # Server-side SI readiness is not monotonic right after create/drop —
-        # a single successful probe can be followed by a brief IndexNotReadable
-        # window. Require `stable` consecutive readable probes so the very next
-        # query in the test does not race that flicker.
-        deadline = time.monotonic() + timeout
-        last_err = None
-        hits = 0
-        session = client.create_session()
-        while time.monotonic() < deadline:
-            try:
-                stream = session.query(ns, set_name).filter(sindex_filter).execute()
-                for _ in stream:
-                    break
-                stream.close()
-                hits += 1
-                if hits >= stable:
-                    return
-                time.sleep(interval)
-            except Exception as exc:
-                if "IndexNotReadable" not in str(exc):
-                    raise
-                hits = 0  # a flicker resets the streak
-                last_err = exc
-                time.sleep(interval)
-        raise last_err  # type: ignore[misc]
 
     return _wait
 

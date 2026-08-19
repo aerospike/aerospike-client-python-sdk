@@ -23,7 +23,7 @@ digest → partition assignments.
 
 from collections import Counter
 
-from aerospike_sdk import DataSet, Filter
+from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
@@ -203,9 +203,7 @@ async def test_on_partition_with_limit_and_chunking_stops_at_limit(cluster):
 
 
 @requires_server_compiled_ael
-async def test_on_partition_range_with_where_returns_matching_subset(
-    cluster, wait_for_index,
-):
+async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     """A filter expression and a partition range compose: exactly their intersection."""
     session = cluster.create_session()
     ds = DataSet.of(general_namespace(), PART_SET)
@@ -217,11 +215,12 @@ async def test_on_partition_range_with_where_returns_matching_subset(
     # first: a run killed before its teardown leaves the index behind, and
     # creating an index that already exists fails.
     await _drop_index_quiet(session, ds)
-    await session.index(dataset=ds).on_bin("v").named(V_INDEX).numeric().create()
+    index_task = await (
+        session.index(dataset=ds).on_bin("v").named(V_INDEX).numeric().create()
+    )
     try:
-        await wait_for_index(
-            cluster, general_namespace(), PART_SET, Filter.range("v", 0, NUM_KEYS),
-        )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         start, end = 0, 2048
         threshold = 100

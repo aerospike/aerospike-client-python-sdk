@@ -15,7 +15,6 @@ from aerospike_sdk import (
     Behavior,
     ClusterDefinition,
     DataSet,
-    Filter,
 )
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
@@ -91,11 +90,11 @@ def doc_sync_cluster(make_cluster_definition):
 
 @requires_server_compiled_ael
 @pytest.mark.asyncio(loop_scope="session")
-async def test_quick_example_async(session, doc_cluster, wait_for_index):
+async def test_quick_example_async(session):
     """docs/index.md — Quick Example (async tab)."""
     key = USERS.id("qe_async")
     await _drop_index_quiet(session, QUICK_EXAMPLE_INDEX)
-    await (
+    index_task = await (
         session.index(dataset=USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
@@ -103,11 +102,10 @@ async def test_quick_example_async(session, doc_cluster, wait_for_index):
         .create()
     )
     try:
-        # create() returns before the build finishes, so the filtered query
-        # below would race a still-building index.
-        await wait_for_index(
-            doc_cluster, USERS.namespace, USERS.set_name, Filter.range("age", 0, 100),
-        )
+        # create() returns before the build finishes; the task reports when the
+        # server has actually built the index, so the filtered query below
+        # cannot race it.
+        await index_task.wait_till_complete()
 
         await (
             session.upsert(key)
@@ -140,13 +138,13 @@ async def test_quick_example_async(session, doc_cluster, wait_for_index):
 # ------------------------------------------------------------------
 
 @requires_server_compiled_ael
-def test_quick_example_sync(doc_sync_cluster, sync_wait_for_index):
+def test_quick_example_sync(doc_sync_cluster):
     """docs/index.md — Quick Example (sync tab)."""
     s = doc_sync_cluster.create_session(Behavior.DEFAULT)
     key = USERS.id("qe_sync")
 
     _drop_index_quiet_sync(s, QUICK_EXAMPLE_INDEX)
-    (
+    index_task = (
         s.index(dataset=USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
@@ -154,12 +152,9 @@ def test_quick_example_sync(doc_sync_cluster, sync_wait_for_index):
         .create()
     )
     try:
-        # create() returns before the build finishes, so the filtered query
-        # below would race a still-building index.
-        sync_wait_for_index(
-            doc_sync_cluster, USERS.namespace, USERS.set_name,
-            Filter.range("age", 0, 100),
-        )
+        # create() returns before the build finishes; the task reports when the
+        # server has actually built the index.
+        index_task.wait_till_complete_blocking()
 
         s.upsert(key).bin("name").set_to("Alice").bin("age").set_to(30).execute()
 

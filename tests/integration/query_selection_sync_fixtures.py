@@ -28,7 +28,6 @@ from tests.integration.query_selection_seed import (
 def query_selection_cluster(
     aerospike_host,
     make_cluster_definition,
-    sync_wait_for_index,
     sync_wait_for_set_visible,
 ):
     """One connect + seed for all sync query-selection integration modules.
@@ -42,7 +41,7 @@ def query_selection_cluster(
         skip_if_lacks_query_selection(client)
         session = cluster.create_session()
         seed_query_selection_sync(
-            client, session, sync_wait_for_index, sync_wait_for_set_visible,
+            client, session, sync_wait_for_set_visible,
         )
         state = QuerySelectionClusterState(client=client, session=session)
         yield state

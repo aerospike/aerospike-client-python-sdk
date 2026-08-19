@@ -46,15 +46,15 @@ async def cluster_with_udf(aerospike_host, make_cluster_definition):
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
         yield c
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
@@ -449,13 +449,13 @@ async def test_list_udf(aerospike_host, make_cluster_definition):
             body = f.read()
         try:
             rm = await session.remove_udf(path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         assert not any(m["name"] == path for m in await session.list_udf())
 
         task = await session.register_udf(body, path, UDFLang.LUA)
-        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         mine = [m for m in await session.list_udf() if m["name"] == path]
         assert mine, "module not listed after register"
@@ -465,7 +465,7 @@ async def test_list_udf(aerospike_host, make_cluster_definition):
         assert set(entry) == {"name", "hash", "type"}
 
         rm = await session.remove_udf(path)
-        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         assert not any(m["name"] == path for m in await session.list_udf())
 
 
@@ -483,17 +483,17 @@ async def test_register_udf_from_resource(aerospike_host, make_cluster_definitio
         server_path = "psdk_resource_probe.lua"
         try:
             rm = await session.remove_udf(server_path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         task = await session.register_udf_from_resource(
             "psdk_udf_resource_pkg", "probe.lua", server_path)
-        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
         assert any(m["name"] == server_path for m in await session.list_udf())
 
         rm = await session.remove_udf(server_path)
-        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         assert not any(m["name"] == server_path for m in await session.list_udf())
 
 
@@ -514,18 +514,18 @@ async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     try:
         try:
             rm = await cluster.remove_udf(path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         reg = await cluster.register_udf(body, path, UDFLang.LUA)
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         session = cluster.create_session()
         assert any(m["name"] == path for m in await session.list_udf())
 
         rm = await session.remove_udf(path)
-        assert await rm.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await rm.wait_till_complete(sleep_time=0.2, timeout=10.0)
         assert not any(m["name"] == path for m in await cluster.list_udf())
     finally:
         await cluster.close()
@@ -623,17 +623,17 @@ async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         reg = await udf_session.register_udf_from_file(
             SLEEP_LUA_FILE, SLEEP_SERVER_PATH, UDFLang.LUA
         )
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
         yield c
         try:
             rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 

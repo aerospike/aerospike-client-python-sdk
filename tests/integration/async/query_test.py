@@ -203,13 +203,18 @@ async def test_query_builder_chaining(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_range_filter(cluster, session, enterprise, wait_for_index):
+async def test_query_with_range_filter(cluster, session, enterprise):
     """Test query with range filter (requires index)."""
     try:
-        await session.index(general_namespace(), "query_test").on_bin("age").named("age_idx").numeric().create()
+        index_task = await (
+            session.index(general_namespace(), "query_test")
+            .on_bin("age").named("age_idx").numeric().create()
+        )
     except Exception:
-        pass
-    await wait_for_index(cluster, general_namespace(), "query_test", Filter.range("age", 22, 26))
+        # Already present from an earlier test: its build is done, no task to await.
+        index_task = None
+    if index_task is not None:
+        await index_task.wait_till_complete()
 
     try:
         stream = await (
@@ -280,13 +285,18 @@ async def test_query_with_filter_expression(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_and_filter_expression(cluster, session, enterprise, wait_for_index):
+async def test_query_with_filter_and_filter_expression(cluster, session, enterprise):
     """Test query with both Filter (secondary index) and Exp (FilterExpression)."""
     try:
-        await session.index(general_namespace(), "query_test").on_bin("age").named("age_idx").numeric().create()
+        index_task = await (
+            session.index(general_namespace(), "query_test")
+            .on_bin("age").named("age_idx").numeric().create()
+        )
     except Exception:
-        pass
-    await wait_for_index(cluster, general_namespace(), "query_test", Filter.range("age", 20, 30))
+        # Already present from an earlier test: its build is done, no task to await.
+        index_task = None
+    if index_task is not None:
+        await index_task.wait_till_complete()
 
     filter_exp = Exp.eq(Exp.string_bin("name"), Exp.string_val("User5"))
 

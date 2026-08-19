@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from aerospike_async import DropIndexTask, IndexTask
+
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
 
@@ -54,8 +56,16 @@ class IndexBuilder(_IndexBuilderBase):
         super().__init__(namespace, set_name)
         self._async_client = async_client
 
-    def create(self) -> None:
-        """Create the index (blocks until the admin call completes).
+    def create(self) -> IndexTask:
+        """Create the index (blocks until the admin call is accepted).
+
+        The call returns once the server accepts the request; the build itself
+        continues in the background, so wait on the returned task before
+        querying through the index.
+
+        Returns:
+            An ``IndexTask``. Call ``wait_till_complete_blocking()`` before
+            querying through the index.
 
         Raises:
             ValueError: Same validation as async :meth:`~aerospike_sdk.aio.operations.index.IndexBuilder.create`.
@@ -64,7 +74,7 @@ class IndexBuilder(_IndexBuilderBase):
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create()
             try:
-                self._async_client._async_client.create_index_using_expression_blocking(
+                return self._async_client._async_client.create_index_using_expression_blocking(
                     self._namespace,
                     self._set_name,
                     index_name,
@@ -74,7 +84,6 @@ class IndexBuilder(_IndexBuilderBase):
                 )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
-            return
         if not self._bin_name:
             raise ValueError("bin_name is required. Call on_bin() first.")
         if not self._index_name:
@@ -84,7 +93,7 @@ class IndexBuilder(_IndexBuilderBase):
                 "index_type is required. "
                 "Call numeric(), string(), blob(), or geo2dsphere() first.")
         try:
-            self._async_client._async_client.create_index_blocking(
+            return self._async_client._async_client.create_index_blocking(
                 self._namespace,
                 self._set_name,
                 self._bin_name,
@@ -96,8 +105,11 @@ class IndexBuilder(_IndexBuilderBase):
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
-    def drop(self) -> None:
-        """Drop the index (blocks until the admin call completes).
+    def drop(self) -> DropIndexTask:
+        """Drop the index (blocks until the admin call is accepted).
+
+        Returns:
+            A ``DropIndexTask`` tracking the server-side removal.
 
         Raises:
             ValueError: If the index name was not set via :meth:`named`.
@@ -106,7 +118,7 @@ class IndexBuilder(_IndexBuilderBase):
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
         try:
-            self._async_client._async_client.drop_index_blocking(
+            return self._async_client._async_client.drop_index_blocking(
                 self._namespace, self._set_name, self._index_name,
             )
         except Exception as e:

@@ -10,17 +10,28 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""One-time seed/teardown for query-selection integration datasets (four suites)."""
+"""One-time seed/teardown for query-selection integration datasets (four suites).
+
+The datasets are declared as data — rows and index definitions — and walked by
+one small driver per runtime. Only the driver is written twice, so the thing
+that must not drift between the async and blocking suites (what gets seeded)
+exists once.
+
+Index readiness needs no polling here: ``create_index_quiet_*`` waits on the
+server's build task, so an index is queryable by the time the call returns.
+Row visibility is a separate concern and still uses ``wait_for_set_visible``,
+because a scan can lag the writes that produced the rows.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from typing import Any, Awaitable
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 from aerospike_async import IndexType
 
-from aerospike_sdk import CollectionIndexType, DataSet, Filter
+from aerospike_sdk import CollectionIndexType, DataSet
 
 from tests.integration.query_selection_helpers import (
     BIN_AGE,
@@ -65,244 +76,118 @@ from tests.integration.query_selection_helpers import (
 _QUERY_SELECTION_SETS = (SET_NAME, SCOPE_SET_NAME, HINT_SET_NAME, CDT_SET_NAME)
 
 
+# ---------------------------------------------------------------------------
+# What the four datasets contain
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
-class _IndexDropSpec:
+class _IndexSpec:
+    bin_name: str
+    index_name: str
+    index_type: IndexType
+    collection_type: CollectionIndexType | None = None
+
+
+@dataclass(frozen=True)
+class _SetSeed:
+    """One set's rows and indexes.
+
+    ``indexes_before_rows`` preserves each dataset's original order. It is not
+    cosmetic: an index created first indexes each row as it is written, while an
+    index created afterwards has to build against rows that already exist.
+    """
+
     set_name: str
-    index_names: tuple[str, ...]
+    indexes: tuple[_IndexSpec, ...]
+    rows: tuple[tuple[str, dict[str, Any]], ...]
+    indexes_before_rows: bool = True
+    expected_visible: int | None = field(default=None)
+
+    def visible_count(self) -> int:
+        return len(self.rows) if self.expected_visible is None else self.expected_visible
 
 
-_QUERY_SELECTION_INDEX_DROPS: tuple[_IndexDropSpec, ...] = (
-    _IndexDropSpec(SET_NAME, (INDEX_NAME, SCORE_INDEX_NAME)),
-    _IndexDropSpec(SCOPE_SET_NAME, (SCOPE_INT_INDEX, SCOPE_BLOB_INDEX, SCOPE_MAP_INDEX)),
-    _IndexDropSpec(HINT_SET_NAME, (HINT_INDEX_NAME, HINT_SCORE_INDEX_NAME)),
-    _IndexDropSpec(CDT_SET_NAME, (CDT_MAP_INDEX, CDT_LIST_INDEX)),
+_QSEL = _SetSeed(
+    set_name=SET_NAME,
+    indexes=(
+        _IndexSpec(BIN_AGE, INDEX_NAME, IndexType.NUMERIC),
+        _IndexSpec(BIN_SCORE, SCORE_INDEX_NAME, IndexType.NUMERIC),
+    ),
+    rows=tuple(
+        (
+            key_name(i),
+            {BIN_AGE: i, BIN_SCORE: i, BIN_COUNTRY: "US" if i % 2 == 0 else "CA"},
+        )
+        for i in range(1, SIZE + 1)
+    ),
+    indexes_before_rows=False,
 )
 
-
-@dataclass(frozen=True)
-class _SeedOps:
-    """Async/sync seed helpers selected by ``async_mode``."""
-
-    client: Any
-    session: Any
-    pac: Any
-    wait_for_index: Callable[..., Any]
-    wait_for_set_visible: Callable[..., Any]
-    create_index: Callable[..., Any]
-    async_mode: bool
-
-
-def _truncate_steps(session: Any, *, async_mode: bool) -> Iterator[Awaitable[Any] | None]:
-    for set_name in _QUERY_SELECTION_SETS:
-        if async_mode:
-            yield session.truncate(DataSet.of(NS, set_name))
-        else:
-            session.truncate(DataSet.of(NS, set_name))
-            yield None
-
-
-def _drop_index_steps(client: Any, *, async_mode: bool) -> Iterator[Awaitable[Any] | None]:
-    for spec in _QUERY_SELECTION_INDEX_DROPS:
-        for index_name in spec.index_names:
-            if async_mode:
-                yield drop_index_quiet_async(client, NS, spec.set_name, index_name)
-            else:
-                drop_index_quiet_blocking(client, NS, spec.set_name, index_name)
-                yield None
-
-
-def _upsert(
-    ops: _SeedOps, ds: DataSet, key_id: str, bins: dict[str, Any],
-) -> Awaitable[Any] | None:
-    chain = ops.session.upsert(ds.id(key_id)).put(bins)
-    if ops.async_mode:
-        return chain.execute()
-    chain.execute()
-    return None
-
-
-def _create_idx(
-    ops: _SeedOps,
-    *,
-    set_name: str,
-    bin_name: str,
-    index_name: str,
-    index_type: IndexType,
-    collection_type: CollectionIndexType | None = None,
-) -> Awaitable[Any] | None:
-    kwargs: dict[str, Any] = {
-        "set_name": set_name,
-        "bin_name": bin_name,
-        "index_name": index_name,
-        "index_type": index_type,
-    }
-    if collection_type is not None:
-        kwargs["collection_type"] = collection_type
-    if ops.async_mode:
-        return ops.create_index(ops.pac, **kwargs)
-    ops.create_index(ops.pac, **kwargs)
-    return None
-
-
-def _wait_set_visible(
-    ops: _SeedOps, set_name: str, expected: int,
-) -> Awaitable[Any] | None:
-    if ops.async_mode:
-        return ops.wait_for_set_visible(ops.session, NS, set_name, expected)
-    ops.wait_for_set_visible(ops.session, NS, set_name, expected)
-    return None
-
-
-def _wait_index(
-    ops: _SeedOps, set_name: str, sindex_filter: Filter,
-) -> Awaitable[Any] | None:
-    if ops.async_mode:
-        return ops.wait_for_index(ops.client, NS, set_name, sindex_filter)
-    ops.wait_for_index(ops.client, NS, set_name, sindex_filter)
-    return None
-
-
-def _seed_qsel_steps(ops: _SeedOps) -> Iterator[Awaitable[Any] | None]:
-    ds = DataSet.of(NS, SET_NAME)
-    for i in range(1, SIZE + 1):
-        country = "US" if i % 2 == 0 else "CA"
-        yield _upsert(
-            ops, ds, key_name(i),
-            {BIN_AGE: i, BIN_SCORE: i, BIN_COUNTRY: country},
-        )
-    yield _wait_set_visible(ops, SET_NAME, SIZE)
-    yield _create_idx(
-        ops, set_name=SET_NAME, bin_name=BIN_AGE,
-        index_name=INDEX_NAME, index_type=IndexType.NUMERIC,
-    )
-    yield _create_idx(
-        ops, set_name=SET_NAME, bin_name=BIN_SCORE,
-        index_name=SCORE_INDEX_NAME, index_type=IndexType.NUMERIC,
-    )
-    yield _wait_index(ops, SET_NAME, Filter.range(BIN_AGE, 1, SIZE))
-    yield _wait_index(ops, SET_NAME, Filter.range(BIN_SCORE, 1, SIZE))
-
-
-def _seed_qscexp_steps(ops: _SeedOps) -> Iterator[Awaitable[Any] | None]:
-    ds = DataSet.of(NS, SCOPE_SET_NAME)
-    yield _create_idx(
-        ops, set_name=SCOPE_SET_NAME, bin_name=SCOPE_AGE_BIN,
-        index_name=SCOPE_INT_INDEX, index_type=IndexType.NUMERIC,
-    )
-    yield _create_idx(
-        ops, set_name=SCOPE_SET_NAME, bin_name=SCOPE_BLOB_BIN,
-        index_name=SCOPE_BLOB_INDEX, index_type=IndexType.BLOB,
-    )
-    yield _create_idx(
-        ops, set_name=SCOPE_SET_NAME, bin_name=SCOPE_MAP_BIN,
-        index_name=SCOPE_MAP_INDEX, index_type=IndexType.STRING,
-        collection_type=CollectionIndexType.MAP_KEYS,
-    )
-    yield _upsert(
-        ops, ds, "k1",
-        {
+_QSCEXP = _SetSeed(
+    set_name=SCOPE_SET_NAME,
+    indexes=(
+        _IndexSpec(SCOPE_AGE_BIN, SCOPE_INT_INDEX, IndexType.NUMERIC),
+        _IndexSpec(SCOPE_BLOB_BIN, SCOPE_BLOB_INDEX, IndexType.BLOB),
+        _IndexSpec(
+            SCOPE_MAP_BIN, SCOPE_MAP_INDEX, IndexType.STRING,
+            CollectionIndexType.MAP_KEYS,
+        ),
+    ),
+    rows=(
+        ("k1", {
             SCOPE_AGE_BIN: 25,
             SCOPE_COUNTRY_BIN: "US",
             SCOPE_BLOB_BIN: SCOPE_BLOB_BYTES,
             SCOPE_MAP_BIN: {SCOPE_MAP_KEY: "v1"},
-        },
-    )
-    yield _upsert(
-        ops, ds, "k2",
-        {SCOPE_AGE_BIN: 30, SCOPE_COUNTRY_BIN: "CA"},
-    )
-    yield _wait_set_visible(ops, SCOPE_SET_NAME, 2)
-    yield _wait_index(ops, SCOPE_SET_NAME, Filter.equal(SCOPE_AGE_BIN, 25))
-    yield _wait_index(
-        ops, SCOPE_SET_NAME, Filter.equal(SCOPE_BLOB_BIN, SCOPE_BLOB_BYTES),
-    )
-    yield _wait_index(
-        ops, SCOPE_SET_NAME,
-        Filter.contains(SCOPE_MAP_BIN, SCOPE_MAP_KEY, CollectionIndexType.MAP_KEYS),
-    )
+        }),
+        ("k2", {SCOPE_AGE_BIN: 30, SCOPE_COUNTRY_BIN: "CA"}),
+    ),
+)
+
+_QSELHINT = _SetSeed(
+    set_name=HINT_SET_NAME,
+    indexes=(
+        _IndexSpec(BIN_AGE, HINT_INDEX_NAME, IndexType.NUMERIC),
+        _IndexSpec(BIN_SCORE, HINT_SCORE_INDEX_NAME, IndexType.NUMERIC),
+    ),
+    rows=(
+        (hint_key_name("1"), {BIN_AGE: 25, BIN_SCORE: 25, BIN_COUNTRY: "US"}),
+        (hint_key_name("2"), {BIN_AGE: 30, BIN_SCORE: 30, BIN_COUNTRY: "CA"}),
+    ),
+)
 
 
-def _seed_qselhint_steps(ops: _SeedOps) -> Iterator[Awaitable[Any] | None]:
-    ds = DataSet.of(NS, HINT_SET_NAME)
-    for index_name, bin_name in (
-        (HINT_INDEX_NAME, BIN_AGE),
-        (HINT_SCORE_INDEX_NAME, BIN_SCORE),
-    ):
-        yield _create_idx(
-            ops, set_name=HINT_SET_NAME, bin_name=bin_name,
-            index_name=index_name, index_type=IndexType.NUMERIC,
-        )
-    yield _upsert(
-        ops, ds, hint_key_name("1"),
-        {BIN_AGE: 25, BIN_SCORE: 25, BIN_COUNTRY: "US"},
-    )
-    yield _upsert(
-        ops, ds, hint_key_name("2"),
-        {BIN_AGE: 30, BIN_SCORE: 30, BIN_COUNTRY: "CA"},
-    )
-    yield _wait_set_visible(ops, HINT_SET_NAME, 2)
-    yield _wait_index(ops, HINT_SET_NAME, Filter.range(BIN_AGE, 25, 30))
-    yield _wait_index(ops, HINT_SET_NAME, Filter.range(BIN_SCORE, 25, 30))
-
-
-def _seed_qp_cdt_steps(ops: _SeedOps) -> Iterator[Awaitable[Any] | None]:
-    ds = DataSet.of(NS, CDT_SET_NAME)
-    yield _create_idx(
-        ops, set_name=CDT_SET_NAME, bin_name=CDT_MAP_BIN,
-        index_name=CDT_MAP_INDEX, index_type=IndexType.STRING,
-        collection_type=CollectionIndexType.MAP_KEYS,
-    )
-    yield _create_idx(
-        ops, set_name=CDT_SET_NAME, bin_name=CDT_LIST_BIN,
-        index_name=CDT_LIST_INDEX, index_type=IndexType.BLOB,
-        collection_type=CollectionIndexType.LIST,
-    )
+def _cdt_rows() -> tuple[tuple[str, dict[str, Any]], ...]:
+    rows = []
     for i in range(1, CDT_SIZE + 1):
-        map_data = {"mkey1": f"v{i}"}
+        map_data: dict[str, Any] = {"mkey1": f"v{i}"}
         if i % 2 == 0:
             map_data[CDT_MAP_KEY] = f"v{i}"
-        list_data = (
-            [CDT_LIST_BLOB_BYTES] if i == 3 else [long_bytes_be(50000 + i)]
-        )
-        yield _upsert(
-            ops, ds, cdt_key_name(i),
-            {CDT_MAP_BIN: map_data, CDT_LIST_BIN: list_data},
-        )
-    yield _wait_set_visible(ops, CDT_SET_NAME, CDT_SIZE)
-    yield _wait_index(
-        ops, CDT_SET_NAME,
-        Filter.contains(CDT_MAP_BIN, CDT_MAP_KEY, CollectionIndexType.MAP_KEYS),
-    )
-    yield _wait_index(
-        ops, CDT_SET_NAME,
-        Filter.contains(CDT_LIST_BIN, CDT_LIST_BLOB_BYTES, CollectionIndexType.LIST),
-    )
+        list_data = [CDT_LIST_BLOB_BYTES] if i == 3 else [long_bytes_be(50000 + i)]
+        rows.append((cdt_key_name(i), {CDT_MAP_BIN: map_data, CDT_LIST_BIN: list_data}))
+    return tuple(rows)
 
 
-def _run_seed_steps_sync(steps: Iterator[Awaitable[Any] | None]) -> None:
-    for step in steps:
-        if step is not None:
-            raise RuntimeError("sync seed step returned an awaitable")
+_QP_CDT = _SetSeed(
+    set_name=CDT_SET_NAME,
+    indexes=(
+        _IndexSpec(
+            CDT_MAP_BIN, CDT_MAP_INDEX, IndexType.STRING,
+            CollectionIndexType.MAP_KEYS,
+        ),
+        _IndexSpec(
+            CDT_LIST_BIN, CDT_LIST_INDEX, IndexType.BLOB,
+            CollectionIndexType.LIST,
+        ),
+    ),
+    rows=_cdt_rows(),
+)
 
+_ALL_SEEDS = (_QSEL, _QSCEXP, _QSELHINT, _QP_CDT)
 
-async def _run_seed_steps_async(steps: Iterator[Awaitable[Any] | None]) -> None:
-    for step in steps:
-        if step is not None:
-            await step
-
-
-def _seed_all_sync(ops: _SeedOps) -> None:
-    _run_seed_steps_sync(_seed_qsel_steps(ops))
-    _run_seed_steps_sync(_seed_qscexp_steps(ops))
-    _run_seed_steps_sync(_seed_qselhint_steps(ops))
-    _run_seed_steps_sync(_seed_qp_cdt_steps(ops))
-
-
-async def _seed_all_async(ops: _SeedOps) -> None:
-    await _run_seed_steps_async(_seed_qsel_steps(ops))
-    await _run_seed_steps_async(_seed_qscexp_steps(ops))
-    await _run_seed_steps_async(_seed_qselhint_steps(ops))
-    await _run_seed_steps_async(_seed_qp_cdt_steps(ops))
+_QUERY_SELECTION_INDEX_DROPS = tuple(
+    (seed.set_name, tuple(ix.index_name for ix in seed.indexes)) for seed in _ALL_SEEDS
+)
 
 
 @dataclass(frozen=True)
@@ -313,51 +198,89 @@ class QuerySelectionClusterState:
     session: Any
 
 
+# ---------------------------------------------------------------------------
+# Drivers — one per runtime, walking the same declarations
+# ---------------------------------------------------------------------------
+
 async def seed_query_selection_async(
     client: Any,
     session: Any,
-    wait_for_index: Callable[..., Awaitable[None]],
-    wait_for_set_visible: Callable[..., Awaitable[None]],
+    wait_for_set_visible: Callable[..., Any],
 ) -> None:
-    """Seed all four query-selection sets and wait for SI readiness (async)."""
-    await _run_seed_steps_async(_truncate_steps(session, async_mode=True))
-    ops = _SeedOps(
-        client=client,
-        session=session,
-        pac=client.underlying_client,
-        wait_for_index=wait_for_index,
-        wait_for_set_visible=wait_for_set_visible,
-        create_index=create_index_quiet_async,
-        async_mode=True,
-    )
-    await _seed_all_async(ops)
+    """Seed all four query-selection sets (async)."""
+    for set_name in _QUERY_SELECTION_SETS:
+        await session.truncate(DataSet.of(NS, set_name))
+
+    pac = client.underlying_client
+    for seed in _ALL_SEEDS:
+        ds = DataSet.of(NS, seed.set_name)
+
+        async def make_indexes(seed=seed):
+            for ix in seed.indexes:
+                await create_index_quiet_async(
+                    pac,
+                    set_name=seed.set_name,
+                    bin_name=ix.bin_name,
+                    index_name=ix.index_name,
+                    index_type=ix.index_type,
+                    collection_type=ix.collection_type,
+                )
+
+        if seed.indexes_before_rows:
+            await make_indexes()
+        for key_id, bins in seed.rows:
+            await session.upsert(ds.id(key_id)).put(bins).execute()
+        if not seed.indexes_before_rows:
+            await make_indexes()
+        if seed.rows:
+            await wait_for_set_visible(session, NS, seed.set_name, seed.visible_count())
 
 
 def seed_query_selection_sync(
     client: Any,
     session: Any,
-    sync_wait_for_index: Callable[..., None],
-    sync_wait_for_set_visible: Callable[..., None],
+    sync_wait_for_set_visible: Callable[..., Any],
 ) -> None:
-    """Seed all four query-selection sets and wait for SI readiness (sync)."""
-    _run_seed_steps_sync(_truncate_steps(session, async_mode=False))
-    ops = _SeedOps(
-        client=client,
-        session=session,
-        pac=client.underlying_client,
-        wait_for_index=sync_wait_for_index,
-        wait_for_set_visible=sync_wait_for_set_visible,
-        create_index=create_index_quiet_blocking,
-        async_mode=False,
-    )
-    _seed_all_sync(ops)
+    """Seed all four query-selection sets (blocking)."""
+    for set_name in _QUERY_SELECTION_SETS:
+        session.truncate(DataSet.of(NS, set_name))
+
+    pac = client.underlying_client
+    for seed in _ALL_SEEDS:
+        ds = DataSet.of(NS, seed.set_name)
+
+        def make_indexes(seed=seed):
+            for ix in seed.indexes:
+                create_index_quiet_blocking(
+                    pac,
+                    set_name=seed.set_name,
+                    bin_name=ix.bin_name,
+                    index_name=ix.index_name,
+                    index_type=ix.index_type,
+                    collection_type=ix.collection_type,
+                )
+
+        if seed.indexes_before_rows:
+            make_indexes()
+        for key_id, bins in seed.rows:
+            session.upsert(ds.id(key_id)).put(bins).execute()
+        if not seed.indexes_before_rows:
+            make_indexes()
+        if seed.rows:
+            sync_wait_for_set_visible(session, NS, seed.set_name, seed.visible_count())
 
 
 async def teardown_query_selection_async(client: Any, session: Any) -> None:
-    await _run_seed_steps_async(_truncate_steps(session, async_mode=True))
-    await _run_seed_steps_async(_drop_index_steps(client, async_mode=True))
+    for set_name in _QUERY_SELECTION_SETS:
+        await session.truncate(DataSet.of(NS, set_name))
+    for set_name, index_names in _QUERY_SELECTION_INDEX_DROPS:
+        for index_name in index_names:
+            await drop_index_quiet_async(client, NS, set_name, index_name)
 
 
 def teardown_query_selection_sync(client: Any, session: Any) -> None:
-    _run_seed_steps_sync(_truncate_steps(session, async_mode=False))
-    _run_seed_steps_sync(_drop_index_steps(client, async_mode=False))
+    for set_name in _QUERY_SELECTION_SETS:
+        session.truncate(DataSet.of(NS, set_name))
+    for set_name, index_names in _QUERY_SELECTION_INDEX_DROPS:
+        for index_name in index_names:
+            drop_index_quiet_blocking(client, NS, set_name, index_name)

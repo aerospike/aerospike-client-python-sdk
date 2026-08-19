@@ -62,7 +62,7 @@ def _user_keys_from_stream(results):
     return keys
 
 
-async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, wait_for_index):
+async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     """Query with ``Filter.equal(...).context([...])`` on a nested map value (indexed path).
 
     Records store ``mapbin`` as ``{outer: {inner: <int>, ...}}``. A numeric index on
@@ -106,7 +106,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
     )
 
     try:
-        await pac.create_index(
+        index_task = await pac.create_index(
             _NS,
             _SET,
             _BIN,
@@ -119,7 +119,9 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
     flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
-    await wait_for_index(cluster, _NS, _SET, flt)
+    # The build task is authoritative; a query probe only
+    # infers readiness.
+    await index_task.wait_till_complete()
 
     try:
         stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
@@ -151,7 +153,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise, w
         await _cleanup_records(session, keys)
 
 
-async def test_query_filter_equal_single_map_key_context(cluster, enterprise, wait_for_index):
+async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()
 
@@ -183,7 +185,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise, wa
     )
 
     try:
-        await pac.create_index(
+        index_task = await pac.create_index(
             _NS,
             _SET,
             _BIN,
@@ -196,7 +198,9 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise, wa
         pytest.skip(f"Could not create CDT-path numeric index: {e}")
 
     flt = Filter.equal(_BIN, val).context([CTX.map_key(_INNER)])
-    await wait_for_index(cluster, _NS, _SET, flt)
+    # The build task is authoritative; a query probe only
+    # infers readiness.
+    await index_task.wait_till_complete()
 
     try:
         stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
