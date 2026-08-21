@@ -25,6 +25,7 @@ if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotat
 
 from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.info_shared import InfoCommandsBase
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.loggers import SdkLoggers
 
 log = logging.getLogger(SdkLoggers.INFO)
@@ -80,22 +81,32 @@ class InfoCommands(InfoCommandsBase):
         all_responses = await self._session._client._client.info_on_all_nodes("namespaces")
         return self._merge_delimited_set(all_responses, ";")
 
-    async def namespace_details(self, namespace: str) -> Optional[Dict[str, str]]:
-        """
-        Get detailed information about a specific namespace.
+    async def namespace_details(self, namespace: str) -> Optional[NamespaceDetail]:
+        """Get detailed configuration and statistics for one namespace.
 
         Args:
             namespace: The name of the namespace.
 
         Returns:
-            A dictionary containing namespace details, or None if not found.
+            A :class:`~aerospike_sdk.info_types.NamespaceDetail` -- a mapping of
+            every key the server reported, with typed properties for the fields
+            the SDK consults -- or ``None`` when the namespace is undefined.
+
+        Example::
+
+            detail = await session.info().namespace_details("customers")
+            if detail is not None and detail.nsup_period == 0:
+                print("record expiration is disabled on this namespace")
+
+        See Also:
+            :class:`~aerospike_sdk.info_types.NamespaceDetail`
         """
         try:
             response = await self._session._client._client.info(f"namespace/{namespace}")
         except Exception:
             log.debug("namespace_details(%s) failed", namespace, exc_info=True)
             return None
-        return self._interpret_namespace_details(response, namespace)
+        return NamespaceDetail.from_response(response, namespace)
 
     async def sets(self, namespace: str) -> List[str]:
         """

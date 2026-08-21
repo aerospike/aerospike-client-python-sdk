@@ -48,6 +48,7 @@ from aerospike_sdk.aio.operations.query import (
 )
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
     PacAerospikeError,
     PacServerError,
@@ -56,30 +57,11 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
-
-
-def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
-    """Parse one ``namespace/<name>`` info response fragment.
-
-    Returns:
-        ``(exists, sc_opt)``. ``exists`` is false when ``type=unknown``.
-        ``sc_opt`` is set when a ``strong-consistency`` key is present.
-    """
-    exists = True
-    sc_opt: Optional[bool] = None
-    for pair in body.split(";"):
-        pair = pair.strip()
-        if "=" not in pair:
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key == "type" and value == "unknown":
-            exists = False
-        if key in ("strong-consistency", "strong_consistency"):
-            sc_opt = value.lower() in ("true", "1", "yes")
-    return exists, sc_opt
+from aerospike_sdk.session_shared import (
+    NamespaceScStatus,
+    SessionBase,
+    _namespace_sc_status,
+)
 
 
 # Gates for the transparent same-tick coalescer (on by default; PSDK_COALESCE=0
@@ -178,22 +160,12 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         cache = self._client._namespace_mode_cache
         if namespace in cache:
             return cache[namespace]
-        # Mirror the parsing logic used by `namespace_sc_status` but inline
-        # against PAC blocking — we avoid the indirection of reusing the
-        # async helper through a runner.
         pac = self._client._async_client
         is_sc = False
         try:
             result = pac.info_blocking(f"namespace/{namespace}")
-            for node_result in result.values():
-                if not node_result:
-                    continue
-                exists, sc_opt = _parse_namespace_info_body(node_result)
-                if not exists:
-                    is_sc = False
-                    break
-                if sc_opt is not None:
-                    is_sc = bool(sc_opt)
+            detail = NamespaceDetail.from_response(result, namespace)
+            is_sc = detail is not None and detail.strong_consistency
         except Exception:
             # Conservative default: treat as AP. The cache miss path is
             # rare (cache primes on first use); a transient info error
@@ -1132,37 +1104,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         except Exception as e:
             raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
 
-        missing = False
-        sc_val: Optional[bool] = None
-        for node_result in result.values():
-            if not node_result:
-                continue
-            exists, sc_opt = _parse_namespace_info_body(node_result)
-            if not exists:
-                missing = True
-                break
-            if sc_opt is not None:
-                sc_val = sc_opt
-
-        if missing:
-            return NamespaceScStatus(
-                False,
-                f"Namespace {namespace!r} is not defined on this cluster "
-                "(info reports type=unknown). Create it or set "
-                "AEROSPIKE_SC_NAMESPACE to an existing SC namespace.",
-            )
-        if sc_val is True:
-            return NamespaceScStatus(True, "")
-        if sc_val is False:
-            return NamespaceScStatus(
-                False,
-                f"Namespace {namespace!r} exists but strong-consistency is false "
-                "(AP mode). Point AEROSPIKE_SC_NAMESPACE at a namespace with "
-                "strong-consistency enabled.",
-            )
-        return NamespaceScStatus(
-            False,
-            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
+        return _namespace_sc_status(
+            namespace, NamespaceDetail.from_response(result, namespace)
         )
 
     async def is_namespace_sc(self, namespace: str) -> bool:

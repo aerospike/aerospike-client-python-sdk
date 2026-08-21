@@ -15,7 +15,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_sdk.aio.session import _parse_namespace_info_body
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_async.exceptions import ConnectionError as PacConnectionError
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 
@@ -339,20 +339,10 @@ def general_namespace_is_sc(aerospike_host, pytestconfig):
     except Exception as exc:
         return _degraded(f"connect error: {exc}")
     try:
-        missing = False
-        sc_val = None
-        for body in client.info_blocking(f"namespace/{ns}").values():
-            if not body:
-                continue
-            exists, sc_opt = _parse_namespace_info_body(body)
-            if not exists:
-                missing = True
-                break
-            if sc_opt is not None:
-                sc_val = sc_opt
-        if missing:
+        detail = NamespaceDetail.from_response(client.info_blocking(f"namespace/{ns}"), ns)
+        if detail is None:
             return _degraded("namespace not present on the seed")
-        return bool(sc_val)
+        return detail.strong_consistency
     except Exception as exc:
         return _degraded(f"info scan error: {exc}")
     finally:
@@ -428,21 +418,11 @@ def _report_sc_routing(client, config) -> None:
     try:
         verdicts = {}
         for ns in sorted(SyncInfoCommands(client).namespaces()):
-            # Same multi-node scan as ``Session.namespace_sc_status``: a node
-            # reporting the namespace as unknown wins, otherwise the last node
-            # to report ``strong-consistency`` decides.
-            missing = False
-            sc_val = None
-            for body in client.info_blocking(f"namespace/{ns}").values():
-                if not body:
-                    continue
-                exists, sc_opt = _parse_namespace_info_body(body)
-                if not exists:
-                    missing = True
-                    break
-                if sc_opt is not None:
-                    sc_val = sc_opt
-            verdicts[ns] = not missing and bool(sc_val)
+            # Same verdict as ``Session.namespace_sc_status``.
+            detail = NamespaceDetail.from_response(
+                client.info_blocking(f"namespace/{ns}"), ns
+            )
+            verdicts[ns] = detail is not None and detail.strong_consistency
     except Exception as exc:
         emit("")
         emit(f"SC routing: namespace check unavailable ({exc})")

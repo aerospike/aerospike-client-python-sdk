@@ -16,6 +16,8 @@
 """Tests for the SDK exception hierarchy, factory, and dependency converter."""
 
 import pytest
+from aerospike_async import Operation, SubCode
+from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.exceptions import (
     AerospikeError,
     AuthenticationError,
@@ -505,3 +507,168 @@ class TestSubCodeCatalogReExport:
             "FORBID_TRUNCATED", "UNSUPP_FEAT_GENERIC",
         ):
             assert hasattr(SubCode, name), name
+
+class TestResultCodeGuidance:
+    """Local guidance appended to codes whose cause is a known misconfiguration."""
+
+    def test_bin_name_too_long_explains_the_limit(self):
+        # The server names no bin, so the hint has to say what to look for.
+        exc = _result_code_to_exception(ResultCode.BIN_NAME_TOO_LONG, "Code: BinNameTooLong")
+        assert "15 characters" in exc.hint
+        assert "Code: BinNameTooLong" in str(exc)
+        assert "15 characters" in str(exc)
+
+    def test_fail_forbidden_does_not_rank_causes(self):
+        # The code covers several conditions; naming one would misdirect
+        # whenever it is not that one.
+        exc = _result_code_to_exception(ResultCode.FAIL_FORBIDDEN, "boom")
+        assert "subcode" in exc.hint
+        assert "clock skew" in exc.hint and "stop-writes" in exc.hint
+
+    def test_bin_name_too_long_names_both_meanings(self):
+        # Code 21 is also returned for too many bins, not just a long name.
+        exc = _result_code_to_exception(ResultCode.BIN_NAME_TOO_LONG, "boom")
+        assert "too many bins" in exc.hint
+
+    def test_unsupported_feature_points_at_namespace_mode(self):
+        exc = _result_code_to_exception(ResultCode.UNSUPPORTED_FEATURE, "boom")
+        assert "strong-consistency" in exc.hint
+
+    def test_codes_without_guidance_carry_no_hint(self):
+        # Guidance that restates the code name is noise; most codes get none.
+        exc = _result_code_to_exception(ResultCode.KEY_NOT_FOUND_ERROR, "missing")
+        assert exc.hint is None
+        assert str(exc) == "missing"
+
+    def test_explicit_hint_overrides_the_generic_text(self):
+        exc = _result_code_to_exception(
+            ResultCode.FAIL_FORBIDDEN, "boom", hint="bin 'x' is the problem"
+        )
+        assert exc.hint == "bin 'x' is the problem"
+        assert "nsup-period" not in str(exc)
+
+    def test_hint_stands_alone_when_there_is_no_message(self):
+        exc = _result_code_to_exception(ResultCode.BIN_NAME_TOO_LONG, "")
+        assert str(exc) == exc.hint
+
+    def test_guidance_survives_the_pac_boundary(self):
+        # Real errors arrive as PAC exceptions, so the converter must carry it.
+        pac = PacServerError("Code: BinNameTooLong", ResultCode.BIN_NAME_TOO_LONG)
+        converted = _convert_pac_exception(pac)
+        assert converted.hint is not None
+        assert "15 characters" in converted.hint
+        assert "15 characters" in str(converted)
+
+
+class TestBinNameHint:
+    """The over-long-bin-name hint built from an operation list."""
+
+    @staticmethod
+    def _hint(*bin_names):
+        # Exercise the shared helper against real operations without standing
+        # up a segment: it reads only ``_ops``.
+        class _Segment:
+            _ops = [Operation.put(name, 1) for name in bin_names]
+            _bin_name_hint = _SingleKeyWriteSegmentBase._bin_name_hint
+
+        return _Segment()._bin_name_hint()
+
+    def test_names_the_single_offender(self):
+        hint = self._hint("ok", "a" * 16, "fine")
+        assert repr("a" * 16) in hint
+        assert "'ok'" not in hint and "'fine'" not in hint
+        assert "15-character" in hint
+
+    def test_lists_offenders_sorted_and_pluralized(self):
+        hint = self._hint("z" * 16, "y" * 18)
+        assert hint.startswith("Bin names ")
+        # Sorted, so the text is stable regardless of operation order.
+        assert hint.index(repr("y" * 18)) < hint.index(repr("z" * 16))
+        assert "exceed the" in hint
+
+    def test_singular_wording_for_one_offender(self):
+        hint = self._hint("a" * 16)
+        assert hint.startswith("Bin name ")
+        assert "exceeds the" in hint
+
+    def test_boundary_length_is_not_an_offender(self):
+        # 15 is legal; 16 is not.
+        assert self._hint("a" * 15) is None
+        assert self._hint("a" * 16) is not None
+
+    def test_no_offenders_yields_no_hint(self):
+        # Falls back to the generic guidance for the code.
+        assert self._hint("ok", "fine") is None
+
+    def test_duplicate_offenders_are_listed_once(self):
+        hint = self._hint("a" * 16, "a" * 16)
+        assert hint.count(repr("a" * 16)) == 1
+        assert hint.startswith("Bin name ")
+
+    def test_operations_without_a_bin_name_are_ignored(self):
+        class _Segment:
+            _ops = [Operation.touch(), Operation.get(), Operation.put("a" * 16, 1)]
+            _bin_name_hint = _SingleKeyWriteSegmentBase._bin_name_hint
+
+        hint = _Segment()._bin_name_hint()
+        assert repr("a" * 16) in hint
+
+
+class TestSubCodeGuidance:
+    """A subcode names the exact condition, so it outranks the per-code text."""
+
+    def test_durability_violation_is_named_exactly(self):
+        # The ticket's non-durable-delete-on-SC case, from the server's answer
+        # rather than a client-side guess.
+        exc = _result_code_to_exception(
+            ResultCode.FAIL_FORBIDDEN, "boom",
+            sub_code=SubCode.FORBID_DURABILITY_VIOLATION,
+        )
+        assert "durable delete" in exc.hint
+        assert "clock skew" not in exc.hint
+
+    def test_clock_skew_is_reported_as_a_cluster_problem(self):
+        exc = _result_code_to_exception(
+            ResultCode.FAIL_FORBIDDEN, "boom",
+            sub_code=SubCode.FORBID_CLOCK_SKEW_STOP_WRITES,
+        )
+        assert "time synchronization" in exc.hint
+        assert "durable delete" not in exc.hint
+
+    def test_bin_count_subcode_corrects_the_generic_reading(self):
+        # Same parent code as an over-long name, but a different cause.
+        exc = _result_code_to_exception(
+            ResultCode.BIN_NAME_TOO_LONG, "boom",
+            sub_code=SubCode.BIN_NAME_COUNT_TOO_LARGE,
+        )
+        assert "too many bins" in exc.hint
+        assert "15 characters" not in exc.hint
+
+    def test_same_subcode_integer_under_different_parents(self):
+        # BIN_NAME_COUNT_TOO_LARGE and FORBID_XDR_FILTER_BLOCKED are both 1,
+        # so the lookup must key on the pair, never the subcode alone.
+        assert SubCode.BIN_NAME_COUNT_TOO_LARGE == SubCode.FORBID_XDR_FILTER_BLOCKED
+        bins = _result_code_to_exception(
+            ResultCode.BIN_NAME_TOO_LONG, "", sub_code=SubCode.BIN_NAME_COUNT_TOO_LARGE)
+        xdr = _result_code_to_exception(
+            ResultCode.FAIL_FORBIDDEN, "", sub_code=SubCode.FORBID_XDR_FILTER_BLOCKED)
+        assert "too many bins" in bins.hint
+        assert "XDR ship filter" in xdr.hint
+
+    def test_unknown_subcode_falls_back_to_the_code_text(self):
+        # New server subcodes must degrade, not blank out the guidance.
+        exc = _result_code_to_exception(ResultCode.FAIL_FORBIDDEN, "boom", sub_code=9999)
+        assert "subcode" in exc.hint
+
+    def test_subcode_none_uses_the_code_text(self):
+        exc = _result_code_to_exception(
+            ResultCode.FAIL_FORBIDDEN, "boom", sub_code=SubCode.NONE)
+        assert "subcode" in exc.hint
+
+    def test_explicit_hint_still_wins_over_a_subcode(self):
+        exc = _result_code_to_exception(
+            ResultCode.BIN_NAME_TOO_LONG, "boom",
+            sub_code=SubCode.BIN_NAME_COUNT_TOO_LARGE,
+            hint="bin 'x' is too long",
+        )
+        assert exc.hint == "bin 'x' is too long"

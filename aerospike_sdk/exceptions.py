@@ -37,6 +37,7 @@ from aerospike_async.exceptions import (
 )
 # Re-exported for callers that need the raw server result code or the
 # PAC-level error types without importing aerospike_async directly.
+from aerospike_async import SubCode
 from aerospike_async.exceptions import ResultCode
 from aerospike_async.exceptions import SecurityNotEnabled as SecurityNotEnabled
 from aerospike_async.exceptions import ServerError as ServerError
@@ -71,6 +72,12 @@ class AerospikeError(Exception):
         server_message: Human-readable message from the server when detail was
             requested at message-level verbosity or higher; ``None`` when no
             detail was returned. May be present even when ``sub_code`` is ``0``.
+        hint: Client-side guidance for result codes whose cause is a common,
+            recognizable misconfiguration -- appended to the message and kept
+            here separately so callers can log or suppress it independently.
+            ``None`` when the SDK has nothing to add beyond what the server
+            reported. Unlike ``server_message`` this is generated locally and
+            never travels the wire.
         exp_trace: Structured expression trace the server attaches to
             expression-build failures at trace-level verbosity; ``None``
             otherwise. Surfaced as an opaque passthrough of the underlying
@@ -113,6 +120,7 @@ class AerospikeError(Exception):
         iteration: int | None = None,
         sub_exceptions: tuple[AerospikeError, ...] = (),
         base_message: str | None = None,
+        hint: str | None = None,
     ) -> None:
         super().__init__(message)
         self.result_code = result_code
@@ -124,6 +132,7 @@ class AerospikeError(Exception):
         self.iteration = iteration
         self.sub_exceptions = sub_exceptions
         self.base_message = base_message
+        self.hint = hint
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +746,80 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
 }
 
 
+# Guidance for failures whose cause is a recognizable condition the result code
+# alone does not name. Deliberately small: text that restates the code name is
+# noise, and this is appended to a user-facing message.
+#
+# Precedence is narrowest-first -- an explicit ``hint=`` from a caller holding
+# the operation, then the (code, subcode) pair, then the code alone.
+
+# Keyed on the *pair*: subcode integers are scoped to their parent code, not
+# globally unique (BIN_NAME_COUNT_TOO_LARGE and FORBID_XDR_FILTER_BLOCKED are
+# both 1). Populated only when the server sends detail, which requires
+# ``error_detail_verbosity`` and a server that supplies it.
+_SUBCODE_GUIDANCE: dict[tuple[ResultCode, int], str] = {
+    (ResultCode.BIN_NAME_TOO_LONG, SubCode.BIN_NAME_COUNT_TOO_LARGE): (
+        "The record would exceed the server's per-record bin-count limit. The "
+        "bin names themselves are fine -- the record has too many bins."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_DURABILITY_VIOLATION): (
+        "A non-durable delete was refused because it would violate durability. "
+        "Strong-consistency namespaces require durable deletes: enable durable "
+        "delete on the operation, or on the Behavior the session carries."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_SET_COUNT_STOP_WRITES): (
+        "The set reached its record-count stop-writes limit. Writes stay "
+        "refused until the count falls or the limit is raised."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_SET_SIZE_STOP_WRITES): (
+        "The set reached its size stop-writes limit. Writes stay refused until "
+        "the set shrinks or the limit is raised."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_CLOCK_SKEW_STOP_WRITES): (
+        "Writes are stopped because clocks across the cluster have drifted too "
+        "far apart. This is a cluster health problem, not a client one -- check "
+        "time synchronization on the server nodes."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_TRUNCATED): (
+        "The set or namespace is mid-truncate, so writes are refused until the "
+        "truncate completes. Retrying after it finishes should succeed."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_XDR_FILTER_BLOCKED): (
+        "An XDR ship filter at the destination rejected this write. The filter "
+        "is configured on the destination cluster, not in the client."
+    ),
+    (ResultCode.FAIL_FORBIDDEN, SubCode.FORBID_REPLACE_CONFLICT_RESOLVING): (
+        "A replace was refused while the record was being conflict-resolved. "
+        "Retry, or use an update rather than a replace."
+    ),
+}
+
+# Fallback when no subcode is available. These must not rank causes: the code
+# covers several, and naming one would misdirect whenever it is not that one.
+_RC_GUIDANCE: dict[ResultCode, str] = {
+    ResultCode.BIN_NAME_TOO_LONG: (
+        "The server rejected the operation over bin naming. This code covers "
+        "two causes: a bin name longer than 15 characters, or a record with "
+        "too many bins. Enable extended error detail to get the subcode that "
+        "tells them apart."
+    ),
+    ResultCode.FAIL_FORBIDDEN: (
+        "The server forbade this operation given its current state. Causes "
+        "include a durability violation, set-level stop-writes limits, cluster "
+        "clock skew, an in-progress truncate, XDR filtering, and conflict "
+        "resolution. Enable extended error detail to get the subcode that "
+        "identifies which; namespace configuration is visible through "
+        "session.info().namespace_details(<namespace>)."
+    ),
+    ResultCode.UNSUPPORTED_FEATURE: (
+        "The cluster or namespace does not support something this operation "
+        "requires. Multi-record transactions, for example, need a "
+        "strong-consistency namespace on a server build that supports them; "
+        "check the namespace mode with session.namespace_sc_status(<namespace>)."
+    ),
+}
+
+
 def _result_code_to_exception(
     result_code: ResultCode,
     message: str = "",
@@ -749,9 +832,29 @@ def _result_code_to_exception(
     iteration: int | None = None,
     sub_exceptions: tuple[AerospikeError, ...] = (),
     base_message: str | None = None,
+    hint: str | None = None,
 ) -> AerospikeError:
-    """Map a server result code to the appropriate typed exception."""
+    """Map a server result code to the appropriate typed exception.
+
+    When the code is one whose cause is a recognizable misconfiguration, local
+    guidance is appended to *message* and kept on the exception as ``hint``. Pass
+    ``hint`` explicitly to override the generic text with something narrower --
+    a caller holding the operation knows more than the code alone conveys.
+    """
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
+    if hint is not None:
+        guidance: str | None = hint
+    elif sub_code:
+        # A subcode names the exact condition, so it beats the per-code text.
+        # Falsy covers both "absent" and SubCode.NONE.
+        guidance = (
+            _SUBCODE_GUIDANCE.get((result_code, sub_code))
+            or _RC_GUIDANCE.get(result_code)
+        )
+    else:
+        guidance = _RC_GUIDANCE.get(result_code)
+    if guidance:
+        message = f"{message}\n{guidance}" if message else guidance
     return cls(
         message,
         result_code=result_code,
@@ -763,6 +866,7 @@ def _result_code_to_exception(
         iteration=iteration,
         sub_exceptions=sub_exceptions,
         base_message=base_message,
+        hint=guidance,
     )
 
 
@@ -789,11 +893,17 @@ def _retry_context_kwargs(exc: Exception) -> dict:
     }
 
 
-def _convert_pac_exception(exc: Exception) -> AerospikeError:
+def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> AerospikeError:
     """Convert a PAC exception to the appropriate PSDK typed exception.
 
     The original exception is **not** set as ``__cause__`` here; callers
     should use ``raise _convert_pac_exception(e) from e``.
+
+    Args:
+        exc: The PAC exception to convert.
+        hint: Guidance narrower than the result code alone supports, from a
+            caller that still has the operation in scope. Replaces the generic
+            text for that code. Ignored for failures that carry no result code.
     """
     if isinstance(exc, AerospikeError):
         return exc
@@ -806,6 +916,7 @@ def _convert_pac_exception(exc: Exception) -> AerospikeError:
             sub_code=getattr(exc, "sub_code", None),
             server_message=getattr(exc, "server_message", None),
             exp_trace=getattr(exc, "exp_trace", None),
+            hint=hint,
             **_retry_context_kwargs(exc),
         )
 
