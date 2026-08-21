@@ -139,6 +139,65 @@ for successful rows or when detail was not requested) — and
 `RecordResult.or_raise()` attaches all three to the raised error, matching
 the single-key exception shape.
 
+## Client-Side Guidance (`hint`)
+
+Some result codes name a condition without saying what caused it. The server
+reports `BinNameTooLong` for a bin name over the limit, for instance, but does not
+say *which* bin. For codes whose cause is a common, recognizable
+misconfiguration, the SDK adds local guidance: it is appended to the exception
+message and also kept on its own attribute.
+
+```python
+try:
+    await session.upsert(customers.id(1)).put({"a_very_long_bin_name": 1}).execute()
+except AerospikeError as err:
+    print(err)         # server message, then the guidance on the next line
+    print(err.hint)    # just the guidance, or None when there is nothing to add
+```
+
+When the SDK still holds the operation that failed, the guidance names the
+specific cause rather than the general one:
+
+```
+Code: BinNameTooLong, In Doubt: false, Node: 10.0.0.4:3000
+Bin name 'a_very_long_bin_name' exceeds the server's 15-character limit.
+```
+
+`hint` is generated locally and never travels the wire — that is the difference
+from `server_message`, which is the server's own text. Most codes carry no hint:
+guidance that only restates the code name would be noise.
+
+### Precedence
+
+Guidance resolves narrowest-first:
+
+1. **What the SDK knows about the operation** — the bin-naming case above.
+2. **The `(result_code, sub_code)` pair**, when extended error detail is enabled.
+3. **The result code alone**, as a fallback.
+
+Step 2 matters because several codes cover more than one condition, and the
+server already distinguishes them. `FailForbidden` alone could be a durability
+violation, a set-level stop-writes limit, cluster clock skew, an in-progress
+truncate, XDR filtering, or conflict resolution; `BinNameTooLong` is returned
+both for an over-long name *and* for a record with too many bins. Without a
+subcode the SDK says so rather than picking one — naming a single cause would
+misdirect whenever it is not that one. With a subcode it names the condition
+exactly:
+
+```
+Code: FailForbidden, In Doubt: false, Node: 10.0.0.4:3000
+A non-durable delete was refused because it would violate durability.
+Strong-consistency namespaces require durable deletes: enable durable delete on
+the operation, or on the Behavior the session carries.
+```
+
+Subcode integers are scoped to their parent code, not globally unique, so the
+lookup keys on the pair. An unrecognized subcode — a newer server than this
+SDK — falls back to the per-code text rather than losing the guidance.
+
+Keeping the guidance on its own attribute means it can be logged or suppressed
+independently of the message — useful when error text is parsed or forwarded.
+
 ## In-Doubt Writes
 
 Every `AerospikeError` carries an `in_doubt` flag. It is `True` when a **write**

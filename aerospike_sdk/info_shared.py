@@ -27,6 +27,53 @@ from __future__ import annotations
 from typing import Dict, Optional, Set
 
 
+def parse_info_body(body: str) -> Dict[str, str]:
+    """Split one info-protocol body into its ``key=value`` pairs.
+
+    A body is a flat ``;``-delimited document -- several hundred pairs for a
+    namespace -- so this is the hot part of reading any info response. Keys and
+    values are taken verbatim: the wire format does not pad around ``=`` or
+    ``;``, and stripping every half of every pair costs more than the split
+    itself. Values may contain ``=``, so only the first one separates.
+
+    Args:
+        body: One info response body, e.g. ``"type=device;nsup-period=120"``.
+
+    Returns:
+        Mapping of key to raw string value. Fragments without ``=`` are skipped.
+
+    Example::
+
+        pairs = parse_info_body("type=device;nsup-period=120")
+        assert pairs["nsup-period"] == "120"
+    """
+    return dict(
+        pair.split("=", 1) for pair in body.split(";") if "=" in pair
+    )
+
+
+def single_info_body(response: Optional[Dict[str, str]], command: str) -> Optional[str]:
+    """Pull the one body out of a single-command info response.
+
+    ``info(cmd)`` answers ``{cmd: body}``, so the command itself is the key.
+    Falls back to the sole value when the key does not match, which keeps this
+    tolerant of a server that echoes the command differently than it was sent.
+
+    Args:
+        response: Raw response mapping, or ``None``/empty.
+        command: Command that was sent, e.g. ``"namespace/test"``.
+
+    Returns:
+        The body string, or ``None`` when the response carried none.
+    """
+    if not response:
+        return None
+    body = response.get(command)
+    if body is not None:
+        return body
+    return next(iter(response.values())) if len(response) == 1 else None
+
+
 class InfoCommandsBase:
     """Stateless info-response parsers shared by the async and sync info helpers.
 
@@ -64,21 +111,6 @@ class InfoCommandsBase:
                 if isinstance(value, str) and value:
                     out.update(item.strip() for item in value.split(sep) if item.strip())
         return out
-
-    @staticmethod
-    def _interpret_namespace_details(
-        response: Optional[Dict[str, str]], namespace: str
-    ) -> Optional[Dict[str, str]]:
-        """Return the namespace-details response, or ``None`` when unknown.
-
-        A non-existent namespace reports ``{"namespace/<name>": "type=unknown"}``.
-        """
-        if not response:
-            return None
-        expected_key = f"namespace/{namespace}"
-        if expected_key in response and str(response[expected_key]).strip() == "type=unknown":
-            return None
-        return response
 
     @staticmethod
     def _interpret_sindex_details(

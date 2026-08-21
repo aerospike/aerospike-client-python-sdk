@@ -16,7 +16,7 @@
 """Sync integration tests mirroring async idempotent-op, TTL guard, and bad-AEL paths."""
 
 import pytest
-from aerospike_sdk.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -187,3 +187,26 @@ class TestSyncAelParamBinding:
             .execute()
         )
         assert rs.first() is not None
+
+
+@pytest.fixture
+def bin_name_session(cluster):
+    """Plain session for the bin-name diagnostic; no AEL row needed."""
+    return cluster.create_session()
+
+
+class TestBinNameTooLongDiagnostic:
+    """The server rejects an over-long bin name without naming the bin."""
+
+    def test_names_the_offending_bin(self, bin_name_session, ds):
+        with pytest.raises(AerospikeError) as excinfo:
+            bin_name_session.upsert(ds.id("binname-1")).put(
+                {"ok": 1, "b" * 20: 2, "fine": 3}
+            ).execute()
+
+        err = excinfo.value
+        assert err.result_code == ResultCode.BIN_NAME_TOO_LONG
+        # The whole point: the caller learns which bin, not just that one is bad.
+        assert repr("b" * 20) in err.hint
+        assert "'ok'" not in err.hint
+        assert err.hint in str(err)

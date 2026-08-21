@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from aerospike_sdk.index_list import parse_index_list
 from aerospike_sdk.info_shared import InfoCommandsBase
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.loggers import SdkLoggers
 
 log = logging.getLogger(SdkLoggers.INFO)
@@ -54,14 +55,19 @@ class InfoCommands(InfoCommandsBase):
         responses = self._pac.info_on_all_nodes_blocking("namespaces")
         return self._merge_delimited_set(responses, ";")
 
-    def namespace_details(self, namespace: str) -> Optional[Dict[str, str]]:
-        """Per-namespace info; ``None`` when the namespace is unknown."""
+    def namespace_details(self, namespace: str) -> Optional[NamespaceDetail]:
+        """Per-namespace info; ``None`` when the namespace is unknown.
+
+        Returns a :class:`~aerospike_sdk.info_types.NamespaceDetail`: a mapping
+        of every reported key, with typed properties for the fields the SDK
+        consults.
+        """
         try:
             response = self._pac.info_blocking(f"namespace/{namespace}")
         except Exception:
             log.debug("namespace_details(%s) failed", namespace, exc_info=True)
             return None
-        return self._interpret_namespace_details(response, namespace)
+        return NamespaceDetail.from_response(response, namespace)
 
     def sets(self, namespace: str) -> List[str]:
         """Set names in ``namespace``."""

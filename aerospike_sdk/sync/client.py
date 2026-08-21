@@ -37,6 +37,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
@@ -274,21 +275,13 @@ class SyncClient(RoutingCapabilitiesMixin):
         if cached is not None:
             return cached
         try:
-            from aerospike_sdk.aio.session import _parse_namespace_info_body
             result = self.underlying_client.info_blocking(f"namespace/{namespace}")
         except Exception:
             mode = Mode.AP
             self._namespace_mode_cache[namespace] = mode
             return mode
-        is_sc = False
-        for node_result in result.values():
-            if not node_result:
-                continue
-            exists, sc_opt = _parse_namespace_info_body(node_result)
-            if exists and sc_opt is True:
-                is_sc = True
-                break
-        mode = Mode.SC if is_sc else Mode.AP
+        detail = NamespaceDetail.from_response(result, namespace)
+        mode = Mode.SC if detail is not None and detail.strong_consistency else Mode.AP
         self._namespace_mode_cache[namespace] = mode
         return mode
 
