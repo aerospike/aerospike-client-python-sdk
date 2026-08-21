@@ -518,7 +518,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 # (update, replace_if_exists). For upsert/insert/replace,
                 # it's idempotent. KEY_EXISTS_ERROR is always actionable
                 # (e.g. insert into existing record).
-                psdk_exc = _convert_pac_exception(e)
+                hint = (
+                    self._bin_name_hint()
+                    if getattr(e, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
+                    else None
+                )
+                psdk_exc = _convert_pac_exception(e, hint=hint)
                 rc = psdk_exc.result_code
                 if (
                     rc == ResultCode.KEY_NOT_FOUND_ERROR

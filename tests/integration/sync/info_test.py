@@ -99,8 +99,16 @@ def test_namespace_details(session):
     details = info.namespace_details(test_namespace)
 
     assert details is not None
-    assert isinstance(details, dict)
-    assert len(details) > 0, "Namespace details should contain data"
+    assert isinstance(details, dict), "stays a mapping, so raw-key access keeps working"
+    # The body is parsed into its fields -- not returned as one blob under the
+    # command key, which is what this call used to answer.
+    assert f"namespace/{test_namespace}" not in details
+    assert "nsup-period" in details
+    assert len(details) > 50, "a namespace reports hundreds of keys"
+    # Typed reads coerce; raw reads still resolve.
+    assert isinstance(details.strong_consistency, bool)
+    assert isinstance(details.nsup_period, int)
+    assert details["replication-factor"] == details.get("replication-factor")
 
 
 def test_namespace_details_nonexistent(session):

@@ -39,6 +39,7 @@ from typing_extensions import deprecated
 from aerospike_async import Key
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.policy.behavior import OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
@@ -70,6 +71,45 @@ class NamespaceScStatus(NamedTuple):
     """True when the namespace exists and ``strong-consistency`` is enabled."""
     detail: str
     """Empty when ``is_sc`` is true; otherwise a short explanation for logging or skips."""
+
+
+def _namespace_sc_status(
+    namespace: str, detail: Optional[NamespaceDetail]
+) -> NamespaceScStatus:
+    """Build a :class:`NamespaceScStatus` from a parsed namespace detail.
+
+    Shared so the async and blocking sessions cannot drift in the text they
+    hand back to callers -- the reason is user-facing, and two copies of it
+    are two things to keep correct.
+
+    Args:
+        namespace: Namespace that was inspected.
+        detail: Parsed detail, or ``None`` when the namespace is undefined.
+
+    Returns:
+        :class:`NamespaceScStatus` with ``is_sc`` and a reason when false.
+    """
+    if detail is None:
+        return NamespaceScStatus(
+            False,
+            f"Namespace {namespace!r} is not defined on this cluster "
+            "(info reports type=unknown). Check the namespace name, or add the "
+            "namespace to the server configuration.",
+        )
+    if not detail.strong_consistency_reported:
+        return NamespaceScStatus(
+            False,
+            f"Namespace {namespace!r} info did not report strong-consistency; "
+            "treating as non-SC.",
+        )
+    if detail.strong_consistency:
+        return NamespaceScStatus(True, "")
+    return NamespaceScStatus(
+        False,
+        f"Namespace {namespace!r} exists but strong-consistency is false "
+        "(AP mode). Strong consistency is a server-side namespace setting; "
+        "it cannot be enabled from the client.",
+    )
 
 
 class SessionBase(Generic[_WSB, _QB, _TS]):

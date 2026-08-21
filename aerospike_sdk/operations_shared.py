@@ -831,6 +831,11 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
 _FAST_WRITES_REQUIRING_KEY = frozenset({"update", "replace_if_exists"})
 
 
+# Server limit on bin-name length. Used only to explain a rejection the server
+# already made -- the SDK does not pre-validate against it.
+_MAX_BIN_NAME_LEN = 15
+
+
 class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     """Shared fast-path state + promote-delegate logic for single-key segments.
 
@@ -1044,11 +1049,36 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super()._start_write_verb(op_type, arg1, *more_keys)
 
-    @staticmethod
+    def _bin_name_hint(self) -> Optional[str]:
+        """Name the bins whose names exceed the server's length limit.
+
+        The server rejects an over-long bin name without saying which bin it
+        was, and by then the name is only reachable through the operations this
+        segment built. Called on the error path only.
+        """
+        offenders = sorted({
+            name for name in (getattr(op, "bin_name", None) for op in self._ops)
+            if name is not None and len(name) > _MAX_BIN_NAME_LEN
+        })
+        if not offenders:
+            return None
+        listed = ", ".join(repr(name) for name in offenders)
+        plural = "s" if len(offenders) > 1 else ""
+        return (
+            f"Bin name{plural} {listed} exceed"
+            f"{'' if len(offenders) > 1 else 's'} the server's "
+            f"{_MAX_BIN_NAME_LEN}-character limit."
+        )
+
     def _handle_fast_error(
-        exc: Exception, op_type: str,
+        self, exc: Exception, op_type: str,
     ) -> RecordStream:
-        pfc_exc = _convert_pac_exception(exc)
+        hint = (
+            self._bin_name_hint()
+            if getattr(exc, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
+            else None
+        )
+        pfc_exc = _convert_pac_exception(exc, hint=hint)
         rc = pfc_exc.result_code or ResultCode.OK
         _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:

@@ -958,3 +958,24 @@ class TestTtlExpiry:
         assert rr2.record.bins["v"] == 1
 
         await _cleanup(session, k)
+
+class TestBinNameTooLongDiagnostic:
+    """The server rejects an over-long bin name without naming the bin."""
+
+    async def test_names_the_offending_bin(self, session, ds):
+        with pytest.raises(AerospikeError) as excinfo:
+            await session.upsert(ds.id("binname-1")).put(
+                {"ok": 1, "b" * 20: 2, "fine": 3}
+            ).execute()
+
+        err = excinfo.value
+        assert err.result_code == ResultCode.BIN_NAME_TOO_LONG
+        # The whole point: the caller learns which bin, not just that one is bad.
+        assert repr("b" * 20) in err.hint
+        assert "'ok'" not in err.hint
+        assert err.hint in str(err)
+
+    async def test_legal_bin_name_at_the_limit_is_accepted(self, session, ds):
+        # Guards the boundary the diagnostic reports: 15 is legal.
+        await session.upsert(ds.id("binname-2")).put({"a" * 15: 1}).execute()
+        await _cleanup(session, ds.id("binname-2"))
