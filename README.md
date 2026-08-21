@@ -168,14 +168,17 @@ row = await stream.first_or_raise()
 row.record.bins["embedding"].numpy_value  # typed numpy array
 ```
 
-`Exp.vector_bin`/`l2_squared_distance`/`dot_product`/`cosine_similarity`
+### Vector search / Top-K (preview — not yet supported server-side)
+
+`Exp.vector_bin`/`euclidean_squared_distance`/`dot_product`/`cosine_similarity`
 (reachable through `aerospike_sdk.exp.Exp`, the SDK's `FilterExpression`
 alias) build vector-distance expressions, projected into a named bin with
-the existing `.bin(name).select_from(expr)` mechanism. `.order_by(...)` /
-`.top_k(...)` on `QueryBuilder` add Top-K (`ORDER BY <bin> LIMIT k`)
-ranking — including hybrid search, by combining them with `.where(...)`:
+`.with_op_projection(...)`. `.order_by(...)` / `.top_k(...)` on `QueryBuilder`
+express Top-K (`ORDER BY <bin> LIMIT k`) ranking — the intended shape for
+similarity and hybrid search (combined with `.where(...)`):
 
 ```python
+from aerospike_async import ExpOperation, ExpReadFlags
 from aerospike_sdk import DataSet, Order, OrderByType
 from aerospike_sdk.exp import Exp
 
@@ -185,8 +188,12 @@ products = DataSet.of("catalog", "products")
 stream = await (
     session.query(products)
     .where("$.category == 'footwear' and $.stock > 0")
-    .bin("d").select_from(Exp.cosine_similarity(query_vector, Exp.vector_bin("vec")))
-    .bins(["name", "stock", "d"])
+    .with_op_projection(
+        ExpOperation.read(
+            "d",
+            Exp.cosine_similarity(query_vector, Exp.vector_bin("vec")),
+            ExpReadFlags.DEFAULT,
+        ))
     .order_by("d", OrderByType.DOUBLE, Order.DESC)   # larger cosine similarity = closer
     .top_k(10)
     .execute()
@@ -197,14 +204,17 @@ stream.close()
 ```
 
 See [`examples/vector_topk_query.py`](examples/vector_topk_query.py) for a
-full example.
+full TODO/WIP example.
 
-**Work in progress:** Top-K's wire encode is capability-gated in the
-underlying native client and has no assigned minimum server version yet, so
-a query with `.order_by(...)`/`.top_k(...)` set currently fails fast
-client-side (`ValueError`) regardless of the server behind it. The vector
-distance expressions' wire contract is likewise implemented and unit-tested
-for packing, but not yet verified against server code.
+> **Work in progress — vector-distance search is not functional yet.** Scalar
+> Top-K (`ORDER BY <scalar bin> LIMIT k`) works on the current dev server, but
+> vector search first needs an expression to load the VECTOR bin. The server's
+> `rt_bin_translate` has no `AS_PARTICLE_TYPE_VECTOR` case, so *any* expression
+> over a vector bin (`Exp.vector_bin`, `bin_exists`, filters, or vector-distance
+> expressions) falls through to `cf_crash` and aborts `asd`. The normal
+> regression examples/tests are therefore marked TODO/WIP and disabled until
+> the server fixes VECTOR expression evaluation. **Vector bin storage** (above)
+> works today.
 
 ## Performance modes
 
