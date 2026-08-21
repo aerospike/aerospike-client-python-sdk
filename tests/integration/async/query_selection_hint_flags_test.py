@@ -18,14 +18,12 @@
 from __future__ import annotations
 
 import pytest
-from aerospike_async.exceptions import IndexNotFound, InvalidRequest
 
 from aerospike_sdk import Behavior, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior_settings import Settings
 
 from tests.integration.query_selection_helpers import (
-    HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
@@ -46,20 +44,6 @@ PERMISSIVE_SCANS = Behavior.DEFAULT.derive_with_changes(
 
 
 class TestQuerySelectionHintFlags:
-    @requires_query_selection
-    async def test_disallow_scans_on_primary_index_plan_fails_explain(
-        self, query_selection_cluster,
-    ):
-        pac = query_selection_cluster.client.underlying_client
-        with pytest.raises(IndexNotFound) as exc_info:
-            await explain_plan_async(
-                pac,
-                "$.country == 'US'",
-                set_name=HINT_SET_NAME,
-                hint=QueryHint(allow_scans_with_where=False),
-            )
-        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-
     @requires_query_selection
     async def test_disallow_scans_with_soft_hint_selects_secondary_index(
         self, query_selection_cluster,
@@ -115,30 +99,6 @@ class TestQuerySelectionHintFlags:
             | QueryWhereFlags.REQUIRE_INDEX
             | QueryWhereFlags.HARD_HINT
         )
-
-    @requires_query_selection
-    async def test_hard_hint_with_wrong_index_fails_explain(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        with pytest.raises(IndexNotFound) as exc_info:
-            await explain_plan_async(
-                pac,
-                "$.age == 25",
-                set_name=HINT_SET_NAME,
-                hint=QueryHint(
-                    index_name=HINT_BOGUS_INDEX_NAME,
-                    hard_hint=True,
-                ),
-            )
-        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-
-    @requires_query_selection
-    async def test_bad_ael_fails_explain_with_parameter(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        with pytest.raises(InvalidRequest) as exc_info:
-            await explain_plan_async(
-                pac, "$.age > 30 and", set_name=HINT_SET_NAME,
-            )
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
 
 class TestQuerySelectionBuilderScanBlocking:

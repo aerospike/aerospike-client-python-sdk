@@ -26,7 +26,11 @@ from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
-from tests.integration.query_selection_helpers import HINT_SET_NAME, NS
+from tests.integration.query_selection_helpers import (
+    HINT_BOGUS_INDEX_NAME,
+    HINT_SET_NAME,
+    NS,
+)
 from tests.pac_compat import requires_query_selection
 
 
@@ -39,6 +43,41 @@ def _verbose_session(query_selection_cluster, verbosity):
 
 
 class TestQuerySelectionErrorDetail:
+    @requires_query_selection
+    async def test_bad_ael_verbosity_message_fails_at_explain(
+        self, query_selection_cluster, supports_error_detail,
+    ):
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.age > 30 and")
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.sub_code in (None, 0)
+        assert exc_info.value.exp_trace is None
+
+    @requires_query_selection
+    async def test_bad_ael_verbosity_expression_trace_fails_at_explain(
+        self, query_selection_cluster, supports_error_detail,
+    ):
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        session = _verbose_session(
+            query_selection_cluster, ErrorDetailVerbosity.EXPRESSION_TRACE,
+        )
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.age > 30 and")
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.sub_code in (None, 0)
+
     @requires_query_selection
     async def test_disallow_scans_index_not_found_carries_no_subcode(
         self, query_selection_cluster, supports_error_detail,
@@ -55,4 +94,21 @@ class TestQuerySelectionErrorDetail:
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
         # The rejection carries no refining sub_code.
+        assert exc_info.value.sub_code in (None, 0)
+
+    @requires_query_selection
+    async def test_hard_hint_wrong_index_carries_no_subcode(
+        self, query_selection_cluster, supports_error_detail,
+    ):
+        if not supports_error_detail:
+            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
+        with pytest.raises(AerospikeError) as exc_info:
+            await (
+                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                .where("$.age == 51")
+                .with_hint(QueryHint(index_name=HINT_BOGUS_INDEX_NAME, hard_hint=True))
+                .execute()
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
         assert exc_info.value.sub_code in (None, 0)

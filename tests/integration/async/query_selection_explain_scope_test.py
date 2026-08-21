@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aerospike_sdk import DataSet, QueryHint
+from aerospike_sdk import DataSet
 
 from tests.integration.query_selection_helpers import (
     NS,
@@ -26,6 +26,7 @@ from tests.integration.query_selection_helpers import (
     SCOPE_BLOB_INDEX,
     SCOPE_INT_INDEX,
     SCOPE_MAP_BIN,
+    SCOPE_MAP_INDEX,
     SCOPE_MAP_KEY,
     SCOPE_SET_NAME,
     SCOPE_BLOB_BYTES,
@@ -77,7 +78,7 @@ class TestQuerySelectionExplainScope:
         assert plan.index_name == SCOPE_BLOB_INDEX
 
     @requires_query_selection
-    async def test_explain_map_keys_exists_primary_index_fallback(
+    async def test_explain_map_keys_exists_selects_map_keys_index(
         self, query_selection_cluster,
     ):
         client = query_selection_cluster.client
@@ -85,8 +86,8 @@ class TestQuerySelectionExplainScope:
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
         plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
 
-        assert plan.selection == QuerySelection.PRIMARY_INDEX
-        assert plan.index_name is None
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == SCOPE_MAP_INDEX
 
     @requires_query_selection
     async def test_execute_blob_equality_returns_matching_row(
@@ -114,9 +115,6 @@ class TestQuerySelectionExplainScope:
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
             .bins([SCOPE_MAP_BIN])
             .where(where)
-            # map-keys-exists has no secondary index -> primary-index scan; opt
-            # into it past the strict allow_scans_with_where default.
-            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         count = 0

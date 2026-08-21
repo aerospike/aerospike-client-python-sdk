@@ -22,6 +22,7 @@ from aerospike_sdk import DataSet, QueryHint
 from tests.integration.query_selection_helpers import (
     CDT_LIST_BIN,
     CDT_MAP_BIN,
+    CDT_MAP_INDEX,
     CDT_MAP_KEY,
     CDT_SET_NAME,
     CDT_SIZE,
@@ -35,13 +36,13 @@ from tests.pac_compat import requires_query_selection
 
 class TestSyncQueryPlannerCollectionCdt:
     @requires_query_selection
-    def test_plan_map_keys_exists_primary_index_fallback(self, query_selection_cluster):
+    def test_plan_map_keys_exists_selects_map_keys_index(self, query_selection_cluster):
         where = f"$.{CDT_MAP_BIN}.{CDT_MAP_KEY}.exists() == true"
         plan = explain_plan_blocking(
             query_selection_cluster.client.underlying_client, where, set_name=CDT_SET_NAME,
         )
-        assert plan.selection == QuerySelection.PRIMARY_INDEX
-        assert plan.index_name is None
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == CDT_MAP_INDEX
 
     @requires_query_selection
     def test_plan_list_exists_primary_index_fallback(self, query_selection_cluster):
@@ -62,8 +63,7 @@ class TestSyncQueryPlannerCollectionCdt:
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
 
         map_stream = (
-            session.query(ds).bins([CDT_MAP_BIN]).where(map_where)
-            .with_hint(QueryHint(allow_scans_with_where=True)).execute()
+            session.query(ds).bins([CDT_MAP_BIN]).where(map_where).execute()
         )
         map_count = 0
         try:
@@ -76,6 +76,8 @@ class TestSyncQueryPlannerCollectionCdt:
         assert map_count == 10
 
         list_stream = (
+            # A positional list path stays on the primary index, so this leg
+            # still needs the opt-in past the strict default.
             session.query(ds).bins([CDT_LIST_BIN]).where(list_where)
             .with_hint(QueryHint(allow_scans_with_where=True)).execute()
         )
