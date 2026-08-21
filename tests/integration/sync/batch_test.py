@@ -537,3 +537,96 @@ class TestBatchWriteMissingKeyRows:
         after = session.query(present).bins(["v"]).execute().first_or_raise()
         assert after.record.bins["v"] == 2
         assert list(session.query(missing).execute()) == []
+
+
+class TestSyncBatchFilterExpression:
+    """Filter expressions carried on a multi-key (batch) operation.
+
+    The single-key filter tests exercise a different dispatch path; nothing
+    covered a filter that fans out across a batch. A filter travels with each
+    row here rather than once for the whole batch, so every row carries its own
+    copy and is judged independently.
+
+    Reporting differs by verb, which is the part easiest to regress: a
+    filtered-out *read* is dropped from the stream entirely, while a
+    filtered-out *write* or *delete* comes back as a ``FILTERED_OUT`` row.
+    """
+
+    @staticmethod
+    def _seed(session, users: DataSet, prefix: str, values: dict):
+        keys = {name: users.id(f"{prefix}_{name}") for name in values}
+        for name, key in keys.items():
+            session.upsert(key).put({"v": values[name]}).execute()
+        return keys
+
+    @requires_server_compiled_ael
+    def test_batch_read_returns_only_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfr", {"lo": 1, "hi": 9})
+
+        rows = session.query(list(keys.values())).where("$.v >= 5").execute().collect()
+
+        # A filtered-out read is dropped rather than reported.
+        assert [r.key.value for r in rows] == [keys["hi"].value]
+        assert rows[0].record.bins["v"] == 9
+
+    @requires_server_compiled_ael
+    def test_batch_write_applies_only_to_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfw", {"lo": 1, "hi": 9})
+
+        rows = (
+            session.upsert(list(keys.values()))
+            .bin("tagged").set_to(True)
+            .where("$.v >= 5")
+            .execute()
+            .collect()
+        )
+        by_key = {r.key.value: r for r in rows}
+
+        assert by_key[keys["hi"].value].is_ok
+        assert by_key[keys["lo"].value].result_code == ResultCode.FILTERED_OUT
+
+        # The write reached the match and only the match.
+        for name, expected in (("hi", True), ("lo", None)):
+            rec = session.query(keys[name]).execute().first_or_raise()
+            assert rec.record.bins.get("tagged") is expected
+
+    @requires_server_compiled_ael
+    def test_batch_delete_removes_only_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfd", {"lo": 1, "hi": 9})
+
+        rows = session.delete(list(keys.values())).where("$.v >= 5").execute().collect()
+        by_key = {r.key.value: r for r in rows}
+
+        assert by_key[keys["hi"].value].is_ok
+        assert by_key[keys["lo"].value].result_code == ResultCode.FILTERED_OUT
+
+        present = {
+            r.key.value: r.as_bool()
+            for r in session.exists(list(keys.values())).include_missing_keys().execute().collect()
+        }
+        assert present[keys["hi"].value] is False
+        assert present[keys["lo"].value] is True
+
+    @requires_server_compiled_ael
+    def test_batch_survives_a_long_filter_expression(self, cluster: Cluster, users: DataSet):
+        """A long filter must survive being repeated across every row.
+
+        Each row carries its own copy of the expression, so a long filter
+        multiplies the request size by the row count -- the shape where a
+        length or offset mistake in encoding would show up first.
+        """
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbflong", {"lo": 1, "hi": 9})
+
+        # Semantically "$.v >= 5", padded with redundant terms to lengthen the
+        # encoded expression without changing which records it selects.
+        padding = " and ".join(f"$.v != {n}" for n in range(100, 140))
+        long_filter = f"$.v >= 5 and {padding}"
+
+        rows = session.query(list(keys.values())).where(long_filter).execute().collect()
+
+        assert [r.key.value for r in rows] == [keys["hi"].value]
+        assert rows[0].record.bins["v"] == 9
