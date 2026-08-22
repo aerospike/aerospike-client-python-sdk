@@ -20,8 +20,9 @@ import os
 import pytest
 
 from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, IndexNotFoundError
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 async def test_client_policy_use_services_alternate_from_env(client_policy, aerospike_host):
@@ -374,6 +375,122 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payloads"]).execute()
         matches = [r.record.bins["payloads"] async for r in stream if r.is_ok and r.record]
         assert matches == [[b"\x0a", needle]]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index(general_namespace(), set_name).named(index_name).drop()
+        except Exception:
+            pass
+
+
+@requires_server_compiled_ael
+async def test_create_index_from_ael_string_and_query(cluster):
+    """Create an expression index from an AEL string, list it, query through it, drop it."""
+    from aerospike_async import FilterExpression
+
+    set_name = "ael_idx_set"
+    index_name = "psdk_ael_age_idx"
+    ael = "$.age + 1"
+    ds = DataSet.of(general_namespace(), set_name)
+    session = cluster.create_session()
+
+    try:
+        await session.index(general_namespace(), set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+    keys = [ds.id(f"ael_u{i}") for i in range(5)]
+    for i, k in enumerate(keys):
+        await session.upsert(k).put({"age": 30 + i}).execute()
+
+    try:
+        index_task = await (
+            session.index(general_namespace(), set_name)
+            .on_expression(ael)
+            .named(index_name)
+            .numeric()
+            .create()
+        )
+        await index_task.wait_till_complete()
+
+        listed = [i for i in await session.list_indexes() if i["name"] == index_name]
+        assert listed, "AEL-string expression index not visible in list_indexes"
+
+        flt = Filter.range("age", 32, 34).expression(
+            FilterExpression.from_server_compiled_ael(ael),
+        )
+        stream = (
+            await session.query(general_namespace(), set_name)
+            .filter(flt)
+            .bins(["age"])
+            .execute()
+        )
+        ages = sorted(
+            [r.record.bins["age"] async for r in stream if r.is_ok and r.record],
+        )
+        assert ages == [31, 32, 33]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index(general_namespace(), set_name).named(index_name).drop()
+        except Exception:
+            pass
+
+
+@requires_server_compiled_ael
+async def test_create_index_from_boolean_ael_rejected(cluster):
+    """The index basis must produce a value — a boolean AEL predicate is rejected."""
+    session = cluster.create_session()
+    with pytest.raises(AerospikeError):
+        await (
+            session.index(general_namespace(), "ael_idx_set")
+            .on_expression("$.age > 31")
+            .named("psdk_ael_bool_idx")
+            .numeric()
+            .create()
+        )
+
+
+@requires_server_compiled_ael
+@pytest.mark.xfail(
+    strict=True,
+    raises=IndexNotFoundError,
+    reason=(
+        "Server query planning does not yet consider expression-based indexes "
+        "for where() — verified through 8.1.3.0-75 (auto-selection and an "
+        "explicit index-name hint both return IndexNotFound). When a server "
+        "build starts selecting them, this XPASSes: promote it to a real test."
+    ),
+)
+async def test_where_selects_ael_expression_index(cluster):
+    """Tripwire: where() served through an index created from the same AEL."""
+    set_name = "ael_idx_sel_set"
+    index_name = "psdk_ael_sel_idx"
+    ael = "$.age + 1"
+    ds = DataSet.of(general_namespace(), set_name)
+    session = cluster.create_session()
+
+    keys = [ds.id(f"sel_u{i}") for i in range(5)]
+    for i, k in enumerate(keys):
+        await session.upsert(k).put({"age": 30 + i}).execute()
+
+    try:
+        index_task = await (
+            session.index(general_namespace(), set_name)
+            .on_expression(ael)
+            .named(index_name)
+            .numeric()
+            .create()
+        )
+        await index_task.wait_till_complete()
+
+        stream = (
+            await session.query(general_namespace(), set_name)
+            .where(f"{ael} == 32")
+            .execute()
+        )
+        ages = [r.record.bins["age"] async for r in stream if r.is_ok and r.record]
+        assert ages == [31]
     finally:
         await session.delete(keys).execute()
         try:

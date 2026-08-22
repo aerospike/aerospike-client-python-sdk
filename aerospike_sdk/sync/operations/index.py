@@ -72,7 +72,9 @@ class IndexBuilder(_IndexBuilderBase):
             AerospikeError: On failure from the cluster (typed when mapped).
         """
         if self._expression is not None:
-            index_name, index_type, expression = self._validate_expression_create()
+            index_name, index_type, expression = self._validate_expression_create(
+                self._async_client,
+            )
             try:
                 return self._async_client._async_client.create_index_using_expression_blocking(
                     self._namespace,
