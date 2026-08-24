@@ -22,7 +22,11 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 
 from aerospike_sdk import HllConfig
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_result import (
+    RecordResult,
+    batch_failure_records_to_results,
+    batch_records_to_results,
+)
 from aerospike_sdk.operation_result import OperationResult
 
 
@@ -176,6 +180,57 @@ class TestImmutability:
         # (an `AttributeError` subclass).
         with pytest.raises(AttributeError):
             setattr(rr, "record", None)
+
+
+# ---------------------------------------------------------------------------
+# batch_failure_records_to_results
+# ---------------------------------------------------------------------------
+
+class TestBatchFailureRecordsToResults:
+
+    def _aggregate(self) -> AerospikeError:
+        exc = AerospikeError("Batch failed (3 records)")
+        exc.in_doubt = True
+        return exc
+
+    def test_stamped_row_gets_typed_exception(self):
+        # An unanswered row core stamped with the client timeout.
+        br = _batch_record(result_code=ResultCode.TIMEOUT, in_doubt=True)
+        results = batch_failure_records_to_results([br], self._aggregate())
+        row = results[0]
+        assert not row.is_ok
+        assert row.result_code == ResultCode.TIMEOUT
+        assert row.in_doubt is True
+        assert isinstance(row.exception, AerospikeError)
+        assert row.exception.result_code == ResultCode.TIMEOUT
+
+    def test_answered_row_survives_as_success(self):
+        # A sub-batch that completed before another one failed.
+        rec = _record()
+        br = _batch_record(record=rec, result_code=None)
+        results = batch_failure_records_to_results([br], self._aggregate())
+        assert results[0].is_ok
+        assert results[0].record is rec
+
+    def test_unanswered_unstamped_row_carries_the_aggregate(self):
+        # No record, no stamped code: only the batch-wide failure explains
+        # the row — it must not read as success.
+        agg = self._aggregate()
+        br = _batch_record(record=None, result_code=None, in_doubt=False)
+        results = batch_failure_records_to_results([br], agg)
+        row = results[0]
+        assert not row.is_ok
+        assert row.exception is agg
+        assert row.in_doubt is True  # inherited from the aggregate
+
+    def test_index_and_key_are_row_local(self):
+        brs = [
+            _batch_record(key_val=7, result_code=ResultCode.TIMEOUT),
+            _batch_record(key_val=8, result_code=ResultCode.TIMEOUT),
+        ]
+        results = batch_failure_records_to_results(brs, self._aggregate())
+        assert [r.index for r in results] == [0, 1]
+        assert [r.key.digest for r in results] == [_key(7).digest, _key(8).digest]
 
 
 # ---------------------------------------------------------------------------

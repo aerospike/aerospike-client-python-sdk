@@ -152,7 +152,11 @@ from aerospike_sdk.exceptions import (
     _result_code_to_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_result import (
+    RecordResult,
+    batch_failure_records_to_results,
+    batch_records_to_results,
+)
 from aerospike_sdk.record_stream import RecordStream
 
 if TYPE_CHECKING:
@@ -1729,6 +1733,14 @@ class _QueryBuilderBase:
             for i, key in enumerate(keys):
                 handler(key, i, pfc_exc)
             return []
+
+        # A batch-wide failure carries the per-key outcomes the client
+        # already knows (answered rows keep their result; unanswered rows
+        # are stamped — TIMEOUT + in-doubt on client timeouts). Report
+        # those instead of fanning the aggregate onto every key.
+        records = getattr(exc, "records", None)
+        if records:
+            return batch_failure_records_to_results(records, pfc_exc)
 
         return [
             RecordResult(

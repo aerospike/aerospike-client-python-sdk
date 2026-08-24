@@ -101,6 +101,10 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise RuntimeError("No active transaction to commit.")
         status = await self._client._async_client.commit(self._txn)
         self._finalized = True
+        # Drop the txn reference so operations issued after an explicit
+        # commit run transaction-free instead of stamping the finalized
+        # txn on their policies (mirrors the sync session and __aexit__).
+        self._txn = None
         return status
 
     async def abort(self) -> AbortStatus:
@@ -120,6 +124,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise RuntimeError("No active transaction to abort.")
         status = await self._client._async_client.abort(self._txn)
         self._finalized = True
+        self._txn = None
         return status
 
     async def rollback(self) -> AbortStatus:
