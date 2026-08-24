@@ -115,7 +115,8 @@ document id — using the regular collection builders:
 await (
     session.upsert(docs.id("doc-1"))
     .bin("embeddings").list_append(Vector([0.1, 0.2, 0.3]))
-    .bin("embeddings_by_model").map_upsert_items({"v1": Vector([0.1, 0.2, 0.3])})
+    # Bin names are capped at 15 characters server-side.
+    .bin("emb_by_model").map_upsert_items({"v1": Vector([0.1, 0.2, 0.3])})
     .execute()
 )
 ```
