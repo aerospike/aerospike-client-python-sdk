@@ -22,10 +22,15 @@ the async ``create()`` / ``drop()`` dispatchers.
 
 from __future__ import annotations
 
-from aerospike_async import Client, DropIndexTask, IndexTask
+from typing import TYPE_CHECKING
+
+from aerospike_async import DropIndexTask, IndexTask
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
+
+if TYPE_CHECKING:
+    from aerospike_sdk.aio.client import Client
 
 # Re-exported for callers that historically imported the base from this
 # module (the shared definition now lives in index_shared).
@@ -65,7 +70,9 @@ class IndexBuilder(_IndexBuilderBase):
     ) -> None:
         """
         Args:
-            client: Connected async cluster client used for admin calls.
+            client: Connected SDK client; admin calls dispatch through its
+                underlying PAC client, and AEL-string chains read its
+                server-capability gate.
             namespace: Namespace containing the set to index.
             set_name: Set name within the namespace.
         """
@@ -105,9 +112,11 @@ class IndexBuilder(_IndexBuilderBase):
             :meth:`drop`
         """
         if self._expression is not None:
-            index_name, index_type, expression = self._validate_expression_create()
+            index_name, index_type, expression = self._validate_expression_create(
+                self._client,
+            )
             try:
-                return await self._client.create_index_using_expression(
+                return await self._client._async_client.create_index_using_expression(
                     self._namespace,
                     self._set_name,
                     index_name,
@@ -127,7 +136,7 @@ class IndexBuilder(_IndexBuilderBase):
                 "Call numeric(), string(), blob(), or geo2dsphere() first.")
 
         try:
-            return await self._client.create_index(
+            return await self._client._async_client.create_index(
                 self._namespace,
                 self._set_name,
                 self._bin_name,
@@ -166,7 +175,7 @@ class IndexBuilder(_IndexBuilderBase):
             raise ValueError("index_name is required. Call named() first.")
 
         try:
-            return await self._client.drop_index(
+            return await self._client._async_client.drop_index(
                 self._namespace, self._set_name, self._index_name)
         except Exception as e:
             raise _convert_pac_exception(e) from e

@@ -578,7 +578,7 @@ class Client(RoutingCapabilitiesMixin):
             )
 
         return IndexBuilder(
-            client=self._async_client,
+            client=self,
             namespace=namespace,
             set_name=set_name,
         )

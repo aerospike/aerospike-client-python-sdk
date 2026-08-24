@@ -543,9 +543,12 @@ class TestSyncBatchFilterExpression:
     """Filter expressions carried on a multi-key (batch) operation.
 
     The single-key filter tests exercise a different dispatch path; nothing
-    covered a filter that fans out across a batch. A filter travels with each
-    row here rather than once for the whole batch, so every row carries its own
+    covered a filter carried across the rows of a batch. A filter travels with
+    each row rather than once for the whole batch, so every row carries its own
     copy and is judged independently.
+
+    Scope: these use a key list. A chain of several segments on one key is also
+    dispatched as a batch, and a filter on that shape is not covered here.
 
     Reporting differs by verb, which is the part easiest to regress: a
     filtered-out *read* is dropped from the stream entirely, while a
