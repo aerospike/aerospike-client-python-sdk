@@ -15,9 +15,11 @@
 
 """Synchronous multi-key write-chain batch integration tests (mirrors async batch paths)."""
 
+import base64
 import time
 
 import pytest
+from aerospike_async import FilterExpression as Exp
 
 from aerospike_sdk import DataSet, ErrorDetailVerbosity
 from aerospike_sdk.exceptions import ResultCode
@@ -630,3 +632,105 @@ class TestSyncBatchFilterExpression:
 
         assert [r.key.value for r in rows] == [keys["hi"].value]
         assert rows[0].record.bins["v"] == 9
+
+
+def _batch_rows_by_key(results):
+    """Index batch rows by ``(namespace, user key)``.
+
+    Folded batch responses are not ordered by segment order on every server
+    build; match the invalid-filter row by key instead of list position.
+    """
+    return {(r.key.namespace, r.key.value): r for r in results}
+
+
+def _batch_row(rows, key):
+    ident = (key.namespace, key.value)
+    assert ident in rows, (
+        f"no row for {key.value!r}; returned rows: "
+        + ", ".join(f"{k[1]!r}={v.result_code}" for k, v in rows.items())
+    )
+    return rows[ident]
+
+
+def _invalid_filter_expression() -> Exp:
+    return Exp.from_base64(base64.b64encode(bytes([0xFF, 0xFE, 0xFD])).decode())
+
+
+def _assert_batch_invalid_filter_error(res, *, supports_detail: bool) -> None:
+    assert not res.is_ok, (
+        f"expected batch filter build failure for {res.key.value!r}, got {res.result_code}"
+    )
+    assert res.result_code == ResultCode.PARAMETER_ERROR
+    assert res.sub_code in (None, 0)
+    if supports_detail:
+        assert res.server_message is not None
+        assert res.exp_trace is not None
+
+
+class TestSyncBatchInvalidFilterError:
+    """Batch row errors for invalid filter expressions (field 45 extended detail)."""
+
+    @staticmethod
+    def _supports_error_detail(cluster: Cluster) -> bool:
+        builds = cluster.create_session().info().build()
+        versions = [tuple(int(p) for p in b.split("-")[0].split(".")) for b in builds]
+        return bool(versions) and min(versions) >= (8, 1, 3)
+
+    @staticmethod
+    def _verbose_session(cluster: Cluster):
+        behavior = Behavior(
+            "sync-batch-invalid-filter",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.EXPRESSION_TRACE)},
+        )
+        return cluster.create_session(behavior=behavior)
+
+    @requires_server_compiled_ael
+    def test_batch_read_mixed_expressions_invalid_row_returns_parameter_error(
+        self, cluster: Cluster, users: DataSet,
+    ):
+        session = self._verbose_session(cluster)
+        k_ok = users.id("sbif_ok")
+        k_bad = users.id("sbif_bad")
+        session.upsert(k_ok).put({"v": 1}).execute()
+        session.upsert(k_bad).put({"v": 2}).execute()
+
+        results = (
+            session.query(k_ok).where(Exp.bin_exists("v"))
+            .query(k_bad).where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+            .collect()
+        )
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        assert _batch_row(rows, k_ok).is_ok
+        _assert_batch_invalid_filter_error(
+            _batch_row(rows, k_bad),
+            supports_detail=self._supports_error_detail(cluster),
+        )
+
+    @requires_server_compiled_ael
+    def test_batch_read_with_invalid_expression_returns_parameter_error(
+        self, cluster: Cluster, users: DataSet,
+    ):
+        session = self._verbose_session(cluster)
+        keys = [users.id(f"sbif_{i}") for i in (1, 2)]
+        for key in keys:
+            session.upsert(key).put({"v": 1}).execute()
+
+        results = (
+            session.query(keys)
+            .where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+            .collect()
+        )
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        for key in keys:
+            _assert_batch_invalid_filter_error(
+                _batch_row(rows, key),
+                supports_detail=self._supports_error_detail(cluster),
+            )

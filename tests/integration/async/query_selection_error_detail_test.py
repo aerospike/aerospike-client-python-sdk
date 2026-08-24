@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_sdk import ErrorDetailVerbosity, QueryHint, ResultCode
+from aerospike_sdk import ErrorDetailVerbosity, ExpressionTrace, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
@@ -32,6 +32,10 @@ from tests.integration.query_selection_helpers import (
     NS,
 )
 from tests.pac_compat import requires_query_selection
+
+# Trailing ``and`` — syntactically invalid AEL.
+_BAD_AEL = "$.age > 30 and"
+_FILTER_BUILD_MSG = "invalid filter expression in query"
 
 
 def _verbose_session(query_selection_cluster, verbosity):
@@ -53,12 +57,17 @@ class TestQuerySelectionErrorDetail:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(namespace=NS, set_name=HINT_SET_NAME)
-                .where("$.age > 30 and")
+                .where(_BAD_AEL)
                 .execute()
             )
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
-        assert exc_info.value.sub_code in (None, 0)
-        assert exc_info.value.exp_trace is None
+        exc = exc_info.value
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.sub_code in (None, 0)
+        msg = exc.server_message
+        assert msg is not None
+        assert _FILTER_BUILD_MSG in msg
+        assert len(msg) > len(_FILTER_BUILD_MSG)
+        assert exc.exp_trace is None
 
     @requires_query_selection
     async def test_bad_ael_verbosity_expression_trace_fails_at_explain(
@@ -72,11 +81,20 @@ class TestQuerySelectionErrorDetail:
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(namespace=NS, set_name=HINT_SET_NAME)
-                .where("$.age > 30 and")
+                .where(_BAD_AEL)
                 .execute()
             )
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
-        assert exc_info.value.sub_code in (None, 0)
+        exc = exc_info.value
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.sub_code in (None, 0)
+        msg = exc.server_message
+        assert msg is not None
+        assert _FILTER_BUILD_MSG in msg
+        trace = exc.exp_trace
+        assert trace is not None
+        assert trace.phase == ExpressionTrace.PHASE_BUILD
+        assert trace.lang == ExpressionTrace.LANG_AEL
+        assert trace.ael_offset >= 0
 
     @requires_query_selection
     async def test_disallow_scans_index_not_found_carries_no_subcode(

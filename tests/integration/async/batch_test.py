@@ -21,11 +21,17 @@ Tests both:
 3. RecordResult/RecordStream integration (result codes, or_raise, failures, first)
 """
 
+import base64
+
 import pytest
 import pytest_asyncio
+from aerospike_async import FilterExpression as Exp
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk import ErrorDetailVerbosity
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from tests.pac_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
@@ -1270,3 +1276,97 @@ class TestBatchFilterExpression:
 
         assert [r.key.value for r in rows] == [keys["hi"].value]
         assert rows[0].record.bins["v"] == 9
+
+
+def _batch_rows_by_key(results):
+    """Index batch rows by ``(namespace, user key)``.
+
+    Folded batch responses are not ordered by segment order on every server
+    build; match the invalid-filter row by key instead of list position.
+    """
+    return {(r.key.namespace, r.key.value): r for r in results}
+
+
+def _batch_row(rows, key):
+    ident = (key.namespace, key.value)
+    assert ident in rows, (
+        f"no row for {key.value!r}; returned rows: "
+        + ", ".join(f"{k[1]!r}={v.result_code}" for k, v in rows.items())
+    )
+    return rows[ident]
+
+
+def _invalid_filter_expression() -> Exp:
+    return Exp.from_base64(base64.b64encode(bytes([0xFF, 0xFE, 0xFD])).decode())
+
+
+def _assert_batch_invalid_filter_error(res, *, supports_detail: bool) -> None:
+    assert not res.is_ok, (
+        f"expected batch filter build failure for {res.key.value!r}, got {res.result_code}"
+    )
+    assert res.result_code == ResultCode.PARAMETER_ERROR
+    assert res.sub_code in (None, 0)
+    if supports_detail:
+        assert res.server_message is not None
+        assert res.exp_trace is not None
+
+
+class TestBatchInvalidFilterError:
+    """Batch row errors for invalid filter expressions (field 45 extended detail)."""
+
+    @staticmethod
+    def _verbose_session(cluster):
+        behavior = Behavior(
+            "batch-invalid-filter",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.EXPRESSION_TRACE)},
+        )
+        return cluster.create_session(behavior=behavior)
+
+    @requires_server_compiled_ael
+    async def test_batch_read_mixed_expressions_invalid_row_returns_parameter_error(
+        self, cluster, users: DataSet, supports_error_detail,
+    ):
+        session = self._verbose_session(cluster)
+        k_ok = users.id("bif_ok")
+        k_bad = users.id("bif_bad")
+        await session.upsert(k_ok).put({"v": 1}).execute()
+        await session.upsert(k_bad).put({"v": 2}).execute()
+
+        stream = await (
+            session.query(k_ok).where(Exp.bin_exists("v"))
+            .query(k_bad).where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+        )
+        results = await stream.collect()
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        assert _batch_row(rows, k_ok).is_ok
+        _assert_batch_invalid_filter_error(
+            _batch_row(rows, k_bad), supports_detail=supports_error_detail,
+        )
+
+    @requires_server_compiled_ael
+    async def test_batch_read_with_invalid_expression_returns_parameter_error(
+        self, cluster, users: DataSet, supports_error_detail,
+    ):
+        session = self._verbose_session(cluster)
+        keys = [users.id(f"bif_{i}") for i in (1, 2)]
+        for key in keys:
+            await session.upsert(key).put({"v": 1}).execute()
+
+        stream = await (
+            session.query(keys)
+            .where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+        )
+        results = await stream.collect()
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        for key in keys:
+            _assert_batch_invalid_filter_error(
+                _batch_row(rows, key), supports_detail=supports_error_detail,
+            )
