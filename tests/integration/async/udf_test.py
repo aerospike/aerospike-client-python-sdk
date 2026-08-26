@@ -705,6 +705,46 @@ async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
     assert all(isinstance(s, AerospikeError) for s in err.sub_exceptions)
 
 
+async def test_batch_udf_client_timeout_marks_rows_in_doubt(cluster_with_sleep_udf):
+    """A batch UDF client timeout marks every row in-doubt.
+
+    Batch sibling of the single-key in-doubt test above, with the same
+    deterministic shape: the client's 250ms socket timer races the 1000ms
+    server-side UDF sleep, and total_timeout stays 0 so no server deadline
+    can beat the client timer. The writes reached the wire, so every row's
+    outcome is unknown — the in-doubt condition. Batch errors embed
+    per-row rather than raising, so the assertions read the stream.
+    """
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "batch_udf_client_timeout",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=0,
+        ),
+    )
+    session = cluster_with_sleep_udf.create_session(behavior)
+    keys = [DS.id(f"budf_in_doubt_{i}") for i in range(8)]
+    for k in keys:
+        await session.upsert(k).put({"bin": 0}).execute()
+
+    stream = await (
+        session.execute_udf(*keys)
+        .function(SLEEP_MODULE, "sleep")
+        .passing(1000)
+        .execute()
+    )
+    rows = await stream.collect()
+
+    assert len(rows) == len(keys)
+    assert all(not r.is_ok for r in rows)
+    assert all(r.result_code == ResultCode.TIMEOUT for r in rows)
+    assert all(r.in_doubt is True for r in rows)
+    assert all(isinstance(r.exception, TimeoutError) for r in rows)
+    assert all(r.exception.in_doubt is True for r in rows)
+    assert sorted(r.key.digest for r in rows) == sorted(k.digest for k in keys)
+
+
 class TestBatchApplyExpiration:
     """``BatchUDFPolicy.expiration`` — a batch-apply TTL reaches the record.
 

@@ -144,7 +144,10 @@ async def test_delete(cluster):
 async def test_delete_nonexistent(cluster):
     """Test deleting a non-existent record."""
     session = cluster.create_session()
-    k = DataSet.of(general_namespace(), "test").id(999)
+    # Unique key owned by this test; the first delete guarantees absence
+    # even when another test in the shared set transiently created it.
+    k = DataSet.of(general_namespace(), "test").id("pg_delete_missing")
+    await session.delete(k).execute()
 
     result = await session.delete(k).execute()
     first = await result.first()
@@ -227,7 +230,10 @@ async def test_touch(cluster):
 async def test_get_nonexistent(cluster):
     """Test getting a non-existent record."""
     session = cluster.create_session()
-    k = DataSet.of(general_namespace(), "test").id(999)
+    # Unique key owned by this test, deleted up front so the read below is
+    # a guaranteed miss regardless of what other tests populated.
+    k = DataSet.of(general_namespace(), "test").id("pg_get_missing")
+    await session.delete(k).execute()
 
     result = await session.query(k).execute()
     first = await result.first()

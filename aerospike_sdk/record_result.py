@@ -315,6 +315,60 @@ class RecordResult:
         return False  # unreachable
 
 
+def batch_failure_records_to_results(
+    batch_records: list[BatchRecord] | tuple[BatchRecord, ...],
+    aggregate_exc: AerospikeError,
+) -> list[RecordResult]:
+    """Convert the per-key outcomes attached to a failed batch (library internal).
+
+    Unlike :func:`batch_records_to_results`, a missing row result code here
+    cannot mean success: the batch as a whole failed, so a row without a
+    stamped code and without a record was simply never answered — it carries
+    the aggregate failure instead of a fabricated ``OK``.
+
+    Args:
+        batch_records: Per-key ``BatchRecord`` outcomes from the failure.
+        aggregate_exc: The converted batch-wide exception, attached to rows
+            that have no row-level outcome of their own.
+
+    Returns:
+        Parallel list with :attr:`~RecordResult.index` set to each row's
+        position in ``batch_records``.
+    """
+    results: list[RecordResult] = []
+    for i, br in enumerate(batch_records):
+        rc = br.result_code
+        if rc is None and br.record is None:
+            # Unanswered and unstamped: only the batch-wide failure explains it.
+            results.append(RecordResult(
+                key=br.key,
+                record=None,
+                result_code=aggregate_exc.result_code or ResultCode.OK,
+                in_doubt=br.in_doubt or aggregate_exc.in_doubt,
+                index=i,
+                exception=aggregate_exc,
+            ))
+            continue
+        rc = rc if rc is not None else ResultCode.OK
+        results.append(RecordResult(
+            key=br.key,
+            record=br.record,
+            result_code=rc,
+            in_doubt=br.in_doubt,
+            index=i,
+            exception=None if rc == ResultCode.OK else _result_code_to_exception(
+                rc, str(rc), br.in_doubt,
+                sub_code=br.sub_code,
+                server_message=br.server_message,
+                exp_trace=br.exp_trace,
+            ),
+            sub_code=br.sub_code,
+            server_message=br.server_message,
+            exp_trace=br.exp_trace,
+        ))
+    return results
+
+
 def batch_records_to_results(
     batch_records: list[BatchRecord] | tuple[BatchRecord, ...],
 ) -> list[RecordResult]:

@@ -135,6 +135,17 @@ def test_explicit_commit_returns_status(
     assert len(sync_client._pac.commit_calls) == 1
 
 
+def test_ops_after_explicit_commit_run_txn_free(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    # Twin of the aio drift guard: explicit commit drops the txn reference,
+    # so later builders run transaction-free.
+    with sync_tx as tx:
+        tx.commit()
+        assert tx.get_current_transaction() is None
+
+
 def test_explicit_abort_returns_status(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,

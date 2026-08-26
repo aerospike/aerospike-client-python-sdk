@@ -220,9 +220,13 @@ except TimeoutError as err:
 ```
 
 For batch operations with in-stream errors, the per-key flag is
-`RecordResult.in_doubt`. For transactions, `CommitError.in_doubt` reports
-whether the commit itself may have landed (see
-[Transactions](transactions.md)).
+`RecordResult.in_doubt`. This holds even when the batch fails as a whole:
+each row reports its own outcome — rows the server answered keep their
+result, and unanswered rows carry the failure's stamped code, so a batch
+write that client-times-out after reaching the wire yields one row per key
+with `result_code=TIMEOUT` and `in_doubt=True`. For transactions,
+`CommitError.in_doubt` reports whether the commit itself may have landed
+(see [Transactions](transactions.md)).
 
 The direct point-operation shortcuts — `session.get`, `session.put`,
 `session.get_many`, and `session.put_many` — raise the same SDK exception
