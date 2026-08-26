@@ -130,6 +130,33 @@ rejected by the server. If any node is older than 8.1.3, `create()` raises
 with result code `OP_NOT_APPLICABLE` — build the expression with `Exp`
 instead on those clusters.
 
+### Indexing only some records (sparse indexes)
+
+A record whose expression evaluates to `unknown` — equivalently `error` — is
+left out of the index. That is the mechanism for indexing a *subset* of a set:
+return a value for the records worth indexing, and `unknown` for the rest.
+
+```python
+# Index adults in selected countries on their age; skip every other record.
+ael = (
+    "when ($.age >= 18 and $.country in ['Australia', 'Canada', 'USA'] => $.age, "
+    "default => unknown)"
+)
+
+await (
+    session.index(dataset=users)
+    .on_expression(ael)
+    .named("users_adult_age_idx")
+    .numeric()
+    .create()
+)
+```
+
+The index then holds only the matching records, so it stays smaller and a query
+through it never has to consider the rest. Records excluded this way are not
+errors — nothing fails, they simply do not appear in the index, and a query
+served by it will not return them even if they would satisfy the filter.
+
 ## Waiting for an index to build
 
 `create()` returns as soon as the server accepts the request; the index is built
