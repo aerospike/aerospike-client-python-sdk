@@ -20,7 +20,7 @@ import os
 import pytest
 
 from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
-from aerospike_sdk.exceptions import AerospikeError, IndexNotFoundError
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
 
@@ -452,18 +452,14 @@ async def test_create_index_from_boolean_ael_rejected(cluster):
 
 
 @requires_server_compiled_ael
-@pytest.mark.xfail(
-    strict=True,
-    raises=IndexNotFoundError,
-    reason=(
-        "Server query planning does not yet consider expression-based indexes "
-        "for where() — verified through 8.1.3.0-75 (auto-selection and an "
-        "explicit index-name hint both return IndexNotFound). When a server "
-        "build starts selecting them, this XPASSes: promote it to a real test."
-    ),
-)
 async def test_where_selects_ael_expression_index(cluster):
-    """Tripwire: where() served through an index created from the same AEL."""
+    """A where() served through an index created from the same AEL.
+
+    Server query planning began selecting expression-based indexes in the
+    8.1.3.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.1.3.0``,
+    which a pre-RC build of that version also satisfies, so this fails with
+    ``IndexNotFound`` there instead of skipping.
+    """
     set_name = "ael_idx_sel_set"
     index_name = "psdk_ael_sel_idx"
     ael = "$.age + 1"
