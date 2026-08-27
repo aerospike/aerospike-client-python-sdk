@@ -1536,11 +1536,11 @@ class TestMapKeyOperationsAel:
 
     @requires_server_compiled_ael
     async def test_map_key_list(self, session_with_map_data):
-        """Test $.map.{a,b,c} - get entries by key list."""
+        """Test $.map.{@a,@b} - get entries by key list."""
         # Get entries for keys alice and bob from scores
         stream = await (
             session_with_map_data.query(*_MAP_SET_KEYS)
-            .where("$.scores:MAP.{alice,bob}.count() == 2")
+            .where("$.scores:MAP.{@alice,bob}.count() == 2")
             .execute()
         )
         records = []
@@ -2184,10 +2184,10 @@ class TestAelMapBlobIntegrationQueries:
 
     @requires_server_compiled_ael
     async def test_map_ael_key_list_count_on_server(self, session_with_map_data):
-        """Map key list slice: ``$.scores.{alice,bob}``."""
+        """Map key list slice: ``$.scores.{@alice,bob}``."""
         stream = await (
             session_with_map_data.query(*_MAP_SET_KEYS)
-            .where("$.scores:MAP.{alice,bob}.count() == 2")
+            .where("$.scores:MAP.{@alice,bob}.count() == 2")
             .execute()
         )
         records = []

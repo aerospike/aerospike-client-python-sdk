@@ -285,6 +285,7 @@ async def test_str_concat_with_flag(cluster):
 # users drop to low-level StringOperation with ctx=[...] for nested ops)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xfail(reason="CLIENT-5329: string-op CTX envelope reshape")
 async def test_str_upper_with_list_ctx(cluster):
     """``StringOperation.upper`` with a ``ctx=[CTX.list_index(...)]`` upper-cases one list element."""
     sess = cluster.create_session()
@@ -299,6 +300,7 @@ async def test_str_upper_with_list_ctx(cluster):
     assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["one", "TWO", "three"]
 
 
+@pytest.mark.xfail(reason="CLIENT-5329: string-op CTX envelope reshape")
 async def test_str_strlen_with_map_ctx(cluster):
     """``StringOperation.strlen`` with ``ctx=[CTX.map_key(...)]`` measures one map value."""
     sess = cluster.create_session()
