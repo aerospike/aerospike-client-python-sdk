@@ -13,7 +13,7 @@ dependencies = [
     # PAC merge; promoted versions land on public PyPI at release. CI
     # resolves this from the internal index; see README "Local PAC checkout"
     # for working against a local PAC tree instead.
-    "aerospike-async==0.6.0a7.dev29",
+    "aerospike-async==0.6.0a7.dev30",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]
