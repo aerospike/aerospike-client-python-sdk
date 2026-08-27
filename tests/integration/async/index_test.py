@@ -453,7 +453,13 @@ async def test_create_index_from_boolean_ael_rejected(cluster):
 
 @requires_server_compiled_ael
 async def test_where_selects_ael_expression_index(cluster):
-    """Tripwire: where() served through an index created from the same AEL."""
+    """A where() served through an index created from the same AEL.
+
+    Server query planning began selecting expression-based indexes in the
+    8.1.3.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.1.3.0``,
+    which a pre-RC build of that version also satisfies, so this fails with
+    ``IndexNotFound`` there instead of skipping.
+    """
     set_name = "ael_idx_sel_set"
     index_name = "psdk_ael_sel_idx"
     ael = "$.age + 1"

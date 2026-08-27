@@ -115,6 +115,8 @@ class TestQuerySelectionExplainScope:
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
             .bins([SCOPE_MAP_BIN])
             .where(where)
+            # map-keys-exists is served by SCOPE_MAP_INDEX now, so no scan and
+            # no opt-in past the strict allow_scans_with_where default.
             .execute()
         )
         count = 0

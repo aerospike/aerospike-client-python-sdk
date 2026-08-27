@@ -63,6 +63,8 @@ class TestSyncQueryPlannerCollectionCdt:
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
 
         map_stream = (
+            # Map-keys exists now plans onto the map-keys index, so this leg no
+            # longer needs the opt-in past the strict default.
             session.query(ds).bins([CDT_MAP_BIN]).where(map_where).execute()
         )
         map_count = 0

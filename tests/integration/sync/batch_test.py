@@ -19,9 +19,8 @@ import base64
 import time
 
 import pytest
-from aerospike_async import FilterExpression as Exp
 
-from aerospike_sdk import DataSet, ErrorDetailVerbosity
+from aerospike_sdk import DataSet, ErrorDetailVerbosity, Exp, ExpressionTrace, SubCode
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
@@ -549,6 +548,11 @@ class TestSyncBatchFilterExpression:
     row here rather than once for the whole batch, so every row carries its own
     copy and is judged independently.
 
+    Scope: these use a key list. A chain of several segments on one key is also
+    dispatched as a batch, and a filter on that shape is not covered here (the
+    mixed-expression test in ``TestSyncBatchInvalidFilterError`` chains
+    segments, but across distinct keys).
+
     Reporting differs by verb, which is the part easiest to regress: a
     filtered-out *read* is dropped from the stream entirely, while a
     filtered-out *write* or *delete* comes back as a ``FILTERED_OUT`` row.
@@ -637,10 +641,13 @@ class TestSyncBatchFilterExpression:
 def _batch_rows_by_key(results):
     """Index batch rows by ``(namespace, user key)``.
 
-    Folded batch responses are not ordered by segment order on every server
-    build; match the invalid-filter row by key instead of list position.
+    Precaution rather than an observed failure: nothing in the protocol
+    promises a folded batch response arrives in segment order, so match the
+    invalid-filter row by key instead of by list position.
     """
-    return {(r.key.namespace, r.key.value): r for r in results}
+    rows = {(r.key.namespace, r.key.value): r for r in results}
+    assert len(rows) == len(results), "duplicate keys collapsed"
+    return rows
 
 
 def _batch_row(rows, key):
@@ -653,28 +660,43 @@ def _batch_row(rows, key):
 
 
 def _invalid_filter_expression() -> Exp:
+    """A packed filter the server cannot decode.
+
+    ``FF FE FD`` is not a valid msgpack prefix, so the bytes fail at expression
+    *build* time on the server rather than being rejected client-side — the
+    sibling of ``query_selection_error_detail_test``'s trailing-``and`` AEL, on
+    the packed path.
+    """
     return Exp.from_base64(base64.b64encode(bytes([0xFF, 0xFE, 0xFD])).decode())
 
 
-def _assert_batch_invalid_filter_error(res, *, supports_detail: bool) -> None:
+def _assert_batch_invalid_filter_error(res) -> None:
+    """Assert a batch row carrying an undecodable packed filter.
+
+    Values pinned against 8.1.3.0, which ``@requires_server_compiled_ael``
+    already guarantees — the same threshold as the ``supports_error_detail``
+    fixture, so detail is unconditionally present here.
+    """
     assert not res.is_ok, (
         f"expected batch filter build failure for {res.key.value!r}, got {res.result_code}"
     )
     assert res.result_code == ResultCode.PARAMETER_ERROR
-    assert res.sub_code in (None, 0)
-    if supports_detail:
-        assert res.server_message is not None
-        assert res.exp_trace is not None
+    assert res.sub_code == SubCode.NONE  # 0, explicitly, not None
+    assert res.server_message is not None
+    assert "invalid filter expression" in res.server_message
+    trace = res.exp_trace
+    assert trace is not None
+    assert trace.phase == ExpressionTrace.PHASE_BUILD
+    # The packed path reports MSGPACK and locates the fault by byte offset;
+    # the AEL path in query_selection_error_detail_test reports LANG_AEL and
+    # fills ael_offset instead. Pinned to keep the two distinguishable.
+    assert trace.lang == ExpressionTrace.LANG_MSGPACK
+    assert trace.byte_offset is not None
+    assert trace.ael_offset is None
 
 
 class TestSyncBatchInvalidFilterError:
     """Batch row errors for invalid filter expressions (field 45 extended detail)."""
-
-    @staticmethod
-    def _supports_error_detail(cluster: Cluster) -> bool:
-        builds = cluster.create_session().info().build()
-        versions = [tuple(int(p) for p in b.split("-")[0].split(".")) for b in builds]
-        return bool(versions) and min(versions) >= (8, 1, 3)
 
     @staticmethod
     def _verbose_session(cluster: Cluster):
@@ -705,10 +727,7 @@ class TestSyncBatchInvalidFilterError:
         assert len(results) == 2
         rows = _batch_rows_by_key(results)
         assert _batch_row(rows, k_ok).is_ok
-        _assert_batch_invalid_filter_error(
-            _batch_row(rows, k_bad),
-            supports_detail=self._supports_error_detail(cluster),
-        )
+        _assert_batch_invalid_filter_error(_batch_row(rows, k_bad))
 
     @requires_server_compiled_ael
     def test_batch_read_with_invalid_expression_returns_parameter_error(
@@ -730,7 +749,4 @@ class TestSyncBatchInvalidFilterError:
         assert len(results) == 2
         rows = _batch_rows_by_key(results)
         for key in keys:
-            _assert_batch_invalid_filter_error(
-                _batch_row(rows, key),
-                supports_detail=self._supports_error_detail(cluster),
-            )
+            _assert_batch_invalid_filter_error(_batch_row(rows, key))

@@ -68,6 +68,8 @@ class TestQueryPlannerCollectionCdt:
             session.query(ds)
             .bins([CDT_MAP_BIN])
             .where(map_where)
+            # Map-keys exists now plans onto the map-keys index, so this leg no
+            # longer needs the opt-in past the strict default.
             .execute()
         )
         map_count = 0

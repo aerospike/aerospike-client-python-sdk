@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import pytest
+from aerospike_async.exceptions import IndexNotFound
 
 from aerospike_sdk import Behavior, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
@@ -38,6 +39,25 @@ from tests.pac_compat import requires_query_selection
 
 
 class TestSyncQuerySelectionHintFlags:
+    @requires_query_selection
+    def test_disallow_scans_on_primary_index_plan_fails_explain(self, query_selection_cluster):
+        """The explain-layer counterpart of ``TestSyncQuerySelectionBuilderScanBlocking``.
+
+        The two tests that used to sit alongside this one moved to
+        ``query_selection_error_detail_test``, which asserts through the SDK
+        builder; this one stays because no test there covers ``REQUIRE_INDEX``
+        on a plan that has no index to fall back to.
+        """
+        pac = query_selection_cluster.client.underlying_client
+        with pytest.raises(IndexNotFound) as exc_info:
+            explain_plan_blocking(
+                pac,
+                "$.country == 'US'",
+                set_name=HINT_SET_NAME,
+                hint=QueryHint(allow_scans_with_where=False),
+            )
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+
     @requires_query_selection
     def test_disallow_scans_with_soft_hint_selects_secondary_index(self, query_selection_cluster):
         pac = query_selection_cluster.client.underlying_client
