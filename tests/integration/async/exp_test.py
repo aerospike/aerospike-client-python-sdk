@@ -1545,6 +1545,9 @@ class TestMapKeyOperationsAel:
         )
         records = []
         async for result in stream:
+            # Count matches, not rows: a rejected filter arrives as a non-ok row
+            # carrying no record, which would otherwise read as a match.
+            assert result.is_ok, f"row {result.key.value!r}: {result.result_code}"
             records.append(result.record)
         stream.close()
 
@@ -2192,6 +2195,7 @@ class TestAelMapBlobIntegrationQueries:
         )
         records = []
         async for result in stream:
+            assert result.is_ok, f"row {result.key.value!r}: {result.result_code}"
             records.append(result.record)
         stream.close()
         assert len(records) == 1
