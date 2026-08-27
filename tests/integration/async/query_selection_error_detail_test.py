@@ -58,16 +58,19 @@ def _verbose_session(query_selection_cluster, verbosity):
 
 
 class TestQuerySelectionErrorDetail:
+    """Error detail on the explain path.
+
+    No test here guards on ``supports_error_detail``: that fixture and
+    ``@requires_query_selection`` share the 8.1.3.0 threshold, so a cluster
+    that reaches these bodies always supplies extended detail.
+    """
+
     @requires_query_selection
-    async def test_bad_ael_verbosity_none_yields_no_detail(
-        self, query_selection_cluster, supports_error_detail,
-    ):
+    async def test_bad_ael_verbosity_none_yields_no_detail(self, query_selection_cluster):
         """Control for the rest of the file: at ``NONE`` the explain path
         attaches nothing, so the detail the other tests assert on is a
         consequence of the requested verbosity rather than something the
         server always sends here."""
-        if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.NONE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
@@ -82,11 +85,7 @@ class TestQuerySelectionErrorDetail:
         assert exc.sub_code is None
 
     @requires_query_selection
-    async def test_bad_ael_verbosity_message_fails_at_explain(
-        self, query_selection_cluster, supports_error_detail,
-    ):
-        if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+    async def test_bad_ael_verbosity_message_fails_at_explain(self, query_selection_cluster):
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
@@ -105,10 +104,8 @@ class TestQuerySelectionErrorDetail:
 
     @requires_query_selection
     async def test_bad_ael_verbosity_expression_trace_fails_at_explain(
-        self, query_selection_cluster, supports_error_detail,
+        self, query_selection_cluster,
     ):
-        if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _verbose_session(
             query_selection_cluster, ErrorDetailVerbosity.EXPRESSION_TRACE,
         )
@@ -135,10 +132,8 @@ class TestQuerySelectionErrorDetail:
 
     @requires_query_selection
     async def test_disallow_scans_index_not_found_carries_no_subcode(
-        self, query_selection_cluster, supports_error_detail,
+        self, query_selection_cluster,
     ):
-        if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
@@ -153,11 +148,7 @@ class TestQuerySelectionErrorDetail:
         assert exc_info.value.sub_code is None
 
     @requires_query_selection
-    async def test_hard_hint_wrong_index_carries_no_subcode(
-        self, query_selection_cluster, supports_error_detail,
-    ):
-        if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+    async def test_hard_hint_wrong_index_carries_no_subcode(self, query_selection_cluster):
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
