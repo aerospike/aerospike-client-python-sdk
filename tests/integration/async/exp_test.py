@@ -529,6 +529,18 @@ _MAP_SET_KEYS = _set_keys("map_ael_test", "rec1", "rec2", "rec3")
 _NESTED_SET_KEYS = _set_keys("nested_ael_test", "rec1", "rec2")
 _REL_RANGE_SET_KEYS = _set_keys("rel_range_test", "rec1", "rec2", "rec3")
 
+# A map key-list selector holding two or more keys -- ``{alice,bob}`` -- is
+# rejected per record with PARAMETER_ERROR on the 8.1.3.0 RC, and evaluates
+# normally on 8.1.3.0-75. Narrowed by A/B on the same client and data: key
+# ranges ``{@a:d}``, index ranges ``{0:2}`` and single-value selectors
+# ``{=100,}`` are unaffected, so only the key-list form regressed.
+_MAP_KEY_LIST_REGRESSED = (
+    "Map key-list selector {k1,k2} is rejected per record with PARAMETER_ERROR "
+    "on the 8.1.3.0 RC; it evaluates normally on 8.1.3.0-75. Neighboring "
+    "selector forms (key range, index range, single value) still work, so the "
+    "regression is confined to the key-list form."
+)
+
 
 class TestExpWithAel:
     """Test AEL string expressions with where() method.
@@ -1535,6 +1547,7 @@ class TestMapKeyOperationsAel:
 
 
     @requires_server_compiled_ael
+    @pytest.mark.xfail(reason=_MAP_KEY_LIST_REGRESSED)
     async def test_map_key_list(self, session_with_map_data):
         """Test $.map.{a,b,c} - get entries by key list."""
         # Get entries for keys alice and bob from scores
@@ -1545,6 +1558,9 @@ class TestMapKeyOperationsAel:
         )
         records = []
         async for result in stream:
+            # Count matches, not rows: a rejected filter arrives as a non-ok row
+            # carrying no record, which would otherwise read as a match.
+            assert result.is_ok, f"row {result.key.value!r}: {result.result_code}"
             records.append(result.record)
         stream.close()
 
@@ -2183,6 +2199,7 @@ class TestAelMapBlobIntegrationQueries:
             assert rec.bins["metadata"]["level"] in (2, 3)
 
     @requires_server_compiled_ael
+    @pytest.mark.xfail(reason=_MAP_KEY_LIST_REGRESSED)
     async def test_map_ael_key_list_count_on_server(self, session_with_map_data):
         """Map key list slice: ``$.scores.{alice,bob}``."""
         stream = await (
@@ -2192,6 +2209,7 @@ class TestAelMapBlobIntegrationQueries:
         )
         records = []
         async for result in stream:
+            assert result.is_ok, f"row {result.key.value!r}: {result.result_code}"
             records.append(result.record)
         stream.close()
         assert len(records) == 1
