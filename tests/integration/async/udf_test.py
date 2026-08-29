@@ -723,10 +723,14 @@ async def test_batch_udf_client_timeout_marks_rows_in_doubt(cluster_with_sleep_u
             max_retries=0,
         ),
     )
-    session = cluster_with_sleep_udf.create_session(behavior)
+    # Seed through a default session: the 250ms socket timer is scoped to
+    # the UDF race below, and a slow runner must not time out the setup.
+    seed_session = cluster_with_sleep_udf.create_session()
     keys = [DS.id(f"budf_in_doubt_{i}") for i in range(8)]
     for k in keys:
-        await session.upsert(k).put({"bin": 0}).execute()
+        await seed_session.upsert(k).put({"bin": 0}).execute()
+
+    session = cluster_with_sleep_udf.create_session(behavior)
 
     stream = await (
         session.execute_udf(*keys)
