@@ -53,6 +53,15 @@ class TestOnExpressionChaining:
         assert b.on_expression("$.age") is b
         assert b._expression == "$.age"
 
+    def test_rejects_non_expression_input(self):
+        # Without the shape check, None would fall through to the bin path and
+        # surface as a misleading "bin_name is required" at create().
+        b = _async_builder()
+        with pytest.raises(TypeError, match="AEL string or a FilterExpression"):
+            b.on_expression(None)
+        with pytest.raises(TypeError, match="got int"):
+            b.on_expression(42)
+
 
 class TestExpressionCreateAsync:
 

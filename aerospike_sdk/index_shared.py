@@ -104,6 +104,8 @@ class _IndexBuilderBase:
             ``self`` for method chaining.
 
         Raises:
+            TypeError: If *expression* is neither an AEL string nor a
+                ``FilterExpression``.
             ValueError: If :meth:`on_bin` was already called on this builder.
 
         Example::
@@ -135,6 +137,11 @@ class _IndexBuilderBase:
         See Also:
             :meth:`on_bin`: Index a plain bin value.
         """
+        if not isinstance(expression, (str, FilterExpression)):
+            raise TypeError(
+                "expression must be an AEL string or a FilterExpression, got "
+                f"{type(expression).__name__}",
+            )
         if self._bin_name is not None:
             raise ValueError(
                 "on_bin() and on_expression() are mutually exclusive; "
