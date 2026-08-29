@@ -27,7 +27,7 @@ from aerospike_sdk import (
     StringWriteFlags,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from tests.integration.namespace import general_namespace
 
 
@@ -55,6 +55,7 @@ async def cluster(aerospike_host, supports_string_operations, make_cluster_defin
             "reads", "modify", "append_ops", "exp_query",
             "transform_noop_missing", "create_from_missing",
             "concat_flag", "list_ctx", "map_ctx",
+            "norm_replace", "norm_affix", "result_cap",
         ):
             await sess.delete(_TEST_DS.id(f"strop_{suffix}")).execute()
         yield c
@@ -496,3 +497,101 @@ async def test_str_find_overlap_skip_icu_path_emoji(cluster):
         .execute())
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["s"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Unicode canonical equivalence — replace and affix matching
+# ---------------------------------------------------------------------------
+
+_NFC = "caf\u00e9"     # composed
+_NFD = "cafe\u0301"    # decomposed
+
+
+async def test_str_replace_matches_across_normalization_forms(cluster):
+    """``str_replace`` treats canonically equivalent needles as equal.
+
+    Replace carries the same canonical-equivalence guarantee as find and
+    contains: the server routes replace through its canonical search
+    (``get_canon_search`` in ``particle_string.c``) whenever the forms
+    differ, so a needle in one normalization form matches a stored value
+    in the other.
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_norm_replace")
+
+    # Composed haystack, decomposed needle.
+    await sess.upsert(k).bin("s").set_to(_NFC + " au lait").execute()
+    result = await (await sess.upsert(k)
+        .bin("s").str_replace(_NFD, "tea")
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "tea au lait"
+
+    # Decomposed haystack, composed needle.
+    await sess.upsert(k).bin("s").set_to(_NFD + " au lait").execute()
+    result = await (await sess.upsert(k)
+        .bin("s").str_replace(_NFC, "tea")
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "tea au lait"
+
+
+async def test_str_starts_with_and_ends_with_match_across_normalization_forms(cluster):
+    """``str_starts_with`` / ``str_ends_with`` match canonically, not byte-exact.
+
+    The server's canonical search backs prefix and suffix matching too
+    (four ``get_canon_search`` call sites, not two), so an affix in either
+    normalization form matches a value stored in the other.
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_norm_affix")
+
+    async def probe(stored, op, affix):
+        await sess.upsert(k).bin("s").set_to(stored).execute()
+        chain = sess.query(k).bin("s")
+        rs = await getattr(chain, op)(affix).execute()
+        return (await rs.first_or_raise()).record_or_raise().bins["s"]
+
+    assert await probe(_NFC + " au lait", "str_starts_with", _NFD) is True
+    assert await probe(_NFD + " au lait", "str_starts_with", _NFC) is True
+    assert await probe("au lait " + _NFC, "str_ends_with", _NFD) is True
+    assert await probe("au lait " + _NFD, "str_ends_with", _NFC) is True
+
+
+# ---------------------------------------------------------------------------
+# Result-size cap
+#
+# Modify ops bound their estimated result at prepare time
+# (particle_string.c string_modify_set_estimated_size). Exceeding the bound
+# is PARAMETER_ERROR and nothing is written, so it is reported independently
+# of RECORD_TOO_BIG — which the same ops raise for a result that clears the
+# cap but outgrows the namespace record limit.
+# ---------------------------------------------------------------------------
+
+# Ceiling the server puts on a modify op's estimated result size.
+_RESULT_SIZE_CAP = 8 * 1024 * 1024
+
+
+async def test_modify_past_result_cap_raises_parameter_error(cluster):
+    """Each estimate-growing modify op past the cap fails with ``PARAMETER_ERROR``."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_result_cap")
+    await sess.upsert(k).bin("s").set_to("hello").execute()
+
+    async def assert_param_error(build):
+        with pytest.raises(AerospikeError) as exc_info:
+            await build(sess.upsert(k).bin("s")).execute()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+    # Estimated as old_size * count.
+    await assert_param_error(lambda b: b.str_repeat(_RESULT_SIZE_CAP))
+    # Estimated as target_length * 4 — worst-case UTF-8 expansion.
+    await assert_param_error(lambda b: b.str_pad_start(_RESULT_SIZE_CAP // 4 + 1, "*"))
+    await assert_param_error(lambda b: b.str_pad_end(_RESULT_SIZE_CAP // 4 + 1, "*"))
+    # Estimated as old_size + argument size, so only the argument can carry
+    # the result past the cap.
+    await assert_param_error(lambda b: b.str_concat("x" * _RESULT_SIZE_CAP))
+
+    # Nothing was written by any of the rejected ops.
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "hello"

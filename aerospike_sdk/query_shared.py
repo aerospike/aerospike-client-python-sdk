@@ -4062,11 +4062,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         return self._segment._add_op(StringOperation.contains(self._bin, needle))
 
     def str_starts_with(self, prefix: str) -> WriteSegmentBuilder:
-        """Register a starts-with read: ``True`` iff this bin starts with ``prefix``."""
+        """Register a starts-with read: ``True`` iff this bin starts with ``prefix``.
+
+        Matching is Unicode canonical, not byte-exact: a prefix in a different
+        normalization form than the stored value still matches.
+        """
         return self._segment._add_op(StringOperation.starts_with(self._bin, prefix))
 
     def str_ends_with(self, suffix: str) -> WriteSegmentBuilder:
-        """Register an ends-with read: ``True`` iff this bin ends with ``suffix``."""
+        """Register an ends-with read: ``True`` iff this bin ends with ``suffix``.
+
+        Matching is Unicode canonical, not byte-exact: a suffix in a different
+        normalization form than the stored value still matches.
+        """
         return self._segment._add_op(StringOperation.ends_with(self._bin, suffix))
 
     def str_to_integer(self) -> WriteSegmentBuilder:
@@ -5328,12 +5336,20 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         return self._parent
 
     def str_starts_with(self, prefix: str) -> _T:
-        """Read a bool: ``True`` iff this bin starts with ``prefix``."""
+        """Read a bool: ``True`` iff this bin starts with ``prefix``.
+
+        Matching is Unicode canonical, not byte-exact: a prefix in a different
+        normalization form than the stored value still matches.
+        """
         self._parent.add_operation(StringOperation.starts_with(self._bin, prefix))  # type: ignore[union-attr]
         return self._parent
 
     def str_ends_with(self, suffix: str) -> _T:
-        """Read a bool: ``True`` iff this bin ends with ``suffix``."""
+        """Read a bool: ``True`` iff this bin ends with ``suffix``.
+
+        Matching is Unicode canonical, not byte-exact: a suffix in a different
+        normalization form than the stored value still matches.
+        """
         self._parent.add_operation(StringOperation.ends_with(self._bin, suffix))  # type: ignore[union-attr]
         return self._parent
 
