@@ -174,6 +174,51 @@ await (
 )
 ```
 
+### Key-ordered maps
+
+A map written as a plain `dict` is stored **unordered**. The server sorts the
+entries either way, so a read looks identical — but it will not binary-search a
+map that was not *declared* ordered, and keyed or range access on one falls back
+to a scan. On a large map that is the difference between a lookup and a walk.
+
+Declare the order by wrapping the dict in [`SortedMap`](../api/sorted-map.md):
+
+```python
+from aerospike_sdk import SortedMap
+
+await (
+    session.upsert(users.id(1))
+    .put({"scores": SortedMap({"zoe": 3, "amy": 1})})
+    .execute()
+)
+```
+
+The flag is stored with the record and survives later modification, so it
+governs the cost of every subsequent access — by any client — until the map is
+rewritten unordered.
+
+`SortedMap` subclasses `dict`, so it behaves as one everywhere, and a
+key-ordered map reads back as a `SortedMap` rather than a plain `dict`:
+
+```python
+scores = record.bins["scores"]
+
+scores["amy"]                     # 1
+scores == {"amy": 1, "zoe": 3}    # True
+isinstance(scores, dict)          # True
+```
+
+Maps created through the CDT surface take their order from the operation
+instead, so `SortedMap` is not needed there:
+
+```python
+await (
+    session.update(users.id(1))
+    .bin("settings").map_upsert_items({"theme": "dark"}, order=MapOrder.KEY_ORDERED)
+    .execute()
+)
+```
+
 ### Remove
 
 ```python

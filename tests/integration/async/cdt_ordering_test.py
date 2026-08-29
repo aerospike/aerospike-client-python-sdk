@@ -15,11 +15,14 @@
 
 """Tests proving K-ordered map key ordering is preserved through native Python dict."""
 
+import pytest
 import pytest_asyncio
-from aerospike_sdk import MapOrder, MapReturnType
+from aerospike_sdk import Exp, MapOrder, MapReturnType, SortedMap
 from aerospike_async import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 NS = general_namespace()
@@ -32,7 +35,7 @@ DS = DataSet.of(NS, SET)
 async def cluster(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
-        for key in range(1, 25):
+        for key in range(1, 40):
             await session.delete(DS.id(key)).execute()
         yield c
 
@@ -524,3 +527,144 @@ class TestCdtOrdering:
 
         keys = record.bins[BIN]
         assert keys == ["b", "c", "d"]
+
+
+class TestSortedMapOnPlainWrites:
+    """``SortedMap`` declares a plain bin write key-ordered.
+
+    A plain ``dict`` is written unordered. The server sorts the entries either
+    way, so the two cannot be told apart by reading them back -- the flag is
+    what decides whether the server will binary-search the map on later access,
+    and it is durable, so it governs every subsequent read of that record.
+    """
+
+    async def test_sorted_map_round_trips_as_itself(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(30)
+        await session.delete(k).execute()
+        data = {"zebra": 26, "apple": 1, "mango": 13}
+
+        await session.upsert(k).put({BIN: SortedMap(data)}).execute()
+        stream = await session.query(k).execute()
+        got = (await stream.first_or_raise()).record_or_raise()
+
+        # Symmetric: written as a SortedMap, read back as one.
+        assert isinstance(got.bins[BIN], SortedMap)
+        # And still a dict in every way that matters to a caller.
+        assert isinstance(got.bins[BIN], dict)
+        assert got.bins[BIN] == data
+        assert got.bins[BIN]["apple"] == 1
+        assert list(got.bins[BIN]) == sorted(data)
+
+    async def test_plain_dict_stays_a_plain_dict(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(31)
+        await session.delete(k).execute()
+        data = {"b": 2, "a": 1}
+
+        await session.upsert(k).put({BIN: data}).execute()
+        stream = await session.query(k).execute()
+        got = (await stream.first_or_raise()).record_or_raise()
+
+        # An undeclared map is not silently promoted.
+        assert type(got.bins[BIN]) is dict
+        assert got.bins[BIN] == data
+
+    async def test_sorted_map_through_the_bin_builder(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(32)
+        await session.delete(k).execute()
+
+        await session.upsert(k).bin(BIN).set_to(SortedMap({"z": 1, "a": 2})).execute()
+        stream = await session.query(k).execute()
+        got = (await stream.first_or_raise()).record_or_raise()
+
+        assert isinstance(got.bins[BIN], SortedMap)
+        assert got.bins[BIN] == {"a": 2, "z": 1}
+
+    async def test_sorted_map_nests(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(33)
+        await session.delete(k).execute()
+
+        await session.upsert(k).put(
+            {BIN: {"limits": SortedMap({"z": 1, "a": 2})}}
+        ).execute()
+        stream = await session.query(k).execute()
+        got = (await stream.first_or_raise()).record_or_raise()
+
+        inner = got.bins[BIN]["limits"]
+        assert isinstance(inner, SortedMap)
+        assert inner == {"a": 2, "z": 1}
+
+    async def test_sorted_map_equals_itself_in_an_expression(self, cluster):
+        """Whole-map equality: a key-ordered bin compared against the same map.
+
+        Both operands must be key-ordered for the server to compare them --
+        the encodings differ by the order-flag header, so an unordered operand
+        on either side never matches. The unordered form is unreachable until
+        the server detects pre-sorted unordered maps.
+        """
+        session = cluster.create_session()
+        k = DS.id(34)
+        await session.delete(k).execute()
+        m = SortedMap({"key1": "e", "key2": "d", "key3": "c",
+                       "key4": "b", "key5": "a"})
+
+        await session.upsert(k).bin(BIN).set_to(m).execute()
+
+        stream = await (
+            session.query(k)
+            .bins([BIN])
+            .fail_on_filtered_out()
+            .where(Exp.eq(Exp.map_bin(BIN), Exp.val(m)))
+            .execute()
+        )
+        rows = await stream.collect()
+
+        assert rows, "a key-ordered map must compare equal to itself"
+        got = rows[0].record_or_raise().bins[BIN]
+        # Returned as the declared type, so it compares against the value written.
+        assert isinstance(got, SortedMap)
+        assert got == m
+        assert list(got) == sorted(m)
+
+    @requires_server_compiled_ael
+    @pytest.mark.xfail(
+        raises=AerospikeError,
+        reason=(
+            "Server-compiled AEL cannot express whole-map equality: a map "
+            "literal comparison comes back PARAMETER_ERROR regardless of the "
+            "bin's map order. Controls isolate it -- plain AEL filters work, "
+            "AEL reaches into the map (`:MAP.count()`), and the identical "
+            "comparison succeeds as a built expression -- so only the AEL "
+            "map-literal form is unsupported. Promote when the server gains it."
+        ),
+    )
+    async def test_sorted_map_equality_via_server_ael(self, cluster):
+        """The AEL spelling of :meth:`test_sorted_map_equals_itself_in_an_expression`.
+
+        Kept as the string-filter twin of the built-expression test so the two
+        surfaces stay paired: the day the server compiles map equality, this
+        XPASSes and becomes a plain test.
+        """
+        session = cluster.create_session()
+        k = DS.id(35)
+        await session.delete(k).execute()
+        m = SortedMap({"key1": "e", "key2": "d", "key3": "c",
+                       "key4": "b", "key5": "a"})
+
+        await session.upsert(k).bin(BIN).set_to(m).execute()
+
+        literal = ("{'key1': 'e', 'key2': 'd', 'key3': 'c', "
+                   "'key4': 'b', 'key5': 'a'}")
+        stream = await (
+            session.query(k)
+            .bins([BIN])
+            .fail_on_filtered_out()
+            .where(f"$.{BIN}.get(type: MAP) == {literal}")
+            .execute()
+        )
+        rows = await stream.collect()
+
+        assert rows, "a key-ordered map must compare equal to itself"

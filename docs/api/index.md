@@ -52,6 +52,7 @@ Shared types used by both async and sync APIs.
 |-------|-------------|
 | [`DataSet`](dataset.md) | Namespace + set pair, key factory |
 | [`HllConfig`](hll-config.md) | HyperLogLog bin precision (index + minhash bit counts) |
+| [`SortedMap`](sorted-map.md) | Declares a map bin key-ordered on a plain write |
 | [`RecordResult`](record-result.md) | Single result from a query or batch |
 | [`OperationResult`](operation-result.md) | Typed-accessor wrapper around a single operation's value |
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
@@ -108,6 +109,7 @@ sync/udf
 sync/tls-builder
 dataset
 hll-config
+sorted-map
 record-result
 operation-result
 record-stream
