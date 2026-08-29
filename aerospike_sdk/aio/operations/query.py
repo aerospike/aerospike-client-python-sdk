@@ -1364,7 +1364,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- delete (PAC returns bool, no record) --
         if op_type == "delete":
-            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy(mode)
             wp = self._apply_txn(wp)
             try:
                 existed = await self._client_fast.delete(key, policy=wp)
@@ -1378,7 +1378,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- touch (no record returned) --
         if op_type == "touch":
-            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy(mode)
             wp = self._apply_txn(wp)
             try:
                 await self._client_fast.touch(key, policy=wp)
@@ -1441,7 +1441,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 wp = WritePolicy()
             wp.record_exists_action = rea
         else:
-            wp = self._get_write_policy()
+            wp = self._get_write_policy(mode)
         wp = self._apply_txn(wp)
 
         try:

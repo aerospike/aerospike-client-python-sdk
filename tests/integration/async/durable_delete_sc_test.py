@@ -799,3 +799,41 @@ class TestBackgroundTaskDelete:
                 assert row is None or not row.is_ok
             else:
                 assert row is not None and row.is_ok and row.record is not None
+
+
+class TestTxnBoundWritePolicyMode:
+    """A txn-bound write on SC must resolve SC write settings, not AP ones.
+
+    Binding a segment to a transaction nulls both cached policies so the fast
+    path derives fresh ones from the Behavior. That derivation is the only
+    place a point write asks the Behavior for settings without saying which
+    mode it is in, and ``Behavior.get_settings`` defaults to AP -- so an SC
+    namespace silently gets ``Scope.WRITES_AP``: no ``durable_delete``
+    default, and ``commit_level=COMMIT_ALL``.
+
+    Asserted through the observable consequence rather than the resolved
+    policy object: on SC, a non-durable delete is refused by the server, so a
+    delete that leaves no tombstone is the signature of AP settings having
+    been applied.
+    """
+
+    async def test_txn_bound_delete_uses_sc_write_settings(
+        self, cluster_sc, sc_namespace,
+    ):
+        session = cluster_sc.create_session()
+        ds = DataSet.of(sc_namespace, "txn_mode_probe")
+        key = ds.id("r1")
+
+        await session.upsert(key).put({"v": 1}).execute()
+
+        async def op(tx):
+            await tx.delete(key).execute()
+
+        await session.do_in_transaction(op)
+
+        # Reaching here is the assertion: with AP settings resolved, the
+        # delete carries no durable_delete and the SC server rejects it with
+        # FailForbidden ("durability violation") before anything is removed.
+        stream = await session.query(key).execute()
+        rows = await stream.collect()
+        assert not rows or not rows[0].is_ok, "record should be gone after delete"

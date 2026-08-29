@@ -1088,14 +1088,31 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             raise pfc_exc from exc
         return RecordStream._from_list([])
 
-    def _get_write_policy(self) -> WritePolicy:
-        wp = self._write_policy
-        if wp is None and self._behavior_fast is not None:
-            wp = self._apply_txn(to_write_policy(
+    def _get_write_policy(self, mode: Mode = Mode.AP) -> WritePolicy:
+        """Resolve the point-write policy for *mode*, caching per mode.
+
+        ``Behavior.get_settings`` defaults to ``Mode.AP``, so resolving without
+        a mode gives an SC namespace the ``WRITES_AP`` scope: no
+        ``durable_delete`` default, and ``commit_level=COMMIT_ALL``. The server
+        then refuses a non-durable delete on SC outright, so the omission is
+        not merely a wrong default -- it fails the operation.
+
+        Reached only when the caller has no cached policy for the mode, which
+        in practice means a txn-bound segment: binding a transaction nulls both
+        cached policies to force fresh derivation.
+        """
+        cached = self._write_policy_sc if mode == Mode.SC else self._write_policy
+        if cached is None and self._behavior_fast is not None:
+            cached = self._apply_txn(to_write_policy(
                 self._behavior_fast.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
-            self._write_policy = wp
-        return self._apply_txn(wp or WritePolicy())
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode)))
+            # Cache into the slot for this mode; writing an SC-resolved policy
+            # into the AP slot would hand AP callers SC settings.
+            if mode == Mode.SC:
+                self._write_policy_sc = cached
+            else:
+                self._write_policy = cached
+        return self._apply_txn(cached or WritePolicy())
 
     def _execute_blocking_fast_path(
         self,
