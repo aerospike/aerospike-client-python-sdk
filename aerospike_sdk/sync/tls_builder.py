@@ -179,10 +179,6 @@ class TlsBuilder:
         """
         Build a PAC TlsConfig from the builder state.
 
-        Every option the builder accepts reaches the config: dropping one
-        silently is how a caller ends up with weaker transport than they asked
-        for, or none at all.
-
         Returns:
             A configured ``aerospike_async.TlsConfig``. A builder with no CA
             file still returns one -- the server is then verified against the

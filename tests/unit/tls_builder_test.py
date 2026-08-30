@@ -66,9 +66,6 @@ class TestProtocolsReachTheConfig:
 
     @pytest.mark.parametrize("builder", _builders())
     def test_unknown_protocol_is_rejected(self, builder):
-        """Rejected, not ignored. Dropping a restriction is how a caller ends
-        up negotiating exactly what they excluded -- and this is also what
-        proves the name reached rustls at all."""
         with pytest.raises(ValueError, match="protocol"):
             builder.tls_name("x").protocols("SSLv3").build_tls_config()
 
