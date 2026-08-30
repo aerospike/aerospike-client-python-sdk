@@ -246,3 +246,80 @@ class TestTlsEnvDrivenDefinition:
             result = stream.first_or_raise()
             assert result.record.bins["v"] == 2
             session.delete(key).execute()
+
+
+@skip_no_tls
+class TestTlsTransportOptions:
+    """Protocol and cipher restrictions against a live server.
+
+    The unit tests prove these options reach rustls, by way of an invalid name
+    being rejected. They cannot prove a *valid* restriction still negotiates: a
+    config that pins a version builds fine and only fails at the handshake.
+    So these cover the direction the unit tests cannot: a supported
+    restriction still completes a round trip over a real connection. The
+    refusal direction needs no server and lives with the unit tests.
+    """
+
+    @pytest.fixture
+    def host_port(self):
+        return _parse_host_port(_tls_host_env())
+
+    def _definition(self, host_port, tune):
+        hostname, port = host_port
+        builder = (
+            ClusterDefinition(hostname, port)
+            .with_tls_config_of()
+            .tls_name(TLS_NAME or "")
+            .ca_file(TLS_CA)
+        )
+        tune(builder)
+        return (
+            builder.done()
+            .with_native_credentials(TLS_USER, TLS_PASS)
+            .using_services_alternate()
+        )
+
+    async def _round_trip(self, host_port, tune, key_name):
+        cluster = await self._definition(host_port, tune).connect()
+        try:
+            session = cluster.create_session(Behavior.DEFAULT)
+            key = USERS.id(key_name)
+            await session.delete(key).execute()
+            await session.upsert(key).put({"v": 1}).execute()
+            stream = await session.query(key).execute()
+            record = (await stream.first_or_raise()).record_or_raise()
+            assert record.bins["v"] == 1
+            await session.delete(key).execute()
+        finally:
+            await cluster.close()
+
+    async def test_supported_protocol_still_connects(self, host_port):
+        """Pinning a version the server speaks must not break the handshake."""
+        if not TLS_CA:
+            pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
+        await self._round_trip(
+            host_port, lambda b: b.protocols("TLSv1.2"), "tls_proto",
+        )
+
+    async def test_supported_cipher_still_connects(self, host_port):
+        """Same for a single suite, narrowed from the provider default."""
+        if not TLS_CA:
+            pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
+        await self._round_trip(
+            host_port,
+            lambda b: b.ciphers("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"),
+            "tls_cipher",
+        )
+
+    async def test_protocol_and_cipher_together(self, host_port):
+        """Both restrictions at once, since they build the config by
+        different paths -- ciphers go through a rebuilt crypto provider."""
+        if not TLS_CA:
+            pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
+        await self._round_trip(
+            host_port,
+            lambda b: b.protocols("TLSv1.2").ciphers(
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+            ),
+            "tls_both",
+        )

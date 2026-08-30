@@ -179,12 +179,28 @@ class TlsBuilder:
         """
         Build a PAC TlsConfig from the builder state.
 
+        Every option the builder accepts reaches the config: dropping one
+        silently is how a caller ends up with weaker transport than they asked
+        for, or none at all.
+
         Returns:
-            A configured ``aerospike_async.TlsConfig``, or ``None`` when
-            no CA file has been set (TLS cannot be configured without one).
+            A configured ``aerospike_async.TlsConfig``. A builder with no CA
+            file still returns one -- the server is then verified against the
+            system trust store, which is what a ``tls_name``-only setup needs.
+
+        Raises:
+            ValueError: An unrecognized protocol or cipher-suite name.
+            NotImplementedError: ``for_login_only`` was requested. The
+                underlying connection decides TLS once at connect and cannot
+                drop to cleartext afterwards, so honoring it is not possible
+                here; accepting it silently would misrepresent the transport.
         """
-        if not self._ca_file:
-            return None
+        if self._for_login_only:
+            raise NotImplementedError(
+                "for_login_only is not supported: the connection cannot drop "
+                "to cleartext after login. Omit it to use TLS for the whole "
+                "connection."
+            )
 
         from aerospike_async import TlsConfig
 
@@ -193,7 +209,13 @@ class TlsBuilder:
                 self._ca_file,
                 self._client_cert_file,
                 self._client_key_file,
+                protocols=self._protocols,
+                ciphers=self._ciphers,
             )
-        return TlsConfig(self._ca_file)
+        return TlsConfig(
+            self._ca_file,
+            protocols=self._protocols,
+            ciphers=self._ciphers,
+        )
 
 
