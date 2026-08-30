@@ -477,7 +477,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         Example::
 
-            cd = ClusterDefinition("localhost", 4333).with_tls_config_of().with_ca_file("/certs/ca.pem").done()
+            cd = ClusterDefinition("localhost", 4333).with_tls_config_of().ca_file("/certs/ca.pem").done()
         """
         self._tls_builder = self._new_tls_builder()
         return self._tls_builder
