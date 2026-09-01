@@ -131,7 +131,19 @@ class SyncBackgroundOperationBuilder:
         return self
 
     def records_per_second(self, rps: int) -> SyncBackgroundOperationBuilder:
-        """Store a throttle hint."""
+        """Throttle the background job to *rps* records per second.
+
+        Args:
+            rps: Records per second. ``0`` means unthrottled.
+
+        Returns:
+            This builder, for chaining.
+
+        Example::
+
+            session.update(users).bin("tier").set_to("gold") \\
+                .records_per_second(500).execute()
+        """
         self._inner.records_per_second(rps)
         return self
 

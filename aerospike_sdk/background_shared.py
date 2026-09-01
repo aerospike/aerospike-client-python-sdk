@@ -71,6 +71,7 @@ def make_background_write_policy(
     namespace_mode: Mode = Mode.AP,
     durable_delete_command_default: Optional[bool] = None,
     durable_delete_override: Optional[bool] = None,
+    records_per_second: Optional[int] = None,
 ) -> WritePolicy:
     """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``."""
     if behavior is not None:
@@ -94,6 +95,10 @@ def make_background_write_policy(
         wp.expiration = ttl_to_expiration(ttl_seconds)
     if record_exists_action is not None:
         wp.record_exists_action = record_exists_action
+    if records_per_second is not None:
+        # Only background jobs honor this; the server throttles the job to the
+        # given rate. Zero means unthrottled, which is also the default.
+        wp.records_per_second = records_per_second
     return wp
 
 

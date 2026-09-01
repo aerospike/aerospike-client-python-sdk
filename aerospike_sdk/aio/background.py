@@ -323,7 +323,19 @@ class _BackgroundOperationBuilderBase:
         return self
 
     def records_per_second(self, rps: int) -> BackgroundOperationBuilder:
-        """Store a throttle hint (may be unused depending on PAC background API)."""
+        """Throttle the background job to *rps* records per second.
+
+        Args:
+            rps: Records per second. ``0`` means unthrottled.
+
+        Returns:
+            This builder, for chaining.
+
+        Example::
+
+            await session.update(users).bin("tier").set_to("gold") \\
+                .records_per_second(500).execute()
+        """
         self._records_per_second = rps
         return self
 
@@ -387,6 +399,7 @@ class _BackgroundOperationBuilderBase:
             namespace_mode=mode,
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
+            records_per_second=self._records_per_second,
         )
         if self._op_type is not _OpType.DELETE:
             wp.durable_delete = False
@@ -406,10 +419,6 @@ class _BackgroundOperationBuilderBase:
 
 class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
     """Configure filters, TTL, and operations for ``query_operate``.
-
-    Not all query-policy knobs are wired through to PAC for background jobs;
-    ``records_per_second`` is stored for API parity but may not affect the
-    underlying call.
 
     See Also:
         :meth:`BackgroundTaskSession.update`: Typical construction path.
@@ -481,6 +490,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             namespace_mode=mode,
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
+            records_per_second=self._records_per_second,
         )
         if self._op_type is not _OpType.DELETE:
             wp.durable_delete = False
@@ -616,7 +626,19 @@ class _BackgroundUdfBuilderBase:
         return self
 
     def records_per_second(self, rps: int) -> BackgroundUdfBuilder:
-        """Throttle hint stored for API parity (may not affect PAC)."""
+        """Throttle the background job to *rps* records per second.
+
+        Args:
+            rps: Records per second. ``0`` means unthrottled.
+
+        Returns:
+            This builder, for chaining.
+
+        Example::
+
+            await session.update(users).bin("tier").set_to("gold") \\
+                .records_per_second(500).execute()
+        """
         self._records_per_second = rps
         return self
 
@@ -654,6 +676,7 @@ class _BackgroundUdfBuilderBase:
             namespace_mode=mode,
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
+            records_per_second=self._records_per_second,
         )
         statement = dataset_statement(
             self._dataset.namespace,
@@ -735,6 +758,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             namespace_mode=mode,
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
+            records_per_second=self._records_per_second,
         )
         statement = dataset_statement(
             self._dataset.namespace,
