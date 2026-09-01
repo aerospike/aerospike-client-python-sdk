@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 import typing
+from datetime import timedelta
 from typing import (
     Any,
     Awaitable,
@@ -35,8 +36,9 @@ if TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
-from aerospike_async import Key, Record, ResultCode, Txn, UDFLang
+from aerospike_async import Key, Record, Txn, UDFLang
 
+from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
@@ -1141,15 +1143,15 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         self,
         operation: typing.Callable[["TransactionalSession"], typing.Awaitable[typing.Any]],
         *,
-        max_attempts: int = 5,
-        sleep_between_retries: float = 0.0,
+        max_attempts: Optional[int] = None,
+        sleep_between_retries: Optional[Union[float, timedelta]] = None,
     ) -> typing.Any:
         """Run an async callable inside a retrying multi-record transaction.
 
         Creates a :class:`TransactionalSession`, invokes ``operation(tx)``
-        inside ``async with``, and retries the whole block when the server
-        signals a transient conflict (``MRT_BLOCKED``,
-        ``MRT_VERSION_MISMATCH``, or ``TXN_FAILED``). On any non-transient
+        inside ``async with``, and retries the whole block when the attempt
+        ends in a transient conflict (``MRT_BLOCKED`` or
+        ``MRT_VERSION_MISMATCH``) or in a failed commit. On any non-transient
         failure the transaction is aborted and the exception re-raised.
 
         Args:
@@ -1157,9 +1159,12 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 and performing zero or more operations on it. Its return
                 value is returned from :meth:`do_in_transaction`.
             max_attempts: Maximum total attempts (initial + retries). Must
-                be ``>= 1``. Defaults to ``5``.
-            sleep_between_retries: Optional seconds to ``await asyncio.sleep``
-                between retries. ``0`` (the default) retries immediately.
+                be ``>= 1``. Omit to use the cluster's
+                :class:`~aerospike_sdk.policy.system_settings.TransactionSettings`.
+            sleep_between_retries: How long to wait between retries, as
+                seconds or a :class:`datetime.timedelta`. Omit to use the
+                cluster's transaction settings; pass ``0`` to retry
+                immediately.
 
         Returns:
             Whatever ``operation`` returns on the successful attempt.
@@ -1183,37 +1188,30 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`transaction`: Manual MRT lifecycle.
             :class:`TransactionalSession`
         """
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be >= 1")
+        attempts, sleep_seconds = resolve_retry_plan(
+            self._client._sdk_settings.transactions,
+            max_attempts,
+            sleep_between_retries,
+        )
 
         import asyncio
         from aerospike_sdk.exceptions import AerospikeError
 
         # Transient MRT conflicts that are safe to retry automatically.
-        retryable_codes = {
-            ResultCode.MRT_BLOCKED,
-            ResultCode.MRT_VERSION_MISMATCH,
-        }
-        # TXN_FAILED is a rolled-up code used when the MRT monitor reports
-        # that one or more ops failed — retrying is safe because we abort
-        # and start fresh on each attempt.
-        txn_failed = getattr(ResultCode, "TXN_FAILED", None)
-        if txn_failed is not None:
-            retryable_codes.add(txn_failed)
 
         last_exc: Optional[BaseException] = None
-        for attempt in range(max_attempts):
+        for attempt in range(attempts):
             try:
                 async with self.transaction() as tx_session:
                     return await operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
-                if exc.result_code not in retryable_codes:
+                if not is_retryable_txn_error(exc):
                     raise
-                if attempt + 1 >= max_attempts:
+                if attempt + 1 >= attempts:
                     raise
-                if sleep_between_retries > 0:
-                    await asyncio.sleep(sleep_between_retries)
+                if sleep_seconds > 0:
+                    await asyncio.sleep(sleep_seconds)
         # Unreachable — last iteration always raises — but keep mypy happy.
         assert last_exc is not None
         raise last_exc

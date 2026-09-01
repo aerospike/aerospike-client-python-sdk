@@ -38,7 +38,7 @@ exception propagates.
 
 Strong-consistency transactions can fail with transient conflicts when
 concurrent writers touch the same record
-(`MRT_BLOCKED`, `MRT_VERSION_MISMATCH`, `TXN_FAILED`). Use
+(`MRT_BLOCKED`, `MRT_VERSION_MISMATCH`), and on a failed commit. Use
 `do_in_transaction` to retry the whole block automatically:
 
 ```python
@@ -146,11 +146,33 @@ already-tombstoned records) raises `CommitFailedError` instead of
 returning per-key soft errors — opt out with `with_txn(None)` for
 cleanup-style deletes that do not need atomicity.
 
+## Nesting
+
+Calling `do_in_transaction` on a transactional session joins the transaction
+already in progress rather than starting a second one, so the whole block stays
+atomic. The outermost call owns the commit and the retrying.
+
+```python
+async def audit(tx):
+    await tx.upsert(log_key).put({"event": "transfer"}).execute()
+
+async def transfer(tx):
+    await tx.upsert(src).put({"balance": 90}).execute()
+    await tx.do_in_transaction(audit)      # joins; does not open a second txn
+
+await session.do_in_transaction(transfer)
+```
+
+Retry counts and the pause between attempts come from the cluster's
+`TransactionSettings` unless `do_in_transaction` is given explicit
+`max_attempts` / `sleep_between_retries`. The same settings drive the implicit
+transactions the SDK opens for batch writes, so both get identical treatment.
+
 ## Errors
 
 | Error | Meaning |
 |-------|---------|
-| `CommitError` | Commit failed (server-side); the transaction is in an indeterminate state. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. |
+| `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries this automatically. |
 | `MRT_BLOCKED` | Another transaction has one of the records locked. Retry. |
 | `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry. |
 | `MRT_EXPIRED` | Transaction monitor TTL elapsed before commit. |

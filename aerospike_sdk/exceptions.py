@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from aerospike_async.exceptions import (
     AerospikeError as PacAerospikeError,
+    CommitFailedError as PacCommitFailedError,
     ConnectionError as PacConnectionError,
     InvalidNodeError as PacInvalidNodeError,
     MaxErrorRate as PacMaxErrorRate,
@@ -952,6 +953,20 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
             ResultCode.UDF_BAD_RESPONSE,
             str(exc),
             getattr(exc, "in_doubt", False),
+            **_retry_context_kwargs(exc),
+        )
+
+    if isinstance(exc, PacCommitFailedError):
+        # The stage, the per-key records, and the code that tripped verify or
+        # roll all come straight through. The code is absent when the failure
+        # was client-side, which is why this is classified by type as well.
+        return CommitError(
+            str(exc),
+            result_code=getattr(exc, "result_code", None),
+            commit_error_type=getattr(exc, "commit_error_type", None),
+            verify_records=getattr(exc, "verify_records", None),
+            roll_records=getattr(exc, "roll_records", None),
+            in_doubt=getattr(exc, "in_doubt", False),
             **_retry_context_kwargs(exc),
         )
 

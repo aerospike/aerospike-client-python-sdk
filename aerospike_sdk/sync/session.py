@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import time
 import typing
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
 from aerospike_async import Key, Record, Txn, UDFLang
 
+from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
@@ -477,37 +479,61 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         self,
         operation: "typing.Callable[[TransactionalSession], typing.Any]",
         *,
-        max_attempts: int = 5,
-        sleep_between_retries: float = 0.0,
+        max_attempts: Optional[int] = None,
+        sleep_between_retries: Optional[Union[float, timedelta]] = None,
     ) -> Any:
-        """Run a callable inside a retrying multi-record transaction (synchronous)."""
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be >= 1")
+        """Run a callable inside a retrying multi-record transaction (synchronous).
 
-        from aerospike_async import ResultCode
+        Args:
+            operation: Callable accepting a :class:`SyncTransactionalSession`.
+            max_attempts: Maximum total attempts (initial + retries). Must be
+                ``>= 1``. Omit to use the cluster's
+                :class:`~aerospike_sdk.policy.system_settings.TransactionSettings`.
+            sleep_between_retries: How long to wait between retries, as
+                seconds or a :class:`datetime.timedelta`. Omit to use the
+                cluster's transaction settings; pass ``0`` to retry
+                immediately.
+
+        Returns:
+            Whatever ``operation`` returns on the successful attempt.
+
+        Raises:
+            ValueError: If ``max_attempts`` is given and is less than 1.
+
+        Example::
+
+            def transfer(tx):
+                tx.upsert(src).put({"balance": 90}).execute()
+                tx.upsert(dst).put({"balance": 110}).execute()
+
+            session.do_in_transaction(transfer)
+
+        See Also:
+            :meth:`aerospike_sdk.sync.transactional_session.SyncTransactionalSession.do_in_transaction`:
+                Nested calls join the transaction already in progress.
+        """
+        attempts, sleep_seconds = resolve_retry_plan(
+            self._client._sdk_settings.transactions,
+            max_attempts,
+            sleep_between_retries,
+        )
+
         from aerospike_sdk.exceptions import AerospikeError
 
-        retryable_codes = {
-            ResultCode.MRT_BLOCKED,
-            ResultCode.MRT_VERSION_MISMATCH,
-        }
-        txn_failed = getattr(ResultCode, "TXN_FAILED", None)
-        if txn_failed is not None:
-            retryable_codes.add(txn_failed)
 
         last_exc: Optional[BaseException] = None
-        for attempt in range(max_attempts):
+        for attempt in range(attempts):
             try:
                 with self.transaction() as tx_session:
                     return operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
-                if exc.result_code not in retryable_codes:
+                if not is_retryable_txn_error(exc):
                     raise
-                if attempt + 1 >= max_attempts:
+                if attempt + 1 >= attempts:
                     raise
-                if sleep_between_retries > 0:
-                    time.sleep(sleep_between_retries)
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
         assert last_exc is not None
         raise last_exc
 

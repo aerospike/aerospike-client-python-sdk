@@ -31,11 +31,15 @@ Provenance (per repo rules):
 
 from __future__ import annotations
 
+import asyncio
+from datetime import timedelta
+
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import DataSet, ResultCode
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk import Behavior, DataSet, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
 from integration.sc_namespace_resolve import (
     MultipleScNamespacesError,
@@ -480,3 +484,228 @@ async def test_txn_mrt_expired_after_deadline(session, mrt_set):
 
     # Pre-txn value must remain visible to non-transactional reads.
     assert await _fetch_bin(session, key) == "val0"
+
+
+class TestCommitRetry:
+    """Retry when the failure lands at commit rather than mid-block."""
+
+    async def test_transient_commit_conflict_is_retried(self, session, sc_namespace):
+        """A conflict that clears on the next attempt must not surface at all.
+
+        Reading inside the transaction records the generation it expects, so an
+        outside write makes the verify phase fail at commit. Since the commit is
+        the last thing an attempt does, this exercises the path where the
+        failure arrives from the context manager's exit rather than from the
+        operation body -- the one an operation-only retry check misses.
+        """
+        users = DataSet.of(sc_namespace, "txn_commit_retry")
+        key = users.id("transient")
+        await session.upsert(key).put({"v": 1}).execute()
+        attempts = 0
+
+        async def operation(tx):
+            nonlocal attempts
+            attempts += 1
+            stream = await tx.query(key).execute()
+            await stream.first_or_raise()
+            if attempts == 1:
+                # Outside the transaction: moves the generation it verified.
+                await session.upsert(key).put({"v": 99}).execute()
+            return "committed"
+
+        result = await session.do_in_transaction(operation, max_attempts=3)
+        assert result == "committed"
+        assert attempts == 2
+        await session.delete(key).execute()
+
+    async def test_persistent_commit_conflict_raises_sdk_type(self, session, sc_namespace):
+        """On exhaustion the caller gets an SDK exception, not the driver's."""
+        users = DataSet.of(sc_namespace, "txn_commit_retry")
+        key = users.id("persistent")
+        await session.upsert(key).put({"v": 1}).execute()
+        attempts = 0
+
+        async def operation(tx):
+            nonlocal attempts
+            attempts += 1
+            stream = await tx.query(key).execute()
+            await stream.first_or_raise()
+            await session.upsert(key).put({"v": attempts * 10}).execute()
+            return "unreachable"
+
+        with pytest.raises(CommitError) as excinfo:
+            await session.do_in_transaction(operation, max_attempts=3)
+        assert attempts == 3
+        # The stage and the code that tripped verify both survive the retries.
+        assert excinfo.value.commit_error_type is not None
+        assert excinfo.value.result_code == ResultCode.MRT_VERSION_MISMATCH
+        await session.delete(key).execute()
+
+
+class TestManualTransactionCommitFailure:
+    """The manual form reports a failed commit the same way; it just retries nothing.
+
+    ``transaction()`` commits on clean exit and aborts on an exception, leaving
+    any looping to the caller -- ``do_in_transaction`` is the retrying form
+    built on it. The error a caller has to handle should not depend on which
+    form they picked, so the two must agree on everything except the retrying.
+    """
+
+    async def test_commit_failure_carries_the_same_detail(self, session, sc_namespace):
+        users = DataSet.of(sc_namespace, "txn_manual_commit")
+        key = users.id("manual")
+        await session.upsert(key).put({"v": 1}).execute()
+
+        with pytest.raises(CommitError) as excinfo:
+            async with session.transaction() as tx:
+                stream = await tx.query(key).execute()
+                await stream.first_or_raise()
+                # Outside the transaction: moves the generation it verified, so
+                # the failure lands on the context manager's exit.
+                await session.upsert(key).put({"v": 99}).execute()
+
+        exc = excinfo.value
+        assert exc.commit_error_type is not None
+        assert exc.result_code == ResultCode.MRT_VERSION_MISMATCH
+        assert len(exc.verify_records) == 1
+        # Nothing was applied, so the outside write is what stands.
+        stream = await session.query(key).execute()
+        record = (await stream.first_or_raise()).record_or_raise()
+        assert record.bins["v"] == 99
+        await session.delete(key).execute()
+
+
+class TestNestedTransactionBoundary:
+    """Which receiver you call decides whether you join or start fresh."""
+
+    async def test_nested_call_on_the_transactional_session_joins(
+        self, session, sc_namespace,
+    ):
+        """Both writes commit together, so the outer block stays atomic."""
+        users = DataSet.of(sc_namespace, "txn_nesting")
+        outer_key = users.id("join_outer")
+        inner_key = users.id("join_inner")
+
+        async def inner(tx):
+            await tx.upsert(inner_key).put({"v": "inner"}).execute()
+
+        async def outer(tx):
+            await tx.upsert(outer_key).put({"v": "outer"}).execute()
+            await tx.do_in_transaction(inner)
+
+        await session.do_in_transaction(outer)
+
+        for key, expected in ((outer_key, "outer"), (inner_key, "inner")):
+            stream = await session.query(key).execute()
+            record = (await stream.first_or_raise()).record_or_raise()
+            assert record.bins["v"] == expected
+            await session.delete(key).execute()
+
+    async def test_nested_call_on_the_plain_session_starts_an_independent_txn(
+        self, session, sc_namespace,
+    ):
+        """A plain session opens a real second transaction, which then blocks.
+
+        The counterpart to the joining case: the two receivers must not behave
+        alike, or callers have no way to express either intention. Writing the
+        same key from an independent transaction contends with the lock the
+        outer one holds, and the outer write is what survives.
+        """
+        users = DataSet.of(sc_namespace, "txn_nesting")
+        key = users.id("independent")
+        await session.upsert(key).put({"v": "seed"}).execute()
+
+        async def inner(tx):
+            await tx.upsert(key).put({"v": "inner"}).execute()
+
+        async def outer(tx):
+            await tx.upsert(key).put({"v": "outer"}).execute()
+            with pytest.raises(AerospikeError) as excinfo:
+                # A separate transaction on the same key: blocked, not joined.
+                await session.do_in_transaction(
+                    inner, max_attempts=1, sleep_between_retries=0.0,
+                )
+            assert excinfo.value.result_code == ResultCode.MRT_BLOCKED
+
+        await session.do_in_transaction(outer)
+
+        stream = await session.query(key).execute()
+        record = (await stream.first_or_raise()).record_or_raise()
+        assert record.bins["v"] == "outer"
+        await session.delete(key).execute()
+
+
+class TestConcurrentContention:
+    """Retry behavior when a *concurrent* transaction holds the lock.
+
+    The other nesting tests reach ``MRT_BLOCKED`` from a single flow, which is
+    deterministic but never has two transactions genuinely in flight. Real
+    contention is what ``do_in_transaction``'s retry loop exists for, so it is
+    worth exercising directly.
+
+    The holder keeps the lock for the whole contended run, which is what makes
+    the attempt count exact rather than racy: every attempt is guaranteed to
+    find the lock taken, so the loop always runs to exhaustion instead of
+    succeeding on whichever attempt happened to land after a release.
+    """
+
+    async def test_contended_transaction_retries_once_per_attempt(
+        self, aerospike_host_sc, make_cluster_definition, sc_namespace,
+    ):
+        attempts_configured = 3
+        settings = SystemSettings(
+            transactions=TransactionSettings(
+                number_of_attempts=attempts_configured,
+                sleep_between_attempts=timedelta(0),
+            )
+        )
+        # A dedicated cluster: the retry count is a cluster-level setting, and
+        # the shared fixture must keep its defaults for every other test.
+        cluster = await (
+            make_cluster_definition(aerospike_host_sc, auth=True)
+            .with_system_settings(settings)
+            .connect()
+        )
+        try:
+            session = cluster.create_session(Behavior.DEFAULT)
+            key = DataSet.of(sc_namespace, "txn_contention").id("contended")
+            await session.upsert(key).put({"v": "seed"}).execute()
+
+            holder_ready = asyncio.Event()
+            release_holder = asyncio.Event()
+
+            async def hold(tx):
+                await tx.upsert(key).put({"v": "holder"}).execute()
+                holder_ready.set()
+                await asyncio.wait_for(release_holder.wait(), timeout=60)
+
+            holder = asyncio.create_task(session.do_in_transaction(hold))
+            try:
+                await asyncio.wait_for(holder_ready.wait(), timeout=60)
+
+                entries = 0
+
+                async def contend(tx):
+                    nonlocal entries
+                    entries += 1
+                    await tx.upsert(key).put({"v": "contender"}).execute()
+
+                # No per-call arguments: the cluster settings above supply the
+                # attempt count, which is the path a caller configures.
+                with pytest.raises(AerospikeError) as excinfo:
+                    await session.do_in_transaction(contend)
+
+                assert excinfo.value.result_code == ResultCode.MRT_BLOCKED
+                assert entries == attempts_configured
+            finally:
+                release_holder.set()
+                await asyncio.wait_for(holder, timeout=60)
+
+            # The holder owned the lock throughout, so its write is the one
+            # that committed.
+            stream = await session.query(key).execute()
+            record = (await stream.first_or_raise()).record_or_raise()
+            assert record.bins["v"] == "holder"
+            await session.delete(key).execute()
+        finally:
+            await cluster.close()

@@ -18,6 +18,9 @@
 The underlying PAC client is mocked so these tests don't need an SC cluster.
 """
 
+from dataclasses import replace
+from datetime import timedelta
+
 import pytest
 
 from aerospike_sdk import ResultCode
@@ -28,8 +31,11 @@ from aerospike_sdk import (
     SyncTransactionalSession,
     Txn,
 )
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_async.exceptions import CommitFailedError
+from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.system_settings import TransactionSettings
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.session import SyncSession
 
@@ -59,6 +65,8 @@ class _FakeSyncClient:
         self._pac = _FakePacClient()
         self._indexes_monitor = None
         self._namespace_mode_cache: dict = {}
+        # Mirrors the real client: the retry plan is resolved from here.
+        self._sdk_settings = fill_hard_defaults(None)
 
     @property
     def underlying_client(self):
@@ -275,19 +283,20 @@ def test_do_in_transaction_aborts_on_non_retryable() -> None:
 
 def test_do_in_transaction_retries_then_succeeds() -> None:
     sync_session, client = _make_sync_session()
-    calls = {"n": 0}
+    calls = 0
 
     def op(tx):
-        calls["n"] += 1
-        if calls["n"] < 3:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
             raise AerospikeError(
                 "conflict", result_code=ResultCode.MRT_BLOCKED,
             )
         return "eventually"
 
-    result = sync_session.do_in_transaction(op, max_attempts=5)
+    result = sync_session.do_in_transaction(op, max_attempts=5, sleep_between_retries=0.0)
     assert result == "eventually"
-    assert calls["n"] == 3
+    assert calls == 3
     # Two aborted attempts + one committed attempt:
     assert len(client._pac.abort_calls) == 2
     assert len(client._pac.commit_calls) == 1
@@ -303,7 +312,7 @@ def test_do_in_transaction_exhausts_retries() -> None:
         )
 
     with pytest.raises(AerospikeError):
-        sync_session.do_in_transaction(op, max_attempts=3)
+        sync_session.do_in_transaction(op, max_attempts=3, sleep_between_retries=0.0)
     assert len(client._pac.abort_calls) == 3
     assert len(client._pac.commit_calls) == 0
 
@@ -312,3 +321,135 @@ def test_do_in_transaction_rejects_zero_attempts() -> None:
     sync_session, _ = _make_sync_session()
     with pytest.raises(ValueError, match="max_attempts"):
         sync_session.do_in_transaction(lambda tx: None, max_attempts=0)
+
+
+def test_do_in_transaction_retries_commit_failure() -> None:
+    """A failed commit is a transient conflict, like a failed operation.
+
+    The commit is the last thing an attempt does, so a failure there means the
+    same thing as a conflict raised mid-block: nothing was applied, and a fresh
+    attempt may succeed. It arrives as CommitFailedError -- the roll-up that
+    carries no result code -- so classifying retryability by result code alone
+    misses it.
+    """
+    sync_session, client = _make_sync_session()
+    calls = 0
+
+    def commit_blocking(txn):
+        nonlocal calls
+        client._pac.commit_calls.append(txn)
+        calls += 1
+        if calls < 3:
+            raise CommitFailedError("commit verify failed")
+        return CommitStatus.OK
+
+    client._pac.commit_blocking = commit_blocking
+
+    assert sync_session.do_in_transaction(
+        lambda tx: "done", max_attempts=5, sleep_between_retries=0.0,
+    ) == "done"
+    assert calls == 3
+
+
+def test_do_in_transaction_commit_failure_exhausts_retries() -> None:
+    """When it never succeeds, the caller sees a PSDK commit failure.
+
+    The underlying client's own exception type is translated at the boundary
+    like every other failure, so a caller catching PSDK exceptions does not
+    have to reach past the SDK for this one case.
+    """
+    sync_session, client = _make_sync_session()
+
+    def commit_blocking(txn):
+        client._pac.commit_calls.append(txn)
+        raise CommitFailedError("commit verify failed")
+
+    client._pac.commit_blocking = commit_blocking
+
+    with pytest.raises(CommitError):
+        sync_session.do_in_transaction(lambda tx: None, max_attempts=3, sleep_between_retries=0.0)
+    assert len(client._pac.commit_calls) == 3
+
+
+def test_nested_do_in_transaction_joins_the_outer_one() -> None:
+    """Sync twin: nesting joins rather than opening a second transaction."""
+    sync_session, client = _make_sync_session()
+    seen: list = []
+
+    def inner(tx):
+        seen.append(tx)
+        return "inner"
+
+    def outer(tx):
+        seen.append(tx)
+        return tx.do_in_transaction(inner)
+
+    assert sync_session.do_in_transaction(outer) == "inner"
+    assert len(client._pac.commit_calls) == 1
+    assert len(client._pac.abort_calls) == 0
+    assert seen[0] is seen[1]
+
+
+def test_cluster_settings_drive_retry_when_not_overridden() -> None:
+    """Sync twin: with no per-call arguments the cluster settings decide.
+
+    Each runtime reads the settings off its own client, so this can be right
+    in one leg and wrong in the other.
+    """
+    sync_session, client = _make_sync_session()
+    client._sdk_settings = replace(
+        client._sdk_settings,
+        transactions=TransactionSettings(
+            number_of_attempts=3, sleep_between_attempts=timedelta(0),
+        ),
+    )
+    attempts = 0
+
+    def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        sync_session.do_in_transaction(always_blocked)
+    assert attempts == 3
+
+
+def test_per_call_arguments_override_cluster_settings() -> None:
+    """Sync twin: an explicit argument still wins over the configured value."""
+    sync_session, client = _make_sync_session()
+    client._sdk_settings = replace(
+        client._sdk_settings,
+        transactions=TransactionSettings(
+            number_of_attempts=9, sleep_between_attempts=timedelta(0),
+        ),
+    )
+    attempts = 0
+
+    def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        sync_session.do_in_transaction(
+            always_blocked, max_attempts=2, sleep_between_retries=0.0,
+        )
+    assert attempts == 2
+
+
+def test_sleep_between_retries_accepts_a_timedelta() -> None:
+    """Sync twin: seconds and timedelta are interchangeable here."""
+    sync_session, _ = _make_sync_session()
+    attempts = 0
+
+    def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        sync_session.do_in_transaction(
+            always_blocked, max_attempts=2, sleep_between_retries=timedelta(0),
+        )
+    assert attempts == 2
