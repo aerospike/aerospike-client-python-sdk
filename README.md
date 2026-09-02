@@ -174,15 +174,15 @@ PYTHON_GIL=0 python my_app.py
 
 Verify with `sys._is_gil_enabled() == False` after imports — if any non-FT-safe C extension is imported, the interpreter silently re-enables the GIL and your multi-threaded perf collapses 4-6×.
 
-`AsyncPool` (multi-loop async) is a free-threading feature — **don't use it on regular Python**, it's slower than a single-client setup there. Each pool spawns N event loops on N OS threads, each with its own `Client`; coroutines submitted via `pool.run(...)` round-robin across loops:
+`AsyncPool` (multi-loop async) is a free-threading feature — **don't use it on regular Python**, it's slower than a single-client setup there. Each pool spawns N event loops on N OS threads, each with its own `Cluster` connected from the definition you pass; coroutines submitted via `pool.run(...)` round-robin across loops:
 
 ```python
-from aerospike_sdk import AsyncPool, Behavior, Client, DataSet
+from aerospike_sdk import AsyncPool, Behavior, ClusterDefinition, DataSet
 
 
 async def main():
     pool = AsyncPool(
-        client_factory=lambda: Client("localhost:3000"),
+        ClusterDefinition("localhost", 3000),
         loop_count=4,
     )
     async with pool:
@@ -190,10 +190,10 @@ async def main():
 
         # Submit a coroutine — picks an idle loop round-robin
         await pool.run(
-            lambda client: client.create_session(Behavior.DEFAULT)
-                                 .upsert(users.id(1))
-                                 .put({"name": "Alice"})
-                                 .execute()
+            lambda cluster: cluster.create_session(Behavior.DEFAULT)
+                                   .upsert(users.id(1))
+                                   .put({"name": "Alice"})
+                                   .execute()
         )
 ```
 

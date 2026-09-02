@@ -68,6 +68,31 @@ regardless of the environment:
 cluster_def = ClusterDefinition("localhost", 3000).using_services_alternate(False)
 ```
 
+### Restricting the cluster to its seeds
+
+`restricting_cluster_to_seeds()` disables peer discovery entirely: the seed
+addresses become the whole cluster, and nodes advertised by `peers` are
+ignored. Seeds are also kept across connection failures rather than being
+dropped by the tend loop, and a seed address is treated as the canonical
+service endpoint rather than resolved to a backend node.
+
+```python
+# Behind a load balancer or VIP that fronts the cluster.
+cluster_def = ClusterDefinition("aerospike-vip", 3000).restricting_cluster_to_seeds()
+```
+
+Reach for it when the addresses the cluster advertises are not routable from
+the client at all — a fixed VIP or proxy in front of the cluster — or when a
+test or benchmark needs a node set that cannot shift as tending discovers and
+drops peers.
+
+This is a different remedy from `using_services_alternate()`, and they solve
+different problems: alternate addresses still discover the peers and then
+address each one by its alternate address, while this stops the client
+contacting peers at all. Neither implies the other, and on a multi-node
+cluster the difference is visible — a client restricted to one seed reports
+one node where discovery would report all of them.
+
 ### TLS
 
 Server-side TLS with CA certificate verification:

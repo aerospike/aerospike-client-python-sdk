@@ -134,35 +134,6 @@ from aerospike_sdk.sync import SyncTransactionalSession
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 from aerospike_sdk.sync.session import SyncSession
 
-# Deprecated connection primitives, kept importable for one deprecation
-# cycle behind the module __getattr__ below. ClusterDefinition -> Cluster ->
-# Session is the supported entry.
-_DEPRECATED_ENTRY_POINTS = {
-    "Client": (
-        "aerospike_sdk.Client is deprecated; connect with "
-        "aerospike_sdk.ClusterDefinition(...).connect() instead"
-    ),
-    "SyncClient": (
-        "aerospike_sdk.SyncClient is deprecated; connect with "
-        "aerospike_sdk.sync.ClusterDefinition(...).connect() instead"
-    ),
-}
-
-
-def __getattr__(name: str):
-    if name in _DEPRECATED_ENTRY_POINTS:
-        import warnings
-
-        warnings.warn(_DEPRECATED_ENTRY_POINTS[name], DeprecationWarning, stacklevel=2)
-        if name == "Client":
-            from aerospike_sdk.aio.client import Client
-
-            return Client
-        from aerospike_sdk.sync.client import SyncClient
-
-        return SyncClient
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 try:
     from importlib.metadata import version as _meta_version
     __version__ = _meta_version("aerospike-sdk")

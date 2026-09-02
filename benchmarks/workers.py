@@ -1173,20 +1173,8 @@ async def run_async_pool(
         await stop.wait()
         thread_stop.set()
 
-    # Definition-based pool contract. ``seed_only_cluster`` has no
-    # ClusterDefinition surface, so that config falls back to the deprecated
-    # factory shape (whose callbacks receive raw Clients — the worker below
-    # only calls ``create_session``, which both member types expose).
-    cluster_def = cluster_def_from_config(cfg)
-    if cluster_def is not None:
-        pool = AsyncPool(cluster_def, loop_count=n_loops)
-    else:
-        policy = client_policy_from_config(cfg)
-
-        def factory() -> Client:
-            return Client(cfg.seeds, policy=policy)
-
-        pool = AsyncPool(client_factory=factory, loop_count=n_loops)
+    # Definition-based pool contract, for every config the bench accepts.
+    pool = AsyncPool(cluster_def_from_config(cfg), loop_count=n_loops)
 
     async with pool:
         dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)

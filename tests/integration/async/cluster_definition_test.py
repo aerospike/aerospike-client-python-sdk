@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_sdk import ClusterDefinition, Host, Behavior
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet, Host
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -239,3 +239,67 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
     finally:
         await cluster.close()
 
+
+
+class TestRestrictingClusterToSeeds:
+    """Pinning the cluster view to the seeds, against a live cluster."""
+
+    async def test_seeds_only_view_excludes_discovered_peers(
+        self, aerospike_host_sc, make_cluster_definition
+    ):
+        """Discovery normally finds the peers; restricting keeps only the seed.
+
+        Needs more than one node to mean anything: on a single-node cluster the
+        seed *is* the whole cluster, so both modes look identical and the test
+        would pass without the setting doing anything.
+        """
+        discovered = await make_cluster_definition(aerospike_host_sc, auth=True).connect()
+        try:
+            info = discovered.create_session().info()
+            namespaces = await info.namespaces()
+            namespace = next(iter(namespaces))
+            peer_count = len(await info.namespace_details_per_node(namespace))
+        finally:
+            await discovered.close()
+
+        if peer_count < 2:
+            pytest.skip(
+                f"seed-only is only observable on a multi-node cluster; "
+                f"{aerospike_host_sc} reports {peer_count}"
+            )
+
+        restricted = await (
+            make_cluster_definition(aerospike_host_sc, auth=True)
+            .restricting_cluster_to_seeds()
+            .connect()
+        )
+        try:
+            seen = len(
+                await restricted.create_session()
+                .info()
+                .namespace_details_per_node(namespace)
+            )
+        finally:
+            await restricted.close()
+
+        assert seen == 1, f"expected only the seed, saw {seen} of {peer_count} nodes"
+
+    async def test_restricted_cluster_still_serves_reads_and_writes(
+        self, aerospike_host_sc, make_cluster_definition
+    ):
+        """A pinned view is still a working client, not just a narrower one."""
+        cluster = await (
+            make_cluster_definition(aerospike_host_sc, auth=True)
+            .restricting_cluster_to_seeds()
+            .connect()
+        )
+        try:
+            session = cluster.create_session()
+            namespace = next(iter(await session.info().namespaces()))
+            key = DataSet.of(namespace, "seed_only").id("k1")
+            await session.upsert(key).put({"v": 1}).execute()
+            result = await session.query(key).first_or_raise()
+            assert result.record_or_raise().bins["v"] == 1
+            await session.delete(key).execute()
+        finally:
+            await cluster.close()

@@ -127,17 +127,15 @@ def cluster_def_from_config(cfg: object):
     """Build an async :class:`ClusterDefinition` mirroring :func:`client_policy_from_config`.
 
     Used by the AsyncPool bench mode, whose contract is ClusterDefinition-based.
-    Returns ``None`` when the config needs a knob the ClusterDefinition path does
-    not expose (``seed_only_cluster``) — the caller falls back to the
-    deprecated ``client_factory`` shape in that case.
+    Covers every config the bench accepts, so the caller has one path.
     """
     from aerospike_sdk import ClusterDefinition, Host
     from aerospike_sdk.policy.system_settings import SystemSettings
 
-    if getattr(cfg, "seed_only_cluster", False):
-        return None
-
     cluster_def = ClusterDefinition(hosts=Host.parse_hosts(cfg.seeds, 3000))
+
+    if getattr(cfg, "seed_only_cluster", False):
+        cluster_def.restricting_cluster_to_seeds()
 
     # Always set both directions explicitly. `ClusterDefinition` seeds this from
     # AEROSPIKE_USE_SERVICES_ALTERNATE, so only enabling it here would let the
