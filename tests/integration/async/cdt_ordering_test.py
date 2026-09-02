@@ -639,10 +639,9 @@ class TestSortedMapOnPlainWrites:
             "uniform boundary of the DSL rather than a map-specific gap. "
             "Scalars compare, collections can be navigated into "
             "(`:MAP.count()` / `:LIST.count()`), and the same comparison "
-            "succeeds as a built expression, so nothing is unreachable. The "
-            "reference client has no equivalent test either. Promote only if "
-            "AEL gains collection literals -- a feature question, not a "
-            "pending fix."
+            "succeeds as a built expression, so nothing is unreachable. "
+            "Promote only if AEL gains collection literals -- a feature "
+            "question, not a pending fix."
         ),
     )
     async def test_sorted_map_equality_via_server_ael(self, cluster):

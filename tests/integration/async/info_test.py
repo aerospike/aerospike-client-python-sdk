@@ -397,7 +397,7 @@ async def test_storage_engine_view(session):
 
 
 async def test_set_lookup_by_name(session):
-    """One set by name, matching the reference client's ``set(name)``."""
+    """One set looked up by name."""
     info = session.info()
     namespaces = await info.namespaces()
     if not namespaces:

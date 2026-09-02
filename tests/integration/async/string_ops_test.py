@@ -287,19 +287,6 @@ async def test_str_concat_with_flag(cluster):
 # users drop to low-level StringOperation with ctx=[...] for nested ops)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    raises=AerospikeError,
-    reason=(
-        "String-op CTX envelope changed from flat to nested server-side. The "
-        "server now expects [0xFF, ctx_list, [inner_op, args...]] with a fixed "
-        "outer length of 3; the core client still emits the flat "
-        "[0xFF, ctx_flat_list, inner_op, args...] and is rejected with "
-        "PARAMETER_ERROR. Passes on server builds without the change (verified "
-        "on 8.1.3.0-75), fails on the 8.1.3.0 RC. Tracked as CLIENT-5329, "
-        "blocked on the server change; promote back to a plain test once the "
-        "core client emits the nested envelope."
-    ),
-)
 async def test_str_upper_with_list_ctx(cluster):
     """``StringOperation.upper`` with a ``ctx=[CTX.list_index(...)]`` upper-cases one list element."""
     sess = cluster.create_session()
@@ -314,19 +301,6 @@ async def test_str_upper_with_list_ctx(cluster):
     assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["one", "TWO", "three"]
 
 
-@pytest.mark.xfail(
-    raises=AerospikeError,
-    reason=(
-        "String-op CTX envelope changed from flat to nested server-side. The "
-        "server now expects [0xFF, ctx_list, [inner_op, args...]] with a fixed "
-        "outer length of 3; the core client still emits the flat "
-        "[0xFF, ctx_flat_list, inner_op, args...] and is rejected with "
-        "PARAMETER_ERROR. Passes on server builds without the change (verified "
-        "on 8.1.3.0-75), fails on the 8.1.3.0 RC. Tracked as CLIENT-5329, "
-        "blocked on the server change; promote back to a plain test once the "
-        "core client emits the nested envelope."
-    ),
-)
 async def test_str_strlen_with_map_ctx(cluster):
     """``StringOperation.strlen`` with ``ctx=[CTX.map_key(...)]`` measures one map value."""
     sess = cluster.create_session()
