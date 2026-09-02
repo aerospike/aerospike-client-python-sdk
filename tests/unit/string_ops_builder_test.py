@@ -15,6 +15,8 @@
 
 """Unit tests for string-operation fluent builders (no cluster)."""
 
+import pytest
+
 from aerospike_sdk import Exp, StringOperation, StringRegexFlags, StringWriteFlags
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -56,6 +58,27 @@ class TestStringOpFactoryShape:
         wbb, seg = _make_wbb()
         wbb.str_substr(3)
         assert len(seg._qb._operations) == 1
+
+    def test_str_snip_range_form(self):
+        wbb, seg = _make_wbb()
+        wbb.str_snip(1, 4)
+        assert len(seg._qb._operations) == 1
+
+    def test_str_snip_truncate_form(self):
+        wbb, seg = _make_wbb()
+        wbb.str_snip(5)
+        assert len(seg._qb._operations) == 1
+
+    def test_str_snip_truncate_form_rejects_flags(self):
+        # The server parses snip args by position, so flags cannot ride on
+        # the 1-arg form; PAC refuses rather than silently dropping them.
+        wbb, _ = _make_wbb()
+        with pytest.raises(ValueError, match="explicit end"):
+            wbb.str_snip(5, flags=StringWriteFlags.NO_FAIL)
+
+    def test_exp_string_snip_from_compiles(self):
+        e = Exp.string_snip_from(Exp.val(5), Exp.string_bin("s"))
+        assert isinstance(e, Exp)
 
     def test_str_upper_registers_upper_op(self):
         wbb, seg = _make_wbb()

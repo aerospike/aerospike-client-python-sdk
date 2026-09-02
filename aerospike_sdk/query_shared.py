@@ -4271,18 +4271,24 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.prepend(self._bin, value, flags=int(flags)),
         )
 
-    def str_snip(self, start: int, end: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_snip(
+        self, start: int, end: int | None = None, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
         """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
 
+        When ``end`` is omitted, everything from ``start`` through the end of
+        the string is removed — ``str_snip(5)`` truncates ``"hello world"``
+        to ``"hello"``. Negative indexes count from the end of the string.
+
         Note:
-            ``end`` is REQUIRED. The server-side snip op cannot dispatch a
-            1-arg form. To remove the suffix from ``start`` to the bin's
-            end, pass the codepoint length explicitly (e.g. from a paired
-            :meth:`str_strlen` read).
+            ``flags`` require an explicit ``end``. The server reads the snip
+            arguments by position (``start``, ``end``, then flags), so the
+            truncate-to-end form is sent without a flags element.
 
         Args:
             start: Codepoint index where the removed range starts.
-            end: Exclusive end of the removed range.
+            end: Exclusive end of the removed range, or None to remove
+                through the end of the string.
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:

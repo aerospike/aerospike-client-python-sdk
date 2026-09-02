@@ -104,6 +104,28 @@ await session.upsert(key).bin("name").str_insert(4, " B.").execute()
 for the list form, and ``str_insert`` when you need an arbitrary position rather
 than the start or end.
 
+### Snip
+
+``str_snip`` removes the half-open codepoint range ``[start, end)``. Omit
+``end`` to remove everything from ``start`` through the end of the string:
+
+```python
+await session.upsert(key).put({"title": "hello world"}).execute()
+
+# Remove a range:
+await session.upsert(key).bin("title").str_snip(1, 4).execute()
+# → "ho world"
+
+# Truncate from a codepoint index through the end:
+await session.upsert(key).put({"title": "hello world"}).execute()
+await session.upsert(key).bin("title").str_snip(5).execute()
+# → "hello"
+```
+
+Negative indexes count from the end of the string. Write ``flags`` require
+an explicit ``end`` — the server reads the snip arguments by position, so
+the truncate-to-end form is sent without a flags element.
+
 ### Replace, Trim, Pad
 
 ```python
