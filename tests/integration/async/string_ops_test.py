@@ -337,6 +337,95 @@ async def test_str_concat_with_flag(cluster):
     assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "foobar"
 
 
+async def test_str_create_only_and_update_only_flags(cluster):
+    """``CREATE_ONLY`` gates on bin absence, ``UPDATE_ONLY`` on bin presence.
+
+    ``CREATE_ONLY`` on a live bin raises ``BIN_EXISTS_ERROR`` unless paired
+    with ``NO_FAIL``, which turns it into a silent no-op; ``UPDATE_ONLY`` on
+    a missing bin is a no-op rather than a create.
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_write_flags")
+    await sess.delete(k).execute()
+    await sess.upsert(k).bin("other").set_to("x").execute()
+
+    # CREATE_ONLY on a missing bin creates it.
+    await (sess.upsert(k)
+        .bin("s").str_insert(0, "new", flags=StringWriteFlags.CREATE_ONLY)
+        .execute())
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "new"
+
+    # CREATE_ONLY on the now-live bin raises BIN_EXISTS_ERROR.
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_insert(0, "x", flags=StringWriteFlags.CREATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.BIN_EXISTS_ERROR
+
+    # ...unless NO_FAIL is set: silent no-op, bin unchanged.
+    await (sess.upsert(k)
+        .bin("s").str_insert(
+            0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.NO_FAIL)
+        .execute())
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "new"
+
+    # UPDATE_ONLY on a missing bin does not create it.
+    await (sess.upsert(k)
+        .bin("absent").str_insert(0, "x", flags=StringWriteFlags.UPDATE_ONLY)
+        .execute())
+    rs = await sess.query(k).execute()
+    assert "absent" not in (await rs.first_or_raise()).record_or_raise().bins
+
+    # The two flags together are rejected by the server.
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_insert(
+                0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.UPDATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+async def test_str_create_only_rejected_with_ctx(cluster):
+    """``CREATE_ONLY`` never combines with a CTX path — server ``PARAMETER_ERROR``."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_write_flags_ctx")
+    await sess.upsert(k).bin("lst").set_to(["a", "b"]).execute()
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .add_operation(StringOperation.insert(
+                "lst", 0, "x",
+                flags=int(StringWriteFlags.CREATE_ONLY),
+                ctx=[CTX.list_index(1)]))
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+async def test_str_no_fail_decides_outcome_on_unreachable_ctx_path(cluster):
+    """An out-of-range CTX path is an in-op execution failure, so ``NO_FAIL``
+    flips it from ``OP_NOT_APPLICABLE`` to a silent no-op."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_nofail_ctx")
+    await sess.upsert(k).bin("lst").set_to(["alpha", "beta"]).execute()
+
+    await (sess.upsert(k)
+        .add_operation(StringOperation.append(
+            "lst", "!",
+            flags=int(StringWriteFlags.NO_FAIL),
+            ctx=[CTX.list_index(99)]))
+        .execute())
+    rs = await sess.query(k).bin("lst").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta"]
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .add_operation(StringOperation.append("lst", "!", ctx=[CTX.list_index(99)]))
+            .execute())
+    assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+
+
 # ---------------------------------------------------------------------------
 # Spot tests — CTX paths (chainable on_list_index / on_map_key not yet added;
 # users drop to low-level StringOperation with ctx=[...] for nested ops)

@@ -103,6 +103,17 @@ class TestStringOpFactoryShape:
 
 class TestStringFlagAcceptance:
 
+    def test_write_flag_values_match_the_wire_protocol(self):
+        assert int(StringWriteFlags.DEFAULT) == 0
+        assert int(StringWriteFlags.CREATE_ONLY) == 1
+        assert int(StringWriteFlags.UPDATE_ONLY) == 2
+        assert int(StringWriteFlags.NO_FAIL) == 4
+
+    def test_str_insert_accepts_combined_typed_flags(self):
+        wbb, seg = _make_wbb()
+        wbb.str_insert(0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.NO_FAIL)
+        assert len(seg._qb._operations) == 1
+
     def test_str_upper_accepts_typed_write_flag(self):
         wbb, seg = _make_wbb()
         wbb.str_upper(flags=StringWriteFlags.NO_FAIL)
