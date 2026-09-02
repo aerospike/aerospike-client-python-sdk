@@ -633,20 +633,24 @@ class TestSortedMapOnPlainWrites:
     @pytest.mark.xfail(
         raises=AerospikeError,
         reason=(
-            "Server-compiled AEL cannot express whole-map equality: a map "
-            "literal comparison comes back PARAMETER_ERROR regardless of the "
-            "bin's map order. Controls isolate it -- plain AEL filters work, "
-            "AEL reaches into the map (`:MAP.count()`), and the identical "
-            "comparison succeeds as a built expression -- so only the AEL "
-            "map-literal form is unsupported. Promote when the server gains it."
+            "Server-compiled AEL has no collection-literal syntax. A map "
+            "literal on the right of == is rejected with PARAMETER_ERROR, and "
+            "so is a list literal (measured on 8.1.3.0-104), so this is a "
+            "uniform boundary of the DSL rather than a map-specific gap. "
+            "Scalars compare, collections can be navigated into "
+            "(`:MAP.count()` / `:LIST.count()`), and the same comparison "
+            "succeeds as a built expression, so nothing is unreachable. The "
+            "reference client has no equivalent test either. Promote only if "
+            "AEL gains collection literals -- a feature question, not a "
+            "pending fix."
         ),
     )
     async def test_sorted_map_equality_via_server_ael(self, cluster):
         """The AEL spelling of :meth:`test_sorted_map_equals_itself_in_an_expression`.
 
         Kept as the string-filter twin of the built-expression test so the two
-        surfaces stay paired: the day the server compiles map equality, this
-        XPASSes and becomes a plain test.
+        surfaces stay paired. Not evidence of a defect: list literals are
+        rejected the same way, so AEL simply has no collection-literal syntax.
         """
         session = cluster.create_session()
         k = DS.id(35)
