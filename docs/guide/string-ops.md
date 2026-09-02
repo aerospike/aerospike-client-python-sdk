@@ -104,6 +104,28 @@ await session.upsert(key).bin("name").str_insert(4, " B.").execute()
 for the list form, and ``str_insert`` when you need an arbitrary position rather
 than the start or end.
 
+### Snip
+
+``str_snip`` removes the half-open codepoint range ``[start, end)``. Omit
+``end`` to remove everything from ``start`` through the end of the string:
+
+```python
+await session.upsert(key).put({"title": "hello world"}).execute()
+
+# Remove a range:
+await session.upsert(key).bin("title").str_snip(1, 4).execute()
+# → "ho world"
+
+# Truncate from a codepoint index through the end:
+await session.upsert(key).put({"title": "hello world"}).execute()
+await session.upsert(key).bin("title").str_snip(5).execute()
+# → "hello"
+```
+
+Negative indexes count from the end of the string. Write ``flags`` require
+an explicit ``end`` — the server reads the snip arguments by position, so
+the truncate-to-end form is sent without a flags element.
+
 ### Replace, Trim, Pad
 
 ```python
@@ -207,22 +229,36 @@ its wire format carries no payload to hold the wrapper.
 ## Write Flags
 
 Modify operations accept a ``flags`` keyword argument carrying a
-:class:`~aerospike_sdk.StringWriteFlags` bitmask. The only meaningful
-flag today is ``NO_FAIL``, which suppresses **missing-bin** errors so an
-op against an absent bin becomes a no-op success instead of a
-``BIN_NOT_FOUND`` error.
+:class:`~aerospike_sdk.StringWriteFlags` bitmask (OR-combine values):
+
+- ``CREATE_ONLY`` — apply only if the bin does not already exist; a live
+  bin raises ``BIN_EXISTS_ERROR``. Valid only on the additive ops
+  (``str_insert``, ``str_overwrite``, ``str_concat``, ``str_append``,
+  ``str_prepend``, ``str_pad_start``, ``str_pad_end``, ``str_repeat``)
+  and never with a CTX path — either misuse is a ``PARAMETER_ERROR``.
+- ``UPDATE_ONLY`` — apply only to an existing bin; on a missing bin the
+  op is a silent no-op instead of creating it. Valid on all modify ops.
+  Mutually exclusive with ``CREATE_ONLY`` (``PARAMETER_ERROR``).
+- ``NO_FAIL`` — suppress in-op execution failures, such as the
+  ``BIN_EXISTS_ERROR`` from ``CREATE_ONLY`` on a live bin: the op becomes
+  a no-op and the bin keeps its current value.
 
 ```python
 from aerospike_sdk import StringWriteFlags
 
-# Bin "title" doesn't exist on this record; without NO_FAIL this would error.
+# Seed "title" only if this record doesn't have one yet; a record that
+# already carries a title is left alone rather than raising.
 await (session.upsert(key)
-       .bin("title").str_upper(flags=StringWriteFlags.NO_FAIL)
+       .bin("title").str_append("untitled",
+                                flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.NO_FAIL)
        .execute())
 ```
 
-``NO_FAIL`` does **not** suppress ``BIN_TYPE_ERROR`` (wrong-type bin) or
-``KEY_NOT_FOUND`` (record absent entirely) — those still raise.
+A **missing bin is never an error** for string ops, with or without
+flags: the additive ops create it from an empty string, and every other
+modify is a silent no-op. ``NO_FAIL`` also does **not** suppress
+``BIN_TYPE_ERROR`` (wrong-type bin), invalid-UTF-8 errors, or the
+``PARAMETER_ERROR`` cases above — those still raise.
 
 ## Type Conversion: ``to_string``
 

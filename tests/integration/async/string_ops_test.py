@@ -23,7 +23,9 @@ import pytest_asyncio
 from aerospike_sdk import (
     CTX,
     Exp,
+    StringNumericType,
     StringOperation,
+    StringRegexFlags,
     StringWriteFlags,
 )
 from aerospike_sdk.dataset import DataSet
@@ -52,10 +54,12 @@ async def cluster(aerospike_host, supports_string_operations, make_cluster_defin
         await asyncio.sleep(2)
         sess = c.create_session()
         for suffix in (
-            "reads", "modify", "append_ops", "exp_query",
+            "reads", "modify", "snip", "append_ops", "exp_query",
             "transform_noop_missing", "create_from_missing",
             "concat_flag", "list_ctx", "map_ctx",
             "norm_replace", "norm_affix", "result_cap",
+            "exp_read_sweep", "exp_modify_sweep", "exp_trim_sweep",
+            "exp_regex_replace", "exp_convert_sweep",
         ):
             await sess.delete(_TEST_DS.id(f"strop_{suffix}")).execute()
         yield c
@@ -127,6 +131,57 @@ async def test_str_append_and_prepend(cluster):
         .bin("s").get()
         .execute()).first_or_raise()
     assert result.record_or_raise().bins["s"] == "oh hello world"
+
+
+async def test_str_snip_range_and_truncate_to_end(cluster):
+    """``str_snip`` removes ``[start, end)``; without ``end`` it truncates
+    from ``start`` through the end of the string.
+
+    A wrong truncate result would be silent: a mispacked 2-element
+    ``[start, flags]`` payload is accepted by the server as ``[start, end]``
+    and no-ops, so the bin coming back shortened is the whole assertion.
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_snip")
+
+    # Range form [start, end).
+    await sess.upsert(k).bin("s").set_to("abcdef").execute()
+    result = await (await sess.upsert(k)
+        .bin("s").str_snip(2, 4)
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "abef"
+
+    # 1-arg form: truncate from start through the end.
+    await sess.upsert(k).bin("s").set_to("hello world").execute()
+    result = await (await sess.upsert(k)
+        .bin("s").str_snip(5)
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "hello"
+
+    # Negative start counts from the end of the string.
+    await sess.upsert(k).bin("s").set_to("hello world").execute()
+    result = await (await sess.upsert(k)
+        .bin("s").str_snip(-6)
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "hello"
+
+    # Same two forms through the low-level StringOperation factory.
+    await sess.upsert(k).bin("s").set_to("Hello").execute()
+    result = await (await sess.upsert(k)
+        .add_operation(StringOperation.snip("s", 1, 4))
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "Ho"
+
+    await sess.upsert(k).bin("s").set_to("hello world").execute()
+    result = await (await sess.upsert(k)
+        .add_operation(StringOperation.snip("s", 5))
+        .bin("s").get()
+        .execute()).first_or_raise()
+    assert result.record_or_raise().bins["s"] == "hello"
 
 
 async def test_str_reads_via_add_operation(cluster):
@@ -280,6 +335,95 @@ async def test_str_concat_with_flag(cluster):
 
     rs = await sess.query(k).bin("s").get().execute()
     assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "foobar"
+
+
+async def test_str_create_only_and_update_only_flags(cluster):
+    """``CREATE_ONLY`` gates on bin absence, ``UPDATE_ONLY`` on bin presence.
+
+    ``CREATE_ONLY`` on a live bin raises ``BIN_EXISTS_ERROR`` unless paired
+    with ``NO_FAIL``, which turns it into a silent no-op; ``UPDATE_ONLY`` on
+    a missing bin is a no-op rather than a create.
+    """
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_write_flags")
+    await sess.delete(k).execute()
+    await sess.upsert(k).bin("other").set_to("x").execute()
+
+    # CREATE_ONLY on a missing bin creates it.
+    await (sess.upsert(k)
+        .bin("s").str_insert(0, "new", flags=StringWriteFlags.CREATE_ONLY)
+        .execute())
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "new"
+
+    # CREATE_ONLY on the now-live bin raises BIN_EXISTS_ERROR.
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_insert(0, "x", flags=StringWriteFlags.CREATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.BIN_EXISTS_ERROR
+
+    # ...unless NO_FAIL is set: silent no-op, bin unchanged.
+    await (sess.upsert(k)
+        .bin("s").str_insert(
+            0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.NO_FAIL)
+        .execute())
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "new"
+
+    # UPDATE_ONLY on a missing bin does not create it.
+    await (sess.upsert(k)
+        .bin("absent").str_insert(0, "x", flags=StringWriteFlags.UPDATE_ONLY)
+        .execute())
+    rs = await sess.query(k).execute()
+    assert "absent" not in (await rs.first_or_raise()).record_or_raise().bins
+
+    # The two flags together are rejected by the server.
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_insert(
+                0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.UPDATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+async def test_str_create_only_rejected_with_ctx(cluster):
+    """``CREATE_ONLY`` never combines with a CTX path — server ``PARAMETER_ERROR``."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_write_flags_ctx")
+    await sess.upsert(k).bin("lst").set_to(["a", "b"]).execute()
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .add_operation(StringOperation.insert(
+                "lst", 0, "x",
+                flags=int(StringWriteFlags.CREATE_ONLY),
+                ctx=[CTX.list_index(1)]))
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
+async def test_str_no_fail_decides_outcome_on_unreachable_ctx_path(cluster):
+    """An out-of-range CTX path is an in-op execution failure, so ``NO_FAIL``
+    flips it from ``OP_NOT_APPLICABLE`` to a silent no-op."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_nofail_ctx")
+    await sess.upsert(k).bin("lst").set_to(["alpha", "beta"]).execute()
+
+    await (sess.upsert(k)
+        .add_operation(StringOperation.append(
+            "lst", "!",
+            flags=int(StringWriteFlags.NO_FAIL),
+            ctx=[CTX.list_index(99)]))
+        .execute())
+    rs = await sess.query(k).bin("lst").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta"]
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .add_operation(StringOperation.append("lst", "!", ctx=[CTX.list_index(99)]))
+            .execute())
+    assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
 
 # ---------------------------------------------------------------------------
@@ -569,3 +713,199 @@ async def test_modify_past_result_cap_raises_parameter_error(cluster):
     # Nothing was written by any of the rejected ops.
     rs = await sess.query(k).bin("s").get().execute()
     assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Expression-path sweeps
+#
+# The same string sub-ops reached as expressions rather than operations: each
+# one projects a computed column and leaves the stored bin alone, so a whole
+# family fits in one query. Sweeps rather than a test per member — the risk
+# being covered is a mis-encoded argument, and one column per member catches
+# that at a fraction of the round trips.
+# ---------------------------------------------------------------------------
+
+async def test_str_exp_read_sweep(cluster):
+    """Every read expression, one projected column each."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_exp_read_sweep")
+    await sess.upsert(k) \
+        .bin("s").set_to("hello") \
+        .bin("csv").set_to("a,b,c") \
+        .bin("b64").set_to("aGVsbG8=") \
+        .execute()
+
+    s = Exp.string_bin("s")
+    rs = await sess.query(k) \
+        .bin("strlen").select_from(Exp.string_strlen(s)) \
+        .bin("substr").select_from(Exp.string_substr(Exp.val(1), s)) \
+        .bin("substr_range").select_from(Exp.string_substr_range(Exp.val(1), Exp.val(4), s)) \
+        .bin("char_at").select_from(Exp.string_char_at(Exp.val(1), s)) \
+        .bin("find").select_from(Exp.string_find(Exp.val("ll"), s)) \
+        .bin("find_nth").select_from(Exp.string_find_nth(Exp.val("l"), Exp.val(2), s)) \
+        .bin("contains").select_from(Exp.string_contains(Exp.val("ell"), s)) \
+        .bin("starts_with").select_from(Exp.string_starts_with(Exp.val("he"), s)) \
+        .bin("ends_with").select_from(Exp.string_ends_with(Exp.val("lo"), s)) \
+        .bin("byte_length").select_from(Exp.string_byte_length(s)) \
+        .bin("is_numeric").select_from(Exp.string_is_numeric(s)) \
+        .bin("is_numeric_int").select_from(
+            Exp.string_is_numeric_typed(StringNumericType.INT, s)) \
+        .bin("is_upper").select_from(Exp.string_is_upper(s)) \
+        .bin("is_lower").select_from(Exp.string_is_lower(s)) \
+        .bin("split").select_from(Exp.string_split(s)) \
+        .bin("split_sep").select_from(
+            Exp.string_split_by_separator(Exp.val(","), Exp.string_bin("csv"))) \
+        .bin("b64_decode").select_from(Exp.string_b64_decode(Exp.string_bin("b64"))) \
+        .bin("regex").select_from(Exp.string_regex_compare(Exp.val("^h.*o$"), s)) \
+        .bin("regex_flags").select_from(Exp.string_regex_compare_with_flags(
+            Exp.val("^H.*O$"), int(StringRegexFlags.CASE_INSENSITIVE), s)) \
+        .execute()
+    b = (await rs.first_or_raise()).record_or_raise().bins
+
+    assert b["strlen"] == 5
+    assert b["substr"] == "ello"
+    assert b["substr_range"] == "ell"
+    assert b["char_at"] == "e"
+    assert b["find"] == 2
+    assert b["find_nth"] == 3          # occurrence is 1-based; the 2nd "l"
+    assert b["contains"] is True
+    assert b["starts_with"] is True
+    assert b["ends_with"] is True
+    assert b["byte_length"] == 5
+    assert b["is_numeric"] is False
+    assert b["is_numeric_int"] is False
+    assert b["is_upper"] is False
+    assert b["is_lower"] is True
+    assert b["split"] == ["h", "e", "l", "l", "o"]   # splits per codepoint
+    assert b["split_sep"] == ["a", "b", "c"]
+    assert b["b64_decode"] == b"hello"   # declared BLOB: base64 decodes to bytes
+    assert b["regex"] is True
+    assert b["regex_flags"] is True    # matches only because of CASE_INSENSITIVE
+    # Projections compute; they never touch storage.
+    assert b.get("s", "hello") == "hello"
+
+
+async def test_str_exp_modify_sweep(cluster):
+    """Every modify expression, one projected column each, none persisting."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_exp_modify_sweep")
+    await sess.upsert(k) \
+        .bin("s").set_to("Hello") \
+        .bin("nfc").set_to("e\u0301") \
+        .execute()
+
+    f = int(StringWriteFlags.DEFAULT)
+    s = Exp.string_bin("s")
+    rs = await sess.query(k) \
+        .bin("orig").select_from(s) \
+        .bin("upper").select_from(Exp.string_upper(f, s)) \
+        .bin("lower").select_from(Exp.string_lower(f, s)) \
+        .bin("case_fold").select_from(Exp.string_case_fold(f, s)) \
+        .bin("normalize").select_from(Exp.string_normalize_nfc(f, Exp.string_bin("nfc"))) \
+        .bin("insert").select_from(Exp.string_insert(f, Exp.val(1), Exp.val("X"), s)) \
+        .bin("overwrite").select_from(Exp.string_overwrite(f, Exp.val(1), Exp.val("i"), s)) \
+        .bin("snip").select_from(Exp.string_snip(f, Exp.val(1), Exp.val(4), s)) \
+        .bin("snip_from").select_from(Exp.string_snip_from(Exp.val(3), s)) \
+        .bin("snip_from_neg").select_from(Exp.string_snip_from(Exp.val(-2), s)) \
+        .bin("append").select_from(Exp.string_append(f, Exp.val("!"), s)) \
+        .bin("prepend").select_from(Exp.string_prepend(f, Exp.val(">"), s)) \
+        .bin("replace").select_from(Exp.string_replace(f, Exp.val("lo"), Exp.val("LL"), s)) \
+        .bin("replace_all").select_from(
+            Exp.string_replace_all(f, Exp.val("l"), Exp.val("L"), s)) \
+        .bin("pad_start").select_from(
+            Exp.string_pad_start(f, Exp.val(7), Exp.val("0"), s)) \
+        .bin("pad_end").select_from(Exp.string_pad_end(f, Exp.val(10), Exp.val("."), s)) \
+        .bin("repeat").select_from(Exp.string_repeat(f, Exp.val(2), s)) \
+        .bin("concat").select_from(Exp.string_concat(f, Exp.list_val(["!", "?"]), s)) \
+        .execute()
+    b = (await rs.first_or_raise()).record_or_raise().bins
+
+    assert b["orig"] == "Hello"
+    assert b["upper"] == "HELLO"
+    assert b["lower"] == "hello"
+    assert b["case_fold"] == "hello"
+    assert b["normalize"] == "\u00e9"      # combining sequence folded to one codepoint
+    assert b["insert"] == "HXello"
+    assert b["overwrite"] == "Hillo"
+    assert b["snip"] == "Ho"                # removes the half-open range [1, 4)
+    # Truncate-to-end must actually truncate: a mispacked 2-element
+    # [start, flags] payload is accepted by the server as [start, end] and
+    # evaluates to the unchanged string.
+    assert b["snip_from"] == "Hel"
+    assert b["snip_from_neg"] == "Hel"      # negative start counts from the end
+    assert b["append"] == "Hello!"
+    assert b["prepend"] == ">Hello"
+    assert b["replace"] == "HelLL"
+    assert b["replace_all"] == "HeLLo"
+    assert b["pad_start"] == "00Hello"
+    assert b["pad_end"] == "Hello....."
+    assert b["repeat"] == "HelloHello"
+    assert b["concat"] == "Hello!?"
+
+    # None of the above wrote anything: the bin still holds what was seeded.
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "Hello"
+
+
+async def test_str_exp_trim_sweep(cluster):
+    """The three trim expressions differ only in which end they touch."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_exp_trim_sweep")
+    await sess.upsert(k).bin("s").set_to("  pad  ").execute()
+
+    f = int(StringWriteFlags.DEFAULT)
+    s = Exp.string_bin("s")
+    rs = await sess.query(k) \
+        .bin("trim").select_from(Exp.string_trim(f, s)) \
+        .bin("trim_start").select_from(Exp.string_trim_start(f, s)) \
+        .bin("trim_end").select_from(Exp.string_trim_end(f, s)) \
+        .execute()
+    b = (await rs.first_or_raise()).record_or_raise().bins
+
+    assert b["trim"] == "pad"
+    assert b["trim_start"] == "pad  "
+    assert b["trim_end"] == "  pad"
+
+
+async def test_str_exp_regex_replace(cluster):
+    """``GLOBAL`` decides whether every match or only the first is replaced."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_exp_regex_replace")
+    await sess.upsert(k).bin("s").set_to("abc123def456").execute()
+
+    s = Exp.string_bin("s")
+    rs = await sess.query(k) \
+        .bin("first").select_from(Exp.string_regex_replace(
+            Exp.val("[0-9]+"), Exp.val("NUM"), int(StringRegexFlags.DEFAULT), s)) \
+        .bin("every").select_from(Exp.string_regex_replace(
+            Exp.val("[0-9]+"), Exp.val("NUM"), int(StringRegexFlags.GLOBAL), s)) \
+        .execute()
+    b = (await rs.first_or_raise()).record_or_raise().bins
+
+    assert b["first"] == "abcNUMdef456"
+    assert b["every"] == "abcNUMdefNUM"
+
+
+async def test_str_exp_conversion_sweep(cluster):
+    """The type-conversion expressions, including the family-agnostic to_string."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_exp_convert_sweep")
+    await sess.upsert(k) \
+        .bin("n").set_to(42) \
+        .bin("i").set_to("42") \
+        .bin("d").set_to("3.5") \
+        .bin("s").set_to("hello") \
+        .execute()
+
+    rs = await sess.query(k) \
+        .bin("to_string").select_from(Exp.to_string(Exp.int_bin("n"))) \
+        .bin("to_integer").select_from(Exp.string_to_integer(Exp.string_bin("i"))) \
+        .bin("to_double").select_from(Exp.string_to_double(Exp.string_bin("d"))) \
+        .bin("to_blob").select_from(Exp.string_to_blob(Exp.string_bin("s"))) \
+        .execute()
+    b = (await rs.first_or_raise()).record_or_raise().bins
+
+    assert b["to_string"] == "42"
+    assert b["to_integer"] == 42
+    assert b["to_double"] == 3.5
+    assert b["to_blob"] == b"hello"
