@@ -143,8 +143,29 @@ Four accessors take a single row. They split on two independent axes —
   hand back non-OK rows as `RecordResult` data (`is_ok=False`) so you can
   branch on partial success.
 
+The builder exposes `first()` and `first_or_raise()` directly, which is the
+shorter form for the single-record case — one `await` instead of two, with the
+same semantics, since each delegates to the stream method of the same name:
+
 ```python
-# Point read — first_or_raise takes one and closes
+# Point read, straight from the builder.
+result = await session.query(users.id(1)).first_or_raise()
+record = result.record_or_raise()
+
+# Or branch on partial success instead of raising.
+result = await session.query(users.id(1)).first()
+if result is None:
+    ...                     # no such record
+elif not result.is_ok:
+    ...                     # result.result_code says why
+```
+
+The terminals return a `RecordResult` rather than a bare `Record`, so
+`result_code`, `sub_code`, and `in_doubt` stay available; `record_or_raise()`
+is the step that unwraps it.
+
+```python
+# The same read through the stream, when you want the stream for other reasons.
 rec = await (await session.query(users.id(1)).execute()).first_or_raise()
 
 # Peek the head, then process the remainder — pop keeps the stream open
@@ -155,7 +176,7 @@ async for rest in stream:
 stream.close()   # or wrap the whole thing in `async with`
 ```
 
-Sync builders expose the same four methods; call them without `await`.
+Sync builders and streams expose the same methods; call them without `await`.
 
 ## Selecting Bins
 

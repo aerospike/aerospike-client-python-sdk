@@ -283,6 +283,9 @@ class RecordStream:
 
         Terminal convenience: takes one row via :meth:`pop`, then :meth:`close`\\ s
         to release the underlying producer. Use :meth:`pop` to keep iterating.
+
+        See Also:
+            :meth:`~aerospike_sdk.sync.operations.query.QueryBuilder.first`: Same terminal on the builder.
         """
         try:
             return self.pop()
@@ -293,6 +296,9 @@ class RecordStream:
         """Return the first row, require success, then close the stream.
 
         Terminal counterpart of :meth:`pop_or_raise`.
+
+        See Also:
+            :meth:`~aerospike_sdk.sync.operations.query.QueryBuilder.first_or_raise`: Same terminal on the builder.
         """
         result = self.first()
         if result is None:

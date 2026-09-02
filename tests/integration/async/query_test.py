@@ -23,6 +23,7 @@ import pytest_asyncio
 from aerospike_sdk import Filter, Key
 from aerospike_async import PartitionFilter, QueryPolicy
 from aerospike_sdk import DataSet, Exp, val
+from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
@@ -712,6 +713,83 @@ class TestPopVsFirst:
         rec = await closed_stream.first_or_raise()
         assert rec.is_ok
         assert await closed_stream.collect() == []     # closed
+
+
+class TestSingleRecordTerminals:
+    """``first`` / ``first_or_raise`` on the builder, not just on the stream.
+
+    Reading one record by key is the most common operation this client has, and
+    reaching it through ``execute()`` costs two awaits -- which callers then
+    collapse into a nested single expression. These terminals are the same pair
+    the stream already exposes, hoisted onto the builder so the common case
+    reads flat.
+    """
+
+    async def test_first_or_raise_matches_the_stream_form(self, cluster):
+        """Same answer as the three-step form, since it delegates to it."""
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+
+        via_stream = (
+            await (await session.query(ds.id(0)).execute()).first_or_raise()
+        ).record_or_raise()
+        via_builder = (
+            await session.query(ds.id(0)).first_or_raise()
+        ).record_or_raise()
+        assert via_builder.bins == via_stream.bins
+
+    async def test_first_returns_none_when_nothing_matches(self, cluster):
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        assert await session.query(ds.id("no_such_key_xyz")).first() is None
+
+    async def test_first_or_raise_raises_when_nothing_matches(self, cluster):
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        with pytest.raises(StopAsyncIteration):
+            await session.query(ds.id("no_such_key_xyz")).first_or_raise()
+
+    async def test_result_envelope_is_preserved(self, cluster):
+        """The terminal returns RecordResult, not a bare Record.
+
+        Dropping the envelope would discard result_code, sub_code and in_doubt,
+        which is why the extra ``.record_or_raise()`` stays the caller's step.
+        """
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        result = await session.query(ds.id(0)).first()
+        assert isinstance(result, RecordResult)
+        assert result.is_ok
+        assert result.record is not None
+
+    async def test_stream_is_closed_by_the_terminal(self, cluster):
+        """The terminal must close the stream it opened, not leak it.
+
+        Observed directly on the stream rather than inferred from the call
+        succeeding: leaving it open still returns the right row, so any check
+        that only looks at the result passes either way.
+        """
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+
+        # Deliberately multi-key: a single-key stream closes itself once
+        # exhausted, so it cannot tell a closing terminal from a
+        # non-closing one. Only an unconsumed remainder can.
+        builder = session.query(ds.ids(0, 1, 2))
+        opened = []
+        real_execute = builder.execute
+
+        async def spy(*args, **kwargs):
+            stream = await real_execute(*args, **kwargs)
+            opened.append(stream)
+            return stream
+
+        builder.execute = spy
+        assert (await builder.first()).is_ok
+        assert len(opened) == 1
+        assert opened[0]._closed, (
+            "first() left its stream open, with rows still unconsumed"
+        )
 
 
 class TestStreamClose:

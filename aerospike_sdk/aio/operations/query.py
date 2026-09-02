@@ -411,6 +411,67 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             )
         return await self._execute_dataset_query()
 
+    async def first(self, on_error: OnError | None = None) -> "RecordResult | None":
+        """Execute and return the first row, or ``None`` when there are none.
+
+        Reading one record by key is the most common thing this client does,
+        and going through :meth:`execute` costs two awaits for it -- one for the
+        stream, one for the row. This is that pair in one call; the stream is
+        closed either way.
+
+        Semantics come from :meth:`RecordStream.first`, not from a second set
+        of rules: per-record failures arrive **as data** (``is_ok=False``),
+        while cluster-level errors raise.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the query matched nothing.
+
+        Example::
+
+            result = await session.query(key).first()
+            if result is None:
+                print("no such record")
+            elif result.is_ok:
+                print(result.record.bins)
+
+        See Also:
+            :meth:`first_or_raise`: Raises instead of returning ``None``.
+            :meth:`execute`: The stream, for reads that return many rows.
+        """
+        return await (await self.execute(on_error)).first()
+
+    async def first_or_raise(self, on_error: OnError | None = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        The single-await counterpart of ``(await (await q.execute()).first_or_raise())``.
+        Semantics come from :meth:`RecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            StopAsyncIteration: The query matched no records.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            result = await session.query(key).first_or_raise()
+            record = result.record_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return await (await self.execute(on_error)).first_or_raise()
+
+
     async def stream(
         self, on_error: OnError | None = None,
     ) -> RecordStream:

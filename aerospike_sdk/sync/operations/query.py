@@ -253,6 +253,61 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             f"sync builder shape not yet covered by a blocking dispatcher: {_describe_specs(self)}",
         )
 
+    def first(self, on_error: Optional[OnError] = None) -> Optional["RecordResult"]:
+        """Execute and return the first row, or ``None`` when there are none.
+
+        Reading one record by key is the most common thing this client does,
+        and going through :meth:`execute` costs a second call for it. This is
+        that pair in one; the stream is closed either way.
+
+        Semantics come from :meth:`SyncRecordStream.first`, not from a second
+        set of rules: per-record failures arrive **as data** (``is_ok=False``),
+        while cluster-level errors raise.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the query matched nothing.
+
+        Example::
+
+            result = session.query(key).first()
+            if result is not None and result.is_ok:
+                print(result.record.bins)
+
+        See Also:
+            :meth:`first_or_raise`: Raise instead of returning ``None``.
+        """
+        return self.execute(on_error).first()
+
+    def first_or_raise(self, on_error: Optional[OnError] = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        Semantics come from :meth:`SyncRecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            StopIteration: The query matched no records.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            record = session.query(key).first_or_raise().record_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return self.execute(on_error).first_or_raise()
+
+
     def stream(
         self, on_error: Optional[OnError] = None,
     ) -> RecordStream:
