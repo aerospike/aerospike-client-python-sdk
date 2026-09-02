@@ -132,8 +132,40 @@ def test_sets(session):
     test_namespace = list(namespaces)[0]
     sets = info.sets(test_namespace)
 
+    from aerospike_sdk import SetDetail
+
     assert isinstance(sets, list)
-    assert all(isinstance(s, str) for s in sets), "All sets should be strings"
+    assert all(isinstance(s, SetDetail) for s in sets)
+    # Names carry no info-protocol delimiters; their presence would mean the
+    # body was returned unsplit, which a shape-only check cannot tell apart.
+    # Names carry no info-protocol delimiters; their presence would mean the
+    # body was returned unsplit, which a shape-only check cannot tell apart.
+    names = [d.name for d in sets]
+    for name in names:
+        assert ";" not in name and ":" not in name and "=" not in name, (
+            f"set name still contains raw info-protocol delimiters: {name[:60]!r}"
+        )
+    assert names == sorted(names), "sets should be ordered by name"
+
+
+def test_sets_returns_detail(session):
+    """Sync twin: per-set detail, typed."""
+    from aerospike_sdk import SetDetail
+
+    info = session.info()
+    namespaces = info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    details = info.sets(namespace)
+    if not details:
+        pytest.skip(f"No sets in namespace {namespace!r}")
+
+    assert all(isinstance(d, SetDetail) for d in details)
+    assert details[0].namespace == namespace
+    assert isinstance(details[0].objects, int)
+    assert [d.name for d in details] == sorted(d.name for d in details)
 
 
 def test_secondary_indexes(session):
@@ -185,7 +217,12 @@ def test_secondary_index_details(session):
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:
-        assert isinstance(details, dict)
+        from aerospike_sdk import SindexDetail
+
+        assert isinstance(details, SindexDetail)
+        # Parsed counters, not the raw {command: body} envelope.
+        assert f"sindex/{test_index['namespace']}" not in details
+        assert isinstance(details.entries, int)
 
 
 def test_secondary_index_details_nonexistent(session):
@@ -303,3 +340,63 @@ def test_info_on_all_nodes_statistics(session):
         assert isinstance(node_response, dict), "Node responses should be dictionaries"
         assert len(node_response) > 0, "Statistics should contain data"
 
+
+
+def test_per_node_views(session):
+    """Sync twin: per-node variants answer per node."""
+    from aerospike_sdk import NamespaceDetail, SetDetail, Sindex
+
+    info = session.info()
+    namespaces = info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    per_node_ns = info.namespace_details_per_node(namespace)
+    assert per_node_ns, "no node reported the namespace"
+    assert all(isinstance(d, NamespaceDetail) for d in per_node_ns.values())
+
+    per_node_sets = info.sets_per_node(namespace)
+    assert set(per_node_sets) == set(per_node_ns)
+    for details in per_node_sets.values():
+        assert all(isinstance(d, SetDetail) for d in details)
+
+    per_node_idx = info.secondary_indexes_per_node(namespace)
+    for indexes in per_node_idx.values():
+        assert all(isinstance(i, Sindex) for i in indexes)
+
+    merged = {d.name for d in info.sets(namespace)}
+    from_nodes = {d.name for details in per_node_sets.values() for d in details}
+    assert merged == from_nodes
+
+
+def test_storage_engine_view(session):
+    """Sync twin: the storage-engine section as a typed view."""
+    info = session.info()
+    namespaces = info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+
+    detail = info.namespace_details(list(namespaces)[0])
+    assert detail is not None
+    engine = detail.storage_engine
+    assert engine.engine in {"memory", "device"}
+    assert engine.is_memory != engine.is_device
+    assert "replication-factor" not in engine
+
+
+def test_set_lookup_by_name(session):
+    """Sync twin: one set by name."""
+    info = session.info()
+    namespaces = info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    all_sets = info.sets(namespace)
+    if not all_sets:
+        pytest.skip(f"No sets in namespace {namespace!r}")
+
+    found = info.set(namespace, all_sets[0].name)
+    assert found is not None and found.name == all_sets[0].name
+    assert info.set(namespace, "no_such_set_xyz") is None

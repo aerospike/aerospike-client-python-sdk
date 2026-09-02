@@ -99,8 +99,47 @@ async def test_sets(session):
     test_namespace = list(namespaces)[0]
     sets = await info.sets(test_namespace)
 
+    from aerospike_sdk import SetDetail
+
     assert isinstance(sets, list)
-    assert all(isinstance(s, str) for s in sets), "All sets should be strings"
+    assert all(isinstance(s, SetDetail) for s in sets)
+    # A shape-only check passes when the whole raw body arrives as one element,
+    # which is what this returned before: names carry no info-protocol
+    # delimiters, so their presence means the body was never split.
+    # Names carry no info-protocol delimiters; their presence would mean the
+    # body was returned unsplit, which a shape-only check cannot tell apart.
+    names = [d.name for d in sets]
+    for name in names:
+        assert ";" not in name and ":" not in name and "=" not in name, (
+            f"set name still contains raw info-protocol delimiters: {name[:60]!r}"
+        )
+    assert names == sorted(names), "sets should be ordered by name"
+
+
+async def test_sets_returns_detail(session):
+    """Per-set detail, typed."""
+    from aerospike_sdk import SetDetail
+
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    details = await info.sets(namespace)
+    if not details:
+        pytest.skip(f"No sets in namespace {namespace!r}")
+
+    assert all(isinstance(d, SetDetail) for d in details)
+    first = details[0]
+    assert first.name and ":" not in first.name
+    assert first.namespace == namespace
+    # Coerced on access rather than left as wire strings.
+    assert isinstance(first.objects, int)
+    assert isinstance(first.truncating, bool)
+    # Still a mapping, so any key the server reports stays reachable.
+    assert first["set"] == first.name
+    assert [d.name for d in details] == sorted(d.name for d in details)
 
 
 async def test_secondary_indexes(session):
@@ -152,7 +191,15 @@ async def test_secondary_index_details(session):
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:
-        assert isinstance(details, dict)
+        from aerospike_sdk import SindexDetail
+
+        assert isinstance(details, SindexDetail)
+        # Parsed counters, not the raw {command: body} envelope -- the envelope
+        # also satisfies isinstance(dict), which is how that shape survived.
+        assert f"sindex/{test_index['namespace']}" not in details
+        assert isinstance(details.entries, int)
+        assert isinstance(details.used_bytes, int)
+        assert 0 <= details.load_pct <= 100
 
 
 async def test_secondary_index_details_nonexistent(session):
@@ -270,3 +317,117 @@ async def test_info_on_all_nodes_statistics(session):
         assert isinstance(node_response, dict), "Node responses should be dictionaries"
         assert len(node_response) > 0, "Statistics should contain data"
 
+
+
+async def test_per_node_views_agree_with_the_merged_ones(session):
+    """Per-node variants answer per node; the merged views collapse that.
+
+    On a single-node cluster the two agree, which is the useful invariant to
+    assert here -- the divergence they exist to expose only appears with more
+    than one node, and this suite does not require one.
+    """
+    from aerospike_sdk import NamespaceDetail, SetDetail, Sindex
+
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    per_node_ns = await info.namespace_details_per_node(namespace)
+    assert per_node_ns, "no node reported the namespace"
+    assert all(isinstance(d, NamespaceDetail) for d in per_node_ns.values())
+
+    per_node_sets = await info.sets_per_node(namespace)
+    assert set(per_node_sets) == set(per_node_ns), "same nodes should answer both"
+    for details in per_node_sets.values():
+        assert all(isinstance(d, SetDetail) for d in details)
+        names = [d.name for d in details]
+        assert names == sorted(names)
+
+    per_node_idx = await info.secondary_indexes_per_node(namespace)
+    for indexes in per_node_idx.values():
+        assert all(isinstance(i, Sindex) for i in indexes)
+        assert all(i.namespace == namespace for i in indexes)
+
+    # Every set the merged view reports is reported by at least one node.
+    merged = {d.name for d in await info.sets(namespace)}
+    from_nodes = {d.name for details in per_node_sets.values() for d in details}
+    assert merged == from_nodes
+
+
+async def test_secondary_index_details_per_node(session):
+    """Build progress is per node, so this is the view that shows it."""
+    from aerospike_sdk import SindexDetail
+
+    info = session.info()
+    indexes = await info.secondary_indexes()
+    if not indexes:
+        pytest.skip("No secondary indexes found to test")
+
+    index = indexes[0]
+    per_node = await info.secondary_index_details_per_node(
+        index.namespace, index.name
+    )
+    if not per_node:
+        pytest.skip("no node reported details for the index")
+    assert all(isinstance(d, SindexDetail) for d in per_node.values())
+    assert all(d.load_pct <= 100 for d in per_node.values())
+
+
+async def test_storage_engine_view(session):
+    """The storage-engine section, lifted out of the namespace response."""
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+
+    detail = await info.namespace_details(list(namespaces)[0])
+    assert detail is not None
+    engine = detail.storage_engine
+    assert engine.engine in {"memory", "device"}
+    assert engine.is_memory != engine.is_device
+    # Grouped per location: the path travels with its own counters, rather
+    # than the counters appearing as separate entries alongside it.
+    for storage_file in engine.files:
+        assert storage_file.path and not storage_file.path.isdigit()
+        assert isinstance(storage_file.used_bytes, int)
+    # The section is a subset: unrelated namespace keys stay out of it.
+    assert "replication-factor" not in engine
+
+
+async def test_set_lookup_by_name(session):
+    """One set by name, matching the reference client's ``set(name)``."""
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+    namespace = list(namespaces)[0]
+
+    all_sets = await info.sets(namespace)
+    if not all_sets:
+        pytest.skip(f"No sets in namespace {namespace!r}")
+
+    found = await info.set(namespace, all_sets[0].name)
+    assert found is not None
+    assert found.name == all_sets[0].name
+    assert await info.set(namespace, "no_such_set_xyz") is None
+
+
+async def test_sets_without_a_namespace_spans_all_of_them(session):
+    """The bare ``sets`` command answers for every namespace, as the reference does."""
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("No namespaces found to test")
+
+    everything = await info.sets()
+    if not everything:
+        pytest.skip("No sets on the cluster")
+
+    reported = {d.namespace for d in everything}
+    assert reported <= set(namespaces)
+    # Filtering must agree with the unfiltered call for the namespace asked.
+    one = list(namespaces)[0]
+    filtered = {(d.namespace, d.name) for d in await info.sets(one)}
+    assert filtered == {(d.namespace, d.name) for d in everything if d.namespace == one}

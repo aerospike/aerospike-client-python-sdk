@@ -109,6 +109,14 @@ from aerospike_sdk.exceptions import (
     UdfError,
 )
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
+from aerospike_sdk.info_types import (
+    NamespaceDetail,
+    SetDetail,
+    Sindex,
+    SindexDetail,
+    StorageEngine,
+    StorageFileDetail,
+)
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.metrics import (
@@ -191,6 +199,7 @@ __all__ = [
     "ConnectionError",
     "CTX",
     "DataSet",
+    "NamespaceDetail",
     "DerivedHistogram",
     "ElementError",
     "ElementExistsError",
@@ -240,6 +249,11 @@ __all__ = [
     "RecordExistsError",
     "RecordNotFoundError",
     "RecordResult",
+    "SetDetail",
+    "Sindex",
+    "SindexDetail",
+    "StorageEngine",
+    "StorageFileDetail",
     "RecordStream",
     "RecordTooBigError",
     "RegexFlag",

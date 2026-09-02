@@ -24,7 +24,15 @@ interpreted.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:  # info_types imports this module; annotation only.
+    from aerospike_sdk.info_types import (
+        NamespaceDetail,
+        SetDetail,
+        Sindex,
+        SindexDetail,
+    )
 
 
 def parse_info_body(body: str) -> Dict[str, str]:
@@ -50,6 +58,40 @@ def parse_info_body(body: str) -> Dict[str, str]:
     return dict(
         pair.split("=", 1) for pair in body.split(";") if "=" in pair
     )
+
+
+def parse_info_records(body: str) -> List[Dict[str, str]]:
+    """Split an info body that carries one record per entity.
+
+    ``sets/<ns>`` and ``sindex-list`` answer with ``;``-separated records whose
+    fields are ``:``-separated -- a different shape from the flat ``;``-separated
+    document :func:`parse_info_body` handles. Splitting one with the other's
+    delimiter silently yields a single element holding the whole body, which
+    looks like a valid one-record answer.
+
+    Args:
+        body: One info response body, e.g. ``"ns=test:set=a;ns=test:set=b"``.
+
+    Returns:
+        One mapping per record, in the order the server reported them. Records
+        with no ``key=value`` field at all are skipped.
+
+    Example::
+
+        records = parse_info_records("ns=test:set=users;ns=test:set=orders")
+        assert [r["set"] for r in records] == ["users", "orders"]
+    """
+    records = []
+    for entry in body.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        fields = dict(
+            token.split("=", 1) for token in entry.split(":") if "=" in token
+        )
+        if fields:
+            records.append(fields)
+    return records
 
 
 def single_info_body(response: Optional[Dict[str, str]], command: str) -> Optional[str]:
@@ -95,6 +137,100 @@ class InfoCommandsBase:
                 if isinstance(value, str) and value:
                     out.add(value.strip())
         return out
+
+    @staticmethod
+    def _per_node_namespace_details(
+        responses: Dict[str, Dict[str, str]], namespace: str
+    ) -> Dict[str, "NamespaceDetail"]:
+        """One detail view per node, keyed by node name.
+
+        Nodes the namespace is absent from are omitted rather than mapped to an
+        empty view -- a node that does not host the namespace and one that
+        reports nothing about it are different answers.
+        """
+        from aerospike_sdk.info_types import NamespaceDetail
+
+        out: Dict[str, "NamespaceDetail"] = {}
+        for node, node_response in responses.items():
+            detail = NamespaceDetail.from_response(node_response, namespace)
+            if detail is not None:
+                out[node] = detail
+        return out
+
+    @staticmethod
+    def _per_node_set_details(
+        responses: Dict[str, Dict[str, str]]
+    ) -> Dict[str, List["SetDetail"]]:
+        """Per-node set detail, keyed by node name.
+
+        Unlike the merged view, this keeps each node's own counters, which is
+        the point: object counts differ per node and merging picks one.
+        """
+        from aerospike_sdk.info_types import SetDetail
+
+        out: Dict[str, List["SetDetail"]] = {}
+        for node, node_response in responses.items():
+            details: List["SetDetail"] = []
+            for value in node_response.values():
+                if isinstance(value, str) and value:
+                    details.extend(SetDetail.from_body(value))
+            out[node] = sorted(details, key=lambda d: (d.namespace, d.name))
+        return out
+
+    @staticmethod
+    def _per_node_sindexes(
+        responses: Dict[str, Dict[str, str]], namespace: Optional[str] = None
+    ) -> Dict[str, List["Sindex"]]:
+        """Per-node secondary-index lists, keyed by node name.
+
+        A node mid-rebuild reports an index in a different state than its peers,
+        which the deduplicated cluster-wide list cannot show.
+        """
+        from aerospike_sdk.index_list import parse_index_list
+        from aerospike_sdk.info_types import Sindex
+
+        return {
+            node: [Sindex(entry) for entry in parse_index_list({node: body}, namespace=namespace)]
+            for node, body in responses.items()
+        }
+
+    @staticmethod
+    def _per_node_sindex_details(
+        responses: Dict[str, Dict[str, str]], namespace: str, index_name: str
+    ) -> Dict[str, "SindexDetail"]:
+        """Per-node index counters, keyed by node name; nodes without it omitted."""
+        from aerospike_sdk.info_types import SindexDetail
+
+        out: Dict[str, "SindexDetail"] = {}
+        for node, node_response in responses.items():
+            detail = SindexDetail.from_response(node_response, namespace, index_name)
+            if detail is not None:
+                out[node] = detail
+        return out
+
+    @staticmethod
+    def _merge_set_details(responses: Dict[str, Dict[str, str]]) -> List["SetDetail"]:
+        """Collect one ``SetDetail`` per set across every node's response.
+
+        A set is reported by each node that holds part of it, so the same set
+        arrives repeatedly; the first record for it wins. Counters are therefore
+        that node's view rather than a cluster-wide total, which is the same
+        contract the raw info command has.
+
+        Keyed by namespace *and* name: set names are only unique within a
+        namespace, and the unfiltered ``sets`` command spans all of them, so
+        keying by name alone would silently drop same-named sets.
+        """
+        from aerospike_sdk.info_types import SetDetail
+
+        by_set: Dict[tuple, "SetDetail"] = {}
+        for node_response in responses.values():
+            for value in node_response.values():
+                if not isinstance(value, str) or not value:
+                    continue
+                for detail in SetDetail.from_body(value):
+                    by_set.setdefault((detail.namespace, detail.name), detail)
+        return [by_set[key] for key in sorted(by_set)]
 
     @staticmethod
     def _merge_delimited_set(
