@@ -45,7 +45,7 @@ class TestRejectedConstruction:
             AsyncPool("127.0.0.1:3000", loop_count=2)  # type: ignore[arg-type]
 
     def test_callable_raises_type_error(self):
-        """A callable used to be accepted positionally as a client factory."""
+        """Only a ClusterDefinition is accepted; a callable is not a pool member source."""
         with pytest.raises(TypeError, match="must be a ClusterDefinition"):
             AsyncPool(lambda: None, loop_count=2)  # type: ignore[arg-type]
 
