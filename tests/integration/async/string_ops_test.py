@@ -232,13 +232,13 @@ async def test_to_string_projection_via_exp(cluster):
     assert rec.bins["as_str"] == "42"
 
 
-async def test_str_to_string_op_via_query(cluster):
-    """Fluent ``str_to_string`` op coerces the bin value to its string form."""
+async def test_read_as_string_op_via_query(cluster):
+    """Fluent ``read_as_string`` op coerces any bin value to its string form."""
     sess = cluster.create_session()
-    k = _TEST_DS.id("strop_str_to_string")
+    k = _TEST_DS.id("strop_read_as_string")
     await sess.upsert(k).bin("n").set_to(42).execute()
 
-    rs = await sess.query(k).bin("n").str_to_string().execute()
+    rs = await sess.query(k).bin("n").read_as_string().execute()
     rec = (await rs.first_or_raise()).record_or_raise()
     assert rec.bins["n"] == "42"
 

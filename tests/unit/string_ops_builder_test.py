@@ -206,11 +206,19 @@ class TestStringMethodSurface:
 
     def test_write_bin_builder_str_method_count(self):
         methods = [m for m in dir(WriteBinBuilder) if m.startswith("str_")]
-        assert len(methods) == 37, f"expected 37 str_* on WriteBinBuilder, got {len(methods)}"
+        assert len(methods) == 36, f"expected 36 str_* on WriteBinBuilder, got {len(methods)}"
 
     def test_query_bin_builder_str_method_count(self):
         methods = [m for m in dir(QueryBinBuilder) if m.startswith("str_")]
-        assert len(methods) == 18, f"expected 18 str_* on QueryBinBuilder, got {len(methods)}"
+        assert len(methods) == 17, f"expected 17 str_* on QueryBinBuilder, got {len(methods)}"
+
+    def test_read_as_string_is_unprefixed_on_both_builders(self):
+        # The X→string conversion is type-agnostic, so it deliberately does
+        # not carry the str_ prefix (which marks a string *source*); the
+        # str_to_* conversions genuinely require one.
+        for builder in (WriteBinBuilder, QueryBinBuilder):
+            assert hasattr(builder, "read_as_string")
+            assert not hasattr(builder, "str_to_string")
 
     def test_query_bin_builder_has_no_modify_methods(self):
         """Modifies (e.g. str_upper, str_concat) live ONLY on WriteBinBuilder."""

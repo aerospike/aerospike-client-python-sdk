@@ -260,22 +260,24 @@ modify is a silent no-op. ``NO_FAIL`` also does **not** suppress
 ``BIN_TYPE_ERROR`` (wrong-type bin), invalid-UTF-8 errors, or the
 ``PARAMETER_ERROR`` cases above — those still raise.
 
-## Type Conversion: ``to_string``
+## Type Conversion: ``read_as_string``
 
-Convert a non-string scalar bin into its string representation server-side.
-Accepts integer, float, string, and blob source types. The op has no CTX
+Convert any scalar bin into its string representation server-side. Accepts
+integer, float, string, and blob source types. Because the source bin need
+not be a string, the builder method carries no ``str_`` prefix — the
+``str_to_integer`` / ``str_to_double`` / ``str_to_blob`` conversions keep
+theirs because they genuinely require a string source. The op has no CTX
 overload and no ``flags`` argument.
 
 ```python
 await session.upsert(key).put({"count": 42}).execute()
 
-await (session.upsert(key)
-       .add_operation(StringOperation.to_string("count"))
-       .execute())
-
-stream = await session.query(key).bin("count").get().execute()
+stream = await session.query(key).bin("count").read_as_string().execute()
 assert (await stream.first_or_raise()).record_or_raise().bins["count"] == "42"
 ```
+
+The low-level factory and expression forms are ``StringOperation.to_string``
+and ``Exp.to_string``.
 
 ## Positional Results
 

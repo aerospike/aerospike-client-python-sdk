@@ -4409,13 +4409,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.repeat(self._bin, count, flags=int(flags)),
         )
 
-    def str_to_string(self) -> WriteSegmentBuilder:
-        """Register a to-string read: convert a non-string bin to its string representation.
+    def read_as_string(self) -> WriteSegmentBuilder:
+        """Register a to-string read: convert any bin to its string representation.
 
-        Accepts ``int``, ``float``, ``string``, or ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server. Has no
-        ``flags`` argument and no CDT-context support (the wire op has no
-        payload to carry a CTX wrapper).
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int``,
+        ``float``, ``string``, or ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server. Has no ``flags``
+        argument and no CDT-context support (the wire op has no payload to
+        carry a CTX wrapper).
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
@@ -5425,11 +5428,14 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )
         return self._parent
 
-    def str_to_string(self) -> _T:
-        """Convert a non-string bin to its string representation.
+    def read_as_string(self) -> _T:
+        """Convert any bin to its string representation.
 
-        Accepts ``int`` / ``float`` / ``string`` / ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server.
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int`` /
+        ``float`` / ``string`` / ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server.
         """
         self._parent.add_operation(StringOperation.to_string(self._bin))  # type: ignore[union-attr]
         return self._parent
