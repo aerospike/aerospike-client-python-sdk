@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Union
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import (
     CTX,

@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any, Generic, List, Optional, Protocol, TypeVar, Union
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import AuthMode, ClientPolicy
 

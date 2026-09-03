@@ -45,7 +45,9 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self, deprecated
+from typing import Self
+
+from typing_extensions import deprecated
 
 from aerospike_async import (
     BasePolicy,

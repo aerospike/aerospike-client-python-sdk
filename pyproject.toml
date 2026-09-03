@@ -7,7 +7,7 @@ name = "aerospike-sdk"
 dynamic = ["version"]
 description = "Aerospike Python SDK - a modern, developer-friendly interface for Aerospike"
 readme = "README.md"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.11"
 dependencies = [
     # Dev-channel version published to the internal package index on every
     # PAC merge; promoted versions land on public PyPI at release. CI
@@ -21,7 +21,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -89,7 +88,7 @@ reportMissingImports = false
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
 # The CDT builders pass one-line lambda factories straight into a constructor;
@@ -100,7 +99,7 @@ target-version = "py310"
 "aerospike_sdk/aio/operations/cdt_write.py" = ["E731"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

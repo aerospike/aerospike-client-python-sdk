@@ -40,7 +40,7 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import (
     Client,

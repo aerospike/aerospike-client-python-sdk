@@ -33,7 +33,7 @@ pip install aerospike-sdk==0.9.0a2
 This installs the SDK plus its dependency on the Aerospike Python Async Client
 (`aerospike-async`). No Rust toolchain or git checkout required for ordinary
 use — pre-built wheels are available for Linux, macOS, and Windows on Python
-3.10–3.14.
+3.11–3.14.
 
 ## Quick start
 
@@ -329,7 +329,9 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 
 ### Prerequisites
 
-- **Python** 3.10 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
+- **Python** 3.11 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
+  The SDK supports every CPython version under upstream security support; the
+  floor rises in minor releases as versions reach end-of-life.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
   Free-threaded wheels (`cp314t`) ship across the same platform matrix as

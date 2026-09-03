@@ -119,7 +119,9 @@ pip install -e ".[dev]"
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+ (the SDK supports every CPython version under upstream
+  security support; the floor rises in minor releases as versions reach
+  end-of-life)
 - Aerospike Server 6.0+ (7.0+ for some features)
 - [aerospike-client-python-async](https://github.com/aerospike/aerospike-client-python-async)
 

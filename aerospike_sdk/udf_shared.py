@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Generic, List, TYPE_CHECKING, TypeVar, Union, overload
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import FilterExpression, Key
 
