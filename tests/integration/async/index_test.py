@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
+from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
@@ -178,7 +178,11 @@ async def test_create_index_with_cdt_context(cluster, enterprise):
     index_name = "test_ctx_idx"
     bin_name = "payload"
     ds = DataSet.of(general_namespace(), "test")
-    session = cluster.create_session()
+    # The assertion reads the user key back off the query results, which
+    # requires the key to be stored with the record — an explicit opt-in.
+    session = cluster.create_session(
+        Behavior.DEFAULT.derive_with_changes("ctx-idx-send-key", send_key=True)
+    )
 
     try:
         await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()

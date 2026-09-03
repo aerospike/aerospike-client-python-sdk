@@ -239,7 +239,8 @@ class TestApplyBehaviors:
         ))
         settings = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.POINT, Mode.AP)
         assert settings.total_timeout == timedelta(seconds=42)
-        assert settings.send_key is True
+        # The factory send_key default still shows through the YAML overlay.
+        assert settings.send_key is False
 
     def test_unchanged_spec_is_skipped(self):
         specs = loader.parse_behaviors(_FULL)

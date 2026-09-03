@@ -20,11 +20,15 @@ See async :mod:`tests.integration.async.cdt_filter_context_test` for notes on
 """
 
 import pytest
-from aerospike_sdk import CTX, Filter
+from aerospike_sdk import CTX, Behavior, Filter
 from aerospike_async import IndexTask, IndexType
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+
+# These tests assert the user key round-trips through query results, which
+# requires the key to be stored with the record — an explicit opt-in.
+_SEND_KEY = Behavior.DEFAULT.derive_with_changes("cdt-ctx-send-key-sync", send_key=True)
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
@@ -48,7 +52,7 @@ def cluster(aerospike_host, make_cluster_definition):
 
 @pytest.fixture
 def session(cluster):
-    return cluster.create_session()
+    return cluster.create_session(_SEND_KEY)
 
 
 def _cleanup_records(session, keys):
@@ -105,7 +109,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     key_missing_inner = ds.id("cdt_ctx_no_inner")
     keys = (key_hi, key_lo, key_missing_inner)
 
-    session = cluster.create_session()
+    session = cluster.create_session(_SEND_KEY)
     # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
     pac = cluster._client.underlying_client
 
@@ -176,7 +180,7 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     key_other = ds.id("cdt_ctx_flat_b")
     keys = (key_match, key_other)
 
-    session = cluster.create_session()
+    session = cluster.create_session(_SEND_KEY)
     # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
     pac = cluster._client.underlying_client
     index_name = f"{_INDEX}_flat"

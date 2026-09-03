@@ -231,8 +231,11 @@ Predefined behaviors:
 Custom behaviors via derivation:
 
 ```python
+from datetime import timedelta
+
 my_behavior = Behavior.DEFAULT.derive_with_changes(
-    total_timeout_ms=5000,
+    "generous-timeouts",
+    total_timeout=timedelta(seconds=5),
     max_retries=3,
 )
 ```

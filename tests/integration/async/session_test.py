@@ -242,7 +242,7 @@ async def test_session_multiple_sessions_different_behaviors(cluster):
     assert default_session.behavior.name == "DEFAULT"
     assert fast_session.behavior.name == "fast"
     assert fast_session.behavior.total_timeout == timedelta(seconds=5)
-    assert default_session.behavior.total_timeout == timedelta(seconds=30)
+    assert default_session.behavior.total_timeout == timedelta(seconds=1)
 
 
 async def test_session_transaction(session):
