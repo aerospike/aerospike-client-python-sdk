@@ -79,7 +79,7 @@ jobs:
 
       - name: Promote Release Bundle v2 to STAGE
         if: env.DRY_RUN != 'true'
-        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@7b61b675476430553f09b94419ca18802d697e98 # v3.4.0
+        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
         with:
           bundle-name: aerospike-client-python-sdk
           version: ${{ needs.extract-version.outputs.version }}
