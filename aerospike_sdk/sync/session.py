@@ -44,6 +44,7 @@ from aerospike_sdk.session_shared import (
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.sync.background import SyncBackgroundTaskSession
 from aerospike_sdk.sync.info import InfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder
@@ -182,6 +183,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
     def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
         """Truncate a set, synchronously (PAC ``truncate_blocking``)."""
+        if self._client._usage_on:
+            usage.record(self._client, [usage.ADMIN_TRUNCATE])
         self._pac_client.truncate_blocking(
             dataset.namespace, dataset.set_name, before_nanos,
         )

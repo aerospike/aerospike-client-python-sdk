@@ -15,11 +15,14 @@
 
 """Tests for the SDK config loader: parsing, profiles, precedence, fail-soft."""
 
+import logging
 from datetime import timedelta
 
 import pytest
 
 from aerospike_sdk.policy.sdk_config_loader import (
+    parse_behaviors,
+    load_at_connect,
     ENV_VAR,
     config_path_from_env,
     fill_hard_defaults,
@@ -37,18 +40,18 @@ version: "1.0.0"
 system:
   DEFAULT:
     connections:
-      minimumConnectionsPerNode: 10
-      maximumConnectionsPerNode: 300
-      maximumSocketIdleTime: 55s
-    circuitBreaker:
-      numTendIntervalsInErrorWindow: 2
-      maximumErrorsInErrorWindow: 100
+      minimum_connections_per_node: 10
+      maximum_connections_per_node: 300
+      maximum_socket_idle_time: 55s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 2
+      maximum_errors_in_error_window: 100
     refresh:
-      tendInterval: 1s
+      tend_interval: 1s
     transactions:
-      implicitBatchWriteTransactions: true
-      sleepBetweenAttempts: 1000ms
-      numberOfAttempts: 5
+      implicit_batch_write_transactions: true
+      sleep_between_attempts: 1000ms
+      number_of_attempts: 5
 """
 
 
@@ -109,7 +112,7 @@ class TestParseSdkConfig:
 
     def test_transactions_only(self):
         profiles = parse_sdk_config(
-            "system:\n  DEFAULT:\n    transactions:\n      implicitBatchWriteTransactions: false\n"
+            "system:\n  DEFAULT:\n    transactions:\n      implicit_batch_write_transactions: false\n"
         )
         settings = profiles["DEFAULT"]
         assert settings.transactions.implicit_batch_write_transactions is False
@@ -133,29 +136,29 @@ class TestParseSdkConfig:
     def test_unknown_section_ignored(self):
         profiles = parse_sdk_config(
             "system:\n  DEFAULT:\n    nonsense:\n      key: 1\n"
-            "    refresh:\n      tendInterval: 2s\n"
+            "    refresh:\n      tend_interval: 2s\n"
         )
         assert profiles["DEFAULT"].tend_interval == timedelta(seconds=2)
 
     def test_behaviors_section_ignored(self):
         profiles = parse_sdk_config(
             "behaviors:\n  fastReads: {}\n"
-            "system:\n  DEFAULT:\n    refresh:\n      tendInterval: 2s\n"
+            "system:\n  DEFAULT:\n    refresh:\n      tend_interval: 2s\n"
         )
         assert profiles["DEFAULT"].tend_interval == timedelta(seconds=2)
 
     def test_unknown_key_ignored(self):
         profiles = parse_sdk_config(
             "system:\n  DEFAULT:\n    connections:\n"
-            "      maximumConnectionsPerNode: 40\n      bogusKey: 7\n"
+            "      maximum_connections_per_node: 40\n      bogusKey: 7\n"
         )
         assert profiles["DEFAULT"].max_connections_per_node == 40
 
     def test_bad_value_skipped_rest_applies(self):
         profiles = parse_sdk_config(
             "system:\n  DEFAULT:\n    connections:\n"
-            "      maximumConnectionsPerNode: not_a_number\n"
-            "      minimumConnectionsPerNode: 5\n"
+            "      maximum_connections_per_node: not_a_number\n"
+            "      minimum_connections_per_node: 5\n"
         )
         settings = profiles["DEFAULT"]
         assert settings.max_connections_per_node is None
@@ -163,12 +166,12 @@ class TestParseSdkConfig:
 
     def test_bool_where_int_expected_skipped(self):
         profiles = parse_sdk_config(
-            "system:\n  DEFAULT:\n    transactions:\n      numberOfAttempts: true\n"
+            "system:\n  DEFAULT:\n    transactions:\n      number_of_attempts: true\n"
         )
         assert profiles["DEFAULT"].transactions.number_of_attempts is None
 
     def test_bad_duration_skipped(self):
-        profiles = parse_sdk_config("system:\n  DEFAULT:\n    refresh:\n      tendInterval: fast\n")
+        profiles = parse_sdk_config("system:\n  DEFAULT:\n    refresh:\n      tend_interval: fast\n")
         assert profiles["DEFAULT"].tend_interval is None
 
 
@@ -178,8 +181,8 @@ class TestResolveForCluster:
     _PROFILES = parse_sdk_config(
         _FULL
         + "  prod-cluster:\n"
-        + "    connections:\n      maximumConnectionsPerNode: 500\n"
-        + "    transactions:\n      implicitBatchWriteTransactions: false\n"
+        + "    connections:\n      maximum_connections_per_node: 500\n"
+        + "    transactions:\n      implicit_batch_write_transactions: false\n"
     )
 
     def test_named_profile_wins_per_field(self):
@@ -202,14 +205,14 @@ class TestResolveForCluster:
 
     def test_no_default_with_matching_profile(self):
         profiles = parse_sdk_config(
-            "system:\n  prod-cluster:\n    refresh:\n      tendInterval: 3s\n"
+            "system:\n  prod-cluster:\n    refresh:\n      tend_interval: 3s\n"
         )
         resolved = resolve_for_cluster(profiles, "prod-cluster")
         assert resolved.tend_interval == timedelta(seconds=3)
 
     def test_no_applicable_profile(self):
         profiles = parse_sdk_config(
-            "system:\n  prod-cluster:\n    refresh:\n      tendInterval: 3s\n"
+            "system:\n  prod-cluster:\n    refresh:\n      tend_interval: 3s\n"
         )
         assert resolve_for_cluster(profiles, None) is None
 
@@ -334,3 +337,196 @@ class TestLoadProfilesFailSoft:
         profiles = load_profiles(str(path))
         assert profiles is not None
         assert profiles["DEFAULT"].max_connections_per_node == 300
+
+
+class TestUnrecognizedKeys:
+    """An unrecognized key applies nothing, so it has to say so.
+
+    The keys below are the previous on-disk spelling. They are the realistic
+    failure: a config written against the old convention still parses, and
+    without a warning the only evidence is settings that quietly never took
+    effect.
+    """
+
+    LEGACY = """
+system:
+  DEFAULT:
+    connections:
+      minimumConnectionsPerNode: 10
+    circuitBreaker:
+      maximumErrorsInErrorWindow: 100
+"""
+
+    def test_legacy_keys_are_reported_not_applied(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            profiles = parse_sdk_config(self.LEGACY)
+        assert profiles["DEFAULT"].min_connections_per_node is None
+        assert "minimumConnectionsPerNode" in caplog.text
+        assert "circuitBreaker" in caplog.text
+
+    def test_current_spelling_applies(self, caplog):
+        current = (
+            self.LEGACY.replace("minimumConnectionsPerNode", "minimum_connections_per_node")
+            .replace("circuitBreaker", "circuit_breaker")
+            .replace("maximumErrorsInErrorWindow", "maximum_errors_in_error_window")
+        )
+        with caplog.at_level(logging.WARNING):
+            profiles = parse_sdk_config(current)
+        assert profiles["DEFAULT"].min_connections_per_node == 10
+        assert profiles["DEFAULT"].max_errors_in_error_window == 100
+        assert "unrecognized" not in caplog.text
+
+    def test_extended_block_warns(self, caplog):
+        """`extended.*` is deliberately not in the schema; it must not look accepted."""
+        doc = """
+system:
+  DEFAULT:
+    metrics:
+      extended:
+        operational:
+          enabled: true
+"""
+        with caplog.at_level(logging.WARNING):
+            parse_sdk_config(doc)
+        assert "metrics" in caplog.text
+
+    def test_unknown_behavior_block_warns(self, caplog):
+        doc = """
+behaviors:
+  b:
+    allOperations:
+      abandon_call_after: 1s
+"""
+        with caplog.at_level(logging.WARNING):
+            specs = parse_behaviors(doc)
+        assert specs["b"].patches == {}
+        assert "allOperations" in caplog.text
+
+
+class TestStrictConfig:
+    """Strict mode turns the warning into a connect-time failure."""
+
+    BAD = """
+system:
+  DEFAULT:
+    connections:
+      minimumConnectionsPerNode: 10
+"""
+
+    def test_strict_raises_naming_the_key(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "sdk.yaml"
+        cfg.write_text(self.BAD)
+        monkeypatch.setenv("AEROSPIKE_SDK_CONFIG_URL", str(cfg))
+        with pytest.raises(ValueError, match="minimumConnectionsPerNode"):
+            load_at_connect(None, None, strict=True)
+
+    def test_default_is_fail_soft(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "sdk.yaml"
+        cfg.write_text(self.BAD)
+        monkeypatch.setenv("AEROSPIKE_SDK_CONFIG_URL", str(cfg))
+        settings, path, _raw = load_at_connect(None, None)
+        assert settings is not None
+        assert path == str(cfg)
+
+    def test_strict_accepts_a_clean_file(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "sdk.yaml"
+        cfg.write_text(self.BAD.replace(
+            "minimumConnectionsPerNode", "minimum_connections_per_node"))
+        monkeypatch.setenv("AEROSPIKE_SDK_CONFIG_URL", str(cfg))
+        settings, _path, _raw = load_at_connect(None, None, strict=True)
+        assert settings.min_connections_per_node == 10
+
+
+class TestMetricsSection:
+    """The ``metrics`` block builds a MetricsSettings group."""
+
+    FULL = """
+system:
+  DEFAULT:
+    metrics:
+      enabled: true
+      latency_unit: microseconds
+      latency_columns: 18
+      latency_shift: 2
+      sampler:
+        range: 1000
+        threshold: 100
+      labels:
+        owner: platform-team
+"""
+
+    def test_full_block(self):
+        m = parse_sdk_config(self.FULL)["DEFAULT"].metrics
+        assert m.enabled is True
+        assert m.latency_unit == "microseconds"
+        assert m.latency_columns == 18
+        assert m.latency_shift == 2
+        assert m.sampler_range == 1000
+        assert m.sampler_threshold == 100
+        assert m.labels == {"owner": "platform-team"}
+
+    def test_usage_counters_come_from_the_extended_group(self):
+        """``metrics.extended.usage.enabled`` is the cross-SDK key for them."""
+        text = ("system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+                "      extended:\n        usage:\n          enabled: true\n")
+        assert parse_sdk_config(text)["DEFAULT"].metrics.usage_enabled is True
+
+    def test_usage_defaults_to_unset_when_the_group_is_absent(self):
+        m = parse_sdk_config(self.FULL)["DEFAULT"].metrics
+        assert m.usage_enabled is None
+
+    def test_extended_operational_is_rejected_but_usage_still_lands(self, caplog):
+        """The core cannot split Tier 0 from operational, so that key is a drop.
+
+        Accepting it silently would promise a split the snapshot cannot deliver;
+        the sibling ``usage`` group is unaffected because this SDK records those
+        counters itself.
+        """
+        text = ("system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+                "      extended:\n        usage:\n          enabled: true\n"
+                "        operational:\n          enabled: true\n")
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.usage_enabled is True
+        assert "metrics.extended.operational" in caplog.text
+
+    def test_absent_block_leaves_everything_unset(self):
+        m = parse_sdk_config("system:\n  DEFAULT:\n    connections:\n"
+                             "      minimum_connections_per_node: 1\n")["DEFAULT"].metrics
+        assert m.enabled is None
+        assert m.latency_unit is None
+
+    def test_bad_latency_unit_is_skipped_not_fatal(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(
+                "system:\n  DEFAULT:\n    metrics:\n"
+                "      enabled: true\n      latency_unit: fortnights\n")["DEFAULT"].metrics
+        assert m.enabled is True          # the rest of the block still applies
+        assert m.latency_unit is None
+        assert "fortnights" in caplog.text
+
+    def test_extended_group_is_not_a_recognized_key(self, caplog):
+        """The spec nests shape keys under `extended`; we do not, so it must warn."""
+        with caplog.at_level(logging.WARNING):
+            parse_sdk_config(
+                "system:\n  DEFAULT:\n    metrics:\n      extended:\n"
+                "        operational:\n          enabled: true\n")
+        assert "metrics.extended" in caplog.text
+
+    def test_policy_round_trip(self):
+        from aerospike_sdk import LatencyUnit
+        from aerospike_sdk.metrics import policy_from_settings
+        policy = policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
+        assert policy.latency_unit == LatencyUnit.MICROSECONDS
+        assert policy.latency_columns == 18
+        assert policy.latency_shift == 2
+        assert policy.labels == [{"owner": "platform-team"}]
+
+    def test_metrics_merges_per_field(self):
+        higher = parse_sdk_config(
+            "system:\n  c1:\n    metrics:\n      latency_columns: 24\n")["c1"]
+        lower = parse_sdk_config(self.FULL)["DEFAULT"]
+        merged = merge_settings(higher, lower)
+        assert merged.metrics.latency_columns == 24        # higher wins
+        assert merged.metrics.latency_unit == "microseconds"  # falls through
+

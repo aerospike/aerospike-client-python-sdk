@@ -264,7 +264,7 @@ class TestHomogeneousBatchOperations:
     
     Tests for homogeneous batch operations:
     - batchExists
-    - batchReads (via query)
+    - batch_reads (via query)
     - batchReadHeaders (via query with no bins)
     - batchDelete
     """

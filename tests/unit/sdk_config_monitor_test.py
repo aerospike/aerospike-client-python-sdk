@@ -22,10 +22,10 @@ from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, _SdkConfigPoller
 
 _IMPLICIT_TRUE = (
-    "system:\n  DEFAULT:\n    transactions:\n      implicitBatchWriteTransactions: true\n"
+    "system:\n  DEFAULT:\n    transactions:\n      implicit_batch_write_transactions: true\n"
 )
 _IMPLICIT_FALSE = (
-    "system:\n  DEFAULT:\n    transactions:\n      implicitBatchWriteTransactions: false\n"
+    "system:\n  DEFAULT:\n    transactions:\n      implicit_batch_write_transactions: false\n"
 )
 
 

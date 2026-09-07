@@ -160,6 +160,7 @@ from aerospike_sdk.record_result import (
     batch_records_to_results,
 )
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:
     # Leaf classes, referenced here only in annotations (safe circular
@@ -435,6 +436,12 @@ class _QueryBuilderBase:
     # whether any key in the batch lands in an SC namespace.
     _batch_namespace_modes: Optional[Dict[str, Mode]] = None
     _batch_any_sc: bool = False
+    # Feature-usage counters. `_usage_on` stays False unless the app enabled
+    # the usage group, which keeps every hook point on this path down to one
+    # attribute load. `_usage_features` accumulates across chained segments
+    # because finalizing a segment clears the state it was derived from.
+    _usage_on: bool = False
+    _usage_features: Optional[List[str]] = None
 
     def __init__(
         self,
@@ -518,6 +525,8 @@ class _QueryBuilderBase:
             and sdk_client.supports_query_selection
         ):
             self._supports_query_selection = True
+        if sdk_client is not None and sdk_client._usage_on:
+            self._usage_on = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -1402,6 +1411,64 @@ class _QueryBuilderBase:
         else:
             raise TypeError(f"requires a Key or List[Key], got {type(arg1).__name__}")
 
+    def _collect_segment_usage(self) -> None:
+        """Fold the current segment's feature counters into the pending set.
+
+        Called from the finalizers, which is the last point at which the
+        segment's filter/op/flag state is still readable — they clear it
+        immediately afterwards. Only reached while ``_usage_on``.
+        """
+        features = self._usage_features
+        if features is None:
+            features = self._usage_features = []
+        if self._where_ael is not None or self._default_where_ael is not None:
+            features.append(usage.FILTER_AEL)
+        elif (
+            self._filter_expression is not None
+            or self._default_filter_expression is not None
+        ):
+            features.append(usage.FILTER_EXP)
+        if self._durable_delete or self._durable_delete_command_default:
+            features.append(usage.WRITE_DURABLE_DELETE)
+        if self._udf_function is not None:
+            features.append(usage.UDF_RECORD)
+        if usage.has_cdt(self._operations):
+            features.append(usage.CDT)
+
+    def _usage_shape(self) -> str:
+        """Classify the finalized builder as a point, batch or query call.
+
+        Call after the specs are finalized. No keys means the call falls
+        through to the dataset/index query path.
+        """
+        specs = self._specs
+        if not specs:
+            return usage.SHAPE_QUERY
+        if len(specs) == 1 and len(specs[0].keys) == 1:
+            return usage.SHAPE_POINT
+        return usage.SHAPE_BATCH
+
+    def _flush_usage(self, execution_mode: str, shape: str) -> None:
+        """Send the accumulated feature set plus this call's mode and shape.
+
+        Only reached while ``_usage_on``. One crossing into the client core
+        per user API call, however many features it touched.
+        """
+        features = self._usage_features
+        if features is None:
+            features = [execution_mode, shape]
+        else:
+            features.append(execution_mode)
+            features.append(shape)
+            self._usage_features = None
+        if self._filter_records:
+            features.append(usage.FILTER_SECONDARY_INDEX)
+        if self._partition_filter is not None:
+            features.append(usage.QUERY_PARTITION_FILTER)
+        if self._txn is not None:
+            features.append(usage.TRANSACTION)
+        usage.record(self._sdk_client, features)
+
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
         if self._single_key is not None:
@@ -1410,6 +1477,8 @@ class _QueryBuilderBase:
             keys = self._keys
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
 
         # Inline the no-AEL fast path: this runs once per segment, and the
         # resolver chain is only needed when a string ``where()`` is pending.
@@ -1477,6 +1546,8 @@ class _QueryBuilderBase:
             keys = list(self._keys)
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
         filt = self._effective_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
