@@ -187,6 +187,7 @@ class TestAelStringCreate:
         class GateSpyClient:
             def __init__(self):
                 self.gate_reads = 0
+                self._usage_on = False
                 self._async_client = MagicMock()
                 self._async_client.create_index_using_expression = AsyncMock(
                     return_value=MagicMock(),

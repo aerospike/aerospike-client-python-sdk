@@ -94,3 +94,49 @@ class TestSyncMetrics:
         assert d["total-nodes"] >= 1
         assert d["cluster-aggregated-metrics"]["latency-unit"] == "us"
         metrics_cluster.disable_metrics()
+
+    def test_usage_counters_record_and_gate(self, metrics_cluster):
+        """Usage counters are recorded on the sync surface, and only when asked."""
+        metrics_cluster.enable_metrics(MetricsPolicy())          # usage off
+        _do_some_ops(metrics_cluster, count=3)
+        assert metrics_cluster.metrics().usage == {}
+
+        metrics_cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
+        _do_some_ops(metrics_cluster, count=3)
+        usage = metrics_cluster.metrics().usage
+        assert usage.get("feature.api.blocking", 0) >= 3, usage
+        assert usage.get("feature.shape.point", 0) >= 3, usage
+        metrics_cluster.disable_metrics()
+
+    def test_exporter_receives_pushed_snapshots(self, metrics_cluster):
+        received = []
+
+        class Recording:
+            def on_enable(self, cluster, settings): ...
+            def on_snapshot(self, snapshot):
+                received.append(snapshot)
+            def on_node_close(self, host, snapshot): ...
+            def on_disable(self, cluster): ...
+
+        metrics_cluster.metrics_exporter = Recording()
+        try:
+            metrics_cluster.enable_metrics(_SHAPE_SAFE)
+            metrics_cluster._export_timer._export_once()
+            assert len(received) == 1
+            assert received[0].to_canonical_dict()["client_type"] == "python"
+        finally:
+            metrics_cluster.disable_metrics()
+            metrics_cluster.metrics_exporter = None
+
+    def test_mismatched_exporter_protocol_is_rejected(self, metrics_cluster):
+        """An async exporter on the sync cluster fails at assignment."""
+
+        class AsyncShaped:
+            async def on_enable(self, cluster, settings): ...
+            async def on_snapshot(self, snapshot): ...
+            async def on_node_close(self, host, snapshot): ...
+            async def on_disable(self, cluster): ...
+
+        with pytest.raises(TypeError, match="MetricsExporter"):
+            metrics_cluster.metrics_exporter = AsyncShaped()
+

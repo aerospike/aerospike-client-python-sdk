@@ -65,6 +65,7 @@ from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.operations.query.
     from aerospike_sdk.aio.operations.query import WriteBinBuilder
@@ -472,7 +473,17 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
         self, expression: Union[str, FilterExpression],
     ) -> FilterExpression:
         """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
-        if not isinstance(expression, str):
+        is_ael = isinstance(expression, str)
+        qb = self._qb
+        sdk = qb._sdk_client if qb is not None else getattr(self, "_sdk_client_fast", None)
+        if sdk is not None and sdk._usage_on:
+            # Recorded here rather than batched with the call's other counters:
+            # operate expressions are resolved during chain construction, and
+            # the two technologies are only distinguishable at this point.
+            usage.record(
+                sdk, [usage.OPERATE_AEL if is_ael else usage.OPERATE_EXP],
+            )
+        if not is_ael:
             return expression
         return filter_expression_from_ael_string(
             expression,

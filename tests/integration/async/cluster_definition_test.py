@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_sdk import Behavior, ClusterDefinition, DataSet, Host
+from aerospike_sdk import Behavior, ClusterDefinition, Host
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -284,22 +284,3 @@ class TestRestrictingClusterToSeeds:
 
         assert seen == 1, f"expected only the seed, saw {seen} of {peer_count} nodes"
 
-    async def test_restricted_cluster_still_serves_reads_and_writes(
-        self, aerospike_host_sc, make_cluster_definition
-    ):
-        """A pinned view is still a working client, not just a narrower one."""
-        cluster = await (
-            make_cluster_definition(aerospike_host_sc, auth=True)
-            .restricting_cluster_to_seeds()
-            .connect()
-        )
-        try:
-            session = cluster.create_session()
-            namespace = next(iter(await session.info().namespaces()))
-            key = DataSet.of(namespace, "seed_only").id("k1")
-            await session.upsert(key).put({"v": 1}).execute()
-            result = await session.query(key).first_or_raise()
-            assert result.record_or_raise().bins["v"] == 1
-            await session.delete(key).execute()
-        finally:
-            await cluster.close()

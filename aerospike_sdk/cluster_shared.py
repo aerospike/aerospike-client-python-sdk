@@ -205,6 +205,7 @@ class ClusterDefinitionBase(Generic[_TB]):
         ).strip().lower() in ("true", "1", "yes")
         self._fail_if_not_connected = True
         self._seed_only_cluster = False
+        self._strict_config = False
         self._ip_map: Optional[dict[str, str]] = None
         self._tls_builder: Optional[_TB] = None
         self._system_settings: Optional[SystemSettings] = None
@@ -443,6 +444,38 @@ class ClusterDefinitionBase(Generic[_TB]):
                 addresses.
         """
         self._seed_only_cluster = enabled
+        return self
+
+    def with_strict_config(self, strict: bool = True) -> Self:
+        """Fail the connect if the SDK config file carries anything unrecognized.
+
+        By default an unrecognized key is warned about and skipped, so a config
+        written for a different client or carrying a typo still connects — it
+        simply does not apply the settings it names. That is the right default
+        for a file shared across SDKs, and the wrong one if you would rather
+        find out at deploy time than from behavior in production.
+
+        Applies to the connect-time read only. Hot reload stays fail-soft
+        whatever this is set to: the monitor runs in the background with no
+        caller to raise to, so it warns and keeps the previous configuration.
+
+        Args:
+            strict: Whether to raise on unrecognized config entries. Defaults
+                to ``True`` so the no-argument call reads as an enable.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            # Deployment-time gate: a stale key fails the rollout, not a request.
+            cd = ClusterDefinition("localhost", 3000).with_strict_config()
+
+        See Also:
+            :meth:`with_system_settings`: Settings supplied in code, which the
+                file layers over.
+        """
+        self._strict_config = strict
         return self
 
     def fail_if_not_connected(self, fail: bool) -> Self:

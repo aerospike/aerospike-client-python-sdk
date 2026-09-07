@@ -72,7 +72,9 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         ``CompletionBridge`` to the caller's loop.
         """
         self._validate()
-        settings, _config_path, _raw = load_at_connect(self._cluster_name, self._system_settings)
+        settings, _config_path, _raw = load_at_connect(
+            self._cluster_name, self._system_settings, strict=self._strict_config
+        )
         policy = self._get_policy(settings)
         seeds = self._build_seeds_string()
         members: List[Client] = []
@@ -112,7 +114,9 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         # SDK config file (AEROSPIKE_SDK_CONFIG_URL): applies the behaviors
         # section, layers system settings over programmatic ones per-field,
         # and arms hot-reload on the client when a path is configured.
-        settings, config_path, raw = load_at_connect(self._cluster_name, self._system_settings)
+        settings, config_path, raw = load_at_connect(
+            self._cluster_name, self._system_settings, strict=self._strict_config
+        )
         config_source = (
             SdkConfigSource(config_path, self._cluster_name, self._system_settings, raw)
             if config_path is not None

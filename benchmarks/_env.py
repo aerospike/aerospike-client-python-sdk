@@ -173,3 +173,34 @@ def cluster_def_from_config(cfg: object):
             cluster_def.with_native_credentials(user or "", password or "")
 
     return cluster_def
+
+
+def maybe_enable_metrics(client, cfg) -> None:
+    """Turn on client metrics for a benchmark run, per ``--metrics-mode``.
+
+    The harness holds a low-level ``Client`` rather than a ``Cluster``, so
+    collection is enabled through the underlying client; usage counters are a
+    PSDK-side flag and are set directly.
+
+    Args:
+        client: The PSDK client or cluster backing this run.
+        cfg: Parsed benchmark configuration.
+    """
+    mode = getattr(cfg, "metrics_mode", "off")
+    if mode == "off":
+        return
+    from aerospike_sdk import MetricsPolicy, Sampler
+
+    if mode == "usage":
+        policy = MetricsPolicy(usage_enabled=True)
+    elif mode == "sampled":
+        policy = MetricsPolicy(sampler=Sampler.probability(0.1))
+    else:
+        policy = MetricsPolicy()
+    # The harness holds a Client in most modes and a Cluster per pool member;
+    # a Cluster exposes enable_metrics itself, a Client does not.
+    if hasattr(client, "enable_metrics"):
+        client.enable_metrics(policy)
+        return
+    client.underlying_client.enable_metrics(policy._to_pac())
+    client._usage_on = policy.usage_enabled

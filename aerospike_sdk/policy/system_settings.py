@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Optional
+from typing import Dict, Optional
 
 from aerospike_async import ClientPolicy
 
@@ -64,6 +64,53 @@ class TransactionSettings:
     implicit_batch_write_transactions: Optional[bool] = None
     sleep_between_attempts: Optional[timedelta] = None
     number_of_attempts: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class MetricsSettings:
+    """Client metrics configuration from the ``system.<cluster>.metrics`` block.
+
+    Every field is ``None`` when the file did not set it, so an absent block
+    changes nothing and a partial block only overrides what it names.
+
+    The histogram shape keys sit at the ``metrics`` root rather than under an
+    ``extended`` group: collection here is a single on/off, so a group whose
+    own ``enabled`` flag could not be honored would imply a tier split that
+    does not exist.
+
+    ``usage_enabled`` is the exception, and comes from
+    ``metrics.extended.usage.enabled``. Usage counters are recorded by this SDK
+    rather than the client core, so unlike ``extended.operational`` they really
+    are independently switchable, and the cross-SDK key names them there.
+
+    Example::
+
+        # system:
+        #   DEFAULT:
+        #     metrics:
+        #       enabled: true
+        #       latency_unit: microseconds
+        #       latency_columns: 18
+        #       labels:
+        #         owner: platform-team
+
+    See Also:
+        :class:`~aerospike_sdk.metrics.MetricsPolicy`: The runtime policy these
+            settings build.
+    """
+
+    enabled: Optional[bool] = None
+    latency_unit: Optional[str] = None
+    latency_columns: Optional[int] = None
+    latency_shift: Optional[int] = None
+    export_interval: Optional[timedelta] = None
+    exporter: Optional[str] = None
+    report_dir: Optional[str] = None
+    report_size_limit: Optional[int] = None
+    sampler_range: Optional[int] = None
+    sampler_threshold: Optional[int] = None
+    labels: Optional[Dict[str, str]] = None
+    usage_enabled: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +160,7 @@ class SystemSettings:
     num_tend_intervals_in_error_window: Optional[int] = None
     max_errors_in_error_window: Optional[int] = None
     transactions: TransactionSettings = TransactionSettings()
+    metrics: MetricsSettings = MetricsSettings()
 
     def apply_to(self, policy: ClientPolicy) -> ClientPolicy:
         """Apply non-None fields to *policy*, returning the same object.
