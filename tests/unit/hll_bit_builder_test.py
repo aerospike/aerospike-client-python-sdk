@@ -15,6 +15,8 @@
 
 """Unit tests for HyperLogLog and bit-operation fluent builders."""
 
+import pytest
+
 from aerospike_sdk import BitPolicy, BitWriteFlags, BitwiseOverflowActions, BitwiseResizeFlags
 from aerospike_async import BitOperation, HllOperation
 
@@ -126,6 +128,40 @@ class TestQueryBinHllBitReads:
         qbb.bit_rscan(0, 8, False)
         qbb.bit_get_int(0, 8, True)
         assert len(parent.operations) == 11
+
+
+class TestBitB64Encode:
+    def test_whole_blob_and_range_forms_register(self):
+        wbb, segment = _make_wbb("b")
+        wbb.bit_b64_encode()
+        wbb.bit_b64_encode(0, 2)
+        wbb.bit_b64_encode(1, 0, invert_size=True)
+        ops = segment._qb._operations
+        assert len(ops) == 3
+        assert isinstance(ops[0], type(BitOperation.b64_encode("x")))
+
+    def test_query_bin_read_registers(self):
+        parent = _OpCollector()
+        qbb: QueryBinBuilder[_OpCollector] = QueryBinBuilder(parent, "b")
+        qbb.bit_b64_encode()
+        qbb.bit_b64_encode(-2, 2)
+        assert len(parent.operations) == 2
+
+    def test_offset_without_size_rejected(self):
+        wbb, _ = _make_wbb("b")
+        with pytest.raises(ValueError):
+            wbb.bit_b64_encode(byte_offset=1)
+
+    def test_size_without_offset_rejected(self):
+        parent = _OpCollector()
+        qbb: QueryBinBuilder[_OpCollector] = QueryBinBuilder(parent, "b")
+        with pytest.raises(ValueError):
+            qbb.bit_b64_encode(byte_size=2)
+
+    def test_invert_size_without_range_rejected(self):
+        wbb, _ = _make_wbb("b")
+        with pytest.raises(ValueError):
+            wbb.bit_b64_encode(invert_size=True)
 
 
 class TestBitDefaults:

@@ -377,7 +377,7 @@ def _parse_profile(name: str, profile: object) -> SystemSettings:
         if key_map is None:
             _record_drop(f"section {section_name!r} in profile {name!r}")
             continue
-        parsed = _parse_section(section_name, section, key_map)
+        parsed = _parse_section(f"{name}.{section_name}", section, key_map)
         if section_name == "transactions":
             txn_kwargs.update(parsed)
         elif section_name == "metrics":

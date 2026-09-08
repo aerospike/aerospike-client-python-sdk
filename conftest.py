@@ -667,6 +667,19 @@ async def supports_string_operations(server_version):
     return server_version is not None and server_version >= SERVER_8_1_3
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_bit_b64_encode(server_version):
+    """``True`` when the (default-host) cluster supports the bit b64_encode op.
+
+    Covers ``bit_b64_encode`` on the builders and the matching filter
+    expressions (server >= 8.1.3). Same single-host model as
+    :func:`supports_string_operations`: point ``AEROSPIKE_HOST`` at an
+    8.1.3+ build to exercise these. Tests should ``pytest.skip`` when this
+    is ``False``.
+    """
+    return server_version is not None and server_version >= SERVER_8_1_3
+
+
 def _parse_build_string(build: str):
     """Parse a server build string (e.g. ``8.1.2.1``) into ``(M, m, p, b)``.
 

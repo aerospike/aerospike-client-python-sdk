@@ -4017,6 +4017,54 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.1.3 or later. The decode direction is
+        :meth:`str_b64_decode`.
+
+        Example::
+
+            stream = await (
+                session.update(key)
+                .bin("payload").bit_b64_encode(0, 16)
+                .execute()
+            )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`QueryBinBuilder.bit_b64_encode`
+            :meth:`str_b64_decode`
+        """
+        return self._segment._add_op(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
+        )
+
     # -- Server-side string operations (server 8.1.3+) ------------------------
     #
     # The ``str_*`` family wraps server-side string read/modify ops. Each
@@ -5378,6 +5426,49 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """
         self._parent.add_operation(
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
+        )  # type: ignore[union-attr]
+        return self._parent
+
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> _T:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.1.3 or later. The decode direction is
+        :meth:`WriteBinBuilder.str_b64_decode`.
+
+        Example::
+            stream = await ( session.query(key).bin("payload").bit_b64_encode().execute() )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent query builder for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`WriteBinBuilder.bit_b64_encode`
+        """
+        self._parent.add_operation(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
         )  # type: ignore[union-attr]
         return self._parent
 

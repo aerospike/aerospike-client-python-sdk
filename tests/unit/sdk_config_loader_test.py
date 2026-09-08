@@ -376,6 +376,82 @@ system:
         assert profiles["DEFAULT"].max_errors_in_error_window == 100
         assert "unrecognized" not in caplog.text
 
+    METRICS_CAMEL = """
+system:
+  DEFAULT:
+    metrics:
+      enabled: true
+      latencyUnit: microseconds
+      latencyColumns: 18
+      reportDir: /tmp/x
+      exportInterval: 5s
+      sampler:
+        Range: 100
+        Threshold: 10
+      extended:
+        usage:
+          Enabled: true
+"""
+
+    def test_camel_case_metrics_keys_are_reported_not_applied(self, caplog):
+        """snake_case only -- no camelCase aliases, per the cross-SDK naming rule.
+
+        Java may alias camelCase while migrating; Python does not, so a config
+        written against the Java programmatic names has to be told it did
+        nothing rather than silently collecting with default settings.
+        """
+        with caplog.at_level(logging.WARNING):
+            metrics = parse_sdk_config(self.METRICS_CAMEL)["DEFAULT"].metrics
+        # The one snake_case key applies; every camelCase sibling does not.
+        assert metrics.enabled is True
+        assert metrics.latency_unit is None
+        assert metrics.latency_columns is None
+        assert metrics.report_dir is None
+        assert metrics.export_interval is None
+        assert metrics.sampler_range is None
+        assert metrics.sampler_threshold is None
+        assert metrics.usage_enabled is None
+        for key in ("latencyUnit", "latencyColumns", "reportDir", "exportInterval",
+                    "Range", "Threshold", "Enabled"):
+            assert key in caplog.text, f"{key} was dropped without saying so"
+
+    def test_every_drop_names_its_profile(self, caplog):
+        """A multi-profile file has to say which profile the bad key is in."""
+        doc = """
+system:
+  prod:
+    metrics:
+      latencyUnit: microseconds
+  staging:
+    connections:
+      minimumConnectionsPerNode: 10
+"""
+        with caplog.at_level(logging.WARNING):
+            parse_sdk_config(doc)
+        assert "prod.metrics.latencyUnit" in caplog.text
+        assert "staging.connections.minimumConnectionsPerNode" in caplog.text
+
+    def test_strict_mode_raises_on_a_camel_case_key(self):
+        """`strict=True` turns the warning into a failure naming the key."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "sdk.yaml")
+            with open(path, "w") as handle:
+                handle.write(self.METRICS_CAMEL)
+            previous = os.environ.get("AEROSPIKE_SDK_CONFIG_URL")
+            os.environ["AEROSPIKE_SDK_CONFIG_URL"] = path
+            try:
+                with pytest.raises(ValueError) as excinfo:
+                    load_at_connect(None, None, strict=True)
+                assert "latencyUnit" in str(excinfo.value)
+            finally:
+                if previous is None:
+                    os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
+                else:
+                    os.environ["AEROSPIKE_SDK_CONFIG_URL"] = previous
+
     def test_extended_block_warns(self, caplog):
         """`extended.*` is deliberately not in the schema; it must not look accepted."""
         doc = """
