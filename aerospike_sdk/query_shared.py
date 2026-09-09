@@ -228,7 +228,7 @@ class QueryHint:
     plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
     mutually exclusive.
 
-    On clusters that support field ``44`` query selection (>= 8.1.3),
+    On clusters that support field ``44`` query selection (>= 8.2.0),
     ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
     explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
     Behavior default (strict — primary-index fallback rejected), ``True``
@@ -4031,7 +4031,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         ``invert_size`` is ``True``, ``byte_size`` counts back from the end
         instead, so an inverted size of 0 encodes through to the end.
 
-        Requires server 8.1.3 or later. The decode direction is
+        Requires server 8.2.0 or later. The decode direction is
         :meth:`str_b64_decode`.
 
         Example::
@@ -4065,7 +4065,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
         )
 
-    # -- Server-side string operations (server 8.1.3+) ------------------------
+    # -- Server-side string operations (server 8.2.0+) ------------------------
     #
     # The ``str_*`` family wraps server-side string read/modify ops. Each
     # method registers a single op on the surrounding write segment and
@@ -5443,7 +5443,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         ``invert_size`` is ``True``, ``byte_size`` counts back from the end
         instead, so an inverted size of 0 encodes through to the end.
 
-        Requires server 8.1.3 or later. The decode direction is
+        Requires server 8.2.0 or later. The decode direction is
         :meth:`WriteBinBuilder.str_b64_decode`.
 
         Example::
@@ -5472,7 +5472,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )  # type: ignore[union-attr]
         return self._parent
 
-    # -- Server-side string read operations (server 8.1.3+) -------------------
+    # -- Server-side string read operations (server 8.2.0+) -------------------
     #
     # See :class:`WriteBinBuilder` for the parallel write-side surface +
     # modify-op family. Only reads make sense on a query builder; users

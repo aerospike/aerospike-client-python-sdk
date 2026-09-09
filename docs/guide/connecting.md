@@ -187,7 +187,7 @@ async with await ClusterDefinition("localhost", 3000).connect() as cluster:
         ...  # fall back
 
     version = await cluster.server_version()   # minimum Version across the cluster
-    if version is not None and (version.major, version.minor, version.patch) >= (8, 1, 3):
+    if version is not None and (version.major, version.minor, version.patch) >= (8, 2, 0):
         ...
 ```
 

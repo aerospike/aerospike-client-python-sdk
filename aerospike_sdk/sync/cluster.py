@@ -267,7 +267,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         Example::
 
             v = cluster.server_version()
-            if v is not None and (v.major, v.minor, v.patch) >= (8, 1, 3):
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 2, 0):
                 ...
         """
         return capabilities.min_version(self._sdk_client._cluster_versions_blocking())
@@ -287,7 +287,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             self._sdk_client._cluster_versions_blocking())
 
     def supports_query_selection(self) -> bool:
-        """Whether every node supports server-led index selection (>= 8.1.3)."""
+        """Whether every node supports server-led index selection (>= 8.2.0)."""
         return capabilities.supports_query_selection(
             self._sdk_client._cluster_versions_blocking())
 

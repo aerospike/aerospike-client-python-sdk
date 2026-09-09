@@ -460,7 +460,7 @@ async def test_where_selects_ael_expression_index(cluster):
     """A where() served through an index created from the same AEL.
 
     Server query planning began selecting expression-based indexes in the
-    8.1.3.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.1.3.0``,
+    8.2.0.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.2.0.0``,
     which a pre-RC build of that version also satisfies, so this fails with
     ``IndexNotFound`` there instead of skipping.
     """

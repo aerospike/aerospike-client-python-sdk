@@ -368,8 +368,8 @@ class TestSyncBatchErrorDetail:
     def test_batch_row_carries_sub_code(self, cluster: Cluster, users: DataSet):
         builds = cluster.create_session().info().build()
         versions = [tuple(int(p) for p in b.split("-")[0].split(".")) for b in builds]
-        if not versions or min(versions) < (8, 1, 3):
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        if not versions or min(versions) < (8, 2, 0):
+            pytest.skip("cluster does not supply extended error detail (server < 8.2.0)")
 
         behavior = Behavior(
             "sync-batch-error-detail",
@@ -673,7 +673,7 @@ def _invalid_filter_expression() -> Exp:
 def _assert_batch_invalid_filter_error(res) -> None:
     """Assert a batch row carrying an undecodable packed filter.
 
-    Values pinned against 8.1.3.0, which ``@requires_server_compiled_ael``
+    Values pinned against 8.2.0.0, which ``@requires_server_compiled_ael``
     already guarantees — the same threshold as the ``supports_error_detail``
     fixture, so detail is unconditionally present here.
     """

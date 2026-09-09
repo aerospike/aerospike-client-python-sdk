@@ -16,7 +16,7 @@ primary-index fallback.
 ## How string AEL is executed
 
 The SDK does **not** parse AEL strings locally. When the connected cluster
-supports it (Aerospike **8.1.3+** on every node), string AEL is sent to the
+supports it (Aerospike **8.2.0+** on every node), string AEL is sent to the
 server for compilation (**field 43** via
 `FilterExpression.from_server_compiled_ael`).
 

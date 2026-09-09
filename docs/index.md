@@ -115,7 +115,7 @@ pip install -e ".[dev]"
 :   Reads return a [`QueryBuilder`](api/query.md), writes return a [`WriteSegmentBuilder`](api/write-segment.md). Chain methods, then call `.execute()`.
 
 **Aerospike Expression Language (AEL)**
-:   Filter records with string expressions on server 8.1.3+ (`"$.age > 18 and $.status == 'active'"`), or use [`Exp`](api/exp.md) on older clusters. See the [AEL guide](guide/expression-ael.md).
+:   Filter records with string expressions on server 8.2.0+ (`"$.age > 18 and $.status == 'active'"`), or use [`Exp`](api/exp.md) on older clusters. See the [AEL guide](guide/expression-ael.md).
 
 ## Requirements
 

@@ -87,7 +87,7 @@ class _IndexBuilderBase:
 
         An AEL string may be passed instead of a prebuilt expression; the
         server parses and compiles it when the index is created, so the
-        cluster must support server-compiled AEL (server 8.1.3 or newer on
+        cluster must support server-compiled AEL (server 8.2.0 or newer on
         every node) or :meth:`create` raises with result code
         ``OP_NOT_APPLICABLE``.
 
@@ -125,7 +125,7 @@ class _IndexBuilderBase:
                 .create()
             )
 
-            # Or let the server compile an AEL string (server 8.1.3+):
+            # Or let the server compile an AEL string (server 8.2.0+):
             await (
                 client.index("test", "users")
                 .on_expression("$.age + 1")

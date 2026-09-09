@@ -22,8 +22,8 @@ constant), and modifies are blocked for unprivileged users.
 
 Gated on FOUR conditions:
 
-1. ``AEROSPIKE_HOST_SEC`` set and the cluster is server >= 8.1.3
-   (string ops + masking are 8.1.3+ features)
+1. ``AEROSPIKE_HOST_SEC`` set and the cluster is server >= 8.2.0
+   (string ops + masking are 8.2.0+ features)
 2. Security enabled on that cluster
 3. Admin credentials supplied via ``AEROSPIKE_AUTH_USER`` /
    ``AEROSPIKE_AUTH_PASSWORD``
@@ -133,12 +133,12 @@ async def admin_pac(aerospike_host_sec):
     the SDK layer (by design; users are expected to use ``asadm`` or the
     low-level client for that).
 
-    Masking is both a security feature and an 8.1.3+ feature, so it targets
+    Masking is both a security feature and an 8.2.0+ feature, so it targets
     the security host (``AEROSPIKE_HOST_SEC``). Skips the module if that host
-    is unset, is < 8.1.3, security is not enabled, or admin creds fail.
+    is unset, is < 8.2.0, security is not enabled, or admin creds fail.
     """
     if not aerospike_host_sec:
-        pytest.skip("AEROSPIKE_HOST_SEC unset; masking needs a security-enabled 8.1.3+ cluster")
+        pytest.skip("AEROSPIKE_HOST_SEC unset; masking needs a security-enabled 8.2.0+ cluster")
     user = os.environ.get("AEROSPIKE_AUTH_USER", "admin")
     password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin")
     cp = _PacClientPolicy()
@@ -150,7 +150,7 @@ async def admin_pac(aerospike_host_sec):
     except Exception as exc:
         pytest.skip(f"Could not connect as admin to {aerospike_host_sec}: {exc}")
     await asyncio.sleep(2)
-    # Gate on server >= 8.1.3 (string ops + masking feature).
+    # Gate on server >= 8.2.0 (string ops + masking feature).
     def _ver_prefix(part):
         digits = ""
         for ch in part:
@@ -167,15 +167,15 @@ async def admin_pac(aerospike_host_sec):
         version = tuple(_ver_prefix(p) for p in parts)
     except Exception:
         version = (0, 0, 0)
-    if version < (8, 1, 3):
+    if version < (8, 2, 0):
         await client.close()
-        pytest.skip(f"masking requires server >= 8.1.3; AEROSPIKE_HOST_SEC is {build!r}")
+        pytest.skip(f"masking requires server >= 8.2.0; AEROSPIKE_HOST_SEC is {build!r}")
     try:
         await client.query_users(None)
     except ServerError as exc:
         await client.close()
         if exc.result_code == ResultCode.SECURITY_NOT_ENABLED or isinstance(exc, SecurityNotEnabled):
-            pytest.skip("Security not enabled on the 8.1.3+ cluster")
+            pytest.skip("Security not enabled on the 8.2.0+ cluster")
         raise
     yield client
     await client.close()
@@ -185,7 +185,7 @@ async def admin_pac(aerospike_host_sec):
 async def admin_cluster(aerospike_host_sec, admin_pac):
     """PSDK admin Cluster — used for masking-rule application, record put,
     and any test assertion that needs admin privileges. Depends on
-    ``admin_pac`` solely so the security + 8.1.3 probe happens before this
+    ``admin_pac`` solely so the security + 8.2.0 probe happens before this
     one spins up.
     """
     cluster_def = _psdk_definition(

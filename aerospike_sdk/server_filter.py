@@ -82,7 +82,7 @@ def filter_expression_from_ael_string(
     """
     if not supports_server_compiled_ael:
         raise AerospikeError(
-            "String AEL requires server-compiled AEL support (Aerospike >= 8.1.3 "
+            "String AEL requires server-compiled AEL support (Aerospike >= 8.2.0 "
             "on every node). Use FilterExpression / Exp builders, or upgrade the cluster.",
             result_code=ResultCode.OP_NOT_APPLICABLE,
         )

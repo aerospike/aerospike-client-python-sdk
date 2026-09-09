@@ -1317,7 +1317,7 @@ def _invalid_filter_expression() -> Exp:
 def _assert_batch_invalid_filter_error(res) -> None:
     """Assert a batch row carrying an undecodable packed filter.
 
-    Values pinned against 8.1.3.0, which ``@requires_server_compiled_ael``
+    Values pinned against 8.2.0.0, which ``@requires_server_compiled_ael``
     already guarantees — the same threshold as the ``supports_error_detail``
     fixture, so detail is unconditionally present here.
     """

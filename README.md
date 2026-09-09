@@ -145,7 +145,7 @@ message when it is absent:
   `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
   `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).
 - **Server-version-gated examples** (e.g. `string_operations_example.py`, server
-  8.1.3+) check `_env.server_at_least(session, (8, 1, 3))` and skip if the cluster
+  8.2.0+) check `_env.server_at_least(session, (8, 2, 0))` and skip if the cluster
   is older.
 
 Connection variables are the same ones the test suite uses — see

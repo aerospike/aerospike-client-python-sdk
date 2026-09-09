@@ -635,7 +635,7 @@ class TestSortedMapOnPlainWrites:
         reason=(
             "Server-compiled AEL has no collection-literal syntax. A map "
             "literal on the right of == is rejected with PARAMETER_ERROR, and "
-            "so is a list literal (measured on 8.1.3.0-104), so this is a "
+            "so is a list literal (measured), so this is a "
             "uniform boundary of the DSL rather than a map-specific gap. "
             "Scalars compare, collections can be navigated into "
             "(`:MAP.count()` / `:LIST.count()`), and the same comparison "

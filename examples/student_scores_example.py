@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Querying map-valued bins with an AEL path predicate (server 8.1.3+).
+"""Querying map-valued bins with an AEL path predicate (server 8.2.0+).
 
 Each student record holds a ``scores`` map of subject -> grade. A single
 dataset query with an AEL path predicate filters and aggregates inside the map
@@ -28,8 +28,8 @@ async def main() -> None:
         class10a = DataSet.of("test", "class10a")
 
         try:
-            if not await _env.server_at_least(session, (8, 1, 3)):
-                print("Skipped: AEL path queries require Aerospike 8.1.3+.")
+            if not await _env.server_at_least(session, (8, 2, 0)):
+                print("Skipped: AEL path queries require Aerospike 8.2.0+.")
                 return
 
             await session.truncate(class10a)

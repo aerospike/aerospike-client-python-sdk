@@ -86,7 +86,7 @@ async def test_bit_b64_encode_whole_and_ranges(cluster, supports_bit_b64_encode)
     an inverted size of 0 means "to the end".
     """
     if not supports_bit_b64_encode:
-        pytest.skip("bit b64_encode requires server >= 8.1.3")
+        pytest.skip("bit b64_encode requires server >= 8.2.0")
     session = cluster.create_session()
     k = DataSet.of(general_namespace(), "test").id("hll_bit_b64_1")
     initial = b"\x01\x42\x03"
@@ -114,7 +114,7 @@ async def test_bit_b64_encode_round_trips_through_str_b64_decode(
 ):
     """Encode a blob to base64 text, then decode it back via the string op."""
     if not supports_bit_b64_encode:
-        pytest.skip("bit b64_encode requires server >= 8.1.3")
+        pytest.skip("bit b64_encode requires server >= 8.2.0")
     session = cluster.create_session()
     k = DataSet.of(general_namespace(), "test").id("hll_bit_b64_2")
     initial = b"\xde\xad\xbe\xef"
@@ -131,7 +131,7 @@ async def test_bit_b64_encode_round_trips_through_str_b64_decode(
 async def test_bit_b64_encode_expression_reads(cluster, supports_bit_b64_encode):
     """Whole, span, inverted, and negative-offset expression forms via select_from."""
     if not supports_bit_b64_encode:
-        pytest.skip("bit b64_encode requires server >= 8.1.3")
+        pytest.skip("bit b64_encode requires server >= 8.2.0")
     session = cluster.create_session()
     k = DataSet.of(general_namespace(), "test").id("hll_bit_b64_3")
     blob = b"\x01\x42\x03\x04\x05"

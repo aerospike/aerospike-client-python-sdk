@@ -284,7 +284,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         Example::
 
             v = await cluster.server_version()
-            if v is not None and (v.major, v.minor, v.patch) >= (8, 1, 3):
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 2, 0):
                 ...
         """
         return capabilities.min_version(await self._sdk_client._cluster_versions())
@@ -310,7 +310,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             await self._sdk_client._cluster_versions())
 
     async def supports_query_selection(self) -> bool:
-        """Whether every node supports server-led index selection (>= 8.1.3)."""
+        """Whether every node supports server-led index selection (>= 8.2.0)."""
         return capabilities.supports_query_selection(
             await self._sdk_client._cluster_versions())
 

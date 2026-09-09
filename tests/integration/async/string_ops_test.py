@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Integration tests for server string operations (8.1.3+)."""
+"""Integration tests for server string operations (8.2.0+)."""
 
 import asyncio
 
@@ -38,17 +38,17 @@ _TEST_DS = DataSet.of(general_namespace(), "test")
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, supports_string_operations, make_cluster_definition):
-    """Module-scoped cluster for server-side string ops (server >= 8.1.3).
+    """Module-scoped cluster for server-side string ops (server >= 8.2.0).
 
     Single-host model: connects to the default ``AEROSPIKE_HOST`` and skips
-    cleanly via ``supports_string_operations`` unless it is 8.1.3+. Point
-    ``AEROSPIKE_HOST`` at an 8.1.3+ build to run these; CI covers the version
+    cleanly via ``supports_string_operations`` unless it is 8.2.0+. Point
+    ``AEROSPIKE_HOST`` at an 8.2.0+ build to run these; CI covers the version
     spread via a server matrix.
     """
     if not supports_string_operations:
         pytest.skip(
-            "string operations require server >= 8.1.3; point AEROSPIKE_HOST "
-            "at an 8.1.3+ build to run these"
+            "string operations require server >= 8.2.0; point AEROSPIKE_HOST "
+            "at an 8.2.0+ build to run these"
         )
     async with await make_cluster_definition(aerospike_host).connect() as c:
         await asyncio.sleep(2)
@@ -218,7 +218,7 @@ async def test_str_projection_via_exp_on_query(cluster):
 async def test_to_string_projection_via_exp(cluster):
     """``Exp.to_string`` coerces any type to its string representation.
 
-    Exercises the dedicated TO_STRING expression opcode (server 8.1.3+) through
+    Exercises the dedicated TO_STRING expression opcode (server 8.2.0+) through
     the renamed ``Exp.to_string`` surface (was ``string_to_string``).
     """
     sess = cluster.create_session()
@@ -283,7 +283,7 @@ async def test_string_to_double_evaluates_in_filter(cluster):
 async def test_str_upper_silently_noops_on_missing_bin(cluster):
     """Transform / subtractive ops on a missing bin: silent no-op.
 
-    Per the string-ops spec (§4.1, server 8.1.3+), the missing-bin path is
+    Per the string-ops spec (§4.1, server 8.2.0+), the missing-bin path is
     op-class-dependent, not flag-dependent. ``str_upper`` is a transform op:
     on a missing bin it succeeds, does not create the bin, and leaves
     siblings untouched. Behavior is independent of the NO_FAIL flag
@@ -305,7 +305,7 @@ async def test_str_upper_silently_noops_on_missing_bin(cluster):
 async def test_str_insert_creates_bin_from_empty_on_missing_bin(cluster):
     """Additive / create ops on a missing bin: bin is created from empty.
 
-    Per the string-ops spec (§4.1, server 8.1.3+), the eight additive
+    Per the string-ops spec (§4.1, server 8.2.0+), the eight additive
     create-ops {INSERT, OVERWRITE, CONCAT, APPEND, PREPEND, PAD_START,
     PAD_END, REPEAT} treat the absent bin as the empty string ``""``,
     apply themselves, and create the bin with the result.
