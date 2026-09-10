@@ -40,7 +40,8 @@ from aerospike_sdk.policy.policy_mapper import (
     to_query_policy,
     to_write_policy,
 )
-from aerospike_sdk.policy.behavior_settings import Settings
+from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
 
 
 class TestToReadPolicy:
@@ -207,6 +208,45 @@ class TestToBatchPolicy:
         # The batch wire has no bounded-concurrency mode; N > 1 is parallel.
         p = to_batch_policy(Settings(max_concurrent_nodes=4))
         assert p.concurrency == Concurrency.PARALLEL
+
+    def test_replica_propagates(self):
+        # Batch node selection is driven by the parent policy's replica; the
+        # per-record policies carry no routing fields, so dropping it here
+        # would silently discard the setting.
+        p = to_batch_policy(Settings(replica=Replica.PREFER_RACK))
+        assert p.replica == Replica.PREFER_RACK
+
+    def test_read_mode_ap_propagates(self):
+        p = to_batch_policy(Settings(read_mode_ap=ReadModeAP.ALL))
+        assert p.read_mode_ap == ReadModeAP.ALL
+
+    def test_read_mode_sc_propagates(self):
+        p = to_batch_policy(Settings(read_mode_sc=ReadModeSC.LINEARIZE))
+        assert p.read_mode_sc == ReadModeSC.LINEARIZE
+
+    def test_routing_defaults_unchanged(self):
+        # Wire-neutrality guard: unset Settings must leave the routing
+        # defaults exactly as PAC constructs them.
+        p = to_batch_policy(Settings())
+        assert p.replica == Replica.SEQUENCE
+        assert p.read_mode_ap == ReadModeAP.ONE
+        assert p.read_mode_sc == ReadModeSC.SESSION
+
+
+class TestBatchPolicyFromPresets:
+    """Preset routing choices must reach the batch wire policy: batch
+    commands take replica and read modes from the parent BatchPolicy alone,
+    so a preset value dropped here never affects routing."""
+    def test_strictly_consistent_batch_reads_linearize(self):
+        s = Behavior.STRICTLY_CONSISTENT.get_settings(
+            OpKind.READ, OpShape.BATCH, Mode.SC)
+        p = to_batch_policy(s)
+        assert p.read_mode_sc == ReadModeSC.LINEARIZE
+
+    def test_rack_aware_batch_reads_prefer_rack(self):
+        s = Behavior.FAST_RACK_AWARE.get_settings(OpKind.READ, OpShape.BATCH)
+        p = to_batch_policy(s)
+        assert p.replica == Replica.PREFER_RACK
 
 
 class TestToBatchReadPolicy:
