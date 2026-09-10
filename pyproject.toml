@@ -39,6 +39,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-env>=1.1.0",
+    "pytest-cov>=5.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "types-PyYAML",
@@ -82,6 +83,9 @@ filterwarnings = [
     "ignore::DeprecationWarning:uvloop",
     "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
 ]
+
+[tool.coverage.run]
+source = ["aerospike_sdk"]
 
 [tool.basedpyright]
 reportMissingImports = false

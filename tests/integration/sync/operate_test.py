@@ -132,3 +132,31 @@ def test_scalar_multi_op_results_are_op_aligned(session, ds):
     assert typed is not None and typed.get_long() == 11
 
     session.delete(key).execute()
+
+
+def test_touch_single_key_bumps_generation(session, ds):
+    """session.touch(key) on the sync path bumps the record generation."""
+    key = ds.id("touch_single")
+    session.upsert(key).put({"score": 1}).execute()
+    gen_before = session.query(key).execute().first_or_raise().record.generation
+
+    session.touch(key).execute()
+
+    rr = session.query(key).execute().first_or_raise()
+    assert rr.record.generation == gen_before + 1
+    assert rr.record.bins["score"] == 1
+
+
+def test_touch_batch_bumps_each_generation(session, ds):
+    """session.touch([...]) dispatches one batch and bumps every record."""
+    keys = [ds.id(f"touch_batch_{i}") for i in range(3)]
+    gens = []
+    for k in keys:
+        session.upsert(k).put({"score": 1}).execute()
+        gens.append(session.query(k).execute().first_or_raise().record.generation)
+
+    session.touch(keys).execute()
+
+    for k, gen_before in zip(keys, gens):
+        rr = session.query(k).execute().first_or_raise()
+        assert rr.record.generation == gen_before + 1
