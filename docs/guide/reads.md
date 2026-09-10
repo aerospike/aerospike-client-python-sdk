@@ -35,6 +35,13 @@ async with await session.query(*users.ids(1, 2, 3)).execute() as stream:
         print(result.record.key, result.record.bins)
 ```
 
+A multi-key read is split into per-node sub-batches, and any node whose
+sub-batch holds a single key is sent a regular single-record command instead of
+a batch request — the server executes those on the transaction service queue
+rather than the batch queue. The choice is per-node, so one call can mix
+singleton and multi-key groups. There is nothing to gain from special-casing
+size-1 batches in application code; the client already does.
+
 Draining a stream fully releases it automatically; the `async with` above also
 guarantees release if you leave the loop early. See
 [Closing a Stream](#closing-streams).

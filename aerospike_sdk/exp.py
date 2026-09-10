@@ -17,8 +17,8 @@
 
 Re-exports FilterExpression as Exp and provides a convenience val() function
 for creating value expressions from Python values, plus thin pass-through
-wrappers around the 8.1.2 enhanced expression API (``in_list`` / ``map_keys``
-/ ``map_values``).
+wrappers around the native ExpOps (``in_list`` / ``map_keys`` /
+``map_values``).
 
 The pass-throughs deliberately have the same signatures as the canonical
 ``FilterExpression`` factories and do not accept a ``ctx=`` kwarg — apply
@@ -89,16 +89,9 @@ def val(value: Any) -> Exp:
 def in_list(value: Exp, list_exp: Exp) -> Exp:
     """Boolean expression: ``value`` is an element of ``list_exp``.
 
-    Thin wrapper around the native ``InList`` ExpOp introduced in server
-    8.1.2 — a single opcode that is cheaper to pack and to evaluate than
-    the equivalent ``list_get_by_value(COUNT) > 0`` composition used on
-    pre-8.1.2 servers.
-
-    Requires Aerospike server >= 8.1.2. On older servers the server's
-    expression VM rejects the opcode at evaluation time. To stay
-    compatible with pre-8.1.2 servers, build the equivalent expression
-    yourself using ``Exp.list_get_by_value`` with
-    ``ListReturnType.COUNT``.
+    Thin wrapper around the native ``InList`` ExpOp — a single opcode that
+    is cheaper to pack and to evaluate than the equivalent
+    ``list_get_by_value(COUNT) > 0`` composition.
 
     Args:
         value: The value to search for.
@@ -115,14 +108,9 @@ def in_list(value: Exp, list_exp: Exp) -> Exp:
 def map_keys(map_exp: Exp) -> Exp:
     """Return the keys of ``map_exp`` as a list expression.
 
-    Thin wrapper around the native ``MapKeys`` ExpOp introduced in server
-    8.1.2 — cheaper to pack and to evaluate than the equivalent
-    ``map_get_by_index_range(KEY, 0, ...)`` composition used on pre-8.1.2
-    servers.
-
-    Requires Aerospike server >= 8.1.2. On older servers, build the
-    equivalent expression yourself using ``Exp.map_get_by_index_range``
-    with ``MapReturnType.KEY``.
+    Thin wrapper around the native ``MapKeys`` ExpOp — cheaper to pack and
+    to evaluate than the equivalent ``map_get_by_index_range(KEY, 0, ...)``
+    composition.
 
     Args:
         map_exp: A map expression (e.g. ``Exp.map_bin("scores")``).
@@ -137,14 +125,9 @@ def map_keys(map_exp: Exp) -> Exp:
 def map_values(map_exp: Exp) -> Exp:
     """Return the values of ``map_exp`` as a list expression.
 
-    Thin wrapper around the native ``MapValues`` ExpOp introduced in
-    server 8.1.2 — cheaper to pack and to evaluate than the equivalent
-    ``map_get_by_index_range(VALUE, 0, ...)`` composition used on
-    pre-8.1.2 servers.
-
-    Requires Aerospike server >= 8.1.2. On older servers, build the
-    equivalent expression yourself using ``Exp.map_get_by_index_range``
-    with ``MapReturnType.VALUE``.
+    Thin wrapper around the native ``MapValues`` ExpOp — cheaper to pack
+    and to evaluate than the equivalent
+    ``map_get_by_index_range(VALUE, 0, ...)`` composition.
 
     Args:
         map_exp: A map expression (e.g. ``Exp.map_bin("scores")``).

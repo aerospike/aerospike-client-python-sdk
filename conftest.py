@@ -747,15 +747,15 @@ async def supports_query_ops_projection_ext(server_version):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_enhanced_expression_api(server_version):
-    """``True`` when the cluster supports the 8.1.2 enhanced expression API.
+async def supports_cdt_path_expressions(server_version):
+    """``True`` when the cluster supports CDT path expressions. Server >= 8.1.1.
 
-    Covers native ``in_list`` / ``map_keys`` / ``map_values`` ExpOps,
-    ``CTX.map_keys_in`` / ``and_filter`` helpers, and the path-form
-    expression operators (``exp_select_*`` / ``exp_modify_*`` /
-    ``exp_remove``). Server >= 8.1.2.
+    Covers the operation-level path factories (``select_by_path`` /
+    ``modify_by_path`` / ``remove``), the expression-level path forms
+    (``exp_select_*`` / ``exp_modify_*`` / ``exp_remove``), the loop-variable
+    family, and ``remove_result``.
     """
-    return server_version is not None and server_version >= SERVER_8_1_2
+    return server_version is not None and server_version >= SERVER_8_1_1
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

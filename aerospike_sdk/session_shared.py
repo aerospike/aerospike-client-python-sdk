@@ -672,6 +672,9 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         Supported shapes: a :class:`~aerospike_sdk.dataset.DataSet` (set-wide
         query), a single :class:`~aerospike_async.Key`, multiple keys (list or
         varargs), or explicit ``namespace`` / ``set_name`` for index scans.
+        Multi-key queries are split into per-node sub-batches, and a node whose
+        sub-batch holds a single key is sent a regular single-record command
+        automatically — size-1 batches need no special-casing by the caller.
 
         Args:
             arg1: Positional dataset, key, list of keys, or namespace string
