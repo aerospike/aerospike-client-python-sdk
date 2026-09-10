@@ -32,6 +32,46 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 The `Cluster` returned by `connect()` supports the context-manager protocol,
 which automatically closes the connection on exit.
 
+## Sync usage
+
+The same surface is available without asyncio — no `async`/`await`, no event
+loop — useful for sync codebases or when a dependency forbids asyncio. Connect
+through the sync `ClusterDefinition` and every builder chain reads the same,
+minus the `await`:
+
+```python
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.sync import ClusterDefinition
+
+
+def main():
+    with ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
+        users = DataSet.of("test", "users")
+
+        # High-level key-value writes
+        session.upsert(users.id(1)).put({"name": "Alice", "age": 28, "country": "UK"}).execute()
+        session.upsert(users.id(2)).put({"name": "Bob", "age": 35, "country": "US"}).execute()
+
+        # Filtered query with AEL — same builder API as async
+        results = (
+            session.query(users)
+            .where("$.age > 25 and $.country == 'US'")
+            .execute()
+        )
+        for row in results:
+            if row.is_ok and row.record is not None:
+                print(row.record.bins)
+
+
+main()
+```
+
+The sync surface is an independent synchronous implementation that calls PAC's
+blocking entry points directly — there is no per-call event loop and no
+per-thread loop runner. Sessions, behaviors, builders, and AEL filters are
+identical to the async surface.
+
 ## Advanced Configuration
 
 `ClusterDefinition` exposes a fluent builder for credentials, alternate-access,
