@@ -18,12 +18,14 @@ env:
   JF_URL: https://artifact.aerospike.io
   # Server build under test. Bump these two to move CI to a different build;
   # list what is available with the registry's docker tags/list endpoint.
-  # 8.1.3 is deliberate: it carries the most features, so a single build
-  # exercises the most surface. Below it, whole areas skip rather than run --
-  # path expressions and ops projection need 8.1.1, native ExpOp coverage
-  # needs 8.1.2, and server-compiled AEL, query selection and extended error
-  # detail all need 8.1.3.
-  AEROSPIKE_SERVER_TAG: "8.1.3.0"
+  # 8.2.0 is deliberate: it is the SDK's minimum supported server and carries
+  # every gated feature, so a single build exercises the whole surface. Below
+  # it, whole areas skip rather than run -- path expressions and ops
+  # projection need 8.1.1, native ExpOp coverage needs 8.1.2, and
+  # server-compiled AEL, query selection and extended error detail all need
+  # 8.2.0. (Builds numbered 8.1.3.x are the pre-rename 8.2.0 bits; the
+  # capability floor tests expect the post-rename number.)
+  AEROSPIKE_SERVER_TAG: "8.2.0.0"
   AEROSPIKE_SERVER_REPO: database-docker-test-local/aerospike-server-enterprise
 
 jobs:

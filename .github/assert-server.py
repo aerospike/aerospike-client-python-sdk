@@ -14,7 +14,7 @@ necessarily installed at this point in the job.
 Env:
     SERVER_HOST     default 127.0.0.1
     SERVER_PORT     default 3000
-    EXPECTED_BUILD  e.g. "8.1.3.0"; the tag's version prefix must match the
+    EXPECTED_BUILD  e.g. "8.2.0.0"; the tag's version prefix must match the
                     server's reported build. Empty disables the check.
 """
 
