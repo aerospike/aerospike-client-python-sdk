@@ -83,7 +83,7 @@ class _IndexBuilderBase:
         must match the index type set via :meth:`numeric`, :meth:`string`,
         or :meth:`geo2dsphere` — a boolean predicate is rejected by the
         server, so build a value-producing expression (e.g. via
-        ``FilterExpression.cond``). Requires server 8.1.2 or newer.
+        ``FilterExpression.cond``).
 
         An AEL string may be passed instead of a prebuilt expression; the
         server parses and compiles it when the index is created, so the

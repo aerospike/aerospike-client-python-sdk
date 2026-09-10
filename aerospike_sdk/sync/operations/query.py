@@ -97,6 +97,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
     through Tier 1 (fast path / multi-key list dispatch), Tier 1b
     (multi-spec blocking dispatch), or Tier 2 (dataset / SI / scan
     streaming) using PAC ``_blocking`` entries. No asyncio loop involved.
+
+    Multi-key chains are split into per-node sub-batches, and a node whose
+    sub-batch holds a single key is sent a regular single-record command
+    instead of a batch request — automatically and per-node, so size-1
+    batches need no special-casing by the caller.
     """
 
     # -- Bin / op entry points (inherited base mutates ``self`` directly) -----

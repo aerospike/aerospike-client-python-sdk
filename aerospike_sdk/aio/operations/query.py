@@ -108,6 +108,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
 
+    Multi-key chains are split into per-node sub-batches, and a node whose
+    sub-batch holds a single key is sent a regular single-record command
+    instead of a batch request — automatically and per-node, so size-1
+    batches need no special-casing by the caller.
+
     Example::
 
         Set-wide read with filter and projection::

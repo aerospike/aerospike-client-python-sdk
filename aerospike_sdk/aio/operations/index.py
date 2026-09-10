@@ -43,7 +43,7 @@ class IndexBuilder(_IndexBuilderBase):
     Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
     :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
     :meth:`context` → ``await`` :meth:`create`. Expression-based indexes
-    (server 8.1.2+) replace :meth:`on_bin` with :meth:`on_expression`.
+    replace :meth:`on_bin` with :meth:`on_expression`.
 
     For removal, only :meth:`named` (and namespace/set from construction) is
     required before ``await`` :meth:`drop`.

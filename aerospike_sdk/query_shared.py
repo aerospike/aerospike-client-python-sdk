@@ -781,12 +781,9 @@ class _QueryBuilderBase:
         ignores the bin list. Subsequent calls replace the previous
         projection.
 
-        Server compatibility:
-            - Servers older than 8.1.2 accept only the basic ``get_bin`` /
-              ``get_header`` ops.
-            - Server 8.1.2+ also accepts CDT, expression, bit, and HLL
-              reads — for example
-              ``CdtOperation.select_values("bin", [...])``.
+        The server accepts basic ``get_bin`` / ``get_header`` ops as well as
+        CDT, expression, bit, and HLL reads — for example
+        ``CdtOperation.select_values("bin", [...])``.
 
         Args:
             *ops: One or more native ``aerospike_async`` read operations.

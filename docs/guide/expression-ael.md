@@ -349,7 +349,7 @@ stream = await session.query(users).where(expr).execute()
 
 Use `Exp` on all clusters; use string AEL when `supports_ael()` is true.
 
-## Path Expressions (Server 8.1.1+)
+## Path Expressions
 
 Path expressions — `select_by_path` / `modify_by_path`, the `SelectFlags` and
 `ModifyFlags` return/modify flag enums, `CTX.all_children()` /
@@ -380,5 +380,22 @@ op = CdtOperation.select_by_path(
 )
 ```
 
-These constructs require Aerospike Server 8.1.1 or newer. A dedicated AEL
-surface is deferred until the DSL shape stabilizes across clients.
+Path expressions can also **remove** the elements they match. The dedicated
+factory is `CdtOperation.remove(bin, ctx)` — equivalent to
+`CdtOperation.modify_by_path` with an `Exp.remove_result()` modify expression —
+and `Exp.exp_remove()` is the expression-level counterpart:
+
+```python
+over_5 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))
+
+op = CdtOperation.remove("nums", [CTX.all_children_with_filter(over_5)])
+```
+
+`examples/cdt_path_expression_example.py` in the repository runs this removal
+end to end. Mind the name collision: the chainable
+[`.on_map_key(...).remove()`](cdt-operations.md) is the older, unrelated CDT
+removal — only the path-based `CdtOperation.remove` takes a `CTX` path with
+filters.
+
+A dedicated AEL surface is deferred until the DSL shape stabilizes across
+clients.
