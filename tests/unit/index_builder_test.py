@@ -238,3 +238,53 @@ class TestIndexTypeSetters:
         b._client._async_client.create_index.assert_awaited_once_with(
             "test", "users", "payload", "payload_idx", IndexType.BLOB, None, None,
         )
+
+
+class TestSyncBinPathValidation:
+    """Bin-path create()/drop() validation and error conversion (sync)."""
+
+    def _sync_builder(self):
+        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
+        client = MagicMock()
+        client._usage_on = False
+        return client, SyncIB(client, "test", "users")
+
+    def test_create_without_bin_raises(self):
+        _, b = self._sync_builder()
+        with pytest.raises(ValueError, match="bin_name is required"):
+            b.create()
+
+    def test_create_without_name_raises(self):
+        _, b = self._sync_builder()
+        with pytest.raises(ValueError, match="index_name is required"):
+            b.on_bin("age").create()
+
+    def test_create_without_index_type_raises(self):
+        _, b = self._sync_builder()
+        with pytest.raises(ValueError, match="index_type is required"):
+            b.on_bin("age").named("idx_age").create()
+
+    def test_create_converts_pac_failure(self):
+        client, b = self._sync_builder()
+        client._async_client.create_index_blocking.side_effect = RuntimeError("boom")
+        with pytest.raises(AerospikeError):
+            b.on_bin("age").named("idx_age").numeric().create()
+
+    def test_drop_without_name_raises(self):
+        _, b = self._sync_builder()
+        with pytest.raises(ValueError, match="index_name is required"):
+            b.drop()
+
+    def test_drop_routes_to_blocking_entry(self):
+        client, b = self._sync_builder()
+        task = b.named("idx_age").drop()
+        client._async_client.drop_index_blocking.assert_called_once_with(
+            "test", "users", "idx_age",
+        )
+        assert task is client._async_client.drop_index_blocking.return_value
+
+    def test_drop_converts_pac_failure(self):
+        client, b = self._sync_builder()
+        client._async_client.drop_index_blocking.side_effect = RuntimeError("boom")
+        with pytest.raises(AerospikeError):
+            b.named("idx_age").drop()
