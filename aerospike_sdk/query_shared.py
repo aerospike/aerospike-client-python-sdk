@@ -2865,6 +2865,22 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         return self._segment._add_op(ListOperation.size(self._bin))
 
+    def list_join(self, separator: Optional[str] = None) -> WriteSegmentBuilder:
+        """Concatenate the string items of the list (read within operate).
+
+        The list must hold only strings; any other element type fails with
+        ``PARAMETER_ERROR``. An empty list joins to an empty string. The
+        inverse of :meth:`str_split`.
+
+        Args:
+            separator: Inserted between consecutive items. ``None`` = no
+                separator.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder`.
+        """
+        return self._segment._add_op(ListOperation.join(self._bin, separator))
+
     def list_append_items(
         self, items: Any,
         *,
@@ -5155,6 +5171,23 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     def list_size(self) -> _T:
         """Read list length into the operate/read result."""
         self._parent.add_operation(ListOperation.size(self._bin))  # type: ignore[union-attr]
+        return self._parent
+
+    def list_join(self, separator: Optional[str] = None) -> _T:
+        """Read the string items of the list concatenated into one string.
+
+        The list must hold only strings; any other element type fails with
+        ``PARAMETER_ERROR``. An empty list joins to an empty string. The
+        inverse of :meth:`str_split`.
+
+        Args:
+            separator: Inserted between consecutive items. ``None`` = no
+                separator.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        self._parent.add_operation(ListOperation.join(self._bin, separator))  # type: ignore[union-attr]
         return self._parent
 
     def list_get(self, index: int) -> _T:
