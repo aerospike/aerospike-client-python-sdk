@@ -111,6 +111,20 @@ class TestSimpleBinReads:
         result = session.query(_key(1)).bin("scores").list_size().execute().first_or_raise()
         assert result.record.bins["scores"] == 3
 
+    def test_list_join(self, cluster):
+        """Join concatenates the string items; the separator is optional."""
+        session = cluster.create_session()
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join")
+        session.upsert(key).bin("tags").set_to(["one", "two", "three"]).execute()
+
+        result = session.query(key).bin("tags").list_join(",").execute().first_or_raise()
+        assert result.record.bins["tags"] == "one,two,three"
+
+        result = session.query(key).bin("tags").list_join().execute().first_or_raise()
+        assert result.record.bins["tags"] == "onetwothree"
+        session.delete(key).execute()
+
     def test_list_get(self, cluster):
         session = cluster.create_session()
         result = (

@@ -580,6 +580,25 @@ class CdtReadBuilder(Generic[T]):
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
 
+    def list_join(self, separator: Optional[str] = None) -> T:
+        """Concatenate the string items of the list at the current CDT path.
+
+        The list must hold only strings; any other element type fails with
+        ``PARAMETER_ERROR``. An empty list joins to an empty string.
+
+        Args:
+            separator: Inserted between consecutive items. ``None`` = no
+                separator.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        op = ListOperation.join(self._bin_name, separator).set_context(
+            self._context_list_for_nested_ops(),
+        )
+        self._parent.add_operation(op)  # type: ignore[union-attr]
+        return self._parent
+
     def list_get(self, index: int) -> T:
         """Read the list element at *index* at the current CDT path."""
         ctx = self._context_list_for_nested_ops()
