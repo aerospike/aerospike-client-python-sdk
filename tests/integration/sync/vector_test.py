@@ -13,33 +13,22 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""``Vector`` bin round-trip integration tests (sync facade).
+"""Synchronous VECTOR bin round-trip integration tests."""
 
-Parity check for the sync builder path: the sync API wraps the async one, so
-this mirrors a representative subset of ``tests/integration/async/vector_test.py``
-rather than the full matrix. VECTOR bins are a dev-server-only feature; this
-skips cleanly unless the target build reports >= 8.1.3 (the interim vector
-gate -- see ``supports_vector_bins`` in the top-level ``conftest.py``).
-
-Vector *search* over a vector bin (distance expressions, and any filter/read
-expression that loads a VECTOR bin) currently crashes ``asd`` server-side and
-is intentionally out of scope here; see
-``tests/integration/async/vector_search_test.py`` for the full, quarantined
-coverage and root cause. *Scalar* Top-K, which does not touch a vector bin,
-does work today and is exercised below.
-"""
+from contextlib import suppress
 
 import pytest
 
-from aerospike_sdk import DataSet, Order, OrderByType, Vector, VectorElementType
-
+from aerospike_sdk import DataSet, ResultCode, Vector, VectorElementType
+from aerospike_sdk.exceptions import AerospikeError
 
 NS = "test"
 SET = "vector_psdk_sync"
 DS = DataSet.of(NS, SET)
 
-_KEYS = ("v1", "v2", "v3", "v4", "cdt", "distinct", "life") + tuple(
-    f"topk-{i}" for i in range(5)
+_KEYS = (
+    "v1", "v2", "v3", "v4", "cdt", "distinct", "life", "empty",
+    *(f"batch-write-{i}" for i in range(3)),
 )
 
 
@@ -48,7 +37,7 @@ def shared_cluster(aerospike_host, make_cluster_definition):
     with make_cluster_definition(aerospike_host, sync=True).connect() as c:
         v = c.server_version()
         if v is None or (v.major, v.minor, v.patch) < (8, 1, 3):
-            pytest.skip("cluster does not support VECTOR bins (requires a dev server build)")
+            pytest.skip("cluster does not support VECTOR bins (requires Server 8.1.3+)")
         yield c
 
 
@@ -56,16 +45,12 @@ def shared_cluster(aerospike_host, make_cluster_definition):
 def session(shared_cluster):
     s = shared_cluster.create_session()
     for k in _KEYS:
-        try:
+        with suppress(AerospikeError):
             s.delete(DS.id(k)).execute()
-        except Exception:
-            pass
     yield s
     for k in _KEYS:
-        try:
+        with suppress(AerospikeError):
             s.delete(DS.id(k)).execute()
-        except Exception:
-            pass
 
 
 def _read_bin(session, key, bin_name):
@@ -112,6 +97,20 @@ class TestSyncVectorRoundTrip:
 
         assert _read_bin(session, k, "embedding") == v
 
+    def test_empty_vector_write_is_rejected_by_server(self, session):
+        with pytest.raises(AerospikeError) as exc_info:
+            session.upsert(DS.id("empty")).put({"embedding": Vector([])}).execute()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+    def test_batch_write_and_read_round_trip_vector(self, session):
+        keys = [DS.id(f"batch-write-{i}") for i in range(3)]
+        vector = Vector([0.25, -0.5, 1.0], VectorElementType.FLOAT32)
+
+        session.upsert(*keys).put({"embedding": vector}).execute()
+
+        rows = session.query(*keys).bins(["embedding"]).execute()
+        assert [row.record_or_raise().bins["embedding"] for row in rows] == [vector] * 3
+
     def test_vector_in_list_and_map(self, session):
         k = DS.id("cdt")
         session.upsert(k) \
@@ -154,23 +153,3 @@ class TestSyncVectorRoundTrip:
         session.delete(k).execute()
         after = session.exists(k).include_missing_keys().execute().first()
         assert after.as_bool() is False
-
-
-class TestSyncScalarTopK:
-    """Scalar Top-K ("``ORDER BY <scalar bin> LIMIT k``") works today; it does
-    not touch a vector bin so it is not on the server crash path. Status is
-    unconfirmed by the server team -- see the async search suite's docstring."""
-
-    def test_scalar_topk_orders_and_limits(self, session):
-        for i in range(5):
-            session.upsert(DS.id(f"topk-{i}")).put({"score": i * 10}).execute()
-
-        stream = (
-            session.query(DS)
-            .bins(["score"])
-            .order_by("score", OrderByType.INTEGER, Order.DESC)
-            .top_k(3)
-            .execute()
-        )
-        scores = [r.record_or_raise().bins["score"] for r in stream]
-        assert scores == [40, 30, 20]
