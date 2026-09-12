@@ -92,6 +92,16 @@ async with session.transaction() as tx:
         await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
 ```
 
+Dataset queries are the exception. The server has no transaction support
+on the query path, so a query over a dataset — filtered or not — always
+reads previously committed state: it does not see the transaction's own
+writes, and the rows it returns are not protected against concurrent
+modification at commit. The SDK logs a warning on the
+`aerospike_sdk.query` logger when a dataset query starts inside a
+transaction. Querying for keys and then writing those keys
+transactionally is still a valid pattern; call `.with_txn(None)` on the
+query to confirm that is intended and silence the warning.
+
 ## Implicit Batch-Write Transactions
 
 A multi-key write batch against a strong-consistency namespace is

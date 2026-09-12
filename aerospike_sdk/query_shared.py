@@ -173,6 +173,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(SdkLoggers.QUERY)
 
+_QUERY_IN_TXN_WARNING = (
+    "Query executed inside a transaction will not take part in it. The server "
+    "has no multi-record transaction support on the query path, so this query "
+    "reads the state as it was before the transaction began: it will not see "
+    "the transaction's own writes, and the rows it returns are not protected "
+    "against concurrent modification at commit. Call with_txn(None) on this "
+    "query to confirm that is intended and silence this warning."
+)
+
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
 _bitwise_or = BitOperation.or_
@@ -701,6 +710,19 @@ class _QueryBuilderBase:
         if self._txn is not None and bp is None:
             bp = BatchPolicy()
         return self._apply_txn(bp)
+
+    def _warn_if_query_in_txn(self) -> None:
+        """Warn that a dataset query cannot participate in its transaction.
+
+        The server has no multi-record transaction support on the query
+        path, so a dataset query always reads previously committed state —
+        whether the transaction was passed explicitly or inherited from the
+        session. Warning rather than failing is deliberate: querying for
+        keys inside a transactional block and then writing those keys
+        transactionally is legitimate and has to keep working.
+        """
+        if self._txn is not None:
+            log.warning(_QUERY_IN_TXN_WARNING)
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
