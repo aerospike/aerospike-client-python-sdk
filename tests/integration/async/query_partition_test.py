@@ -24,12 +24,14 @@ digest → partition assignments.
 from collections import Counter
 
 from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
 
 PART_SET = "query_partition"
 HOT_SET = "query_partition_hot"
 NUM_KEYS = 200
+V_INDEX = "query_partition_v_idx"
 
 # A single partition holding more records than the limit under test, so the
 # limit assertion is exact: one partition means one node, and max_records is
@@ -66,6 +68,14 @@ async def _drain_chunks(stream) -> tuple[int, int]:
             records += 1
     stream.close()
     return records, chunks
+
+
+async def _drop_index_quiet(session, ds) -> None:
+    """Drop the filter index, tolerating its absence, so a run leaves no residue."""
+    try:
+        await session.index(dataset=ds).named(V_INDEX).drop()
+    except AerospikeError:
+        pass
 
 
 async def _seed(session, ds):
@@ -200,19 +210,33 @@ async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     await session.truncate(ds)
     placed = await _seed(session, ds)
 
-    start, end = 0, 2048
-    threshold = 100
-    expected = sum(1 for pid, v in placed if start <= pid < end and v >= threshold)
-    got = await _count(
-        await session.query(ds)
-        .on_partition_range(start, end)
-        .where(f"$.v >= {threshold}")
-        .execute()
+    # Indexing the filtered bin keeps both queries on the secondary-index plan;
+    # without it the strict allow_scans_with_where default rejects them. Drop
+    # first: a run killed before its teardown leaves the index behind, and
+    # creating an index that already exists fails.
+    await _drop_index_quiet(session, ds)
+    index_task = await (
+        session.index(dataset=ds).on_bin("v").named(V_INDEX).numeric().create()
     )
-    assert got == expected
+    try:
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
-    # The intersection is a strict subset of what the filter alone matches.
-    filtered_total = await _count(
-        await session.query(ds).where(f"$.v >= {threshold}").execute()
-    )
-    assert got <= filtered_total
+        start, end = 0, 2048
+        threshold = 100
+        expected = sum(1 for pid, v in placed if start <= pid < end and v >= threshold)
+        got = await _count(
+            await session.query(ds)
+            .on_partition_range(start, end)
+            .where(f"$.v >= {threshold}")
+            .execute()
+        )
+        assert got == expected
+
+        # The intersection is a strict subset of what the filter alone matches.
+        filtered_total = await _count(
+            await session.query(ds).where(f"$.v >= {threshold}").execute()
+        )
+        assert got <= filtered_total
+    finally:
+        await _drop_index_quiet(session, ds)

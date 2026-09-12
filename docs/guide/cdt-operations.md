@@ -174,6 +174,51 @@ await (
 )
 ```
 
+### Key-ordered maps
+
+A map written as a plain `dict` is stored **unordered**. The server sorts the
+entries either way, so a read looks identical — but it will not binary-search a
+map that was not *declared* ordered, and keyed or range access on one falls back
+to a scan. On a large map that is the difference between a lookup and a walk.
+
+Declare the order by wrapping the dict in [`SortedMap`](../api/sorted-map.md):
+
+```python
+from aerospike_sdk import SortedMap
+
+await (
+    session.upsert(users.id(1))
+    .put({"scores": SortedMap({"zoe": 3, "amy": 1})})
+    .execute()
+)
+```
+
+The flag is stored with the record and survives later modification, so it
+governs the cost of every subsequent access — by any client — until the map is
+rewritten unordered.
+
+`SortedMap` subclasses `dict`, so it behaves as one everywhere, and a
+key-ordered map reads back as a `SortedMap` rather than a plain `dict`:
+
+```python
+scores = record.bins["scores"]
+
+scores["amy"]                     # 1
+scores == {"amy": 1, "zoe": 3}    # True
+isinstance(scores, dict)          # True
+```
+
+Maps created through the CDT surface take their order from the operation
+instead, so `SortedMap` is not needed there:
+
+```python
+await (
+    session.update(users.id(1))
+    .bin("settings").map_upsert_items({"theme": "dark"}, order=MapOrder.KEY_ORDERED)
+    .execute()
+)
+```
+
 ### Remove
 
 ```python
@@ -207,13 +252,19 @@ await (
 
 ## AEL expressions on CDT
 
-AEL supports CDT paths for filtering:
+AEL supports CDT paths for filtering. A collection predicate like the ones
+below is generally not satisfiable from a secondary index, so it falls back to
+a primary-index (full-set) scan — which is rejected by default. Opt in with
+`allow_scans_with_where` when the scan is intended:
 
 ```python
+from aerospike_sdk import QueryHint
+
 # Filter records where the list has more than 5 items
 stream = await (
     session.query(users)
     .where("$.scores.count() > 5")
+    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 
@@ -221,6 +272,10 @@ stream = await (
 stream = await (
     session.query(users)
     .where('$.settings.["theme"] == "dark"')
+    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 ```
+
+A collection index can serve some of these predicates directly; see
+[Secondary Indexes](indexes.md).

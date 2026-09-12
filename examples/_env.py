@@ -146,7 +146,7 @@ def connect_sc():
 
 
 async def server_at_least(session, version: tuple[int, ...]) -> bool:
-    """True if every node's build is >= ``version`` (e.g. ``(8, 1, 3)``)."""
+    """True if every node's build is >= ``version`` (e.g. ``(8, 2, 0)``)."""
     from aerospike_sdk.aio.info import InfoCommands
 
     builds = await InfoCommands(session).build()

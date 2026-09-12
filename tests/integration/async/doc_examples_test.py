@@ -16,11 +16,16 @@ from aerospike_sdk import (
     ClusterDefinition,
     DataSet,
 )
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth, general_seed
 
 SEEDS = general_seed()
 USERS = DataSet.of(general_namespace(), "doc_smoke")
+
+# The quick example queries "age" with .where(), which needs an index to be
+# served: an unindexed .where() is rejected rather than run as a full-set scan.
+QUICK_EXAMPLE_INDEX = "doc_smoke_age_idx"
 
 
 def _use_services_alternate() -> bool:
@@ -29,17 +34,54 @@ def _use_services_alternate() -> bool:
     ).lower() in ("true", "1", "yes")
 
 
+async def _drop_index_quiet(session, index_name: str) -> None:
+    """Drop an index, tolerating its absence, so a run leaves no residue."""
+    try:
+        await session.index(dataset=USERS).named(index_name).drop()
+    except AerospikeError:
+        pass
+
+
+def _drop_index_quiet_sync(session, index_name: str) -> None:
+    """Blocking sibling of :func:`_drop_index_quiet`."""
+    try:
+        session.index(dataset=USERS).named(index_name).drop()
+    except AerospikeError:
+        pass
+
+
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def session(make_cluster_definition):
-    """Provide a connected async session for the module."""
+async def doc_cluster(make_cluster_definition):
+    """Connected async cluster for the module.
+
+    Exposed alongside :func:`session` because the index-readiness helper builds
+    its own session from the cluster.
+    """
     async with await make_cluster_definition(SEEDS).connect() as cluster:
-        s = cluster.create_session(Behavior.DEFAULT)
-        await s.truncate(USERS)
-        yield s
+        yield cluster
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def session(doc_cluster):
+    """Provide a connected async session for the module."""
+    s = doc_cluster.create_session(Behavior.DEFAULT)
+    await s.truncate(USERS)
+    yield s
+
+
+@pytest.fixture(scope="module")
+def doc_sync_cluster(make_cluster_definition):
+    """Connected blocking cluster for the sync quick-example tab.
+
+    A fixture rather than an inline context manager so the capability-marker
+    guard can resolve a client from the test's funcargs.
+    """
+    with make_cluster_definition(SEEDS, sync=True).connect() as cluster:
+        yield cluster
 
 
 # ------------------------------------------------------------------
@@ -51,48 +93,87 @@ async def session(make_cluster_definition):
 async def test_quick_example_async(session):
     """docs/index.md — Quick Example (async tab)."""
     key = USERS.id("qe_async")
-    await (
-        session.upsert(key)
-        .bin("name").set_to("Alice")
-        .bin("age").set_to(30)
-        .execute()
+    await _drop_index_quiet(session, QUICK_EXAMPLE_INDEX)
+    index_task = await (
+        session.index(dataset=USERS)
+        .on_bin("age")
+        .named(QUICK_EXAMPLE_INDEX)
+        .numeric()
+        .create()
     )
+    try:
+        # create() returns before the build finishes; the task reports when the
+        # server has actually built the index, so the filtered query below
+        # cannot race it.
+        await index_task.wait_till_complete()
 
-    stream = await session.query(key).execute()
-    result = await stream.first_or_raise()
-    assert result.record.bins["name"] == "Alice"
-    assert result.record.bins["age"] == 30
-    stream.close()
+        await (
+            session.upsert(key)
+            .bin("name").set_to("Alice")
+            .bin("age").set_to(30)
+            .execute()
+        )
 
-    stream = await session.query(USERS).where("$.age > 25").execute()
-    found = False
-    async for r in stream:
-        if r.record.bins.get("name") == "Alice":
-            found = True
-    stream.close()
-    assert found
+        stream = await session.query(key).execute()
+        result = await stream.first_or_raise()
+        assert result.record.bins["name"] == "Alice"
+        assert result.record.bins["age"] == 30
+        stream.close()
 
-    await session.delete(key).execute()
+        stream = await session.query(USERS).where("$.age > 25").execute()
+        found = False
+        async for r in stream:
+            if r.record.bins.get("name") == "Alice":
+                found = True
+        stream.close()
+        assert found
+
+        await session.delete(key).execute()
+    finally:
+        await _drop_index_quiet(session, QUICK_EXAMPLE_INDEX)
 
 
 # ------------------------------------------------------------------
 # docs/index.md — Quick Example (sync)
 # ------------------------------------------------------------------
 
-def test_quick_example_sync(make_cluster_definition):
+@requires_server_compiled_ael
+def test_quick_example_sync(doc_sync_cluster):
     """docs/index.md — Quick Example (sync tab)."""
-    with make_cluster_definition(SEEDS, sync=True).connect() as cluster:
-        s = cluster.create_session(Behavior.DEFAULT)
-        key = USERS.id("qe_sync")
+    s = doc_sync_cluster.create_session(Behavior.DEFAULT)
+    key = USERS.id("qe_sync")
+
+    _drop_index_quiet_sync(s, QUICK_EXAMPLE_INDEX)
+    index_task = (
+        s.index(dataset=USERS)
+        .on_bin("age")
+        .named(QUICK_EXAMPLE_INDEX)
+        .numeric()
+        .create()
+    )
+    try:
+        # create() returns before the build finishes; the task reports when the
+        # server has actually built the index.
+        index_task.wait_till_complete_blocking()
 
         s.upsert(key).bin("name").set_to("Alice").bin("age").set_to(30).execute()
 
         stream = s.query(key).execute()
         result = stream.first_or_raise()
         assert result.record.bins["name"] == "Alice"
+        assert result.record.bins["age"] == 30
         stream.close()
 
+        # The filtered half of the documented tab: match by key so records other
+        # tests leave in the shared set cannot satisfy it.
+        stream = s.query(USERS).where("$.age > 25").execute()
+        found = any(r.key == key for r in stream)
+        stream.close()
+        assert found
+
         s.delete(key).execute()
+    finally:
+        _drop_index_quiet_sync(s, QUICK_EXAMPLE_INDEX)
 
 
 # ------------------------------------------------------------------

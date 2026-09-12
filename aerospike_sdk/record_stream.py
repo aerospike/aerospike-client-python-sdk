@@ -468,6 +468,7 @@ class RecordStream:
         See Also:
             :meth:`pop`: Non-closing counterpart.
             :meth:`first_or_raise`: Raise instead of returning an error envelope.
+            :meth:`~aerospike_sdk.aio.operations.query.QueryBuilder.first`: Same terminal on the builder, one ``await``.
         """
         try:
             return await self.pop()
@@ -492,6 +493,7 @@ class RecordStream:
 
         See Also:
             :meth:`pop_or_raise`: Non-closing counterpart.
+            :meth:`~aerospike_sdk.aio.operations.query.QueryBuilder.first_or_raise`: Same terminal on the builder.
         """
         result = await self.first()
         if result is None:

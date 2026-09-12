@@ -41,7 +41,7 @@ def _make_pool_with_clients(
     The assertion helper only inspects ``client._policy`` identity, so we
     can fake the Clients with plain objects carrying a ``_policy`` field.
     (The definition path satisfies the invariant by construction; the
-    helper still guards the deprecated client_factory path.)
+    helper still guards that construction.)
     """
     pool = AsyncPool(
         definition,

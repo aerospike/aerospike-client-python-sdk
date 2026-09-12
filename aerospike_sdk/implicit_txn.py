@@ -40,31 +40,14 @@ import time
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from aerospike_async import BatchPolicy, Txn
-from aerospike_async.exceptions import CommitFailedError, ResultCode
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
 
 log = logging.getLogger(SdkLoggers.COMMAND)
 
 T = TypeVar("T")
-
-# Transient MRT conflicts safe to retry with a fresh transaction. Matches
-# the retry set of Session.do_in_transaction. A failed commit surfaces as
-# CommitFailedError (the transaction-failed roll-up, carrying no result
-# code); retrying it is safe because each attempt aborts and starts fresh.
-_RETRYABLE_CODES = {
-    ResultCode.MRT_BLOCKED,
-    ResultCode.MRT_VERSION_MISMATCH,
-}
-_TXN_FAILED = getattr(ResultCode, "TXN_FAILED", None)
-if _TXN_FAILED is not None:
-    _RETRYABLE_CODES.add(_TXN_FAILED)
-
-# Fallbacks when TransactionSettings fields are None (e.g. constructed raw
-# instead of through fill_hard_defaults, which supplies the same values).
-_DEFAULT_ATTEMPTS = 5
-_DEFAULT_SLEEP_SECONDS = 1.0
 
 
 def implicit_txn_enabled(sdk_client: Any, txn: Optional[Txn], mode: Optional[Mode]) -> bool:
@@ -92,21 +75,12 @@ def stamp_txn(policy: Optional[Any], txn: Txn) -> Any:
     return policy
 
 
-def _retry_plan(transactions: Any) -> tuple[int, float]:
-    attempts = transactions.number_of_attempts
-    if attempts is None or attempts < 1:
-        attempts = _DEFAULT_ATTEMPTS
-    sleep = transactions.sleep_between_attempts
-    sleep_seconds = sleep.total_seconds() if sleep is not None else _DEFAULT_SLEEP_SECONDS
-    return attempts, sleep_seconds
 
 
 def _should_retry(exc: BaseException, attempt: int, attempts: int) -> bool:
     if attempt + 1 >= attempts:
         return False
-    return (
-        isinstance(exc, CommitFailedError) or getattr(exc, "result_code", None) in _RETRYABLE_CODES
-    )
+    return is_retryable_txn_error(exc)
 
 
 async def run_in_implicit_txn(
@@ -125,7 +99,7 @@ async def run_in_implicit_txn(
     ``transactions.number_of_attempts`` times with
     ``transactions.sleep_between_attempts`` between tries.
     """
-    attempts, sleep_seconds = _retry_plan(transactions)
+    attempts, sleep_seconds = resolve_retry_plan(transactions)
     for attempt in range(attempts):
         txn = Txn()
         try:
@@ -154,7 +128,7 @@ def run_in_implicit_txn_blocking(
     attempt_fn: Callable[[Txn], T],
 ) -> T:
     """Blocking sibling of :func:`run_in_implicit_txn` (no asyncio loop)."""
-    attempts, sleep_seconds = _retry_plan(transactions)
+    attempts, sleep_seconds = resolve_retry_plan(transactions)
     for attempt in range(attempts):
         txn = Txn()
         try:

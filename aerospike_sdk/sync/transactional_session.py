@@ -17,11 +17,14 @@
 
 from __future__ import annotations
 
+import typing
+
 import types
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
+from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.sync.session import Session
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
@@ -58,11 +61,63 @@ class TransactionalSession(TransactionalSessionBase, Session):
         # txn / active come from TransactionalSessionBase.
         self._finalized = False
 
+    def do_in_transaction(
+        self,
+        operation: "typing.Callable[[SyncTransactionalSession], typing.Any]",
+        *,
+        max_attempts: Optional[int] = None,
+        sleep_between_retries: Optional[float] = None,
+    ) -> Any:
+        """Join this transaction instead of starting a nested one.
+
+        A transaction cannot contain another transaction, so the useful
+        reading of a nested call is "run this as part of the transaction I am
+        already in". Opening a second one instead would silently split the
+        caller's work across two transactions that commit independently --
+        losing the atomicity the outer call was written to get.
+
+        The outermost call owns the commit and the retrying, so the retry
+        arguments do not apply here and are accepted only to keep the
+        signature substitutable.
+
+        Args:
+            operation: Callable receiving this session.
+            max_attempts: Ignored; the outermost call owns retrying.
+            sleep_between_retries: Ignored, for the same reason.
+
+        Returns:
+            Whatever ``operation`` returns.
+
+        Raises:
+            RuntimeError: If this session's transaction is no longer active.
+
+        Example::
+
+            def transfer(tx):
+                tx.upsert(src).put({"balance": 90}).execute()
+                # Joins the transaction already in progress.
+                return tx.do_in_transaction(audit)
+
+            session.do_in_transaction(transfer)
+
+        See Also:
+            :meth:`aerospike_sdk.sync.session.SyncSession.do_in_transaction`:
+                The outermost entry point, which does open a transaction.
+        """
+        if self._txn is None or self._finalized:
+            raise RuntimeError("No active transaction to join.")
+        return operation(self)
+
     def commit(self) -> CommitStatus:
         """Commit the transaction and return the server-reported status."""
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to commit.")
-        status = self._pac_client.commit_blocking(self._txn)
+        try:
+            status = self._pac_client.commit_blocking(self._txn)
+        except Exception as e:
+            self._finalized = True
+            self._txn = None
+            raise _convert_pac_exception(e) from e
         self._finalized = True
         self._txn = None
         return status
@@ -71,7 +126,12 @@ class TransactionalSession(TransactionalSessionBase, Session):
         """Abort the transaction and return the server-reported status."""
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to abort.")
-        status = self._pac_client.abort_blocking(self._txn)
+        try:
+            status = self._pac_client.abort_blocking(self._txn)
+        except Exception as e:
+            self._finalized = True
+            self._txn = None
+            raise _convert_pac_exception(e) from e
         self._finalized = True
         self._txn = None
         return status

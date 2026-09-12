@@ -114,21 +114,40 @@ class TestUseServerQuerySelection:
 
 
 class TestExplainWhereFlags:
-    def test_default_none(self):
+    def test_strict_default_sets_require_index(self):
+        # No hint (and no Behavior) resolves to the strict default: reject the
+        # primary-index fallback.
         qb = _async_builder(_ClientSupportsSelection())
-        assert qb._query_explain_where_flags(None) is None
+        flags = qb._query_explain_where_flags(None)
+        assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)
 
-    def test_require_index(self):
+    def test_disallow_scans_sets_require_index(self):
         qb = _async_builder(_ClientSupportsSelection())
-        hint = QueryHint(require_index=True)
+        hint = QueryHint(allow_scans_with_where=False)
         flags = qb._query_explain_where_flags(hint)
         assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)
 
+    def test_allow_scans_clears_require_index(self):
+        qb = _async_builder(_ClientSupportsSelection())
+        hint = QueryHint(allow_scans_with_where=True)
+        assert qb._query_explain_where_flags(hint) is None
+
     def test_hard_hint_with_index_name(self):
         qb = _async_builder(_ClientSupportsSelection())
-        hint = QueryHint(index_name="age_idx", hard_hint=True)
+        # allow_scans_with_where=True isolates HARD_HINT from the strict
+        # REQUIRE_INDEX default.
+        hint = QueryHint(
+            index_name="age_idx", hard_hint=True, allow_scans_with_where=True
+        )
         flags = qb._query_explain_where_flags(hint)
         assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.HARD_HINT)
+
+    def test_effective_allow_scans_with_where_accessor(self):
+        # Public accessor resolves the builder's stored hint against the default.
+        qb = _async_builder(_ClientSupportsSelection())
+        assert qb.effective_allow_scans_with_where() is False  # strict default
+        qb._query_hint = QueryHint(allow_scans_with_where=True)
+        assert qb.effective_allow_scans_with_where() is True
 
 
 class TestApplyDatasetQueryPolicyFilter:

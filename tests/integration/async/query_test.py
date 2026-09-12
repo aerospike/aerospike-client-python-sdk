@@ -23,6 +23,7 @@ import pytest_asyncio
 from aerospike_sdk import Filter, Key
 from aerospike_async import PartitionFilter, QueryPolicy
 from aerospike_sdk import DataSet, Exp, val
+from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
@@ -203,13 +204,18 @@ async def test_query_builder_chaining(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_range_filter(cluster, session, enterprise, wait_for_index):
+async def test_query_with_range_filter(cluster, session, enterprise):
     """Test query with range filter (requires index)."""
     try:
-        await session.index(general_namespace(), "query_test").on_bin("age").named("age_idx").numeric().create()
+        index_task = await (
+            session.index(general_namespace(), "query_test")
+            .on_bin("age").named("age_idx").numeric().create()
+        )
     except Exception:
-        pass
-    await wait_for_index(cluster, general_namespace(), "query_test", Filter.range("age", 22, 26))
+        # Already present from an earlier test: its build is done, no task to await.
+        index_task = None
+    if index_task is not None:
+        await index_task.wait_till_complete()
 
     try:
         stream = await (
@@ -280,13 +286,18 @@ async def test_query_with_filter_expression(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_filter_and_filter_expression(cluster, session, enterprise, wait_for_index):
+async def test_query_with_filter_and_filter_expression(cluster, session, enterprise):
     """Test query with both Filter (secondary index) and Exp (FilterExpression)."""
     try:
-        await session.index(general_namespace(), "query_test").on_bin("age").named("age_idx").numeric().create()
+        index_task = await (
+            session.index(general_namespace(), "query_test")
+            .on_bin("age").named("age_idx").numeric().create()
+        )
     except Exception:
-        pass
-    await wait_for_index(cluster, general_namespace(), "query_test", Filter.range("age", 20, 30))
+        # Already present from an earlier test: its build is done, no task to await.
+        index_task = None
+    if index_task is not None:
+        await index_task.wait_till_complete()
 
     filter_exp = Exp.eq(Exp.string_bin("name"), Exp.string_val("User5"))
 
@@ -342,11 +353,16 @@ async def test_query_with_filter_expression_and(session):
 # Metadata-based query tests 
 # ============================================================================
 
+_QUERY_KEYS = tuple(
+    DataSet.of(general_namespace(), "query_test").id(i) for i in range(10)
+)
+
+
 @requires_server_compiled_ael
 async def test_query_with_ael_where(session):
     """Test query with AEL where() clause (expression filter via string AEL)."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where("$.age >= 25")
         .execute()
     )
@@ -364,7 +380,7 @@ async def test_query_with_ael_where(session):
 async def test_query_ael_and_or(session):
     """Test AEL where() with nested AND/OR conditions."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where('$.age >= 22 and $.age <= 26')
         .execute()
     )
@@ -382,7 +398,7 @@ async def test_query_ael_and_or(session):
 async def test_query_ael_not(session):
     """Test AEL where() with NOT condition."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(*_QUERY_KEYS)
         .where('not ($.age >= 25)')
         .execute()
     )
@@ -472,11 +488,11 @@ async def test_query_ael_set_name_matches_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(f"$.probe == '{probe}'"),
+            lambda: session.query(no_set_key, named_key).where(f"$.probe == '{probe}'"),
             {"no-set", "named-set"},
         )
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).where(
+            lambda: session.query(no_set_key, named_key).where(
                 f"$.probe == '{probe}' and $.setName() == ''",
             ),
             {"no-set"},
@@ -697,6 +713,83 @@ class TestPopVsFirst:
         rec = await closed_stream.first_or_raise()
         assert rec.is_ok
         assert await closed_stream.collect() == []     # closed
+
+
+class TestSingleRecordTerminals:
+    """``first`` / ``first_or_raise`` on the builder, not just on the stream.
+
+    Reading one record by key is the most common operation this client has, and
+    reaching it through ``execute()`` costs two awaits -- which callers then
+    collapse into a nested single expression. These terminals are the same pair
+    the stream already exposes, hoisted onto the builder so the common case
+    reads flat.
+    """
+
+    async def test_first_or_raise_matches_the_stream_form(self, cluster):
+        """Same answer as the three-step form, since it delegates to it."""
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+
+        via_stream = (
+            await (await session.query(ds.id(0)).execute()).first_or_raise()
+        ).record_or_raise()
+        via_builder = (
+            await session.query(ds.id(0)).first_or_raise()
+        ).record_or_raise()
+        assert via_builder.bins == via_stream.bins
+
+    async def test_first_returns_none_when_nothing_matches(self, cluster):
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        assert await session.query(ds.id("no_such_key_xyz")).first() is None
+
+    async def test_first_or_raise_raises_when_nothing_matches(self, cluster):
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        with pytest.raises(StopAsyncIteration):
+            await session.query(ds.id("no_such_key_xyz")).first_or_raise()
+
+    async def test_result_envelope_is_preserved(self, cluster):
+        """The terminal returns RecordResult, not a bare Record.
+
+        Dropping the envelope would discard result_code, sub_code and in_doubt,
+        which is why the extra ``.record_or_raise()`` stays the caller's step.
+        """
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        result = await session.query(ds.id(0)).first()
+        assert isinstance(result, RecordResult)
+        assert result.is_ok
+        assert result.record is not None
+
+    async def test_stream_is_closed_by_the_terminal(self, cluster):
+        """The terminal must close the stream it opened, not leak it.
+
+        Observed directly on the stream rather than inferred from the call
+        succeeding: leaving it open still returns the right row, so any check
+        that only looks at the result passes either way.
+        """
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+
+        # Deliberately multi-key: a single-key stream closes itself once
+        # exhausted, so it cannot tell a closing terminal from a
+        # non-closing one. Only an unconsumed remainder can.
+        builder = session.query(ds.ids(0, 1, 2))
+        opened = []
+        real_execute = builder.execute
+
+        async def spy(*args, **kwargs):
+            stream = await real_execute(*args, **kwargs)
+            opened.append(stream)
+            return stream
+
+        builder.execute = spy
+        assert (await builder.first()).is_ok
+        assert len(opened) == 1
+        assert opened[0]._closed, (
+            "first() left its stream open, with rows still unconsumed"
+        )
 
 
 class TestStreamClose:

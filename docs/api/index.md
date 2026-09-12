@@ -16,7 +16,7 @@ The primary API. All operations are `async`/`await`.
 | [`WriteSegmentBuilder`](write-segment.md) | Build and execute writes (upsert, insert, update, replace, delete) |
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
-| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.1.3+) |
+| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.2.0+) |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
@@ -53,6 +53,7 @@ Shared types used by both async and sync APIs.
 | [`DataSet`](dataset.md) | Namespace + set pair, key factory |
 | [`HllConfig`](hll-config.md) | HyperLogLog bin precision (index + minhash bit counts) |
 | [`Vector`](../guide/writes.md#vector-bins) / `VectorElementType` | Embedding/feature vector bin value (`FLOAT32`, `FLOAT64`, `INT32`, `FLOAT16` via numpy) — re-exported from `aerospike_async` |
+| [`SortedMap`](sorted-map.md) | Declares a map bin key-ordered on a plain write |
 | [`RecordResult`](record-result.md) | Single result from a query or batch |
 | [`OperationResult`](operation-result.md) | Typed-accessor wrapper around a single operation's value |
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
@@ -109,6 +110,7 @@ sync/udf
 sync/tls-builder
 dataset
 hll-config
+sorted-map
 record-result
 operation-result
 record-stream

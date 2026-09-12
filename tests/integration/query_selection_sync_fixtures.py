@@ -28,13 +28,12 @@ from tests.integration.query_selection_seed import (
 def query_selection_cluster(
     aerospike_host,
     make_cluster_definition,
-    sync_wait_for_index,
     sync_wait_for_set_visible,
 ):
     """One connect + seed for all sync query-selection integration modules.
 
     Skips before seed when ``client.supports_query_selection`` is false so
-    pre-8.1.3 clusters do not run truncate/index setup (blob sindex, etc.).
+    pre-8.2.0 clusters do not run truncate/index setup (blob sindex, etc.).
     """
     cluster_def = make_cluster_definition(aerospike_host, sync=True)
     with cluster_def.connect() as cluster:
@@ -42,7 +41,7 @@ def query_selection_cluster(
         skip_if_lacks_query_selection(client)
         session = cluster.create_session()
         seed_query_selection_sync(
-            client, session, sync_wait_for_index, sync_wait_for_set_visible,
+            client, session, sync_wait_for_set_visible,
         )
         state = QuerySelectionClusterState(client=client, session=session)
         yield state

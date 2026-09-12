@@ -131,6 +131,31 @@ async def test_explicit_commit_returns_status(
     assert len(sdk_client._async_client.commit_calls) == 1
 
 
+async def test_ops_after_explicit_commit_run_txn_free(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    # Drift guard against the sync session: an explicit commit must drop
+    # the txn reference so builders created afterwards run transaction-free
+    # instead of stamping the finalized txn on their policies.
+    async with tx_session as tx:
+        await tx.commit()
+        assert tx.get_current_transaction() is None
+        with pytest.raises(RuntimeError, match="not active"):
+            _ = tx.txn
+
+
+async def test_ops_after_explicit_abort_run_txn_free(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    async with tx_session as tx:
+        await tx.abort()
+        assert tx.get_current_transaction() is None
+        with pytest.raises(RuntimeError, match="not active"):
+            _ = tx.txn
+
+
 async def test_explicit_abort_returns_status(
     tx_session: TransactionalSession,
     sdk_client: _FakeSdkClient,

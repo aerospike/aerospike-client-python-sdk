@@ -29,6 +29,13 @@ from aerospike_sdk import Key, ResultCode, Txn
 from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
+from aerospike_async.exceptions import CommitFailedError as PacCommitFailedError
+from dataclasses import replace
+from datetime import timedelta
+
+from aerospike_sdk.policy.system_settings import TransactionSettings
+from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+from aerospike_sdk.exceptions import CommitError
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteSegmentBuilder,
@@ -260,6 +267,8 @@ class _FakeSdkClientForRetry:
         self._async_client = _FakePacClient()
         self._client = self._async_client
         self._indexes_monitor = None
+        # Mirrors the real client: the retry plan is resolved from here.
+        self._sdk_settings = fill_hard_defaults(None)
 
     def transaction(self, behavior=None):
         return TransactionalSession(client=self, behavior=behavior)
@@ -290,19 +299,22 @@ async def test_do_in_transaction_returns_value_on_success() -> None:
 async def test_do_in_transaction_retries_on_transient() -> None:
 
     session = _make_session_for_retry()
-    attempts = {"n": 0}
+    attempts = 0
 
     async def flaky(tx):
-        attempts["n"] += 1
-        if attempts["n"] < 3:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
             raise AerospikeError(
                 "blocked", result_code=ResultCode.MRT_BLOCKED,
             )
         return "won"
 
-    result = await session.do_in_transaction(flaky, max_attempts=5)
+    result = await session.do_in_transaction(
+        flaky, max_attempts=5, sleep_between_retries=0.0,
+    )
     assert result == "won"
-    assert attempts["n"] == 3
+    assert attempts == 3
     pac = session._client._async_client
     # Two failed attempts got aborted; the third was committed.
     assert len(pac.abort_calls) == 2
@@ -312,18 +324,21 @@ async def test_do_in_transaction_retries_on_transient() -> None:
 async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
 
     session = _make_session_for_retry()
-    attempts = {"n": 0}
+    attempts = 0
 
     async def always_blocked(tx):
-        attempts["n"] += 1
+        nonlocal attempts
+        attempts += 1
         raise AerospikeError(
             "still blocked", result_code=ResultCode.MRT_VERSION_MISMATCH,
         )
 
     with pytest.raises(AerospikeError) as excinfo:
-        await session.do_in_transaction(always_blocked, max_attempts=3)
+        await session.do_in_transaction(
+            always_blocked, max_attempts=3, sleep_between_retries=0.0,
+        )
     assert excinfo.value.result_code == ResultCode.MRT_VERSION_MISMATCH
-    assert attempts["n"] == 3
+    assert attempts == 3
     pac = session._client._async_client
     assert len(pac.abort_calls) == 3
     assert len(pac.commit_calls) == 0
@@ -332,17 +347,18 @@ async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
 async def test_do_in_transaction_does_not_retry_on_non_transient() -> None:
 
     session = _make_session_for_retry()
-    attempts = {"n": 0}
+    attempts = 0
 
     async def hard_fail(tx):
-        attempts["n"] += 1
+        nonlocal attempts
+        attempts += 1
         raise AerospikeError(
             "bad key", result_code=ResultCode.KEY_NOT_FOUND_ERROR,
         )
 
     with pytest.raises(AerospikeError):
         await session.do_in_transaction(hard_fail, max_attempts=5)
-    assert attempts["n"] == 1
+    assert attempts == 1
 
 
 async def test_do_in_transaction_rejects_zero_max_attempts() -> None:
@@ -365,7 +381,168 @@ async def test_do_in_transaction_propagates_non_aerospike_errors() -> None:
         raise _AppError("boom")
 
     with pytest.raises(_AppError):
-        await session.do_in_transaction(op, max_attempts=5)
+        await session.do_in_transaction(op, max_attempts=5, sleep_between_retries=0.0)
     pac = session._client._async_client
     assert len(pac.abort_calls) == 1
     assert len(pac.commit_calls) == 0
+
+
+async def test_do_in_transaction_retries_commit_failure() -> None:
+    """A failed commit is retried, like a conflict raised mid-block.
+
+    The commit is the last thing an attempt does, so a failure there means
+    nothing was applied and a fresh attempt may succeed. It carries no result
+    code, so classifying by result code alone misses it -- which is why the
+    async and sync runners share one classifier.
+    """
+    session = _make_session_for_retry()
+    pac = session._client._async_client
+    calls = 0
+
+    async def commit(txn):
+        nonlocal calls
+        pac.commit_calls.append(txn)
+        calls += 1
+        if calls < 3:
+            raise PacCommitFailedError("commit verify failed")
+        return CommitStatus.OK
+
+    pac.commit = commit
+
+    async def op(tx):
+        return "done"
+
+    assert await session.do_in_transaction(op, max_attempts=5, sleep_between_retries=0.0) == "done"
+    assert calls == 3
+
+
+async def test_do_in_transaction_commit_failure_surfaces_psdk_type() -> None:
+    """The caller catches a PSDK exception, not the underlying client's."""
+    session = _make_session_for_retry()
+    pac = session._client._async_client
+
+    async def commit(txn):
+        pac.commit_calls.append(txn)
+        raise PacCommitFailedError("commit verify failed")
+
+    pac.commit = commit
+
+    with pytest.raises(CommitError):
+        await session.do_in_transaction(lambda tx: _noop(), max_attempts=2, sleep_between_retries=0.0)
+    assert len(pac.commit_calls) == 2
+
+
+async def _noop():
+    return None
+
+
+async def test_nested_do_in_transaction_joins_the_outer_one() -> None:
+    """Nesting must not split the caller's work across two transactions.
+
+    One commit, and the inner call receives the same session, so writes on
+    both sides land or roll back together. A second transaction would commit
+    independently -- the outer block would no longer be atomic, which is the
+    one guarantee it was written to get.
+    """
+    session = _make_session_for_retry()
+    pac = session._client._async_client
+    seen: list = []
+
+    async def inner(tx):
+        seen.append(tx)
+        return "inner"
+
+    async def outer(tx):
+        seen.append(tx)
+        return await tx.do_in_transaction(inner)
+
+    assert await session.do_in_transaction(outer) == "inner"
+    assert len(pac.commit_calls) == 1
+    assert len(pac.abort_calls) == 0
+    assert seen[0] is seen[1]
+
+
+async def test_nested_do_in_transaction_rejects_a_finalized_session() -> None:
+    """Joining a transaction that is already over is a caller error."""
+    session = _make_session_for_retry()
+    captured: list = []
+
+    async def outer(tx):
+        captured.append(tx)
+        return "ok"
+
+    await session.do_in_transaction(outer)
+    with pytest.raises(RuntimeError, match="join"):
+        await captured[0].do_in_transaction(outer)
+
+
+async def test_cluster_settings_drive_retry_when_not_overridden() -> None:
+    """With no per-call arguments the cluster's transaction settings decide.
+
+    This is the configuration path, and the only one the implicit-transaction
+    runner has ever used. Before both runners resolved through one place they
+    carried separate defaults, so the same conflict was retried differently
+    depending on which entry point opened the transaction.
+    """
+    session = _make_session_for_retry()
+    session._client._sdk_settings = replace(
+        session._client._sdk_settings,
+        transactions=TransactionSettings(
+            number_of_attempts=3, sleep_between_attempts=timedelta(0),
+        ),
+    )
+    attempts = 0
+
+    async def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        await session.do_in_transaction(always_blocked)
+    assert attempts == 3
+
+
+async def test_per_call_arguments_override_cluster_settings() -> None:
+    """An explicit argument still wins over the configured value."""
+    session = _make_session_for_retry()
+    session._client._sdk_settings = replace(
+        session._client._sdk_settings,
+        transactions=TransactionSettings(
+            number_of_attempts=9, sleep_between_attempts=timedelta(0),
+        ),
+    )
+    attempts = 0
+
+    async def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        await session.do_in_transaction(
+            always_blocked, max_attempts=2, sleep_between_retries=0.0,
+        )
+    assert attempts == 2
+
+
+async def test_sleep_between_retries_accepts_a_timedelta() -> None:
+    """Either spelling of a duration works on the per-call argument.
+
+    The settings object types durations as timedelta while this argument has
+    always taken seconds, so a caller moving a value between the two should
+    not have to convert it.
+    """
+    session = _make_session_for_retry()
+    attempts = 0
+
+    async def always_blocked(tx):
+        nonlocal attempts
+        attempts += 1
+        raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+
+    with pytest.raises(AerospikeError):
+        await session.do_in_transaction(
+            always_blocked, max_attempts=2, sleep_between_retries=timedelta(0),
+        )
+    assert attempts == 2

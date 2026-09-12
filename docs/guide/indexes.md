@@ -9,31 +9,38 @@ with AEL `.where()` on clusters that support query selection (field 44).
 ```python
 users = DataSet.of("test", "users")
 
-# Numeric index
-await (
-    session.index(users)
+# Numeric index. create() returns an IndexTask: the server builds the index
+# asynchronously, so wait on it before querying through the index.
+task = await (
+    session.index(dataset=users)
     .on_bin("age")
     .named("users_age_idx")
     .numeric()
     .create()
 )
+await task.wait_till_complete()
+
+# Every create() below returns the same kind of task; the waits are omitted
+# here for brevity. See "Waiting for a build".
 
 # String index
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("city")
     .named("users_city_idx")
     .string()
     .create()
 )
 
-# Collection index (list elements)
+# Collection index (list elements). collection() selects the container shape;
+# pair it with the element type.
 from aerospike_sdk import CollectionIndexType
 
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("tags")
     .named("users_tags_idx")
+    .string()
     .collection(CollectionIndexType.LIST)
     .create()
 )
@@ -41,7 +48,7 @@ await (
 # GEO2DSPHERE index (for GeoJSON bins)
 places = DataSet.of("test", "places")
 await (
-    session.index(places)
+    session.index(dataset=places)
     .on_bin("loc")
     .named("places_loc_idx")
     .geo2dsphere()
@@ -50,7 +57,7 @@ await (
 
 # Blob index (for bytes bins; server 7.0+)
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_bin("avatar_hash")
     .named("users_avatar_hash_idx")
     .blob()
@@ -60,8 +67,8 @@ await (
 
 ## Expression-Based Indexes
 
-On server 8.1.2+, an index can cover the value an expression computes per
-record instead of a plain bin. Replace `on_bin()` with `on_expression()`
+An index can cover the value an expression computes per record instead of a
+plain bin. Replace `on_bin()` with `on_expression()`
 (they are mutually exclusive). The expression's result type must match the
 index type — index a value-producing expression, not a boolean predicate:
 
@@ -72,7 +79,7 @@ from aerospike_sdk import Exp, Filter
 expr = Exp.int_bin("age")
 
 await (
-    session.index(users)
+    session.index(dataset=users)
     .on_expression(expr)
     .named("users_age_exp_idx")
     .numeric()
@@ -91,10 +98,87 @@ stream = await session.query(users).filter(flt).execute()
 `context()` is not supported with expression indexes — encode CDT
 navigation inside the expression instead.
 
+### From an AEL string
+
+On server 8.2.0+, `on_expression()` also accepts an AEL string. The client
+sends the string as-is and the server parses and compiles it when the index
+is created, so the AEL dialect is the server's:
+
+```python
+from aerospike_sdk import Exp
+
+ael = "$.age + 1"
+
+await (
+    session.index(dataset=users)
+    .on_expression(ael)
+    .named("users_age_ael_idx")
+    .numeric()
+    .create()
+)
+
+# Query through it with the same AEL, server-compiled on the filter:
+flt = Filter.range("age", 26, 41).expression(
+    Exp.from_server_compiled_ael(ael),
+)
+stream = await session.query(users).filter(flt).execute()
+```
+
+The same rules apply as for prebuilt expressions: the AEL must produce a
+value of the index's type, so a boolean predicate like `"$.age > 21"` is
+rejected by the server. If any node is older than 8.2.0, `create()` raises
+with result code `OP_NOT_APPLICABLE` — build the expression with `Exp`
+instead on those clusters.
+
+### Indexing only some records (sparse indexes)
+
+A record whose expression evaluates to `unknown` — equivalently `error` — is
+left out of the index. That is the mechanism for indexing a *subset* of a set:
+return a value for the records worth indexing, and `unknown` for the rest.
+
+```python
+# Index adults in selected countries on their age; skip every other record.
+ael = (
+    "when ($.age >= 18 and $.country in ['Australia', 'Canada', 'USA'] => $.age, "
+    "default => unknown)"
+)
+
+await (
+    session.index(dataset=users)
+    .on_expression(ael)
+    .named("users_adult_age_idx")
+    .numeric()
+    .create()
+)
+```
+
+The index then holds only the matching records, so it stays smaller and a query
+through it never has to consider the rest. Records excluded this way are not
+errors — nothing fails, they simply do not appear in the index, and a query
+served by it will not return them even if they would satisfy the filter.
+
+## Waiting for an index to build
+
+`create()` returns as soon as the server accepts the request; the index is built
+in the background. Querying through an index that is still building can miss
+records that are already written, so wait on the returned task first:
+
+```python
+task = await session.index(dataset=users).on_bin("age").named("users_age_idx").numeric().create()
+await task.wait_till_complete()          # raises TimeoutError past the budget
+await task.wait_till_complete(timeout=None)   # or wait indefinitely
+```
+
+The synchronous builder returns the same task; call
+`wait_till_complete_blocking()` on it. `wait_till_complete` takes a `timeout` in
+seconds (default 60) and raises `TimeoutError` if the build has not finished by
+then — pass `timeout=None` to wait as long as it takes.
+
 ## Dropping Indexes
 
 ```python
-await session.index(users).named("users_age_idx").drop()
+task = await session.index(dataset=users).named("users_age_idx").drop()
+await task.wait_till_complete()
 ```
 
 ## Listing Indexes
@@ -126,6 +210,31 @@ stream = await (
     .execute()
 )
 ```
+
+### Blocking primary-index (full-set) scans
+
+By default a `.where()` query that no secondary index can satisfy is **rejected**
+rather than allowed to fall back to a primary-index (full-set) scan — a full-set
+scan is dangerous at scale. This is the `allow_scans_with_where` query setting,
+which defaults to `False` in `Behavior.DEFAULT`. Queries **without** a `.where()`
+clause (intentional scans) are unaffected, and this only applies on clusters with
+query selection (field 44).
+
+Allow the fallback per query with a hint, or change it on the `Behavior`:
+
+```python
+# Permit the primary-index fallback for this one query
+stream = await (
+    session.query(users)
+    .where("$.age > 25")
+    .with_hint(QueryHint(allow_scans_with_where=True))
+    .execute()
+)
+```
+
+`QueryHint.allow_scans_with_where` is tri-state: `None` (default) inherits the
+`Behavior`, `True` permits the fallback, `False` rejects it. A per-query hint
+always wins over the `Behavior` setting.
 
 ### Opting out of server-led selection
 

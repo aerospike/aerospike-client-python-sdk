@@ -20,11 +20,15 @@ See async :mod:`tests.integration.async.cdt_filter_context_test` for notes on
 """
 
 import pytest
-from aerospike_sdk import CTX, Filter
-from aerospike_async import IndexType
+from aerospike_sdk import CTX, Behavior, Filter
+from aerospike_async import IndexTask, IndexType
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
+
+# These tests assert the user key round-trips through query results, which
+# requires the key to be stored with the record — an explicit opt-in.
+_SEND_KEY = Behavior.DEFAULT.derive_with_changes("cdt-ctx-send-key-sync", send_key=True)
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
@@ -48,7 +52,7 @@ def cluster(aerospike_host, make_cluster_definition):
 
 @pytest.fixture
 def session(cluster):
-    return cluster.create_session()
+    return cluster.create_session(_SEND_KEY)
 
 
 def _cleanup_records(session, keys):
@@ -71,8 +75,8 @@ def _admin_drop(pac, ns: str, st: str, name: str) -> None:
     pac.drop_index_blocking(ns, st, name)
 
 
-def _admin_create_nested(pac) -> None:
-    pac.create_index_blocking(
+def _admin_create_nested(pac) -> IndexTask:
+    return pac.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -83,8 +87,8 @@ def _admin_create_nested(pac) -> None:
     )
 
 
-def _admin_create_flat(pac, index_name: str) -> None:
-    pac.create_index_blocking(
+def _admin_create_flat(pac, index_name: str) -> IndexTask:
+    return pac.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -95,7 +99,7 @@ def _admin_create_flat(pac, index_name: str) -> None:
     )
 
 
-def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wait_for_index):
+def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     """Sync query with ``Filter.equal(...).context([...])`` on a nested map value."""
     _require_filter_context()
 
@@ -105,7 +109,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
     key_missing_inner = ds.id("cdt_ctx_no_inner")
     keys = (key_hi, key_lo, key_missing_inner)
 
-    session = cluster.create_session()
+    session = cluster.create_session(_SEND_KEY)
     # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
     pac = cluster._client.underlying_client
 
@@ -135,12 +139,14 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
     )
 
     try:
-        _admin_create_nested(pac)
+        index_task = _admin_create_nested(pac)
     except Exception as e:
         pytest.skip(f"Could not create nested-map secondary index: {e}")
 
+    # The build task is authoritative; a query probe only infers readiness.
+    index_task.wait_till_complete_blocking()
+
     flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
-    sync_wait_for_index(cluster, _NS, _SET, flt)
 
     try:
         stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
@@ -165,7 +171,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise, sync_wa
         _cleanup_records(session, keys)
 
 
-def test_query_filter_equal_single_map_key_context(cluster, enterprise, sync_wait_for_index):
+def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()
 
@@ -174,7 +180,7 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise, sync_wai
     key_other = ds.id("cdt_ctx_flat_b")
     keys = (key_match, key_other)
 
-    session = cluster.create_session()
+    session = cluster.create_session(_SEND_KEY)
     # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
     pac = cluster._client.underlying_client
     index_name = f"{_INDEX}_flat"
@@ -198,12 +204,14 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise, sync_wai
     )
 
     try:
-        _admin_create_flat(pac, index_name)
+        index_task = _admin_create_flat(pac, index_name)
     except Exception as e:
         pytest.skip(f"Could not create CDT-path numeric index: {e}")
 
+    # The build task is authoritative; a query probe only infers readiness.
+    index_task.wait_till_complete_blocking()
+
     flt = Filter.equal(_BIN, val).context([CTX.map_key(_INNER)])
-    sync_wait_for_index(cluster, _NS, _SET, flt)
 
     try:
         stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()

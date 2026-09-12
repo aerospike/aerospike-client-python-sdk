@@ -15,7 +15,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_sdk.aio.session import _parse_namespace_info_body
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_async.exceptions import ConnectionError as PacConnectionError
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 
@@ -339,20 +339,10 @@ def general_namespace_is_sc(aerospike_host, pytestconfig):
     except Exception as exc:
         return _degraded(f"connect error: {exc}")
     try:
-        missing = False
-        sc_val = None
-        for body in client.info_blocking(f"namespace/{ns}").values():
-            if not body:
-                continue
-            exists, sc_opt = _parse_namespace_info_body(body)
-            if not exists:
-                missing = True
-                break
-            if sc_opt is not None:
-                sc_val = sc_opt
-        if missing:
+        detail = NamespaceDetail.from_response(client.info_blocking(f"namespace/{ns}"), ns)
+        if detail is None:
             return _degraded("namespace not present on the seed")
-        return bool(sc_val)
+        return detail.strong_consistency
     except Exception as exc:
         return _degraded(f"info scan error: {exc}")
     finally:
@@ -428,21 +418,11 @@ def _report_sc_routing(client, config) -> None:
     try:
         verdicts = {}
         for ns in sorted(SyncInfoCommands(client).namespaces()):
-            # Same multi-node scan as ``Session.namespace_sc_status``: a node
-            # reporting the namespace as unknown wins, otherwise the last node
-            # to report ``strong-consistency`` decides.
-            missing = False
-            sc_val = None
-            for body in client.info_blocking(f"namespace/{ns}").values():
-                if not body:
-                    continue
-                exists, sc_opt = _parse_namespace_info_body(body)
-                if not exists:
-                    missing = True
-                    break
-                if sc_opt is not None:
-                    sc_val = sc_opt
-            verdicts[ns] = not missing and bool(sc_val)
+            # Same verdict as ``Session.namespace_sc_status``.
+            detail = NamespaceDetail.from_response(
+                client.info_blocking(f"namespace/{ns}"), ns
+            )
+            verdicts[ns] = detail is not None and detail.strong_consistency
     except Exception as exc:
         emit("")
         emit(f"SC routing: namespace check unavailable ({exc})")
@@ -553,49 +533,6 @@ async def enterprise_sc(aerospike_host_sc, client_policy_sc):
 
 
 @pytest.fixture(scope="session")
-def wait_for_index():
-    """Return an async helper that retries until a secondary index is queryable.
-
-    Session-scoped so module-scoped integration clients may depend on it without
-    a pytest scope mismatch.
-
-    Usage::
-
-        await wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
-    """
-    async def _wait(
-        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
-    ):
-        # Server-side SI readiness is not monotonic right after create/drop —
-        # a single successful probe can be followed by a brief IndexNotReadable
-        # window. Require `stable` consecutive readable probes so the very next
-        # query in the test does not race that flicker.
-        deadline = time.monotonic() + timeout
-        last_err = None
-        hits = 0
-        session = client.create_session()
-        while time.monotonic() < deadline:
-            try:
-                stream = await session.query(ns, set_name).filter(sindex_filter).execute()
-                async for _ in stream:
-                    break
-                stream.close()
-                hits += 1
-                if hits >= stable:
-                    return
-                await asyncio.sleep(interval)
-            except Exception as exc:
-                if "IndexNotReadable" not in str(exc):
-                    raise
-                hits = 0  # a flicker resets the streak
-                last_err = exc
-                await asyncio.sleep(interval)
-        raise last_err  # type: ignore[misc]
-
-    return _wait
-
-
-@pytest.fixture(scope="session")
 def wait_for_set_visible():
     """Return an async helper that polls a set scan until exactly ``expected`` records are visible.
 
@@ -677,49 +614,6 @@ def sync_wait_for_set_visible():
 
 
 @pytest.fixture(scope="session")
-def sync_wait_for_index():
-    """Fixture returning a sync helper that retries until a secondary index is queryable.
-
-    Session-scoped so module- or session-scoped integration clients may depend on
-    it without a pytest scope mismatch.
-
-    Usage::
-
-        sync_wait_for_index(client, "test", "my_set", Filter.range("age", 0, 100))
-    """
-    def _wait(
-        client, ns, set_name, sindex_filter, *, timeout=10.0, interval=0.25, stable=2,
-    ):
-        # Server-side SI readiness is not monotonic right after create/drop —
-        # a single successful probe can be followed by a brief IndexNotReadable
-        # window. Require `stable` consecutive readable probes so the very next
-        # query in the test does not race that flicker.
-        deadline = time.monotonic() + timeout
-        last_err = None
-        hits = 0
-        session = client.create_session()
-        while time.monotonic() < deadline:
-            try:
-                stream = session.query(ns, set_name).filter(sindex_filter).execute()
-                for _ in stream:
-                    break
-                stream.close()
-                hits += 1
-                if hits >= stable:
-                    return
-                time.sleep(interval)
-            except Exception as exc:
-                if "IndexNotReadable" not in str(exc):
-                    raise
-                hits = 0  # a flicker resets the streak
-                last_err = exc
-                time.sleep(interval)
-        raise last_err  # type: ignore[misc]
-
-    return _wait
-
-
-@pytest.fixture(scope="session")
 def aerospike_host_tls():
     """Fixture providing the TLS-enabled Aerospike host for tests"""
     return os.environ.get('AEROSPIKE_HOST_TLS', 'localhost:3107')
@@ -756,7 +650,7 @@ async def aerospike_host_812_required(aerospike_host, server_version):
 # here rather than inlining a tuple in a new ``supports_*`` gate.
 SERVER_8_1_1 = (8, 1, 1, 0)
 SERVER_8_1_2 = (8, 1, 2, 0)
-SERVER_8_1_3 = (8, 1, 3, 0)
+SERVER_8_2_0 = (8, 2, 0, 0)
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -764,13 +658,26 @@ async def supports_string_operations(server_version):
     """``True`` when the (default-host) cluster supports server-side string ops.
 
     Covers the ``str_*`` builder / ``StringOperation`` surface and string
-    filter expressions (server >= 8.1.3, gated server-side via the core's
+    filter expressions (server >= 8.2.0, gated server-side via the core's
     ``Version::supports_string_operations``). Single-host model: point
-    ``AEROSPIKE_HOST`` at an 8.1.3+ build to exercise these; CI covers the
+    ``AEROSPIKE_HOST`` at an 8.2.0+ build to exercise these; CI covers the
     version spread via a server matrix rather than a dedicated host var.
     Tests should ``pytest.skip`` when this is ``False``.
     """
-    return server_version is not None and server_version >= SERVER_8_1_3
+    return server_version is not None and server_version >= SERVER_8_2_0
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def supports_bit_b64_encode(server_version):
+    """``True`` when the (default-host) cluster supports the bit b64_encode op.
+
+    Covers ``bit_b64_encode`` on the builders and the matching filter
+    expressions (server >= 8.2.0). Same single-host model as
+    :func:`supports_string_operations`: point ``AEROSPIKE_HOST`` at an
+    8.2.0+ build to exercise these. Tests should ``pytest.skip`` when this
+    is ``False``.
+    """
+    return server_version is not None and server_version >= SERVER_8_2_0
 
 
 def _parse_build_string(build: str):
@@ -840,15 +747,15 @@ async def supports_query_ops_projection_ext(server_version):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_enhanced_expression_api(server_version):
-    """``True`` when the cluster supports the 8.1.2 enhanced expression API.
+async def supports_cdt_path_expressions(server_version):
+    """``True`` when the cluster supports CDT path expressions. Server >= 8.1.1.
 
-    Covers native ``in_list`` / ``map_keys`` / ``map_values`` ExpOps,
-    ``CTX.map_keys_in`` / ``and_filter`` helpers, and the path-form
-    expression operators (``exp_select_*`` / ``exp_modify_*`` /
-    ``exp_remove``). Server >= 8.1.2.
+    Covers the operation-level path factories (``select_by_path`` /
+    ``modify_by_path`` / ``remove``), the expression-level path forms
+    (``exp_select_*`` / ``exp_modify_*`` / ``exp_remove``), the loop-variable
+    family, and ``remove_result``.
     """
-    return server_version is not None and server_version >= SERVER_8_1_2
+    return server_version is not None and server_version >= SERVER_8_1_1
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -856,11 +763,11 @@ async def supports_error_detail(server_version):
     """``True`` when the cluster supplies extended server error detail.
 
     Covers ``error_detail_verbosity`` and the resulting ``AerospikeError``
-    ``sub_code`` / ``server_message`` / ``exp_trace``. Server >= 8.1.3;
+    ``sub_code`` / ``server_message`` / ``exp_trace``. Server >= 8.2.0;
     older servers ignore the request flags. Tests that assert on error
     detail should ``pytest.skip`` when this is ``False``.
     """
-    return server_version is not None and server_version >= SERVER_8_1_3
+    return server_version is not None and server_version >= SERVER_8_2_0
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

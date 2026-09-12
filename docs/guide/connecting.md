@@ -32,6 +32,46 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 The `Cluster` returned by `connect()` supports the context-manager protocol,
 which automatically closes the connection on exit.
 
+## Sync usage
+
+The same surface is available without asyncio — no `async`/`await`, no event
+loop — useful for sync codebases or when a dependency forbids asyncio. Connect
+through the sync `ClusterDefinition` and every builder chain reads the same,
+minus the `await`:
+
+```python
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.sync import ClusterDefinition
+
+
+def main():
+    with ClusterDefinition("localhost", 3000).connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
+        users = DataSet.of("test", "users")
+
+        # High-level key-value writes
+        session.upsert(users.id(1)).put({"name": "Alice", "age": 28, "country": "UK"}).execute()
+        session.upsert(users.id(2)).put({"name": "Bob", "age": 35, "country": "US"}).execute()
+
+        # Filtered query with AEL — same builder API as async
+        results = (
+            session.query(users)
+            .where("$.age > 25 and $.country == 'US'")
+            .execute()
+        )
+        for row in results:
+            if row.is_ok and row.record is not None:
+                print(row.record.bins)
+
+
+main()
+```
+
+The sync surface is an independent synchronous implementation that calls PAC's
+blocking entry points directly — there is no per-call event loop and no
+per-thread loop runner. Sessions, behaviors, builders, and AEL filters are
+identical to the async surface.
+
 ## Advanced Configuration
 
 `ClusterDefinition` exposes a fluent builder for credentials, alternate-access,
@@ -67,6 +107,31 @@ regardless of the environment:
 ```python
 cluster_def = ClusterDefinition("localhost", 3000).using_services_alternate(False)
 ```
+
+### Restricting the cluster to its seeds
+
+`restricting_cluster_to_seeds()` disables peer discovery entirely: the seed
+addresses become the whole cluster, and nodes advertised by `peers` are
+ignored. Seeds are also kept across connection failures rather than being
+dropped by the tend loop, and a seed address is treated as the canonical
+service endpoint rather than resolved to a backend node.
+
+```python
+# Behind a load balancer or VIP that fronts the cluster.
+cluster_def = ClusterDefinition("aerospike-vip", 3000).restricting_cluster_to_seeds()
+```
+
+Reach for it when the addresses the cluster advertises are not routable from
+the client at all — a fixed VIP or proxy in front of the cluster — or when a
+test or benchmark needs a node set that cannot shift as tending discovers and
+drops peers.
+
+This is a different remedy from `using_services_alternate()`, and they solve
+different problems: alternate addresses still discover the peers and then
+address each one by its alternate address, while this stops the client
+contacting peers at all. Neither implies the other, and on a multi-node
+cluster the difference is visible — a client restricted to one seed reports
+one node where discovery would report all of them.
 
 ### TLS
 
@@ -162,7 +227,7 @@ async with await ClusterDefinition("localhost", 3000).connect() as cluster:
         ...  # fall back
 
     version = await cluster.server_version()   # minimum Version across the cluster
-    if version is not None and (version.major, version.minor, version.patch) >= (8, 1, 3):
+    if version is not None and (version.major, version.minor, version.patch) >= (8, 2, 0):
         ...
 ```
 
@@ -206,8 +271,11 @@ Predefined behaviors:
 Custom behaviors via derivation:
 
 ```python
+from datetime import timedelta
+
 my_behavior = Behavior.DEFAULT.derive_with_changes(
-    total_timeout_ms=5000,
+    "generous-timeouts",
+    total_timeout=timedelta(seconds=5),
     max_retries=3,
 )
 ```

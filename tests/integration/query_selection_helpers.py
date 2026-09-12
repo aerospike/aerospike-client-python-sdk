@@ -98,7 +98,10 @@ def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
     if hint is None:
         return None
     flags = QueryWhereFlags.EXPLAIN
-    if hint.require_index:
+    # PAC-level helper: pass through only an explicit disallow. The strict
+    # Behavior default (unset -> reject fallback) lives in the SDK layer, not
+    # here, so unset hints leave the primary-index fallback available.
+    if hint.allow_scans_with_where is False:
         flags |= QueryWhereFlags.REQUIRE_INDEX
     if hint.hard_hint:
         flags |= QueryWhereFlags.HARD_HINT
@@ -139,13 +142,21 @@ async def create_index_quiet_async(
     index_type,
     collection_type=None,
 ) -> None:
+    """Create an index and wait for its build, tolerating one that exists.
+
+    The wait lives here so no caller can forget it: an index that is registered
+    but still building answers queries with fewer records than it will once the
+    build completes.
+    """
     try:
-        await pac.create_index(
+        task = await pac.create_index(
             NS, set_name, bin_name, index_name, index_type, collection_type,
         )
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
             raise
+        return  # already present, so its build finished in an earlier run
+    await task.wait_till_complete()
 
 
 def create_index_quiet_blocking(
@@ -157,13 +168,16 @@ def create_index_quiet_blocking(
     index_type,
     collection_type=None,
 ) -> None:
+    """Blocking sibling of :func:`create_index_quiet_async`."""
     try:
-        pac.create_index_blocking(
+        task = pac.create_index_blocking(
             NS, set_name, bin_name, index_name, index_type, collection_type,
         )
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
             raise
+        return  # already present, so its build finished in an earlier run
+    task.wait_till_complete_blocking()
 
 
 async def drop_index_quiet_async(

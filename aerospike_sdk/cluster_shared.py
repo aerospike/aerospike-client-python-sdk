@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any, Generic, List, Optional, Protocol, TypeVar, Union
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import AuthMode, ClientPolicy
 
@@ -204,6 +204,8 @@ class ClusterDefinitionBase(Generic[_TB]):
             "AEROSPIKE_USE_SERVICES_ALTERNATE", ""
         ).strip().lower() in ("true", "1", "yes")
         self._fail_if_not_connected = True
+        self._seed_only_cluster = False
+        self._strict_config = False
         self._ip_map: Optional[dict[str, str]] = None
         self._tls_builder: Optional[_TB] = None
         self._system_settings: Optional[SystemSettings] = None
@@ -400,6 +402,82 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._use_services_alternate = enabled
         return self
 
+    def restricting_cluster_to_seeds(self, enabled: bool = True) -> Self:
+        """Pin the cluster view to the seed addresses, disabling peer discovery.
+
+        Normally the client bootstraps from the seeds and then discovers the
+        rest of the cluster, addressing each node at whatever it advertises.
+        That fails wherever the advertised addresses are not routable from the
+        client. Restricting the view keeps the seeds as the whole cluster:
+
+        - peers reported by other nodes are ignored;
+        - seeds are retained across connection failures rather than being
+          dropped by the tend loop, and are re-seeded if the live node count
+          falls below the seed count;
+        - load-balancer detection is skipped, so a seed address is treated as
+          the canonical service endpoint rather than resolved to a backend.
+
+        The deployment case is a client behind a fixed VIP or proxy fronting
+        the cluster. The other use is a test or benchmark that wants a node set
+        that cannot shift under it as tending discovers or drops peers.
+
+        This is a different remedy from :meth:`using_services_alternate`, which
+        still discovers peers but addresses them by their alternate address.
+        Reach for this one when the peers should not be contacted at all.
+
+        Args:
+            enabled: Whether to restrict the cluster to its seeds. Defaults to
+                ``True`` so the no-argument call reads as an enable.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            # Behind a load balancer that fronts the cluster.
+            cd = ClusterDefinition("aerospike-vip", 3000).restricting_cluster_to_seeds()
+
+        See Also:
+            :meth:`using_services_alternate`: Discover peers, but address them
+                by their alternate address.
+            :meth:`with_ip_map`: Client-side translation of discovered
+                addresses.
+        """
+        self._seed_only_cluster = enabled
+        return self
+
+    def with_strict_config(self, strict: bool = True) -> Self:
+        """Fail the connect if the SDK config file carries anything unrecognized.
+
+        By default an unrecognized key is warned about and skipped, so a config
+        written for a different client or carrying a typo still connects — it
+        simply does not apply the settings it names. That is the right default
+        for a file shared across SDKs, and the wrong one if you would rather
+        find out at deploy time than from behavior in production.
+
+        Applies to the connect-time read only. Hot reload stays fail-soft
+        whatever this is set to: the monitor runs in the background with no
+        caller to raise to, so it warns and keeps the previous configuration.
+
+        Args:
+            strict: Whether to raise on unrecognized config entries. Defaults
+                to ``True`` so the no-argument call reads as an enable.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            # Deployment-time gate: a stale key fails the rollout, not a request.
+            cd = ClusterDefinition("localhost", 3000).with_strict_config()
+
+        See Also:
+            :meth:`with_system_settings`: Settings supplied in code, which the
+                file layers over.
+        """
+        self._strict_config = strict
+        return self
+
     def fail_if_not_connected(self, fail: bool) -> Self:
         """Control whether ``connect()`` raises if the cluster is unreachable.
 
@@ -477,7 +555,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         Example::
 
-            cd = ClusterDefinition("localhost", 4333).with_tls_config_of().with_ca_file("/certs/ca.pem").done()
+            cd = ClusterDefinition("localhost", 4333).with_tls_config_of().ca_file("/certs/ca.pem").done()
         """
         self._tls_builder = self._new_tls_builder()
         return self._tls_builder
@@ -503,6 +581,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         policy.use_services_alternate = self._use_services_alternate
         policy.fail_if_not_connected = self._fail_if_not_connected
+        policy.seed_only_cluster = self._seed_only_cluster
 
         # Authentication
         policy.set_auth_mode(self._auth_mode, self._user_name, self._password)

@@ -142,7 +142,8 @@ async with await ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
 
-    # Filtered query — AEL filter expression
+    # Filtered query — AEL filter expression (assumes an index on "age";
+    # an unindexed .where() is rejected rather than run as a full-set scan)
     results = await (
         session.query(users)
         .where("$.age > %s and $.country == '%s'", 25, "US")
@@ -200,7 +201,8 @@ on the tail-latency budget your workload tolerates.
 You can override the auto-enable threshold via `AsyncPool(..., per_client_runtime=True|False)`.
 Forcing it on at low loop counts may be useful on smaller hardware; forcing
 it off reverts to the shared global Tokio runtime path. Worker count is
-auto-derived as `max(2, os.cpu_count() // loop_count)`.
+auto-derived as `max(2, os.cpu_count() // loop_count)`; `loop_count` itself
+defaults to `os.cpu_count()` (or 4 if indeterminate).
 
 **Event loop under free-threading.** The pool uses uvloop by default under
 free-threading — its per-op savings compound with the multi-loop scaling, worth

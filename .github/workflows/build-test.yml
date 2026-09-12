@@ -16,6 +16,17 @@ permissions:
 
 env:
   JF_URL: https://artifact.aerospike.io
+  # Server build under test. Bump these two to move CI to a different build;
+  # list what is available with the registry's docker tags/list endpoint.
+  # 8.2.0 is deliberate: it is the SDK's minimum supported server and carries
+  # every gated feature, so a single build exercises the whole surface. Below
+  # it, whole areas skip rather than run -- path expressions and ops
+  # projection need 8.1.1, native ExpOp coverage needs 8.1.2, and
+  # server-compiled AEL, query selection and extended error detail all need
+  # 8.2.0. (Builds numbered 8.1.3.x are the pre-rename 8.2.0 bits; the
+  # capability floor tests expect the post-rename number.)
+  AEROSPIKE_SERVER_TAG: "8.2.0.0"
+  AEROSPIKE_SERVER_REPO: database-docker-test-local/aerospike-server-enterprise
 
 jobs:
   # Advisory only (never fails the build): confirm the pinned PAC dev version
@@ -71,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -104,14 +115,17 @@ jobs:
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
+      # The fail-under floor sits below the current unit-only figure so churn
+      # doesn't flake the gate; ratchet it upward as coverage grows. The full
+      # 80% target is held against unit+integration (make coverage-all).
       - name: Run unit tests
-        run: python -m pytest tests/unit -v
+        run: python -m pytest tests/unit -v --cov=aerospike_sdk --cov-report=term --cov-fail-under=65
 
   integration:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -122,31 +136,20 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Start Aerospike server
-        run: |
-          # Server image must be >= 8.1.1 so path-expression / ops-projection
-          # tests run instead of skipping. 8.1.2+ unlocks the additional
-          # native-ExpOp coverage that consumes ``client_with_cdt_data_812``
-          # / ``client_812``; tests that need 8.1.2 and don't see an
-          # 8.1.2-routing seed (``AEROSPIKE_HOST_8_1_2``) will skip cleanly.
-          docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
-          for i in {1..10}; do
-            if docker exec aerospike-server asinfo -v "statistics" > /dev/null 2>&1; then
-              echo "Aerospike server is ready after $i seconds"
-              break
-            fi
-            if [ $i -eq 10 ]; then
-              echo "Aerospike server failed to start after 10 seconds"
-              docker logs aerospike-server
-              exit 1
-            fi
-            echo "Waiting for Aerospike server... ($i/10)"
-            sleep 1
-          done
-          echo "Configuring namespace for TTL support..."
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
-          echo "=== Server Build ==="
-          docker exec aerospike-server asinfo -v "build"
+        id: aerospike
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
+        with:
+          server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
+          server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
+          num-nodes: 1
+          config-file: .github/aerospike.conf
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Assert the server is the one we asked for
+        env:
+          EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
+        run: python3 .github/assert-server.py
 
       - name: Setup JFrog CLI
         id: jfrog
@@ -180,7 +183,7 @@ jobs:
           python -m pytest tests/integration -v || TEST_FAILED=true
           if [ "$TEST_FAILED" = "true" ]; then
             echo "=== Aerospike Server Log (last 100 lines) ==="
-            docker logs --tail 100 aerospike-server
+            docker logs --tail 100 "${{ steps.aerospike.outputs.container-names }}"
             echo "=== End of Server Log ==="
             exit 1
           fi
@@ -248,26 +251,20 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Start Aerospike server
-        run: |
-          docker run -d -p 3000:3000 --name aerospike-server aerospike/aerospike-server:8.1.2.1
-          for i in {1..10}; do
-            if docker exec aerospike-server asinfo -v "statistics" > /dev/null 2>&1; then
-              echo "Aerospike server is ready after $i seconds"
-              break
-            fi
-            if [ $i -eq 10 ]; then
-              echo "Aerospike server failed to start after 10 seconds"
-              docker logs aerospike-server
-              exit 1
-            fi
-            echo "Waiting for Aerospike server... ($i/10)"
-            sleep 1
-          done
-          echo "Configuring namespace for TTL support..."
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;nsup-period=120"
-          docker exec aerospike-server asinfo -v "set-config:context=namespace;id=test;default-ttl=2592000"
-          echo "=== Server Build ==="
-          docker exec aerospike-server asinfo -v "build"
+        id: aerospike
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
+        with:
+          server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
+          server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
+          num-nodes: 1
+          config-file: .github/aerospike.conf
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Assert the server is the one we asked for
+        env:
+          EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
+        run: python3 .github/assert-server.py
 
       - name: Setup JFrog CLI
         id: jfrog
@@ -305,6 +302,6 @@ jobs:
           python -m pytest tests/integration -v || TEST_FAILED=true
           if [ "$TEST_FAILED" = "true" ]; then
             echo "=== Aerospike Server Log (last 100 lines) ==="
-            docker logs --tail 100 aerospike-server
+            docker logs --tail 100 "${{ steps.aerospike.outputs.container-names }}"
             exit 1
           fi

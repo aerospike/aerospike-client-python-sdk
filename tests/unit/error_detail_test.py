@@ -15,7 +15,7 @@
 
 """Unit tests for the extended-error-detail surface: the ``ErrorDetailVerbosity``
 / ``SubCode`` re-exports, ``error_detail_verbosity`` settings resolution and
-policy mapping, the ``errorDetailVerbosity`` config key, and the exception
+policy mapping, the ``error_detail_verbosity`` config key, and the exception
 passthrough. Behavior against a live cluster is covered in
 ``tests/integration/async/error_detail_test.py``.
 """
@@ -113,11 +113,11 @@ class TestPolicyMapping:
 
 
 class TestConfigKey:
-    """The ``errorDetailVerbosity`` behaviors key maps to the Settings field."""
+    """The ``error_detail_verbosity`` behaviors key maps to the Settings field."""
 
     def test_parsed_into_settings(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    allOperations:\n      errorDetailVerbosity: 2\n"
+            "behaviors:\n  b:\n    all_operations:\n      error_detail_verbosity: 2\n"
         )
         assert specs["b"].patches[Scope.ALL].error_detail_verbosity == 2
 

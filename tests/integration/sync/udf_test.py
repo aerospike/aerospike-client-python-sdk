@@ -42,7 +42,7 @@ MODULE = "record_example"
 
 def _wait_task(cluster, task) -> bool:
     """Wait for ``task`` synchronously via PAC's blocking sibling."""
-    return task.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+    return task.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
 
 
 @pytest.fixture(scope="module")
@@ -123,18 +123,18 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     try:
         try:
             rm = cluster.remove_udf(path)
-            rm.wait_till_complete_blocking(sleep_time=0.1, max_attempts=20)
+            rm.wait_till_complete_blocking(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         reg = cluster.register_udf(body, path, UDFLang.LUA)
-        assert reg.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+        assert reg.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
 
         session = cluster.create_session()
         assert any(m["name"] == path for m in session.list_udf())
 
         rm = session.remove_udf(path)
-        assert rm.wait_till_complete_blocking(sleep_time=0.2, max_attempts=50)
+        assert rm.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
         assert not any(m["name"] == path for m in cluster.list_udf())
     finally:
         cluster.close()
@@ -161,7 +161,7 @@ def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):
 
 
 @requires_server_compiled_ael
-def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+def test_sync_batch_udf_reports_filtered_out_row_without_opt_in(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("sync_batch_udf_rak_1")
     k2 = DS.id("sync_batch_udf_rak_2")
@@ -177,9 +177,13 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
         .execute()
     )
     results = stream.collect()
-    assert len(results) == 1
-    assert results[0].key == k1
-    assert results[0].is_ok
+    # A UDF apply is a write, so the filtered-out row reports its outcome even
+    # though include_missing_keys was never set.
+    assert len(results) == 2
+    assert next(r for r in results if r.key == k1).is_ok
+    assert next(
+        r for r in results if r.key == k2
+    ).result_code == ResultCode.FILTERED_OUT
 
     stream = (
         session.execute_udf(k1, k2)
@@ -190,6 +194,7 @@ def test_sync_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_
         .execute()
     )
     results = stream.collect()
+    # Opting in changes nothing for a write batch: same rows, same codes.
     assert len(results) == 2
     r1 = next(r for r in results if r.key == k1)
     r2 = next(r for r in results if r.key == k2)
@@ -421,3 +426,44 @@ def test_sync_cluster_register_udf_from_resource(
         rm = cluster.remove_udf(server_path)
         _wait_task(cluster, rm)
         assert not any(m["name"] == server_path for m in cluster.list_udf())
+
+
+class TestBatchApplyExpiration:
+    """``BatchUDFPolicy.expiration`` — a batch-apply TTL reaches the record (sync).
+
+    The plain multi-key apply round-trip is covered elsewhere in this module;
+    these add only the TTL dimension.
+    """
+
+    def test_batch_apply_sets_record_ttl(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k1, k2 = DS.id("sapply_ttl_1"), DS.id("sapply_ttl_2")
+        session.delete(k1).execute()
+        session.delete(k2).execute()
+
+        stream = (
+            session.execute_udf(k1, k2)
+            .function(MODULE, "writeBin").passing("mbin", 42)
+            .expire_record_after_seconds(300)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+
+        for k in (k1, k2):
+            rec = session.query(k).execute().first_or_raise().record
+            assert 270 <= rec.ttl <= 305
+
+    def test_batch_apply_never_expire(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k = DS.id("sapply_ttl_never")
+        session.delete(k).execute()
+
+        stream = (
+            session.execute_udf(k)
+            .function(MODULE, "writeBin").passing("mbin", 7)
+            .never_expire()
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+        rec = session.query(k).execute().first_or_raise().record
+        assert rec.ttl is None

@@ -79,6 +79,7 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 
 # Shared chain layer — re-exported so existing import paths keep resolving.
@@ -106,6 +107,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
+
+    Multi-key chains are split into per-node sub-batches, and a node whose
+    sub-batch holds a single key is sent a regular single-record command
+    instead of a batch request — automatically and per-node, so size-1
+    batches need no special-casing by the caller.
 
     Example::
 
@@ -286,6 +292,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             rp_sc = self._base_read_policy_sc
             if rp_ap is not None and rp_sc is not None:
                 key = self._single_key
+                if self._usage_on:
+                    self._flush_usage(usage.API_DEFERRED, usage.SHAPE_POINT)
                 cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
                 try:
                     record = await self._client.get(
@@ -306,6 +314,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # them): legacy path with explicit mode resolution.
 
         self._finalize_current_spec()
+        if self._usage_on:
+            self._flush_usage(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()
         await self._ensure_batch_namespace_modes()
 
@@ -371,9 +381,14 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
             all_ops: list = []
             all_keys: List[Key] = []
+            row_op_types: List[Optional[str]] = []
             for spec in self._specs:
                 all_keys.extend(spec.keys)
-                all_ops.extend(self._spec_to_batch_ops(spec))
+                spec_ops = self._spec_to_batch_ops(spec)
+                all_ops.extend(spec_ops)
+                # Rows come back in op order, so this pairs each row with the
+                # verb that produced it.
+                row_op_types.extend([spec.op_type] * len(spec_ops))
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 if (
@@ -394,7 +409,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     "batch", self._namespace, self._set_name,
                     len(all_keys), cmd_t0, self._client,
                 )
-            return self._filtered_batch_stream(batch_records, disp, handler)
+            return self._filtered_batch_stream(
+                batch_records, disp, handler, row_op_types=row_op_types)
 
         # Dataset query path (no keys were specified)
         if self._operations:
@@ -404,6 +420,67 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 result_code=ResultCode.OP_NOT_APPLICABLE,
             )
         return await self._execute_dataset_query()
+
+    async def first(self, on_error: OnError | None = None) -> "RecordResult | None":
+        """Execute and return the first row, or ``None`` when there are none.
+
+        Reading one record by key is the most common thing this client does,
+        and going through :meth:`execute` costs two awaits for it -- one for the
+        stream, one for the row. This is that pair in one call; the stream is
+        closed either way.
+
+        Semantics come from :meth:`RecordStream.first`, not from a second set
+        of rules: per-record failures arrive **as data** (``is_ok=False``),
+        while cluster-level errors raise.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the query matched nothing.
+
+        Example::
+
+            result = await session.query(key).first()
+            if result is None:
+                print("no such record")
+            elif result.is_ok:
+                print(result.record.bins)
+
+        See Also:
+            :meth:`first_or_raise`: Raises instead of returning ``None``.
+            :meth:`execute`: The stream, for reads that return many rows.
+        """
+        return await (await self.execute(on_error)).first()
+
+    async def first_or_raise(self, on_error: OnError | None = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        The single-await counterpart of ``(await (await q.execute()).first_or_raise())``.
+        Semantics come from :meth:`RecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            StopAsyncIteration: The query matched no records.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            result = await session.query(key).first_or_raise()
+            record = result.record_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return await (await self.execute(on_error)).first_or_raise()
+
 
     async def stream(
         self, on_error: OnError | None = None,
@@ -1313,6 +1390,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         key = self._key
         op_type = self._op_type_fast
+        # Read the flag off the client rather than slotting it here: this
+        # segment counts its per-op attribute stores.
+        sdk_fast = self._sdk_client_fast
+        if sdk_fast is not None and sdk_fast._usage_on:
+            usage.record_point(sdk_fast, usage.API_DEFERRED, self._txn, self._ops)
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the
@@ -1358,7 +1440,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- delete (PAC returns bool, no record) --
         if op_type == "delete":
-            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy(mode)
             wp = self._apply_txn(wp)
             try:
                 existed = await self._client_fast.delete(key, policy=wp)
@@ -1372,7 +1454,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         # -- touch (no record returned) --
         if op_type == "touch":
-            wp = cached_wp if cached_wp is not None else self._get_write_policy()
+            wp = cached_wp if cached_wp is not None else self._get_write_policy(mode)
             wp = self._apply_txn(wp)
             try:
                 await self._client_fast.touch(key, policy=wp)
@@ -1435,7 +1517,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 wp = WritePolicy()
             wp.record_exists_action = rea
         else:
-            wp = self._get_write_policy()
+            wp = self._get_write_policy(mode)
         wp = self._apply_txn(wp)
 
         try:

@@ -7,10 +7,16 @@ Pass an AEL string to `.where()` on any query or write builder.
 stream = await session.query(users).where("$.age > 18").execute()
 ```
 
+The examples on this page assume a secondary index covers the bin being
+filtered. On clusters with query selection, a `.where()` query that no index
+can satisfy is rejected rather than run as a full-set scan; see
+[Secondary Indexes](indexes.md) to create one or to opt a query into the
+primary-index fallback.
+
 ## How string AEL is executed
 
 The SDK does **not** parse AEL strings locally. When the connected cluster
-supports it (Aerospike **8.1.3+** on every node), string AEL is sent to the
+supports it (Aerospike **8.2.0+** on every node), string AEL is sent to the
 server for compilation (**field 43** via
 `FilterExpression.from_server_compiled_ael`).
 
@@ -343,7 +349,7 @@ stream = await session.query(users).where(expr).execute()
 
 Use `Exp` on all clusters; use string AEL when `supports_ael()` is true.
 
-## Path Expressions (Server 8.1.1+)
+## Path Expressions
 
 Path expressions — `select_by_path` / `modify_by_path`, the `SelectFlags` and
 `ModifyFlags` return/modify flag enums, `CTX.all_children()` /
@@ -374,5 +380,22 @@ op = CdtOperation.select_by_path(
 )
 ```
 
-These constructs require Aerospike Server 8.1.1 or newer. A dedicated AEL
-surface is deferred until the DSL shape stabilizes across clients.
+Path expressions can also **remove** the elements they match. The dedicated
+factory is `CdtOperation.remove(bin, ctx)` — equivalent to
+`CdtOperation.modify_by_path` with an `Exp.remove_result()` modify expression —
+and `Exp.exp_remove()` is the expression-level counterpart:
+
+```python
+over_5 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))
+
+op = CdtOperation.remove("nums", [CTX.all_children_with_filter(over_5)])
+```
+
+`examples/cdt_path_expression_example.py` in the repository runs this removal
+end to end. Mind the name collision: the chainable
+[`.on_map_key(...).remove()`](cdt-operations.md) is the older, unrelated CDT
+removal — only the path-based `CdtOperation.remove` takes a `CTX` path with
+filters.
+
+A dedicated AEL surface is deferred until the DSL shape stabilizes across
+clients.

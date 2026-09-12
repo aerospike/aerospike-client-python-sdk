@@ -71,14 +71,19 @@ class TestQueryHintValidation:
         with pytest.raises(ValueError, match="hard_hint requires index_name"):
             QueryHint(hard_hint=True)
 
-    def test_require_index_and_hard_hint_allowed(self):
+    def test_allow_scans_with_where_and_hard_hint_allowed(self):
         hint = QueryHint(
             index_name="age_idx",
-            require_index=True,
+            allow_scans_with_where=False,
             hard_hint=True,
         )
-        assert hint.require_index is True
+        assert hint.allow_scans_with_where is False
         assert hint.hard_hint is True
+
+    def test_allow_scans_with_where_defaults_to_none(self):
+        # Tri-state: unset inherits the Behavior default (strict), not a bare bool.
+        assert QueryHint().allow_scans_with_where is None
+        assert QueryHint(allow_scans_with_where=True).allow_scans_with_where is True
 
     def test_frozen(self):
         hint = QueryHint(index_name="idx")

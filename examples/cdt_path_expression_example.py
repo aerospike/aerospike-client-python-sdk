@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CDT path select / modify over nested collections (server 8.1.1+).
+"""CDT path select / modify over nested collections.
 
 Reads and rewrites deep inside lists and maps in a single server operation. The
 path is a list of ``CTX`` steps — ``CTX.all_children()`` walks every element at a
@@ -11,7 +11,8 @@ variable*. The path is handed to a ``CdtOperation.select_by_path`` /
 These are the low-level factories; PSDK does not yet expose a fluent path builder
 (``.on_each_child().modify_by(...)``), so the ``CTX`` list is spelled out.
 
-If the cluster is older than 8.1.1, this example prints a skip message and exits.
+If the cluster does not support CDT path operations, this example prints a
+skip message and exits.
 """
 
 import asyncio
@@ -63,7 +64,7 @@ async def main() -> None:
 
         try:
             if not await _env.server_at_least(session, (8, 1, 1)):
-                print("Skipped: CDT path operations require Aerospike 8.1.1+.")
+                print("Skipped: this cluster does not support CDT path operations.")
                 return
 
             # --- 1) Bin-root list: modify every element (add 10 to each) ---

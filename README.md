@@ -10,6 +10,130 @@ thread throughput well past what GIL-bound clients can sustain.
 > **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
 > via [GitHub Issues](https://github.com/aerospike/aerospike-client-python-sdk/issues).
 
+## AI coding agent entry point
+
+PyPI package `aerospike-sdk`. Authoritative version: the root `VERSION` file —
+currently `0.9.0-alpha.5`, a public preview whose signatures may change between
+releases. Python 3.11+. Aerospike Server 8.2.0+ (older servers may work but are
+not guaranteed). Async-first: the top-level `aerospike_sdk` package is the async
+surface; `aerospike_sdk.sync` is an independent synchronous implementation of
+the same surface. Both connect through `ClusterDefinition`.
+
+**Three Aerospike Python packages exist and they are not interchangeable:**
+
+| Package | What it is |
+|---|---|
+| `aerospike-sdk` | this SDK - fluent, async-first, AEL string filters |
+| `aerospike-async` | the Python Async Client (PAC) this SDK is built on |
+| `aerospike` | the legacy client - a different API entirely |
+
+Write `aerospike_sdk` idioms. Importing `aerospike_async` types is correct only
+for the surfaces this SDK does not yet wrap - see Known traps.
+
+### What to read, by task
+
+| Task | Read first | Authoritative for |
+|---|---|---|
+| Connecting, sessions, behaviors | `docs/guide/connecting.md` | client and session setup |
+| Reads, streams, fast-path | `docs/guide/reads.md` | read shapes |
+| Writes, verbs, TTL | `docs/guide/writes.md` | write verb semantics |
+| List and map operations | `docs/guide/cdt-operations.md` | CDT builder chain |
+| AEL filters, expressions | `docs/guide/expression-ael.md` | filter grammar and limits |
+| String operations | `docs/guide/string-ops.md` | server-side string ops |
+| Secondary indexes | `docs/guide/indexes.md` | index create and query |
+| Transactions | `docs/guide/transactions.md` | multi-record semantics |
+| Errors, result handling | `docs/guide/error-handling.md` | error strategy, RecordResult |
+| Background ops, UDFs | `docs/guide/background-udf.md` | background execution |
+| Client logging | `docs/guide/logging.md` | logger names and levels |
+| Client metrics | `docs/guide/metrics.md` | snapshots, exporters, counters |
+| Runtime configuration | `docs/guide/dynamic-sdk-config.md` | YAML/env-driven settings |
+| Builder vs fast-path, AsyncPool | `docs/guide/performance.md` | the trade-offs |
+| Measured throughput, methodology | `docs/guide/benchmarking.md` | the numbers |
+| Exact signatures | docstrings in `aerospike_sdk/` | the API contract |
+
+### Repository map
+
+```text
+aerospike-client-python-sdk/
+|__ README.md             entry point (this file)
+|__ AGENTS.md             pointer to the section above
+|__ VERSION               authoritative version
+|__ aerospike_sdk/        the SDK - py.typed, inline type hints
+|   |__ aio/              async client, session, operations
+|   |__ sync/             independent sync implementation
+|   |__ policy/           Behavior and policy configuration
+|   |__ dataset.py, exp.py, record_stream.py, record_result.py,
+|       error_strategy.py, exceptions.py, operation_result.py, ...
+|__ docs/
+|   |__ guide/            15 hand-written guides - start here
+|   |__ api/              Sphinx autodoc stubs, one per class (+ sync/ mirror)
+|   |__ conf.py           Sphinx config; Read the Docs builds from this
+|__ examples/             23 runnable programs
+|__ tests/
+|   |__ README.md         which suite is authoritative for what
+|   |__ unit/             69 files - no server required
+|   |__ integration/      94 files - needs a running server
+|__ benchmarks/
+|__ Makefile              test, test-unit, test-int, coverage, docs targets
+```
+
+API reference: https://aerospike-python-sdk.readthedocs.io/
+Guides: https://aerospike.com/docs/develop/client/sdk/
+
+### Precedence when sources disagree
+
+This is an alpha and the code moves faster than the prose:
+
+1. Docstrings and inline type hints in `aerospike_sdk/` for signatures. The files
+   under `docs/api/` are thin autodoc wrappers, so the docstrings are the reference.
+2. `tests/` for actual behavior, including edge cases - `tests/README.md` says
+   which suite answers what
+3. `examples/` for idiomatic usage
+4. `docs/guide/` for concepts and the task map
+5. aerospike.com/docs for server-side semantics and version gates
+6. `aerospike-async` documentation for surfaces this SDK does not wrap
+
+A guide that contradicts a docstring is stale, not authoritative. Report it.
+
+### Known traps
+
+* **Do not mix legacy `aerospike` idioms into SDK code.** No `aerospike.client(...)`,
+  no policy dicts, no `aerospike_helpers` operation functions. This SDK uses verbs
+  on a session, `Behavior` for configuration, and AEL strings for filters.
+* **Path expressions are not in the AEL string grammar yet, but they are fully
+  SDK-surfaced.** Use `CdtOperation.select_by_path` / `modify_by_path` /
+  `remove`, the flag enums, `CTX.all_children()`, and the loop-variable family
+  from `aerospike_sdk` directly - see `docs/guide/expression-ael.md`. Removal
+  of matching elements is supported (`CdtOperation.remove`); do not conclude
+  it does not exist.
+* **Importing `aerospike_async` types is correct in exactly one documented case:**
+  the low-level exception types described in `docs/guide/error-handling.md`.
+  Everywhere else, the `aerospike_sdk` re-exports cover it - `aerospike_sdk.Exp`
+  IS the low-level `FilterExpression`. (The string `"aerospike_async"` as a
+  logger name in logging config is fine - that is a name, not an import.)
+* **Fast-path is single-key only.** `session.get(key)` / `session.put(key, bins)`
+  take no filters, no error-handler callbacks, and no batch semantics. Use the
+  chained builder when you need any of those.
+* **Do not loop single-key calls where a batch form exists.** `DataSet.ids(...)`
+  builds a key list; pass it rather than iterating `DataSet.id(...)`.
+* **Do not hand-roll batch fan-out.** A node sub-batch of size 1 is already sent
+  as a single-record command, automatically and per-node.
+* **`AsyncPool` is a free-threading feature.** On regular CPython it is slower than
+  a single client.
+
+### Verifying generated code
+
+    make test-unit          # no server required
+    make coverage           # unit tests plus a line-coverage report
+    make test-int           # needs a running Aerospike server
+    python3 examples/basic_example.py
+
+### Aerospike agent skills
+
+[aerospike/agent-skills](https://github.com/aerospike/agent-skills) carries
+core-database and data-modeling guidance - key design, record sizing, collection
+choice, indexing. Complementary to this repo, which is authoritative for the SDK API.
+
 ## Resources
 
 - **PyPI:** https://pypi.org/project/aerospike-sdk/
@@ -33,7 +157,7 @@ pip install aerospike-sdk==0.9.0a2
 This installs the SDK plus its dependency on the Aerospike Python Async Client
 (`aerospike-async`). No Rust toolchain or git checkout required for ordinary
 use — pre-built wheels are available for Linux, macOS, and Windows on Python
-3.10–3.14.
+3.11–3.14.
 
 ## Quick start
 
@@ -69,43 +193,9 @@ async def main():
 asyncio.run(main())
 ```
 
-### Sync
-
 The same surface is available without asyncio — no `async`/`await`, no event
-loop — useful for sync codebases or when a dependency forbids asyncio. Connect
-through the sync `ClusterDefinition`.
-
-```python
-from aerospike_sdk import Behavior, DataSet
-from aerospike_sdk.sync import ClusterDefinition
-
-
-def main():
-    with ClusterDefinition("localhost", 3000).connect() as cluster:
-        session = cluster.create_session(Behavior.DEFAULT)
-        users = DataSet.of("test", "users")
-
-        # High-level key-value writes
-        session.upsert(users.id(1)).put({"name": "Alice", "age": 28, "country": "UK"}).execute()
-        session.upsert(users.id(2)).put({"name": "Bob", "age": 35, "country": "US"}).execute()
-
-        # Filtered query with AEL — same builder API as async
-        results = (
-            session.query(users)
-            .where("$.age > 25 and $.country == 'US'")
-            .execute()
-        )
-        for row in results:
-            if row.is_ok and row.record is not None:
-                print(row.record.bins)
-
-
-main()
-```
-
-`SyncClient` is a thin façade over the PAC `_blocking` surface — there is no per-call
-event loop and no per-thread loop runner. Sessions, behaviors, builders, and AEL
-filters are identical to the async path.
+loop. See [Sync usage](docs/guide/connecting.md#sync-usage) in the connecting
+guide for the sync variant of this program.
 
 See the [Quick Start guide](https://aerospike.com/docs/develop/client/sdk/) for
 a deeper walkthrough; the [API reference](https://aerospike-python-sdk.readthedocs.io/)
@@ -145,7 +235,7 @@ message when it is absent:
   `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
   `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).
 - **Server-version-gated examples** (e.g. `string_operations_example.py`, server
-  8.1.3+) check `_env.server_at_least(session, (8, 1, 3))` and skip if the cluster
+  8.2.0+) check `_env.server_at_least(session, (8, 2, 0))` and skip if the cluster
   is older.
 
 Connection variables are the same ones the test suite uses — see
@@ -216,55 +306,13 @@ full TODO/WIP example.
 > the server fixes VECTOR expression evaluation. **Vector bin storage** (above)
 > works today.
 
-## Performance modes
+## Performance
 
-PSDK offers two API shapes — pick based on what your code needs.
-
-| API | Use when | Trade-off |
-|---|---|---|
-| **Chained builder** (`session.query(k).execute()`, `session.upsert(k).put(...).execute()`) | You need filters (`where(...)`), batch ops, error handlers, secondary-index queries, TTL overrides, generation checks, etc. Same shape as the Aerospike Java SDK. | Builder + stream wrapping costs ~60 µs/op of Python overhead. |
-| **Fast-path** (`session.get(key)`, `session.put(key, bins)`) | Single-key reads/writes where you want the lowest per-op overhead. | Single-key only; no filters, no error-handler callbacks, no batch semantics. Errors raise directly. |
-
-Both shapes work in sync and async modes. Use whichever fits each call site — they share the same `Session` and `Behavior`.
-
-### Free-threaded Python
-
-For high-throughput multi-threaded workloads, run PSDK on the free-threaded build with the GIL disabled:
-
-```bash
-# uv example — install once, then always launch with PYTHON_GIL=0
-uv python install 3.14.5+freethreaded
-PYTHON_GIL=0 python my_app.py
-```
-
-Verify with `sys._is_gil_enabled() == False` after imports — if any non-FT-safe C extension is imported, the interpreter silently re-enables the GIL and your multi-threaded perf collapses 4-6×.
-
-`AsyncPool` (multi-loop async) is a free-threading feature — **don't use it on regular Python**, it's slower than a single-client setup there. Each pool spawns N event loops on N OS threads, each with its own `Client`; coroutines submitted via `pool.run(...)` round-robin across loops:
-
-```python
-from aerospike_sdk import AsyncPool, Behavior, Client, DataSet
-
-
-async def main():
-    pool = AsyncPool(
-        client_factory=lambda: Client("localhost:3000"),
-        loop_count=4,
-    )
-    async with pool:
-        users = DataSet.of("test", "users")
-
-        # Submit a coroutine — picks an idle loop round-robin
-        await pool.run(
-            lambda client: client.create_session(Behavior.DEFAULT)
-                                 .upsert(users.id(1))
-                                 .put({"name": "Alice"})
-                                 .execute()
-        )
-```
-
-Tune `loop_count` based on your workload — `os.cpu_count()` is the default.
-
-For the full decision guide, the trade-offs, and measured TPS/latency across all modes, see [`docs/guide/performance.md`](docs/guide/performance.md). For the raw bench data and methodology, see [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md).
+Two API shapes: the chained builder for filters, batch operations, and error
+handlers; the fast-path `session.get`/`session.put` for single-key work.
+For the full decision guide — including free-threaded Python and `AsyncPool` —
+see [`docs/guide/performance.md`](docs/guide/performance.md); for the measured
+numbers and methodology, see [`docs/guide/benchmarking.md`](docs/guide/benchmarking.md).
 
 ## Documentation
 
@@ -394,7 +442,9 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 
 ### Prerequisites
 
-- **Python** 3.10 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
+- **Python** 3.11 - 3.14, **or** 3.14t (free-threaded) for high-throughput / `AsyncPool` work.
+  The SDK supports every CPython version under upstream security support; the
+  floor rises in minor releases as versions reach end-of-life.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
   Free-threaded wheels (`cp314t`) ship across the same platform matrix as

@@ -36,7 +36,7 @@ from __future__ import annotations
 import pytest
 
 from aerospike_sdk import Behavior, DataSet, ResultCode
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.sync import TransactionalSession
 
 from integration.sc_namespace_resolve import (
@@ -261,3 +261,59 @@ def test_txn_batch_abort(session, mrt_set):
 
     for k in keys:
         assert _fetch_bin(session, k) == 1
+
+
+class TestCommitRetrySync:
+    """Commit-failure handling through the blocking entry points.
+
+    The sync unit tests drive this logic against a stand-in client, and the
+    async suite drives it against a real server -- but neither exercises the
+    blocking driver, which is a separate path into the same client. This
+    covers that: a commit failure raised inside it has to reach the caller
+    intact for the retry loop to classify it at all.
+    """
+
+    def test_transient_commit_conflict_is_retried(self, session, mrt_set):
+        key = mrt_set.id("syncCommitRetryTransient")
+        session.upsert(key).put({BIN_NAME: "seed"}).execute()
+        attempts = 0
+
+        def operation(tx):
+            nonlocal attempts
+            attempts += 1
+            stream = tx.query(key).execute()
+            stream.first_or_raise()
+            if attempts == 1:
+                # Outside the transaction: moves the generation it verified.
+                session.upsert(key).put({BIN_NAME: "raced"}).execute()
+            return "committed"
+
+        result = session.do_in_transaction(
+            operation, max_attempts=3, sleep_between_retries=0.0,
+        )
+        assert result == "committed"
+        assert attempts == 2
+        session.delete(key).execute()
+
+    def test_persistent_commit_conflict_raises_sdk_type(self, session, mrt_set):
+        """The failure keeps its stage and its code through the sync driver."""
+        key = mrt_set.id("syncCommitRetryPersistent")
+        session.upsert(key).put({BIN_NAME: "seed"}).execute()
+        attempts = 0
+
+        def operation(tx):
+            nonlocal attempts
+            attempts += 1
+            stream = tx.query(key).execute()
+            stream.first_or_raise()
+            session.upsert(key).put({BIN_NAME: f"raced{attempts}"}).execute()
+            return "unreachable"
+
+        with pytest.raises(CommitError) as excinfo:
+            session.do_in_transaction(
+                operation, max_attempts=3, sleep_between_retries=0.0,
+            )
+        assert attempts == 3
+        assert excinfo.value.commit_error_type is not None
+        assert excinfo.value.result_code == ResultCode.MRT_VERSION_MISMATCH
+        session.delete(key).execute()

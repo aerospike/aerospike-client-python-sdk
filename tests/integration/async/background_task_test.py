@@ -326,3 +326,34 @@ async def test_point_query_rejects_background_task(cluster):
             .with_write_operations([Operation.put(MARKER, 1)])
             .execute_background_task()
         )
+
+
+async def test_background_update_with_records_per_second(cluster):
+    """A throttled background job still runs to completion and applies its writes.
+
+    The rate itself is the server's to enforce, so this does not assert timing;
+    what it covers is that a throttle the server accepts is carried on the wire
+    without breaking the job. A rejected or malformed value would surface here
+    as a failed task rather than a slower one.
+    """
+    session = cluster.create_session()
+    for i in range(1, 11):
+        await (
+            session.upsert(DS.id(f"bgrps_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+    task = await (
+        session.background_task()
+        .update(DS)
+        .bin(BG_BIN2).set_to("throttled")
+        .records_per_second(1000)
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(1, 11):
+        rs = await session.query(DS.id(f"bgrps_{i}")).bins([BG_BIN2]).execute()
+        rr = await rs.first_or_raise()
+        assert rr.record is not None
+        assert rr.record.bins.get(BG_BIN2) == "throttled"

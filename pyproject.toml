@@ -7,13 +7,11 @@ name = "aerospike-sdk"
 dynamic = ["version"]
 description = "Aerospike Python SDK - a modern, developer-friendly interface for Aerospike"
 readme = "README.md"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.11"
 dependencies = [
-    # Dev-channel version published to the internal package index on every
-    # PAC merge; promoted versions land on public PyPI at release. CI
-    # resolves this from the internal index; see README "Local PAC checkout"
-    # for working against a local PAC tree instead.
-    "aerospike-async==0.6.0a7.dev20",
+    # Use PAC's vector feature branch until its changes are published to the
+    # internal package index.
+    "aerospike-async @ git+https://github.com/aerospike/aerospike-client-python-async.git@aie/vector",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]
@@ -21,7 +19,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -43,6 +40,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-env>=1.1.0",
+    "pytest-cov>=5.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "types-PyYAML",
@@ -88,12 +86,15 @@ filterwarnings = [
     "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
 ]
 
+[tool.coverage.run]
+source = ["aerospike_sdk"]
+
 [tool.basedpyright]
 reportMissingImports = false
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
 # The CDT builders pass one-line lambda factories straight into a constructor;
@@ -104,7 +105,7 @@ target-version = "py310"
 "aerospike_sdk/aio/operations/cdt_write.py" = ["E731"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

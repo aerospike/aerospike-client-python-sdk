@@ -237,7 +237,7 @@ async def cluster_sc(aerospike_host_sc, make_cluster_definition):
         reg = await cluster.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
-        await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         reg2 = await cluster.register_udf(BG_TEST_LUA, BG_TEST_SERVER_PATH, UDFLang.LUA)
         await reg2.wait_till_complete()
@@ -418,7 +418,7 @@ class TestDurableDeleteBackgroundUdf:
         except AerospikeError as exc:
             _skip_if_role_violation(exc)
             raise
-        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, timeout=10.0)
 
         await _validate_process_record_outcome(
             session, ds_sc, DD_UDF_BIN1, DD_UDF_BIN2, DD_UDF_SIZE,
@@ -760,7 +760,7 @@ class TestQueryExecuteDurableDelete:
         except AerospikeError as exc:
             _skip_if_role_violation(exc)
             raise
-        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, timeout=10.0)
 
         await _validate_process_record_outcome(session, ds_sc, TQE_BIN1, TQE_BIN2, TQE_SIZE)
 
@@ -790,7 +790,7 @@ class TestBackgroundTaskDelete:
             b = _require_default_durable_delete(b, ctx="BackgroundOperationBuilder.delete")
 
         task = await b.execute()
-        assert await task.wait_till_complete(sleep_time=0.25, max_attempts=40)
+        assert await task.wait_till_complete(sleep_time=0.25, timeout=10.0)
 
         for i in range(1, 11):
             rs = await session.query(ds_bg.id(f"bg_{i}")).execute()
@@ -799,3 +799,41 @@ class TestBackgroundTaskDelete:
                 assert row is None or not row.is_ok
             else:
                 assert row is not None and row.is_ok and row.record is not None
+
+
+class TestTxnBoundWritePolicyMode:
+    """A txn-bound write on SC must resolve SC write settings, not AP ones.
+
+    Binding a segment to a transaction nulls both cached policies so the fast
+    path derives fresh ones from the Behavior. That derivation is the only
+    place a point write asks the Behavior for settings without saying which
+    mode it is in, and ``Behavior.get_settings`` defaults to AP -- so an SC
+    namespace silently gets ``Scope.WRITES_AP``: no ``durable_delete``
+    default, and ``commit_level=COMMIT_ALL``.
+
+    Asserted through the observable consequence rather than the resolved
+    policy object: on SC, a non-durable delete is refused by the server, so a
+    delete that leaves no tombstone is the signature of AP settings having
+    been applied.
+    """
+
+    async def test_txn_bound_delete_uses_sc_write_settings(
+        self, cluster_sc, sc_namespace,
+    ):
+        session = cluster_sc.create_session()
+        ds = DataSet.of(sc_namespace, "txn_mode_probe")
+        key = ds.id("r1")
+
+        await session.upsert(key).put({"v": 1}).execute()
+
+        async def op(tx):
+            await tx.delete(key).execute()
+
+        await session.do_in_transaction(op)
+
+        # Reaching here is the assertion: with AP settings resolved, the
+        # delete carries no durable_delete and the SC server rejects it with
+        # FailForbidden ("durability violation") before anything is removed.
+        stream = await session.query(key).execute()
+        rows = await stream.collect()
+        assert not rows or not rows[0].is_ok, "record should be gone after delete"

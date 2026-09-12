@@ -40,7 +40,7 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import (
     Client,
@@ -65,6 +65,7 @@ from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.operations.query.
     from aerospike_sdk.aio.operations.query import WriteBinBuilder
@@ -178,9 +179,9 @@ def _seconds_from_timedelta(duration: timedelta) -> int:
 def _seconds_until(when: datetime) -> int:
     """Convert an absolute ``datetime`` into an integer TTL in seconds from now.
 
-    A naive ``when`` is interpreted in local time (matching the Java SDK's
-    ``LocalDateTime`` semantics); an aware ``when`` is compared against the
-    current time in its own timezone.
+    A naive ``when`` is interpreted in local time, as bare ``datetime.now()``
+    does; an aware ``when`` is compared against the current time in its own
+    timezone.
 
     Raises:
         ValueError: If ``when`` is not strictly in the future.
@@ -346,102 +347,21 @@ def _build_exp_write_flags(
     return flags
 
 
-class _WriteSegmentBuilderBase(Generic[_QB]):
-    """State + chaining shared by async and sync write-segment builders.
+class _ExpirationVerbs(Generic[_QB]):
+    """Record-expiration (TTL) chaining shared by write-segment and UDF builders.
 
-    Holds the wrapped query-builder reference (``_qb``) and the chaining
-    methods that mutate state on it. Concrete subclasses
-    (:class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder` for
-    async, :class:`~aerospike_sdk.sync.operations.query.WriteSegmentBuilder`
-    for sync) add their respective ``execute()`` paths.
-
-    Subclasses inject their tier-appropriate :class:`WriteBinBuilder` class
-    via :attr:`_bin_builder_cls` (set at module load, after the concrete
-    class is defined). The base's :meth:`bin` reads through that hook so it
-    doesn't need a hard reference to a tier-specific module.
+    Each verb stamps the pending TTL on the wrapped query builder (``_qb``); it
+    is materialized into the write / UDF policy's ``expiration`` when the
+    operation is built. Mixed into both :class:`_WriteSegmentBuilderBase` and
+    the UDF builder so the two surfaces stay identical.
     """
 
-    # Subclasses set this after class definition (concrete WriteBinBuilder
-    # is tier-neutral but lives in aio.operations.query, so we avoid the
-    # cross-tier reverse import).
-    _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
-    _ssael_flag: Optional[bool] = None
+    __slots__ = ()
 
-    def __init__(self, qb: _QB) -> None:
-        self._qb: _QB = qb
-
-    def _resolve_ssael_flag(self) -> bool:
-        """Lazy snapshot of server-compiled AEL support for this segment's lifetime."""
-        flag = self._ssael_flag
-        if flag is None:
-            if self._qb is not None:
-                flag = self._qb._supports_server_compiled_ael
-            else:
-                client = getattr(self, "_sdk_client_fast", None)
-                flag = (
-                    bool(client.supports_server_compiled_ael)
-                    if client is not None
-                    else False
-                )
-            self._ssael_flag = flag
-        return flag
-
-    def _expression_from_ael_string_for_ops(
-        self, expression: Union[str, FilterExpression],
-    ) -> FilterExpression:
-        """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
-        if not isinstance(expression, str):
-            return expression
-        return filter_expression_from_ael_string(
-            expression,
-            supports_server_compiled_ael=self._resolve_ssael_flag(),
-        )
-
-    def with_txn(self, txn: Optional[Txn]) -> Self:
-        """Opt this write into (or out of) a specific transaction.
-
-        Delegates to the underlying query builder.
-
-        Args:
-            txn: The :class:`~aerospike_async.Txn` to participate in, or
-                ``None`` to run without a transaction.
-
-        Returns:
-            This segment for chaining.
-        """
-        self._qb.with_txn(txn)
-        return self
-
-    @overload
-    def where(self, expression: str, *params: Any) -> Self: ...
-
-    @overload
-    def where(self, expression: FilterExpression) -> Self: ...
-
-    def where(
-        self,
-        expression: Union[str, FilterExpression],
-        *params: Any,
-    ) -> Self:
-        """Set a filter expression on the current write segment.
-
-        Args:
-            expression: AEL string or pre-built FilterExpression.
-            *params: Values for printf placeholders in an AEL template. See
-                :meth:`QueryBuilder.where` for the interpolation contract.
-
-        Returns:
-            self for method chaining.
-        """
-        expression = bind_ael_params(expression, params)
-        if isinstance(expression, str):
-            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
-        else:
-            self._qb._filter_expression = expression
-        return self
+    _qb: _QB
 
     def expire_record_after_seconds(self, seconds: int) -> Self:
-        """Set the TTL on the current write segment.
+        """Set the TTL on the current operation.
 
         Args:
             seconds: Time-to-live in seconds. A positive value sets an explicit
@@ -450,7 +370,7 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
                 :meth:`with_no_change_in_expiration`, and
                 :meth:`expiry_from_server_default` for named equivalents). The
                 value is not range-checked here — one the client cannot
-                represent is rejected when the write is built.
+                represent is rejected when the operation is built.
 
         Returns:
             self for method chaining.
@@ -506,6 +426,111 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
     def expiry_from_server_default(self) -> Self:
         """Use the namespace's default TTL for this record (TTL = 0)."""
         self._qb._ttl_seconds = _TTL_SERVER_DEFAULT
+        return self
+
+
+class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
+    """State + chaining shared by async and sync write-segment builders.
+
+    Holds the wrapped query-builder reference (``_qb``) and the chaining
+    methods that mutate state on it. Concrete subclasses
+    (:class:`~aerospike_sdk.aio.operations.query.WriteSegmentBuilder` for
+    async, :class:`~aerospike_sdk.sync.operations.query.WriteSegmentBuilder`
+    for sync) add their respective ``execute()`` paths.
+
+    Subclasses inject their tier-appropriate :class:`WriteBinBuilder` class
+    via :attr:`_bin_builder_cls` (set at module load, after the concrete
+    class is defined). The base's :meth:`bin` reads through that hook so it
+    doesn't need a hard reference to a tier-specific module.
+    """
+
+    # Subclasses set this after class definition (concrete WriteBinBuilder
+    # is tier-neutral but lives in aio.operations.query, so we avoid the
+    # cross-tier reverse import).
+    _bin_builder_cls: ClassVar[type] = None  # type: ignore[assignment]
+    _ssael_flag: Optional[bool] = None
+
+    def __init__(self, qb: _QB) -> None:
+        self._qb: _QB = qb
+
+    def _resolve_ssael_flag(self) -> bool:
+        """Lazy snapshot of server-compiled AEL support for this segment's lifetime."""
+        flag = self._ssael_flag
+        if flag is None:
+            if self._qb is not None:
+                flag = self._qb._supports_server_compiled_ael
+            else:
+                client = getattr(self, "_sdk_client_fast", None)
+                flag = (
+                    bool(client.supports_server_compiled_ael)
+                    if client is not None
+                    else False
+                )
+            self._ssael_flag = flag
+        return flag
+
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        """Resolve AEL for bin expression read/write ops (server-compiled when supported)."""
+        is_ael = isinstance(expression, str)
+        qb = self._qb
+        sdk = qb._sdk_client if qb is not None else getattr(self, "_sdk_client_fast", None)
+        if sdk is not None and sdk._usage_on:
+            # Recorded here rather than batched with the call's other counters:
+            # operate expressions are resolved during chain construction, and
+            # the two technologies are only distinguishable at this point.
+            usage.record(
+                sdk, [usage.OPERATE_AEL if is_ael else usage.OPERATE_EXP],
+            )
+        if not is_ael:
+            return expression
+        return filter_expression_from_ael_string(
+            expression,
+            supports_server_compiled_ael=self._resolve_ssael_flag(),
+        )
+
+    def with_txn(self, txn: Optional[Txn]) -> Self:
+        """Opt this write into (or out of) a specific transaction.
+
+        Delegates to the underlying query builder.
+
+        Args:
+            txn: The :class:`~aerospike_async.Txn` to participate in, or
+                ``None`` to run without a transaction.
+
+        Returns:
+            This segment for chaining.
+        """
+        self._qb.with_txn(txn)
+        return self
+
+    @overload
+    def where(self, expression: str, *params: Any) -> Self: ...
+
+    @overload
+    def where(self, expression: FilterExpression) -> Self: ...
+
+    def where(
+        self,
+        expression: Union[str, FilterExpression],
+        *params: Any,
+    ) -> Self:
+        """Set a filter expression on the current write segment.
+
+        Args:
+            expression: AEL string or pre-built FilterExpression.
+            *params: Values for printf placeholders in an AEL template. See
+                :meth:`QueryBuilder.where` for the interpolation contract.
+
+        Returns:
+            self for method chaining.
+        """
+        expression = bind_ael_params(expression, params)
+        if isinstance(expression, str):
+            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
+        else:
+            self._qb._filter_expression = expression
         return self
 
     def ensure_generation_is(self, generation: int) -> Self:
@@ -817,6 +842,11 @@ class _WriteSegmentBuilderBase(Generic[_QB]):
 _FAST_WRITES_REQUIRING_KEY = frozenset({"update", "replace_if_exists"})
 
 
+# Server limit on bin-name length. Used only to explain a rejection the server
+# already made -- the SDK does not pre-validate against it.
+_MAX_BIN_NAME_LEN = 15
+
+
 class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     """Shared fast-path state + promote-delegate logic for single-key segments.
 
@@ -1030,11 +1060,36 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._promote()
         return super()._start_write_verb(op_type, arg1, *more_keys)
 
-    @staticmethod
+    def _bin_name_hint(self) -> Optional[str]:
+        """Name the bins whose names exceed the server's length limit.
+
+        The server rejects an over-long bin name without saying which bin it
+        was, and by then the name is only reachable through the operations this
+        segment built. Called on the error path only.
+        """
+        offenders = sorted({
+            name for name in (getattr(op, "bin_name", None) for op in self._ops)
+            if name is not None and len(name) > _MAX_BIN_NAME_LEN
+        })
+        if not offenders:
+            return None
+        listed = ", ".join(repr(name) for name in offenders)
+        plural = "s" if len(offenders) > 1 else ""
+        return (
+            f"Bin name{plural} {listed} exceed"
+            f"{'' if len(offenders) > 1 else 's'} the server's "
+            f"{_MAX_BIN_NAME_LEN}-character limit."
+        )
+
     def _handle_fast_error(
-        exc: Exception, op_type: str,
+        self, exc: Exception, op_type: str,
     ) -> RecordStream:
-        pfc_exc = _convert_pac_exception(exc)
+        hint = (
+            self._bin_name_hint()
+            if getattr(exc, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
+            else None
+        )
+        pfc_exc = _convert_pac_exception(exc, hint=hint)
         rc = pfc_exc.result_code or ResultCode.OK
         _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:
@@ -1044,14 +1099,31 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             raise pfc_exc from exc
         return RecordStream._from_list([])
 
-    def _get_write_policy(self) -> WritePolicy:
-        wp = self._write_policy
-        if wp is None and self._behavior_fast is not None:
-            wp = self._apply_txn(to_write_policy(
+    def _get_write_policy(self, mode: Mode = Mode.AP) -> WritePolicy:
+        """Resolve the point-write policy for *mode*, caching per mode.
+
+        ``Behavior.get_settings`` defaults to ``Mode.AP``, so resolving without
+        a mode gives an SC namespace the ``WRITES_AP`` scope: no
+        ``durable_delete`` default, and ``commit_level=COMMIT_ALL``. The server
+        then refuses a non-durable delete on SC outright, so the omission is
+        not merely a wrong default -- it fails the operation.
+
+        Reached only when the caller has no cached policy for the mode, which
+        in practice means a txn-bound segment: binding a transaction nulls both
+        cached policies to force fresh derivation.
+        """
+        cached = self._write_policy_sc if mode == Mode.SC else self._write_policy
+        if cached is None and self._behavior_fast is not None:
+            cached = self._apply_txn(to_write_policy(
                 self._behavior_fast.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT)))
-            self._write_policy = wp
-        return self._apply_txn(wp or WritePolicy())
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode)))
+            # Cache into the slot for this mode; writing an SC-resolved policy
+            # into the AP slot would hand AP callers SC settings.
+            if mode == Mode.SC:
+                self._write_policy_sc = cached
+            else:
+                self._write_policy = cached
+        return self._apply_txn(cached or WritePolicy())
 
     def _execute_blocking_fast_path(
         self,

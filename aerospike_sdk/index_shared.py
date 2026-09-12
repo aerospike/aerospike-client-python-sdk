@@ -24,9 +24,9 @@ context) and the chaining methods — no I/O. Terminal ``create()`` /
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import (
     CTX,
@@ -35,13 +35,15 @@ from aerospike_async import (
     IndexType,
 )
 
+from aerospike_sdk.server_filter import filter_expression_from_ael_string
+
 
 class _IndexBuilderBase:
     """State + chaining shared by the async and sync index builders."""
 
     # Class-level default: only expression-based builders ever assign it,
     # so bin-based chains skip the per-instance write entirely.
-    _expression: Optional[FilterExpression] = None
+    _expression: Optional[Union[str, FilterExpression]] = None
 
     def __init__(
         self,
@@ -73,7 +75,7 @@ class _IndexBuilderBase:
         self._bin_name = bin_name
         return self
 
-    def on_expression(self, expression: FilterExpression) -> Self:
+    def on_expression(self, expression: Union[str, FilterExpression]) -> Self:
         """Index the value an expression computes per record, instead of a bin.
 
         The expression is evaluated server-side for every record in the set;
@@ -81,7 +83,13 @@ class _IndexBuilderBase:
         must match the index type set via :meth:`numeric`, :meth:`string`,
         or :meth:`geo2dsphere` — a boolean predicate is rejected by the
         server, so build a value-producing expression (e.g. via
-        ``FilterExpression.cond``). Requires server 8.1.2 or newer.
+        ``FilterExpression.cond``).
+
+        An AEL string may be passed instead of a prebuilt expression; the
+        server parses and compiles it when the index is created, so the
+        cluster must support server-compiled AEL (server 8.2.0 or newer on
+        every node) or :meth:`create` raises with result code
+        ``OP_NOT_APPLICABLE``.
 
         Mutually exclusive with :meth:`on_bin` — an index covers either a
         bin or an expression, never both. Not combinable with
@@ -90,12 +98,14 @@ class _IndexBuilderBase:
 
         Args:
             expression: A prebuilt ``FilterExpression`` whose result is the
-                value to index.
+                value to index, or an AEL string for the server to compile.
 
         Returns:
             ``self`` for method chaining.
 
         Raises:
+            TypeError: If *expression* is neither an AEL string nor a
+                ``FilterExpression``.
             ValueError: If :meth:`on_bin` was already called on this builder.
 
         Example::
@@ -115,9 +125,23 @@ class _IndexBuilderBase:
                 .create()
             )
 
+            # Or let the server compile an AEL string (server 8.2.0+):
+            await (
+                client.index("test", "users")
+                .on_expression("$.age + 1")
+                .named("users_age_ael_idx")
+                .numeric()
+                .create()
+            )
+
         See Also:
             :meth:`on_bin`: Index a plain bin value.
         """
+        if not isinstance(expression, (str, FilterExpression)):
+            raise TypeError(
+                "expression must be an AEL string or a FilterExpression, got "
+                f"{type(expression).__name__}",
+            )
         if self._bin_name is not None:
             raise ValueError(
                 "on_bin() and on_expression() are mutually exclusive; "
@@ -126,13 +150,18 @@ class _IndexBuilderBase:
         self._expression = expression
         return self
 
-    def _validate_expression_create(self) -> tuple[str, IndexType, FilterExpression]:
+    def _validate_expression_create(
+        self, sdk_client,
+    ) -> tuple[str, IndexType, FilterExpression]:
         """Validate chain state for an expression-based ``create()``.
 
         Shared by the async and sync leaf terminals so the two runtimes
         cannot drift on what a valid expression-index chain looks like.
         Returns the narrowed ``(index_name, index_type, expression)``
-        triple the terminals hand to the client.
+        triple the terminals hand to the client. An AEL string set via
+        :meth:`on_expression` is resolved here to its server-compiled
+        wire form, reading *sdk_client*'s capability gate only on the
+        string path so prebuilt-expression chains never pay for it.
         """
         if self._bin_name:
             raise ValueError(
@@ -151,8 +180,14 @@ class _IndexBuilderBase:
                 "index_type is required. "
                 "Call numeric(), string(), blob(), or geo2dsphere() first.",
             )
-        assert self._expression is not None
-        return self._index_name, self._index_type, self._expression
+        expression = self._expression
+        assert expression is not None
+        if isinstance(expression, str):
+            expression = filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=sdk_client.supports_server_compiled_ael,
+            )
+        return self._index_name, self._index_type, expression
 
     def named(self, index_name: str) -> Self:
         """Set the secondary index name the cluster stores (required for create and drop).

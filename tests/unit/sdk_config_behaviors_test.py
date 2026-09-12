@@ -30,32 +30,33 @@ from aerospike_sdk.sync.session import SyncSession
 _FULL = """
 behaviors:
   high-performance:
-    allOperations:
-      abandonCallAfter: 1s
-      waitForCallToComplete: 3s
-      maximumNumberOfCallAttempts: 2
-      delayBetweenRetries: 25ms
-      replicaOrder: SEQUENCE
-      sendKey: false
-      useCompression: false
-      resetTtlOnReadAtPercent: 50
-    retryableWrites:
-      useDurableDelete: false
-      maximumNumberOfCallAttempts: 3
-    nonRetryableWrites:
-      maximumNumberOfCallAttempts: 1
-    consistencyModeReads:
-      readConsistency: LINEARIZE
-    availabilityModeReads:
-      migrationReadConsistency: ONE
-    batchReads:
-      maxConcurrentServers: 8
-      allowInlineMemoryAccess: true
-      allowInlineSsdAccess: false
-    batchWrites:
-      maxConcurrentServers: 6
+    all_operations:
+      abandon_call_after: 1s
+      wait_for_call_to_complete: 3s
+      maximum_number_of_call_attempts: 2
+      delay_between_retries: 25ms
+      replica_order: SEQUENCE
+      send_key: false
+      use_compression: false
+      reset_ttl_on_read_at_percent: 50
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 3
+    non_retryable_writes:
+      maximum_number_of_call_attempts: 1
+    consistency_mode_reads:
+      read_consistency: LINEARIZE
+    availability_mode_reads:
+      migration_read_consistency: ONE
+    batch_reads:
+      max_concurrent_servers: 8
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: false
+    batch_writes:
+      max_concurrent_servers: 6
     query:
-      recordQueueSize: 5000
+      record_queue_size: 5000
+      allow_scans_with_where: true
 """
 
 
@@ -112,35 +113,36 @@ class TestParseBehaviors:
         assert spec.patches[Scope.READS_BATCH].allow_inline_ssd is False
         assert spec.patches[Scope.WRITES_BATCH].max_concurrent_nodes == 6
         assert spec.patches[Scope.READS_QUERY].record_queue_size == 5000
+        assert spec.patches[Scope.READS_QUERY].allow_scans_with_where is True
 
     def test_parent_captured(self):
         specs = loader.parse_behaviors(
             "behaviors:\n  child:\n    parent: high-performance\n"
-            "    query:\n      recordQueueSize: 100\n"
+            "    query:\n      record_queue_size: 100\n"
         )
         assert specs["child"].parent == "high-performance"
 
     def test_unsupported_block_ignored(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    systemTxnVerify:\n      abandonCallAfter: 2s\n"
-            "    query:\n      recordQueueSize: 9\n"
+            "behaviors:\n  b:\n    systemTxnVerify:\n      abandon_call_after: 2s\n"
+            "    query:\n      record_queue_size: 9\n"
         )
         assert set(specs["b"].patches) == {Scope.READS_QUERY}
 
     def test_unmapped_field_ignored(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    allOperations:\n"
+            "behaviors:\n  b:\n    all_operations:\n"
             "      waitForConnectionToComplete: 500ms\n"
-            "      abandonCallAfter: 2s\n"
+            "      abandon_call_after: 2s\n"
         )
         all_scope = specs["b"].patches[Scope.ALL]
         assert all_scope.total_timeout == timedelta(seconds=2)
 
     def test_bad_enum_value_skipped_rest_applies(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    allOperations:\n"
-            "      replicaOrder: NOT_A_REPLICA\n"
-            "      sendKey: true\n"
+            "behaviors:\n  b:\n    all_operations:\n"
+            "      replica_order: NOT_A_REPLICA\n"
+            "      send_key: true\n"
         )
         all_scope = specs["b"].patches[Scope.ALL]
         assert all_scope.replica is None
@@ -148,8 +150,8 @@ class TestParseBehaviors:
 
     def test_attempts_below_one_skipped(self):
         specs = loader.parse_behaviors(
-            "behaviors:\n  b:\n    allOperations:\n"
-            "      maximumNumberOfCallAttempts: 0\n      sendKey: true\n"
+            "behaviors:\n  b:\n    all_operations:\n"
+            "      maximum_number_of_call_attempts: 0\n      send_key: true\n"
         )
         all_scope = specs["b"].patches[Scope.ALL]
         assert all_scope.max_retries is None
@@ -171,11 +173,22 @@ class TestApplyBehaviors:
         assert settings.max_retries == 2
         assert settings.total_timeout == timedelta(seconds=1)
 
+    def test_query_scan_permission_resolves_from_config(self):
+        """Config can lift the strict primary-index-fallback default."""
+        loader.apply_behaviors(loader.parse_behaviors(_FULL))
+        registered = behavior_registry.get_behavior("high-performance")
+        resolved = registered.get_settings(OpKind.READ, OpShape.QUERY, Mode.AP)
+        assert resolved.allow_scans_with_where is True
+        # The shipped default stays strict; only the configured behavior differs.
+        assert Behavior.DEFAULT.get_settings(
+            OpKind.READ, OpShape.QUERY, Mode.AP,
+        ).allow_scans_with_where is False
+
     def test_forward_declared_parent_resolves(self):
         specs = loader.parse_behaviors(
             "behaviors:\n"
-            "  child:\n    parent: base\n    query:\n      recordQueueSize: 111\n"
-            "  base:\n    allOperations:\n      abandonCallAfter: 7s\n"
+            "  child:\n    parent: base\n    query:\n      record_queue_size: 111\n"
+            "  base:\n    all_operations:\n      abandon_call_after: 7s\n"
         )
         loader.apply_behaviors(specs)
         child = behavior_registry.get_behavior("child")
@@ -187,7 +200,7 @@ class TestApplyBehaviors:
     def test_unknown_parent_falls_back_to_default(self):
         loader.apply_behaviors(loader.parse_behaviors(
             "behaviors:\n  b:\n    parent: no-such-behavior\n"
-            "    query:\n      recordQueueSize: 5\n"
+            "    query:\n      record_queue_size: 5\n"
         ))
         assert behavior_registry.get_behavior("b").parent is Behavior.DEFAULT
 
@@ -196,7 +209,7 @@ class TestApplyBehaviors:
         parent = behavior_registry.get_behavior("high-performance")
         child = parent.derive_with_changes("hp-child")
         loader.apply_behaviors(loader.parse_behaviors(
-            _FULL.replace("abandonCallAfter: 1s", "abandonCallAfter: 9s")
+            _FULL.replace("abandon_call_after: 1s", "abandon_call_after: 9s")
         ))
         assert behavior_registry.get_behavior("high-performance") is parent
         assert parent.get_settings(
@@ -207,14 +220,14 @@ class TestApplyBehaviors:
     def test_parent_change_replaces_registration(self):
         loader.apply_behaviors(loader.parse_behaviors(
             "behaviors:\n"
-            "  base:\n    allOperations:\n      abandonCallAfter: 7s\n"
-            "  b:\n    query:\n      recordQueueSize: 5\n"
+            "  base:\n    all_operations:\n      abandon_call_after: 7s\n"
+            "  b:\n    query:\n      record_queue_size: 5\n"
         ))
         original = behavior_registry.get_behavior("b")
         loader.apply_behaviors(loader.parse_behaviors(
             "behaviors:\n"
-            "  base:\n    allOperations:\n      abandonCallAfter: 7s\n"
-            "  b:\n    parent: base\n    query:\n      recordQueueSize: 5\n"
+            "  base:\n    all_operations:\n      abandon_call_after: 7s\n"
+            "  b:\n    parent: base\n    query:\n      record_queue_size: 5\n"
         ))
         replacement = behavior_registry.get_behavior("b")
         assert replacement is not original
@@ -222,11 +235,12 @@ class TestApplyBehaviors:
 
     def test_default_entry_layers_on_factory_patches(self):
         loader.apply_behaviors(loader.parse_behaviors(
-            "behaviors:\n  DEFAULT:\n    allOperations:\n      abandonCallAfter: 42s\n"
+            "behaviors:\n  DEFAULT:\n    all_operations:\n      abandon_call_after: 42s\n"
         ))
         settings = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.POINT, Mode.AP)
         assert settings.total_timeout == timedelta(seconds=42)
-        assert settings.send_key is True
+        # The factory send_key default still shows through the YAML overlay.
+        assert settings.send_key is False
 
     def test_unchanged_spec_is_skipped(self):
         specs = loader.parse_behaviors(_FULL)
@@ -239,8 +253,8 @@ class TestApplyBehaviors:
     def test_parent_cycle_broken_with_warning(self):
         loader.apply_behaviors(loader.parse_behaviors(
             "behaviors:\n"
-            "  a:\n    parent: b\n    query:\n      recordQueueSize: 1\n"
-            "  b:\n    parent: a\n    query:\n      recordQueueSize: 2\n"
+            "  a:\n    parent: b\n    query:\n      record_queue_size: 1\n"
+            "  b:\n    parent: a\n    query:\n      record_queue_size: 2\n"
         ))
         assert behavior_registry.get_behavior("a") is not None
         assert behavior_registry.get_behavior("b") is not None
@@ -260,7 +274,7 @@ class TestSessionPush:
 
         loader.apply_behaviors(loader.parse_behaviors(
             _FULL.replace(
-                "maximumNumberOfCallAttempts: 2", "maximumNumberOfCallAttempts: 6",
+                "maximum_number_of_call_attempts: 2", "maximum_number_of_call_attempts: 6",
             )
         ))
         assert session._cached_read_policy.max_retries == 5
@@ -273,7 +287,7 @@ class TestSessionPush:
         assert session._cached_read_policy.total_timeout == 1_000
 
         loader.apply_behaviors(loader.parse_behaviors(
-            _FULL.replace("abandonCallAfter: 1s", "abandonCallAfter: 9s")
+            _FULL.replace("abandon_call_after: 1s", "abandon_call_after: 9s")
         ))
         assert session._cached_read_policy.total_timeout == 9_000
 

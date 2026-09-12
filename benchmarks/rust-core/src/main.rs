@@ -51,10 +51,10 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
-    // Max connections per node. Default 256 fails-fast on burst > capacity at
-    // high concurrency (see Phase 4b in the timer-churn plan). Lifting it tests
-    // whether a high-concurrency cell is pool-bound vs cluster-bound, without
-    // adding throttling.
+    // Max connections per node. The core default is 100 and fails fast once a
+    // burst exceeds it, so a high-concurrency cell can be pool-bound long
+    // before the cluster is. Lifting it separates pool-bound from cluster-bound
+    // without adding throttling.
     if let Some(n) = env::var("MAX_CONNS_PER_NODE").ok().and_then(|v| v.parse().ok()) {
         policy.max_conns_per_node = n;
     }

@@ -40,7 +40,11 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.session import SyncSession
 
-from ._env import client_policy_from_config, cluster_def_from_config
+from ._env import (
+    client_policy_from_config,
+    cluster_def_from_config,
+    maybe_enable_metrics,
+)
 from .config import WorkloadConfig, WorkloadKind
 from .record_spec import (
     BinField,
@@ -983,6 +987,7 @@ async def run_async(
     bench_state = _BenchState()
     policy = client_policy_from_config(cfg)
     async with Client(cfg.seeds, policy=policy) as client:
+        maybe_enable_metrics(client, cfg)
         # Run the self-test BEFORE signalling `connected` so a failed
         # self-test propagates as `sync_error`/`async_error` to the bench
         # main and aborts the run. If we set `connected` first, the main
@@ -1079,6 +1084,7 @@ async def run_async_many(
     set_str = cfg.set_name
     key_from_int = Key.from_int_user_key
     async with Client(cfg.seeds, policy=policy) as client:
+        maybe_enable_metrics(client, cfg)
         session = client.create_session(Behavior.DEFAULT)
         dataset = DataSet.of(cfg.namespace, cfg.set_name)
         # Fail the self-test BEFORE signalling `connected` (see run_async).
@@ -1173,22 +1179,13 @@ async def run_async_pool(
         await stop.wait()
         thread_stop.set()
 
-    # Definition-based pool contract. ``seed_only_cluster`` has no
-    # ClusterDefinition surface, so that config falls back to the deprecated
-    # factory shape (whose callbacks receive raw Clients — the worker below
-    # only calls ``create_session``, which both member types expose).
-    cluster_def = cluster_def_from_config(cfg)
-    if cluster_def is not None:
-        pool = AsyncPool(cluster_def, loop_count=n_loops)
-    else:
-        policy = client_policy_from_config(cfg)
-
-        def factory() -> Client:
-            return Client(cfg.seeds, policy=policy)
-
-        pool = AsyncPool(client_factory=factory, loop_count=n_loops)
+    # Definition-based pool contract, for every config the bench accepts.
+    pool = AsyncPool(cluster_def_from_config(cfg), loop_count=n_loops)
 
     async with pool:
+        # Each pool member is its own client, so collection is enabled per member.
+        for _member in pool._members:
+            maybe_enable_metrics(_member, cfg)
         dataset_for_self_test = DataSet.of(cfg.namespace, cfg.set_name)
 
         async def _do_self_test(member) -> None:
@@ -1306,6 +1303,7 @@ def run_sync(
         cfg.seeds, policy=policy,
         current_thread_runtime=ct_runtime,
     ) as shared_client:
+        maybe_enable_metrics(shared_client, cfg)
         shared_session = shared_client.create_session(Behavior.DEFAULT)
         # Self-test BEFORE `connected.set()` so a self-test failure
         # aborts the bench. See run_async comment.

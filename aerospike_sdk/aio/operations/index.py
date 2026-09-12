@@ -22,10 +22,15 @@ the async ``create()`` / ``drop()`` dispatchers.
 
 from __future__ import annotations
 
-from aerospike_async import Client
+from typing import TYPE_CHECKING
+
+from aerospike_async import DropIndexTask, IndexTask
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
+
+if TYPE_CHECKING:
+    from aerospike_sdk.aio.client import Client
 
 # Re-exported for callers that historically imported the base from this
 # module (the shared definition now lives in index_shared).
@@ -38,7 +43,7 @@ class IndexBuilder(_IndexBuilderBase):
     Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
     :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
     :meth:`context` → ``await`` :meth:`create`. Expression-based indexes
-    (server 8.1.2+) replace :meth:`on_bin` with :meth:`on_expression`.
+    replace :meth:`on_bin` with :meth:`on_expression`.
 
     For removal, only :meth:`named` (and namespace/set from construction) is
     required before ``await`` :meth:`drop`.
@@ -65,25 +70,36 @@ class IndexBuilder(_IndexBuilderBase):
     ) -> None:
         """
         Args:
-            client: Connected async cluster client used for admin calls.
+            client: Connected SDK client; admin calls dispatch through its
+                underlying PAC client, and AEL-string chains read its
+                server-capability gate.
             namespace: Namespace containing the set to index.
             set_name: Set name within the namespace.
         """
         super().__init__(namespace, set_name)
         self._client = client
 
-    async def create(self) -> None:
+    async def create(self) -> IndexTask:
         """Create the index on the cluster.
+
+        The server builds the index asynchronously, so the returned task is how
+        you know when it is usable: a query through an index that is still
+        building can miss records that are already written.
 
         Example::
 
-            await (
+            task = await (
                 client.index(namespace="test", set_name="users")
                 .on_bin("email")
                 .named("email_idx")
                 .string()
                 .create()
             )
+            await task.wait_till_complete()
+
+        Returns:
+            An ``IndexTask`` tracking the server-side build. Await
+            ``wait_till_complete()`` before querying through the index.
 
         Raises:
             ValueError: If ``on_bin`` (or ``on_expression``), ``named``, or
@@ -96,9 +112,11 @@ class IndexBuilder(_IndexBuilderBase):
             :meth:`drop`
         """
         if self._expression is not None:
-            index_name, index_type, expression = self._validate_expression_create()
+            index_name, index_type, expression = self._validate_expression_create(
+                self._client,
+            )
             try:
-                await self._client.create_index_using_expression(
+                return await self._client._async_client.create_index_using_expression(
                     self._namespace,
                     self._set_name,
                     index_name,
@@ -108,7 +126,6 @@ class IndexBuilder(_IndexBuilderBase):
                 )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
-            return
         if not self._bin_name:
             raise ValueError("bin_name is required. Call on_bin() first.")
         if not self._index_name:
@@ -119,7 +136,7 @@ class IndexBuilder(_IndexBuilderBase):
                 "Call numeric(), string(), blob(), or geo2dsphere() first.")
 
         try:
-            await self._client.create_index(
+            return await self._client._async_client.create_index(
                 self._namespace,
                 self._set_name,
                 self._bin_name,
@@ -131,16 +148,20 @@ class IndexBuilder(_IndexBuilderBase):
         except Exception as e:
             raise _convert_pac_exception(e) from e
 
-    async def drop(self) -> None:
+    async def drop(self) -> DropIndexTask:
         """Drop a previously created index by name.
 
         Example::
 
-            await (
+            task = await (
                 client.index(namespace="test", set_name="users")
                 .named("email_idx")
                 .drop()
             )
+            await task.wait_till_complete()
+
+        Returns:
+            A ``DropIndexTask`` tracking the server-side removal.
 
         Raises:
             ValueError: If :meth:`named` was not called.
@@ -154,6 +175,7 @@ class IndexBuilder(_IndexBuilderBase):
             raise ValueError("index_name is required. Call named() first.")
 
         try:
-            await self._client.drop_index(self._namespace, self._set_name, self._index_name)
+            return await self._client._async_client.drop_index(
+                self._namespace, self._set_name, self._index_name)
         except Exception as e:
             raise _convert_pac_exception(e) from e

@@ -344,3 +344,55 @@ def test_query_with_filter_expression_and(session):
 
     stream.close()
     assert count > 0
+
+
+class TestSingleRecordTerminals:
+    """Sync twin: ``first`` / ``first_or_raise`` on the builder."""
+
+    def test_first_or_raise_matches_the_stream_form(self, session):
+        ds = DataSet.of(general_namespace(), "query_test")
+        via_stream = session.query(ds.id(0)).execute().first_or_raise().record_or_raise()
+        via_builder = session.query(ds.id(0)).first_or_raise().record_or_raise()
+        assert via_builder.bins == via_stream.bins
+
+    def test_first_returns_none_when_nothing_matches(self, session):
+        ds = DataSet.of(general_namespace(), "query_test")
+        assert session.query(ds.id("no_such_key_xyz")).first() is None
+
+    def test_first_or_raise_raises_when_nothing_matches(self, session):
+        """The sync stream signals exhaustion with StopIteration, not its async twin."""
+        ds = DataSet.of(general_namespace(), "query_test")
+        with pytest.raises(StopIteration):
+            session.query(ds.id("no_such_key_xyz")).first_or_raise()
+
+    def test_result_envelope_is_preserved(self, session):
+        from aerospike_sdk.record_result import RecordResult
+
+        ds = DataSet.of(general_namespace(), "query_test")
+        result = session.query(ds.id(0)).first()
+        assert isinstance(result, RecordResult)
+        assert result.is_ok and result.record is not None
+
+    def test_stream_is_closed_by_the_terminal(self, session):
+        """Observed on the stream, and on a multi-key query.
+
+        A single-key stream closes itself once exhausted, so it cannot tell a
+        closing terminal from a non-closing one; only an unconsumed remainder
+        can.
+        """
+        ds = DataSet.of(general_namespace(), "query_test")
+        builder = session.query(ds.ids(0, 1, 2))
+        opened = []
+        real_execute = builder.execute
+
+        def spy(*args, **kwargs):
+            stream = real_execute(*args, **kwargs)
+            opened.append(stream)
+            return stream
+
+        builder.execute = spy
+        assert builder.first().is_ok
+        assert len(opened) == 1
+        assert opened[0]._closed, (
+            "first() left its stream open, with rows still unconsumed"
+        )

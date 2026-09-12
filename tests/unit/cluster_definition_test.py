@@ -399,3 +399,48 @@ class TestSyncConnectionPoolDefaults:
             .with_system_settings(SystemSettings(conn_pools_per_node=3))
         )
         assert seen["policy"].conn_pools_per_node == 3
+
+
+class TestRestrictingClusterToSeeds:
+    """Pinning the cluster view to the seeds, for VIP/proxy deployments."""
+
+    def test_defaults_to_discovery(self):
+        """Peer discovery is the normal mode; restricting is opt-in."""
+        assert ClusterDefinition("localhost", 3000)._get_policy().seed_only_cluster is False
+
+    def test_enabled_reaches_the_client_policy(self):
+        """Storing it on the builder is not enough; it has to reach the policy."""
+        cd = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds()
+        assert cd._get_policy().seed_only_cluster is True
+
+    def test_can_be_turned_back_off(self):
+        cd = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds(False)
+        assert cd._get_policy().seed_only_cluster is False
+
+    def test_chains(self):
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_native_credentials("admin", "password")
+            .restricting_cluster_to_seeds()
+            .validate_cluster_name_is("my-cluster")
+        )
+        assert cd._get_policy().seed_only_cluster is True
+        assert cd._cluster_name == "my-cluster"
+
+    def test_independent_of_services_alternate(self):
+        """Different remedies for different topologies; neither implies the other.
+
+        Compared against a plain definition rather than against ``False``:
+        services-alternate defaults from ``AEROSPIKE_USE_SERVICES_ALTERNATE``,
+        so its absolute value depends on the environment while its
+        independence from this setting does not.
+        """
+        baseline = ClusterDefinition("localhost", 3000)._get_policy()
+
+        seeds_only = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds()
+        assert seeds_only._get_policy().use_services_alternate == (
+            baseline.use_services_alternate
+        )
+
+        alternate = ClusterDefinition("localhost", 3000).using_services_alternate()
+        assert alternate._get_policy().seed_only_cluster is False

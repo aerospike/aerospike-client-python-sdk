@@ -18,6 +18,17 @@ async def main():
         session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
+        # One-time setup: index the bin the filter below queries on. A
+        # .where() query no index can satisfy is rejected rather than run
+        # as a full-set scan.
+        await (
+            session.index(dataset=users)
+            .on_bin("age")
+            .named("users_age_idx")
+            .numeric()
+            .create()
+        )
+
         # Write
         await (
             session.upsert(users.id(1))
@@ -52,6 +63,10 @@ from aerospike_sdk.sync import ClusterDefinition
 with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
+
+    # One-time setup: index the bin the filter below queries on. A .where()
+    # query no index can satisfy is rejected rather than run as a full-set scan.
+    session.index(dataset=users).on_bin("age").named("users_age_idx").numeric().create()
 
     # Write
     session.upsert(users.id(1)).put({"name": "Alice", "age": 30}).execute()
@@ -100,11 +115,13 @@ pip install -e ".[dev]"
 :   Reads return a [`QueryBuilder`](api/query.md), writes return a [`WriteSegmentBuilder`](api/write-segment.md). Chain methods, then call `.execute()`.
 
 **Aerospike Expression Language (AEL)**
-:   Filter records with string expressions on server 8.1.3+ (`"$.age > 18 and $.status == 'active'"`), or use [`Exp`](api/exp.md) on older clusters. See the [AEL guide](guide/expression-ael.md).
+:   Filter records with string expressions on server 8.2.0+ (`"$.age > 18 and $.status == 'active'"`), or use [`Exp`](api/exp.md) on older clusters. See the [AEL guide](guide/expression-ael.md).
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+ (the SDK supports every CPython version under upstream
+  security support; the floor rises in minor releases as versions reach
+  end-of-life)
 - Aerospike Server 6.0+ (7.0+ for some features)
 - [aerospike-client-python-async](https://github.com/aerospike/aerospike-client-python-async)
 

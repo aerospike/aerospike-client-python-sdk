@@ -29,6 +29,7 @@ from aerospike_async import (
     CommitStatus,
     CTX,
     ErrorDetailVerbosity,
+    DropIndexTask,
     ExecuteTask,
     ExpressionTrace,
     ExpType,
@@ -44,12 +45,14 @@ from aerospike_async import (
     MapOrder,
     MapReturnType,
     MapWriteFlags,
+    SortedMap,
     ModifyFlags,
     Order,
     OrderByFlags,
     OrderByType,
     QueryDuration,
     RegexFlag,
+    IndexTask,
     RegisterTask,
     ResultCode,
     Sampler,
@@ -111,6 +114,14 @@ from aerospike_sdk.exceptions import (
     UdfError,
 )
 from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
+from aerospike_sdk.info_types import (
+    NamespaceDetail,
+    SetDetail,
+    Sindex,
+    SindexDetail,
+    StorageEngine,
+    StorageFileDetail,
+)
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.metrics import (
@@ -127,35 +138,6 @@ from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.sync import SyncTransactionalSession
 from aerospike_sdk.sync.record_stream import SyncRecordStream
 from aerospike_sdk.sync.session import SyncSession
-
-# Deprecated connection primitives, kept importable for one deprecation
-# cycle behind the module __getattr__ below. ClusterDefinition -> Cluster ->
-# Session is the supported entry.
-_DEPRECATED_ENTRY_POINTS = {
-    "Client": (
-        "aerospike_sdk.Client is deprecated; connect with "
-        "aerospike_sdk.ClusterDefinition(...).connect() instead"
-    ),
-    "SyncClient": (
-        "aerospike_sdk.SyncClient is deprecated; connect with "
-        "aerospike_sdk.sync.ClusterDefinition(...).connect() instead"
-    ),
-}
-
-
-def __getattr__(name: str):
-    if name in _DEPRECATED_ENTRY_POINTS:
-        import warnings
-
-        warnings.warn(_DEPRECATED_ENTRY_POINTS[name], DeprecationWarning, stacklevel=2)
-        if name == "Client":
-            from aerospike_sdk.aio.client import Client
-
-            return Client
-        from aerospike_sdk.sync.client import SyncClient
-
-        return SyncClient
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 try:
     from importlib.metadata import version as _meta_version
@@ -193,6 +175,7 @@ __all__ = [
     "ConnectionError",
     "CTX",
     "DataSet",
+    "NamespaceDetail",
     "DerivedHistogram",
     "ElementError",
     "ElementExistsError",
@@ -202,6 +185,7 @@ __all__ = [
     "ErrorHandler",
     "ErrorDetailVerbosity",
     "ErrorStrategy",
+    "DropIndexTask",
     "ExecuteTask",
     "Exp",
     "ExpressionTrace",
@@ -244,9 +228,15 @@ __all__ = [
     "RecordExistsError",
     "RecordNotFoundError",
     "RecordResult",
+    "SetDetail",
+    "Sindex",
+    "SindexDetail",
+    "StorageEngine",
+    "StorageFileDetail",
     "RecordStream",
     "RecordTooBigError",
     "RegexFlag",
+    "IndexTask",
     "RegisterTask",
     "ResultCode",
     "Sampler",
@@ -254,6 +244,7 @@ __all__ = [
     "SecondaryIndexError",
     "SecurityError",
     "SelectFlags",
+    "SortedMap",
     "SerializationError",
     "Session",
     "SpecialValue",

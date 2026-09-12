@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 import typing
+from datetime import timedelta
 from typing import (
     Any,
     Awaitable,
@@ -35,8 +36,9 @@ if TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
-from aerospike_async import Key, Record, ResultCode, Txn, UDFLang
+from aerospike_async import Key, Record, Txn, UDFLang
 
+from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
@@ -48,6 +50,7 @@ from aerospike_sdk.aio.operations.query import (
 )
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
     PacAerospikeError,
     PacServerError,
@@ -56,30 +59,12 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
-from aerospike_sdk.session_shared import NamespaceScStatus, SessionBase
-
-
-def _parse_namespace_info_body(body: str) -> tuple[bool, Optional[bool]]:
-    """Parse one ``namespace/<name>`` info response fragment.
-
-    Returns:
-        ``(exists, sc_opt)``. ``exists`` is false when ``type=unknown``.
-        ``sc_opt`` is set when a ``strong-consistency`` key is present.
-    """
-    exists = True
-    sc_opt: Optional[bool] = None
-    for pair in body.split(";"):
-        pair = pair.strip()
-        if "=" not in pair:
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key == "type" and value == "unknown":
-            exists = False
-        if key in ("strong-consistency", "strong_consistency"):
-            sc_opt = value.lower() in ("true", "1", "yes")
-    return exists, sc_opt
+from aerospike_sdk.metrics import usage
+from aerospike_sdk.session_shared import (
+    NamespaceScStatus,
+    SessionBase,
+    _namespace_sc_status,
+)
 
 
 # Gates for the transparent same-tick coalescer (on by default; PSDK_COALESCE=0
@@ -178,22 +163,12 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         cache = self._client._namespace_mode_cache
         if namespace in cache:
             return cache[namespace]
-        # Mirror the parsing logic used by `namespace_sc_status` but inline
-        # against PAC blocking — we avoid the indirection of reusing the
-        # async helper through a runner.
         pac = self._client._async_client
         is_sc = False
         try:
             result = pac.info_blocking(f"namespace/{namespace}")
-            for node_result in result.values():
-                if not node_result:
-                    continue
-                exists, sc_opt = _parse_namespace_info_body(node_result)
-                if not exists:
-                    is_sc = False
-                    break
-                if sc_opt is not None:
-                    is_sc = bool(sc_opt)
+            detail = NamespaceDetail.from_response(result, namespace)
+            is_sc = detail is not None and detail.strong_consistency
         except Exception:
             # Conservative default: treat as AP. The cache miss path is
             # rare (cache primes on first use); a transient info error
@@ -580,7 +555,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 .where("$.flag == 1")
                 .execute()
             )
-            await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+            await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         See Also:
             :meth:`execute_udf`: Foreground UDF on explicit keys.
@@ -1132,37 +1107,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         except Exception as e:
             raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
 
-        missing = False
-        sc_val: Optional[bool] = None
-        for node_result in result.values():
-            if not node_result:
-                continue
-            exists, sc_opt = _parse_namespace_info_body(node_result)
-            if not exists:
-                missing = True
-                break
-            if sc_opt is not None:
-                sc_val = sc_opt
-
-        if missing:
-            return NamespaceScStatus(
-                False,
-                f"Namespace {namespace!r} is not defined on this cluster "
-                "(info reports type=unknown). Create it or set "
-                "AEROSPIKE_SC_NAMESPACE to an existing SC namespace.",
-            )
-        if sc_val is True:
-            return NamespaceScStatus(True, "")
-        if sc_val is False:
-            return NamespaceScStatus(
-                False,
-                f"Namespace {namespace!r} exists but strong-consistency is false "
-                "(AP mode). Point AEROSPIKE_SC_NAMESPACE at a namespace with "
-                "strong-consistency enabled.",
-            )
-        return NamespaceScStatus(
-            False,
-            f"Namespace {namespace!r} info did not report strong-consistency; treating as non-SC.",
+        return _namespace_sc_status(
+            namespace, NamespaceDetail.from_response(result, namespace)
         )
 
     async def is_namespace_sc(self, namespace: str) -> bool:
@@ -1198,15 +1144,15 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         self,
         operation: typing.Callable[["TransactionalSession"], typing.Awaitable[typing.Any]],
         *,
-        max_attempts: int = 5,
-        sleep_between_retries: float = 0.0,
+        max_attempts: Optional[int] = None,
+        sleep_between_retries: Optional[Union[float, timedelta]] = None,
     ) -> typing.Any:
         """Run an async callable inside a retrying multi-record transaction.
 
         Creates a :class:`TransactionalSession`, invokes ``operation(tx)``
-        inside ``async with``, and retries the whole block when the server
-        signals a transient conflict (``MRT_BLOCKED``,
-        ``MRT_VERSION_MISMATCH``, or ``TXN_FAILED``). On any non-transient
+        inside ``async with``, and retries the whole block when the attempt
+        ends in a transient conflict (``MRT_BLOCKED`` or
+        ``MRT_VERSION_MISMATCH``) or in a failed commit. On any non-transient
         failure the transaction is aborted and the exception re-raised.
 
         Args:
@@ -1214,9 +1160,12 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 and performing zero or more operations on it. Its return
                 value is returned from :meth:`do_in_transaction`.
             max_attempts: Maximum total attempts (initial + retries). Must
-                be ``>= 1``. Defaults to ``5``.
-            sleep_between_retries: Optional seconds to ``await asyncio.sleep``
-                between retries. ``0`` (the default) retries immediately.
+                be ``>= 1``. Omit to use the cluster's
+                :class:`~aerospike_sdk.policy.system_settings.TransactionSettings`.
+            sleep_between_retries: How long to wait between retries, as
+                seconds or a :class:`datetime.timedelta`. Omit to use the
+                cluster's transaction settings; pass ``0`` to retry
+                immediately.
 
         Returns:
             Whatever ``operation`` returns on the successful attempt.
@@ -1240,37 +1189,30 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             :meth:`transaction`: Manual MRT lifecycle.
             :class:`TransactionalSession`
         """
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be >= 1")
+        attempts, sleep_seconds = resolve_retry_plan(
+            self._client._sdk_settings.transactions,
+            max_attempts,
+            sleep_between_retries,
+        )
 
         import asyncio
         from aerospike_sdk.exceptions import AerospikeError
 
         # Transient MRT conflicts that are safe to retry automatically.
-        retryable_codes = {
-            ResultCode.MRT_BLOCKED,
-            ResultCode.MRT_VERSION_MISMATCH,
-        }
-        # TXN_FAILED is a rolled-up code used when the MRT monitor reports
-        # that one or more ops failed — retrying is safe because we abort
-        # and start fresh on each attempt.
-        txn_failed = getattr(ResultCode, "TXN_FAILED", None)
-        if txn_failed is not None:
-            retryable_codes.add(txn_failed)
 
         last_exc: Optional[BaseException] = None
-        for attempt in range(max_attempts):
+        for attempt in range(attempts):
             try:
                 async with self.transaction() as tx_session:
                     return await operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
-                if exc.result_code not in retryable_codes:
+                if not is_retryable_txn_error(exc):
                     raise
-                if attempt + 1 >= max_attempts:
+                if attempt + 1 >= attempts:
                     raise
-                if sleep_between_retries > 0:
-                    await asyncio.sleep(sleep_between_retries)
+                if sleep_seconds > 0:
+                    await asyncio.sleep(sleep_seconds)
         # Unreachable — last iteration always raises — but keep mypy happy.
         assert last_exc is not None
         raise last_exc
@@ -1308,6 +1250,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         if self._client._client is None:
             raise RuntimeError("Client is not connected")
 
+        if self._client._usage_on:
+            usage.record(self._client, [usage.ADMIN_TRUNCATE])
         await self._client._client.truncate(dataset.namespace, dataset.set_name, before_nanos)
 
     def __repr__(self) -> str:

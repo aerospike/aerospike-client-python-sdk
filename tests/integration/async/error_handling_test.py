@@ -651,7 +651,7 @@ class TestOperateWithFilter:
         into the raised error (not visible at default verbosity).
         """
         if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+            pytest.skip("cluster does not supply extended error detail (server < 8.2.0)")
 
         behavior = Behavior(
             "error-handling-untyped-select-from",
@@ -813,15 +813,23 @@ class TestIdempotentOps:
         rr = await rs.first()
         assert rr is None
 
-    async def test_batch_delete_all_missing_returns_empty(self, session, ds):
-        """Batch delete where all keys are missing returns an empty stream."""
+    async def test_batch_delete_all_missing_reports_a_row_per_key(self, session, ds):
+        """Batch delete of missing keys reports not-found per key, not silence.
+
+        Deleting an absent key is idempotent, but the stream still accounts for
+        every key the caller named — a shorter stream would be indistinguishable
+        from success.
+        """
         k1 = ds.id("idm_bd_miss1")
         k2 = ds.id("idm_bd_miss2")
         await _cleanup(session, k1, k2)
 
         rs = await session.delete([k1, k2]).execute()
         results = await rs.collect()
-        assert len(results) == 0
+        assert len(results) == 2
+        assert all(
+            r.result_code == ResultCode.KEY_NOT_FOUND_ERROR for r in results
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -950,3 +958,24 @@ class TestTtlExpiry:
         assert rr2.record.bins["v"] == 1
 
         await _cleanup(session, k)
+
+class TestBinNameTooLongDiagnostic:
+    """The server rejects an over-long bin name without naming the bin."""
+
+    async def test_names_the_offending_bin(self, session, ds):
+        with pytest.raises(AerospikeError) as excinfo:
+            await session.upsert(ds.id("binname-1")).put(
+                {"ok": 1, "b" * 20: 2, "fine": 3}
+            ).execute()
+
+        err = excinfo.value
+        assert err.result_code == ResultCode.BIN_NAME_TOO_LONG
+        # The whole point: the caller learns which bin, not just that one is bad.
+        assert repr("b" * 20) in err.hint
+        assert "'ok'" not in err.hint
+        assert err.hint in str(err)
+
+    async def test_legal_bin_name_at_the_limit_is_accepted(self, session, ds):
+        # Guards the boundary the diagnostic reports: 15 is legal.
+        await session.upsert(ds.id("binname-2")).put({"a" * 15: 1}).execute()
+        await _cleanup(session, ds.id("binname-2"))

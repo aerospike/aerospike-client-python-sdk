@@ -38,11 +38,11 @@ async def cluster_with_udf(aerospike_host, make_cluster_definition):
     async with await make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
         reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
         yield c
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 

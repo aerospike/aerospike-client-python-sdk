@@ -46,15 +46,15 @@ async def cluster_with_udf(aerospike_host, make_cluster_definition):
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
         yield c
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
@@ -173,7 +173,7 @@ async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
         assert r.record is not None
 
 @requires_server_compiled_ael
-async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with_udf):
+async def test_batch_udf_reports_filtered_out_row_without_opt_in(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_rak_1")
     k2 = DS.id("batch_udf_rak_2")
@@ -181,7 +181,6 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
     await session.upsert(k1).put({"v": 5}).execute()
     await session.upsert(k2).put({"v": 20}).execute()
 
-    # Without include_missing_keys: filtered-out key is omitted
     stream = await (
         session.execute_udf(k1, k2)
         .function(MODULE, "writeBin")
@@ -190,11 +189,14 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
         .execute()
     )
     results = await stream.collect()
-    assert len(results) == 1
-    assert results[0].key == k1
-    assert results[0].is_ok
+    # A UDF apply is a write, so the filtered-out row reports its outcome even
+    # though include_missing_keys was never set.
+    assert len(results) == 2
+    assert next(r for r in results if r.key == k1).is_ok
+    assert next(
+        r for r in results if r.key == k2
+    ).result_code == ResultCode.FILTERED_OUT
 
-    # With include_missing_keys: filtered-out key appears in stream
     stream = await (
         session.execute_udf(k1, k2)
         .function(MODULE, "writeBin")
@@ -204,6 +206,7 @@ async def test_batch_udf_include_missing_keys_includes_filtered_out(cluster_with
         .execute()
     )
     results = await stream.collect()
+    # Opting in changes nothing for a write batch: same rows, same codes.
     assert len(results) == 2
     r1 = next(r for r in results if r.key == k1)
     r2 = next(r for r in results if r.key == k2)
@@ -446,13 +449,13 @@ async def test_list_udf(aerospike_host, make_cluster_definition):
             body = f.read()
         try:
             rm = await session.remove_udf(path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         assert not any(m["name"] == path for m in await session.list_udf())
 
         task = await session.register_udf(body, path, UDFLang.LUA)
-        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         mine = [m for m in await session.list_udf() if m["name"] == path]
         assert mine, "module not listed after register"
@@ -462,7 +465,7 @@ async def test_list_udf(aerospike_host, make_cluster_definition):
         assert set(entry) == {"name", "hash", "type"}
 
         rm = await session.remove_udf(path)
-        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         assert not any(m["name"] == path for m in await session.list_udf())
 
 
@@ -480,17 +483,17 @@ async def test_register_udf_from_resource(aerospike_host, make_cluster_definitio
         server_path = "psdk_resource_probe.lua"
         try:
             rm = await session.remove_udf(server_path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         task = await session.register_udf_from_resource(
             "psdk_udf_resource_pkg", "probe.lua", server_path)
-        assert await task.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
         assert any(m["name"] == server_path for m in await session.list_udf())
 
         rm = await session.remove_udf(server_path)
-        await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+        await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         assert not any(m["name"] == server_path for m in await session.list_udf())
 
 
@@ -511,18 +514,18 @@ async def test_udf_admin_reachable_via_cluster_and_session(aerospike_host):
     try:
         try:
             rm = await cluster.remove_udf(path)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
         reg = await cluster.register_udf(body, path, UDFLang.LUA)
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
 
         session = cluster.create_session()
         assert any(m["name"] == path for m in await session.list_udf())
 
         rm = await session.remove_udf(path)
-        assert await rm.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await rm.wait_till_complete(sleep_time=0.2, timeout=10.0)
         assert not any(m["name"] == path for m in await cluster.list_udf())
     finally:
         await cluster.close()
@@ -620,17 +623,17 @@ async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
         reg = await udf_session.register_udf_from_file(
             SLEEP_LUA_FILE, SLEEP_SERVER_PATH, UDFLang.LUA
         )
-        assert await reg.wait_till_complete(sleep_time=0.2, max_attempts=50)
+        assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
         yield c
         try:
             rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)
-            await rm.wait_till_complete(sleep_time=0.1, max_attempts=20)
+            await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
         except Exception:
             pass
 
@@ -700,3 +703,92 @@ async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
     assert err.sub_exceptions, "expected prior attempts in sub_exceptions"
     assert all(isinstance(s, TimeoutError) for s in err.sub_exceptions)
     assert all(isinstance(s, AerospikeError) for s in err.sub_exceptions)
+
+
+async def test_batch_udf_client_timeout_marks_rows_in_doubt(cluster_with_sleep_udf):
+    """A batch UDF client timeout marks every row in-doubt.
+
+    Batch sibling of the single-key in-doubt test above, with the same
+    deterministic shape: the client's 250ms socket timer races the 1000ms
+    server-side UDF sleep, and total_timeout stays 0 so no server deadline
+    can beat the client timer. The writes reached the wire, so every row's
+    outcome is unknown — the in-doubt condition. Batch errors embed
+    per-row rather than raising, so the assertions read the stream.
+    """
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "batch_udf_client_timeout",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=0,
+        ),
+    )
+    # Seed through a default session: the 250ms socket timer is scoped to
+    # the UDF race below, and a slow runner must not time out the setup.
+    seed_session = cluster_with_sleep_udf.create_session()
+    keys = [DS.id(f"budf_in_doubt_{i}") for i in range(8)]
+    for k in keys:
+        await seed_session.upsert(k).put({"bin": 0}).execute()
+
+    session = cluster_with_sleep_udf.create_session(behavior)
+
+    stream = await (
+        session.execute_udf(*keys)
+        .function(SLEEP_MODULE, "sleep")
+        .passing(1000)
+        .execute()
+    )
+    rows = await stream.collect()
+
+    assert len(rows) == len(keys)
+    assert all(not r.is_ok for r in rows)
+    assert all(r.result_code == ResultCode.TIMEOUT for r in rows)
+    assert all(r.in_doubt is True for r in rows)
+    assert all(isinstance(r.exception, TimeoutError) for r in rows)
+    assert all(r.exception.in_doubt is True for r in rows)
+    assert sorted(r.key.digest for r in rows) == sorted(k.digest for k in keys)
+
+
+class TestBatchApplyExpiration:
+    """``BatchUDFPolicy.expiration`` — a batch-apply TTL reaches the record.
+
+    The plain multi-key apply round-trip is covered by :func:`test_batch_udf`;
+    these add only the TTL dimension.
+    """
+
+    async def test_batch_apply_sets_record_ttl(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k1, k2 = DS.id("apply_ttl_1"), DS.id("apply_ttl_2")
+        await session.delete(k1).execute()
+        await session.delete(k2).execute()
+
+        stream = await (
+            session.execute_udf(k1, k2)
+            .function(MODULE, "writeBin").passing("mbin", 42)
+            .expire_record_after_seconds(300)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+
+        # The apply carried the requested TTL onto every row — not the
+        # namespace default. A generous band absorbs server-clock jitter.
+        for k in (k1, k2):
+            rec = (await (await session.query(k).execute()).first_or_raise()).record
+            assert 270 <= rec.ttl <= 305
+
+    async def test_batch_apply_never_expire(self, cluster_with_udf):
+        session = cluster_with_udf.create_session()
+        k = DS.id("apply_ttl_never")
+        await session.delete(k).execute()
+
+        stream = await (
+            session.execute_udf(k)
+            .function(MODULE, "writeBin").passing("mbin", 7)
+            .never_expire()
+            .execute()
+        )
+        assert all(rr.is_ok for rr in [rr async for rr in stream])
+        rec = (await (await session.query(k).execute()).first_or_raise()).record
+        # The never-expire sentinel round-trips: a non-expiring record reports
+        # no remaining TTL, distinct from the positive value above.
+        assert rec.ttl is None

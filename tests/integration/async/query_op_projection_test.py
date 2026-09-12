@@ -59,7 +59,7 @@ _MAP_BIN = "tqomapbin"
 _SIZE = 20
 
 
-async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
+async def _seed_qopproj_dataset(c, wait_for_set_visible):
     """Seed the 20-record dataset and SI used by both ``cluster`` fixtures."""
     session = c.create_session()
     ds = DataSet.of(_NS, _SET)
@@ -85,10 +85,14 @@ async def _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible):
     await wait_for_set_visible(session, _NS, _SET, _SIZE)
 
     try:
-        await session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
+        index_task = await (
+            session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
+        )
     except Exception:
-        pass
-    await wait_for_index(c, _NS, _SET, Filter.range(_BIN1, 1, _SIZE))
+        # Already present from an earlier run: its build is done, no task to await.
+        index_task = None
+    if index_task is not None:
+        await index_task.wait_till_complete()
 
 
 async def _drop_qopproj_index(c):
@@ -99,7 +103,7 @@ async def _drop_qopproj_index(c):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def cluster(aerospike_host, make_cluster_definition, wait_for_index, wait_for_set_visible):
+async def cluster(aerospike_host, make_cluster_definition, wait_for_set_visible):
     """Cluster + 20-record dataset on the broad-surface seed.
 
     Tests that exercise server-8.1.2-only ops projection should consume
@@ -107,14 +111,14 @@ async def cluster(aerospike_host, make_cluster_definition, wait_for_index, wait_
     skips cleanly unless that cluster is 8.1.2+.
     """
     async with await make_cluster_definition(aerospike_host).connect() as c:
-        await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
+        await _seed_qopproj_dataset(c, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
 
 
 @pytest.fixture(scope="module")
 async def cluster_812(
-    aerospike_host_812_required, make_cluster_definition, wait_for_index, wait_for_set_visible,
+    aerospike_host_812_required, make_cluster_definition, wait_for_set_visible,
 ):
     """Cluster + 20-record dataset on the default 8.1.2+ seed (function-scoped).
 
@@ -123,7 +127,7 @@ async def cluster_812(
     is 8.1.2+.
     """
     async with await make_cluster_definition(aerospike_host_812_required).connect() as c:
-        await _seed_qopproj_dataset(c, wait_for_index, wait_for_set_visible)
+        await _seed_qopproj_dataset(c, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
 

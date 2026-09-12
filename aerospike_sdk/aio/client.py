@@ -21,7 +21,7 @@ import logging
 import types
 import typing
 from importlib import resources
-from typing import Awaitable, Callable, Dict, List, Optional, Union, overload
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union, overload
 
 from aerospike_async import (
     AdminPolicy,
@@ -41,6 +41,8 @@ from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.index_list import parse_index_list
+from aerospike_sdk.metrics import apply_metrics_settings
+from aerospike_sdk.metrics.usage import UsageCounters
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
@@ -128,6 +130,14 @@ class Client(RoutingCapabilitiesMixin):
         # A frozen snapshot swapped wholesale by the config monitor, so the
         # operation path reads it lock-free.
         self._sdk_settings: SystemSettings = fill_hard_defaults(None)
+        # Feature-usage counters. The flag is read on every gated call
+        # site, so it is a plain attribute rather than a policy lookup.
+        self._usage_on: bool = False
+        self._usage_counters = UsageCounters()
+        # Set by the owning Cluster. Weak so the pair does not form a
+        # cycle; a reload needs the Cluster because collection, the
+        # export timer and the usage gate are all owned up there.
+        self._owner_cluster: Optional[Callable[[], Any]] = None
         self._sdk_config_monitor: Optional[AsyncSdkConfigMonitor] = None
         # Cluster-wide MRT capability (all nodes >= the MRT server version),
         # resolved lazily on the first implicit-transaction gate check and
@@ -161,12 +171,27 @@ class Client(RoutingCapabilitiesMixin):
             )
         return self._supports_mrt_cache
 
+    def _apply_sdk_settings(self, settings: SystemSettings) -> None:
+        """Adopt reloaded settings, applying the ones that act on a live client.
+
+        Most system settings are read at connect and cannot change on a running
+        client; metrics is the exception — the whole point of putting it in the
+        file is turning collection on without a restart.
+        """
+        self._sdk_settings = settings
+        cluster = self._owner_cluster() if self._owner_cluster is not None else None
+        if cluster is not None:
+            # Full re-apply: collection, the export timer and the usage gate.
+            cluster._apply_metrics_settings(settings.metrics)
+        else:
+            apply_metrics_settings(self.underlying_client, settings.metrics)
+
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""
         monitor = AsyncSdkConfigMonitor(
             source,
             self._sdk_settings,
-            lambda settings: setattr(self, "_sdk_settings", settings),
+            self._apply_sdk_settings,
         )
         monitor.start()
         self._sdk_config_monitor = monitor
@@ -578,7 +603,7 @@ class Client(RoutingCapabilitiesMixin):
             )
 
         return IndexBuilder(
-            client=self._async_client,
+            client=self,
             namespace=namespace,
             set_name=set_name,
         )
@@ -741,9 +766,9 @@ class Client(RoutingCapabilitiesMixin):
     ) -> RegisterTask:
         """Register a UDF from a Python package resource (``importlib.resources``).
 
-        The Pythonic analog of the Java client's classpath/resource registration —
-        for a module shipped as package data (e.g. a ``.lua`` bundled inside a
-        library). Reads the resource bytes and delegates to :meth:`register_udf`.
+        For a module shipped as package data — e.g. a ``.lua`` bundled inside a
+        library — rather than read from the filesystem. Reads the resource bytes
+        and delegates to :meth:`register_udf`.
 
         Args:
             package: Importable package holding the resource (e.g. ``"myapp.udfs"``).

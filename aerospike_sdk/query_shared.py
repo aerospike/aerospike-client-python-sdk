@@ -45,7 +45,9 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self, deprecated
+from typing import Self
+
+from typing_extensions import deprecated
 
 from aerospike_async import (
     BasePolicy,
@@ -64,6 +66,7 @@ from aerospike_async import (
     BitWriteFlags,
     CTX,
     Client,
+    CommitLevel,
     ExpOperation,
     ExpReadFlags,
     Filter,
@@ -156,8 +159,13 @@ from aerospike_sdk.exceptions import (
     _result_code_to_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_result import (
+    RecordResult,
+    batch_failure_records_to_results,
+    batch_records_to_results,
+)
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:
     # Leaf classes, referenced here only in annotations (safe circular
@@ -225,8 +233,11 @@ class QueryHint:
     plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
     mutually exclusive.
 
-    On clusters that support field ``44`` query selection (>= 8.1.3),
-    ``require_index`` and ``hard_hint`` set Tier-D WHERE flags on explain.
+    On clusters that support field ``44`` query selection (>= 8.2.0),
+    ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
+    explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
+    Behavior default (strict — primary-index fallback rejected), ``True``
+    allows the fallback for this query, ``False`` rejects it.
 
     .. deprecated:: alpha
         ``bin_name`` is a legacy opt-out that skips server-led selection in
@@ -253,7 +264,10 @@ class QueryHint:
         index_name: Soft index name hint (field ``21`` on explain).
         bin_name: Opt out of explain; send the AEL on field ``43``. Deprecated.
         query_duration: Override ``expected_duration`` on the query policy.
-        require_index: Explain flag — reject primary-index fallback.
+        allow_scans_with_where: Tri-state override for whether a where-clause
+            query may fall back to a primary-index scan. ``None`` (default)
+            inherits the Behavior; ``True`` allows the fallback, ``False``
+            rejects it (sets ``REQUIRE_INDEX`` on explain).
         hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
@@ -267,7 +281,7 @@ class QueryHint:
     index_name: Optional[str] = None
     bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
-    require_index: bool = False
+    allow_scans_with_where: Optional[bool] = None
     hard_hint: bool = False
 
     def __post_init__(self) -> None:
@@ -429,6 +443,12 @@ class _QueryBuilderBase:
     # whether any key in the batch lands in an SC namespace.
     _batch_namespace_modes: Optional[Dict[str, Mode]] = None
     _batch_any_sc: bool = False
+    # Feature-usage counters. `_usage_on` stays False unless the app enabled
+    # the usage group, which keeps every hook point on this path down to one
+    # attribute load. `_usage_features` accumulates across chained segments
+    # because finalizing a segment clears the state it was derived from.
+    _usage_on: bool = False
+    _usage_features: Optional[List[str]] = None
 
     def __init__(
         self,
@@ -512,6 +532,8 @@ class _QueryBuilderBase:
             and sdk_client.supports_query_selection
         ):
             self._supports_query_selection = True
+        if sdk_client is not None and sdk_client._usage_on:
+            self._usage_on = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -766,12 +788,9 @@ class _QueryBuilderBase:
         ignores the bin list. Subsequent calls replace the previous
         projection.
 
-        Server compatibility:
-            - Servers older than 8.1.2 accept only the basic ``get_bin`` /
-              ``get_header`` ops.
-            - Server 8.1.2+ also accepts CDT, expression, bit, and HLL
-              reads — for example
-              ``CdtOperation.select_values("bin", [...])``.
+        The server accepts basic ``get_bin`` / ``get_header`` ops as well as
+        CDT, expression, bit, and HLL reads — for example
+        ``CdtOperation.select_values("bin", [...])``.
 
         Args:
             *ops: One or more native ``aerospike_async`` read operations.
@@ -1464,6 +1483,64 @@ class _QueryBuilderBase:
         else:
             raise TypeError(f"requires a Key or List[Key], got {type(arg1).__name__}")
 
+    def _collect_segment_usage(self) -> None:
+        """Fold the current segment's feature counters into the pending set.
+
+        Called from the finalizers, which is the last point at which the
+        segment's filter/op/flag state is still readable — they clear it
+        immediately afterwards. Only reached while ``_usage_on``.
+        """
+        features = self._usage_features
+        if features is None:
+            features = self._usage_features = []
+        if self._where_ael is not None or self._default_where_ael is not None:
+            features.append(usage.FILTER_AEL)
+        elif (
+            self._filter_expression is not None
+            or self._default_filter_expression is not None
+        ):
+            features.append(usage.FILTER_EXP)
+        if self._durable_delete or self._durable_delete_command_default:
+            features.append(usage.WRITE_DURABLE_DELETE)
+        if self._udf_function is not None:
+            features.append(usage.UDF_RECORD)
+        if usage.has_cdt(self._operations):
+            features.append(usage.CDT)
+
+    def _usage_shape(self) -> str:
+        """Classify the finalized builder as a point, batch or query call.
+
+        Call after the specs are finalized. No keys means the call falls
+        through to the dataset/index query path.
+        """
+        specs = self._specs
+        if not specs:
+            return usage.SHAPE_QUERY
+        if len(specs) == 1 and len(specs[0].keys) == 1:
+            return usage.SHAPE_POINT
+        return usage.SHAPE_BATCH
+
+    def _flush_usage(self, execution_mode: str, shape: str) -> None:
+        """Send the accumulated feature set plus this call's mode and shape.
+
+        Only reached while ``_usage_on``. One crossing into the client core
+        per user API call, however many features it touched.
+        """
+        features = self._usage_features
+        if features is None:
+            features = [execution_mode, shape]
+        else:
+            features.append(execution_mode)
+            features.append(shape)
+            self._usage_features = None
+        if self._filter_records:
+            features.append(usage.FILTER_SECONDARY_INDEX)
+        if self._partition_filter is not None:
+            features.append(usage.QUERY_PARTITION_FILTER)
+        if self._txn is not None:
+            features.append(usage.TRANSACTION)
+        usage.record(self._sdk_client, features)
+
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
         if self._single_key is not None:
@@ -1472,6 +1549,8 @@ class _QueryBuilderBase:
             keys = self._keys
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
 
         # Inline the no-AEL fast path: this runs once per segment, and the
         # resolver chain is only needed when a string ``where()`` is pending.
@@ -1539,10 +1618,13 @@ class _QueryBuilderBase:
             keys = list(self._keys)
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
         filt = self._effective_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
         )
+        ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
         self._specs.append(_OperationSpec(
             keys=keys,
             operations=[],
@@ -1550,7 +1632,7 @@ class _QueryBuilderBase:
             filter_expression=filt,
             op_type="udf",
             generation=None,
-            ttl_seconds=None,
+            ttl_seconds=ttl,
             durable_delete=self._durable_delete,
             durable_delete_command_default=self._durable_delete_command_default,
             contains_record_delete_op=False,
@@ -1579,7 +1661,30 @@ class _QueryBuilderBase:
         # with other op types — folds into one mixed batch call where each UDF
         # row becomes a ``BatchUDFOp``, matching the single-round-trip behavior
         # of every other batch.
-        return len(self._specs) == 1 and self._specs[0].op_type == "udf"
+        if len(self._specs) == 1 and self._specs[0].op_type == "udf":
+            return True
+        return self._specs_overlap_on_a_key()
+
+    def _specs_overlap_on_a_key(self) -> bool:
+        """True when one key appears in more than one segment of the chain.
+
+        Batch sub-transactions against the same key are unordered server-side,
+        so folding such a chain into a single batch lets a segment race an
+        earlier one — a read of a key written earlier in the same chain can
+        miss its own write. Those chains run segment by segment instead;
+        non-overlapping chains keep the single-round-trip fold.
+        """
+        if len(self._specs) < 2:
+            return False
+        seen: set[tuple[str, str]] = set()
+        for spec in self._specs:
+            # Identity is namespace + digest: the digest already folds in the
+            # set name and user key.
+            spec_keys = {(key.namespace, key.digest) for key in spec.keys}
+            if seen & spec_keys:
+                return True
+            seen |= spec_keys
+        return False
 
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
@@ -1597,10 +1702,13 @@ class _QueryBuilderBase:
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             spec.filter_expression is not None
+            or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or eff
         )
         if not has_settings:
@@ -1608,6 +1716,10 @@ class _QueryBuilderBase:
         up = BatchUDFPolicy()
         if spec.filter_expression is not None:
             up.filter_expression = spec.filter_expression
+        if spec.ttl_seconds is not None:
+            up.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            up.commit_level = commit_level
         up.durable_delete = eff
         return up
 
@@ -1616,17 +1728,21 @@ class _QueryBuilderBase:
         result_code: ResultCode,
         respond_all_keys: bool,
         fail_on_filtered_out: bool,
+        has_write: bool = False,
     ) -> bool:
-        """Decide whether to include a result in the stream.
+        """Decide whether to include a per-key result in the stream.
 
-        Decides whether to include a per-key result in the stream.
+        A write row always reports its outcome: the caller named that key and
+        asked to change it, so omitting the row would report success by
+        omission. A read row stays opt-in — a missing key is an ordinary
+        outcome there, surfaced with ``include_missing_keys``.
         """
         if result_code == ResultCode.OK:
             return True
         if result_code == ResultCode.KEY_NOT_FOUND_ERROR:
-            return respond_all_keys
+            return has_write or respond_all_keys
         if result_code == ResultCode.FILTERED_OUT:
-            return fail_on_filtered_out or respond_all_keys
+            return has_write or fail_on_filtered_out or respond_all_keys
         return True
 
     def _filtered_batch_list(
@@ -1635,6 +1751,7 @@ class _QueryBuilderBase:
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
+        row_op_types: Optional[Sequence[Optional[str]]] = None,
     ) -> List[RecordResult]:
         """Filter batch records by disposition; return as a plain list.
 
@@ -1645,9 +1762,17 @@ class _QueryBuilderBase:
         skip the :class:`RecordStream` wrapping.
         """
         all_results = batch_records_to_results(list(batch_records))
+        # A folded chain carries one verb per row (rows follow segment order);
+        # a homogeneous batch shares a single verb across every row.
+        per_row = (
+            row_op_types
+            if row_op_types is not None and len(row_op_types) == len(all_results)
+            else None
+        )
         filtered: list[RecordResult] = []
-        for r in all_results:
-            if not r.is_ok and self._is_actionable(r.result_code, op_type):
+        for i, r in enumerate(all_results):
+            row_op = per_row[i] if per_row is not None else op_type
+            if not r.is_ok and self._is_actionable(r.result_code, row_op):
                 if disp is _ErrorDisposition.THROW:
                     raise _result_code_to_exception(r.result_code, str(r.result_code), r.in_doubt)
                 if disp is _ErrorDisposition.HANDLER and handler is not None:
@@ -1656,7 +1781,8 @@ class _QueryBuilderBase:
                     continue
 
             if not self._should_include_result(
-                r.result_code, self._respond_all_keys, self._fail_on_filtered_out
+                r.result_code, self._respond_all_keys, self._fail_on_filtered_out,
+                has_write=row_op is not None,
             ):
                 continue
 
@@ -1669,6 +1795,7 @@ class _QueryBuilderBase:
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
+        row_op_types: Optional[Sequence[Optional[str]]] = None,
     ) -> RecordStream:
         """Convert batch records to a filtered RecordStream.
 
@@ -1676,7 +1803,8 @@ class _QueryBuilderBase:
         that hand the result back to streaming code.
         """
         return RecordStream._from_list(
-            self._filtered_batch_list(batch_records, disp, handler, op_type),
+            self._filtered_batch_list(
+                batch_records, disp, handler, op_type, row_op_types),
         )
 
     def _is_actionable(self, rc: ResultCode, op_type: Optional[str]) -> bool:
@@ -1750,6 +1878,14 @@ class _QueryBuilderBase:
             for i, key in enumerate(keys):
                 handler(key, i, pfc_exc)
             return []
+
+        # A batch-wide failure carries the per-key outcomes the client
+        # already knows (answered rows keep their result; unanswered rows
+        # are stamped — TIMEOUT + in-doubt on client timeouts). Report
+        # those instead of fanning the aggregate onto every key.
+        records = getattr(exc, "records", None)
+        if records:
+            return batch_failure_records_to_results(records, pfc_exc)
 
         return [
             RecordResult(
@@ -1864,6 +2000,7 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -1871,6 +2008,7 @@ class _QueryBuilderBase:
             or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -1885,9 +2023,12 @@ class _QueryBuilderBase:
         if spec.filter_expression is not None:
             bwp.filter_expression = spec.filter_expression
         if spec.generation is not None:
+            bwp.generation_policy = GenerationPolicy.EXPECT_GEN_EQUAL
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            bwp.commit_level = commit_level
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp
@@ -1900,13 +2041,43 @@ class _QueryBuilderBase:
             return None
         return hint.index_name
 
+    def effective_allow_scans_with_where(self) -> bool:
+        """Resolve whether this query may fall back to a primary-index scan.
+
+        Applies the wire precedence: the query's hint wins when it sets
+        ``allow_scans_with_where``, otherwise the resolved Behavior query
+        setting, otherwise the strict default (reject the fallback).
+
+        Returns:
+            ``True`` if a where-clause query may fall back to a primary-index
+            (full-set) scan, ``False`` if it is rejected.
+
+        See Also:
+            :attr:`QueryHint.allow_scans_with_where`
+        """
+        return self._effective_allow_scans_with_where(self._query_hint)
+
+    def _effective_allow_scans_with_where(self, hint: Optional[QueryHint]) -> bool:
+        """Whether a where-clause query may fall back to a primary-index scan.
+
+        A per-query hint wins; otherwise the resolved Behavior query setting;
+        otherwise the strict default (``False`` — reject the fallback).
+        """
+        if hint is not None and hint.allow_scans_with_where is not None:
+            return hint.allow_scans_with_where
+        if self._behavior is not None:
+            resolved = self._behavior.get_settings(
+                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
+            ).allow_scans_with_where
+            if resolved is not None:
+                return resolved
+        return False
+
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
-        if hint is None:
-            return None
         flags = QueryWhereFlags.EXPLAIN
-        if hint.require_index:
+        if not self._effective_allow_scans_with_where(hint):
             flags |= QueryWhereFlags.REQUIRE_INDEX
-        if hint.hard_hint:
+        if hint is not None and hint.hard_hint:
             flags |= QueryWhereFlags.HARD_HINT
         if flags == QueryWhereFlags.EXPLAIN:
             return None
@@ -2254,6 +2425,8 @@ class _QueryBuilderBase:
         )
         if spec.filter_expression is not None:
             wp.filter_expression = spec.filter_expression
+        if spec.ttl_seconds is not None:
+            wp.expiration = _to_expiration(spec.ttl_seconds)
         return wp
 
     def _effective_point_durable_delete(
@@ -2292,6 +2465,26 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
+    def _batch_commit_level(self, mode: Optional[Mode] = None) -> Optional[CommitLevel]:
+        """Resolved commit level for a batch write row, or ``None`` to keep the default.
+
+        The behavior's commit level applies to batch writes exactly as it does
+        to point writes. Core's batch sub-policy default is already
+        ``COMMIT_ALL``, so a resolved ``COMMIT_ALL`` (or an unset SC value)
+        needs no explicit set — returning ``None`` lets the row keep the
+        zero-allocation no-policy fast path. Only a non-default level (e.g.
+        ``COMMIT_MASTER``) is threaded through.
+        """
+        if self._behavior is None:
+            return None
+        cl = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
+        ).commit_level
+        if cl is None or cl == CommitLevel.COMMIT_ALL:
+            return None
+        return cl
+
     def _make_batch_delete_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchDeletePolicy]:
@@ -2300,11 +2493,13 @@ class _QueryBuilderBase:
         *mode* scopes the durable-delete default to the row's namespace mode.
         """
         eff = self._batch_write_effective_dd(spec, mode)
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or eff
         )
         if not has_settings:
@@ -2313,7 +2508,10 @@ class _QueryBuilderBase:
         if spec.filter_expression is not None:
             bdp.filter_expression = spec.filter_expression
         if spec.generation is not None:
+            bdp.generation_policy = GenerationPolicy.EXPECT_GEN_EQUAL
             bdp.generation = spec.generation
+        if commit_level is not None:
+            bdp.commit_level = commit_level
         bdp.durable_delete = eff
         return bdp
 
@@ -2427,6 +2625,7 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
+        commit_level = self._batch_commit_level(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2434,6 +2633,7 @@ class _QueryBuilderBase:
             or spec.ttl_seconds is not None
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
+            or commit_level is not None
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2452,6 +2652,8 @@ class _QueryBuilderBase:
             bwp.generation = spec.generation
         if spec.ttl_seconds is not None:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
+        if commit_level is not None:
+            bwp.commit_level = commit_level
         if spec.contains_record_delete_op:
             bwp.durable_delete = eff
         return bwp
@@ -3916,7 +4118,55 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
-    # -- Server-side string operations (server 8.1.3+) ------------------------
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.2.0 or later. The decode direction is
+        :meth:`str_b64_decode`.
+
+        Example::
+
+            stream = await (
+                session.update(key)
+                .bin("payload").bit_b64_encode(0, 16)
+                .execute()
+            )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`QueryBinBuilder.bit_b64_encode`
+            :meth:`str_b64_decode`
+        """
+        return self._segment._add_op(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
+        )
+
+    # -- Server-side string operations (server 8.2.0+) ------------------------
     #
     # The ``str_*`` family wraps server-side string read/modify ops. Each
     # method registers a single op on the surrounding write segment and
@@ -4034,11 +4284,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         return self._segment._add_op(StringOperation.contains(self._bin, needle))
 
     def str_starts_with(self, prefix: str) -> WriteSegmentBuilder:
-        """Register a starts-with read: ``True`` iff this bin starts with ``prefix``."""
+        """Register a starts-with read: ``True`` iff this bin starts with ``prefix``.
+
+        Matching is Unicode canonical, not byte-exact: a prefix in a different
+        normalization form than the stored value still matches.
+        """
         return self._segment._add_op(StringOperation.starts_with(self._bin, prefix))
 
     def str_ends_with(self, suffix: str) -> WriteSegmentBuilder:
-        """Register an ends-with read: ``True`` iff this bin ends with ``suffix``."""
+        """Register an ends-with read: ``True`` iff this bin ends with ``suffix``.
+
+        Matching is Unicode canonical, not byte-exact: a suffix in a different
+        normalization form than the stored value still matches.
+        """
         return self._segment._add_op(StringOperation.ends_with(self._bin, suffix))
 
     def str_to_integer(self) -> WriteSegmentBuilder:
@@ -4235,18 +4493,24 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.prepend(self._bin, value, flags=int(flags)),
         )
 
-    def str_snip(self, start: int, end: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_snip(
+        self, start: int, end: int | None = None, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
         """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
 
+        When ``end`` is omitted, everything from ``start`` through the end of
+        the string is removed — ``str_snip(5)`` truncates ``"hello world"``
+        to ``"hello"``. Negative indexes count from the end of the string.
+
         Note:
-            ``end`` is REQUIRED. The server-side snip op cannot dispatch a
-            1-arg form. To remove the suffix from ``start`` to the bin's
-            end, pass the codepoint length explicitly (e.g. from a paired
-            :meth:`str_strlen` read).
+            ``flags`` require an explicit ``end``. The server reads the snip
+            arguments by position (``start``, ``end``, then flags), so the
+            truncate-to-end form is sent without a flags element.
 
         Args:
             start: Codepoint index where the removed range starts.
-            end: Exclusive end of the removed range.
+            end: Exclusive end of the removed range, or None to remove
+                through the end of the string.
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
@@ -4367,13 +4631,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.repeat(self._bin, count, flags=int(flags)),
         )
 
-    def str_to_string(self) -> WriteSegmentBuilder:
-        """Register a to-string read: convert a non-string bin to its string representation.
+    def read_as_string(self) -> WriteSegmentBuilder:
+        """Register a to-string read: convert any bin to its string representation.
 
-        Accepts ``int``, ``float``, ``string``, or ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server. Has no
-        ``flags`` argument and no CDT-context support (the wire op has no
-        payload to carry a CTX wrapper).
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int``,
+        ``float``, ``string``, or ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server. Has no ``flags``
+        argument and no CDT-context support (the wire op has no payload to
+        carry a CTX wrapper).
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
@@ -5263,7 +5530,50 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )  # type: ignore[union-attr]
         return self._parent
 
-    # -- Server-side string read operations (server 8.1.3+) -------------------
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> _T:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.2.0 or later. The decode direction is
+        :meth:`WriteBinBuilder.str_b64_decode`.
+
+        Example::
+            stream = await ( session.query(key).bin("payload").bit_b64_encode().execute() )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent query builder for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`WriteBinBuilder.bit_b64_encode`
+        """
+        self._parent.add_operation(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
+        )  # type: ignore[union-attr]
+        return self._parent
+
+    # -- Server-side string read operations (server 8.2.0+) -------------------
     #
     # See :class:`WriteBinBuilder` for the parallel write-side surface +
     # modify-op family. Only reads make sense on a query builder; users
@@ -5300,12 +5610,20 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         return self._parent
 
     def str_starts_with(self, prefix: str) -> _T:
-        """Read a bool: ``True`` iff this bin starts with ``prefix``."""
+        """Read a bool: ``True`` iff this bin starts with ``prefix``.
+
+        Matching is Unicode canonical, not byte-exact: a prefix in a different
+        normalization form than the stored value still matches.
+        """
         self._parent.add_operation(StringOperation.starts_with(self._bin, prefix))  # type: ignore[union-attr]
         return self._parent
 
     def str_ends_with(self, suffix: str) -> _T:
-        """Read a bool: ``True`` iff this bin ends with ``suffix``."""
+        """Read a bool: ``True`` iff this bin ends with ``suffix``.
+
+        Matching is Unicode canonical, not byte-exact: a suffix in a different
+        normalization form than the stored value still matches.
+        """
         self._parent.add_operation(StringOperation.ends_with(self._bin, suffix))  # type: ignore[union-attr]
         return self._parent
 
@@ -5375,11 +5693,14 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )
         return self._parent
 
-    def str_to_string(self) -> _T:
-        """Convert a non-string bin to its string representation.
+    def read_as_string(self) -> _T:
+        """Convert any bin to its string representation.
 
-        Accepts ``int`` / ``float`` / ``string`` / ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server.
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int`` /
+        ``float`` / ``string`` / ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server.
         """
         self._parent.add_operation(StringOperation.to_string(self._bin))  # type: ignore[union-attr]
         return self._parent

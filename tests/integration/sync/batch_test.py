@@ -15,11 +15,12 @@
 
 """Synchronous multi-key write-chain batch integration tests (mirrors async batch paths)."""
 
+import base64
 import time
 
 import pytest
 
-from aerospike_sdk import DataSet, ErrorDetailVerbosity
+from aerospike_sdk import DataSet, ErrorDetailVerbosity, Exp, ExpressionTrace, SubCode
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
@@ -367,8 +368,8 @@ class TestSyncBatchErrorDetail:
     def test_batch_row_carries_sub_code(self, cluster: Cluster, users: DataSet):
         builds = cluster.create_session().info().build()
         versions = [tuple(int(p) for p in b.split("-")[0].split(".")) for b in builds]
-        if not versions or min(versions) < (8, 1, 3):
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+        if not versions or min(versions) < (8, 2, 0):
+            pytest.skip("cluster does not supply extended error detail (server < 8.2.0)")
 
         behavior = Behavior(
             "sync-batch-error-detail",
@@ -400,3 +401,352 @@ class TestSyncBatchErrorDetail:
         assert results[0].server_message and "out of bounds" in results[0].server_message
         assert results[0].exp_trace is None
         assert results[1].server_message is None
+
+
+class TestBatchGeneration:
+    """Generation policy on batch delete + write (``BatchDelete/WritePolicy``, sync).
+
+    Sync mirror of the async coverage; the single-key contract lives in the
+    generation suite. Sync is an independent implementation, so the batch
+    sub-policy path is exercised here too.
+    """
+
+    def test_batch_delete_matching_generation_deletes_all(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_ok_1"), users.id("del_gen_ok_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+        gen1 = session.query(k1).execute().first_or_raise().record.generation
+        gen2 = session.query(k2).execute().first_or_raise().record.generation
+        assert gen1 == gen2
+
+        stream = session.delete(k1, k2).ensure_generation_is(gen1).execute()
+        assert all(rr.is_ok for rr in stream)
+        for k in (k1, k2):
+            assert list(session.query(k).execute()) == []
+
+    def test_batch_delete_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("del_gen_bad_1"), users.id("del_gen_bad_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+
+        stream = (
+            session.delete(k1, k2).ensure_generation_is(9999).include_missing_keys().execute()
+        )
+        results = {rr.key.value: rr for rr in stream}
+        assert results["del_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["del_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        for k in (k1, k2):
+            assert len(list(session.query(k).execute())) == 1
+
+    def test_batch_write_wrong_generation_reports_error(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_bad_1"), users.id("wr_gen_bad_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+
+        stream = (
+            session.update(k1).put({"n": 10}).ensure_generation_is(9999)
+            .update(k2).put({"n": 20}).ensure_generation_is(9999)
+            .execute()
+        )
+        results = {rr.key.value: rr for rr in stream}
+        assert results["wr_gen_bad_1"].result_code == ResultCode.GENERATION_ERROR
+        assert results["wr_gen_bad_2"].result_code == ResultCode.GENERATION_ERROR
+        assert session.query(k1).execute().first_or_raise().record.bins.get("n") == 1
+
+    def test_batch_write_matching_generation_writes(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        k1, k2 = users.id("wr_gen_ok_1"), users.id("wr_gen_ok_2")
+        session.upsert(k1).put({"n": 1}).execute()
+        session.upsert(k2).put({"n": 2}).execute()
+        gen = session.query(k1).execute().first_or_raise().record.generation
+
+        stream = (
+            session.update(k1).put({"n": 10}).ensure_generation_is(gen)
+            .update(k2).put({"n": 20}).ensure_generation_is(gen)
+            .execute()
+        )
+        assert all(rr.is_ok for rr in stream)
+        assert session.query(k1).execute().first_or_raise().record.bins.get("n") == 10
+
+
+class TestSameKeyChainOrdering:
+    """A key spanning chain segments must observe the earlier segments' writes.
+
+    Batch sub-transactions against one key are unordered server-side, so a
+    chain that writes a key and then reads it back cannot fold into a single
+    batch — the read would race its own write and miss it, and the resulting
+    not-found row is dropped from the stream, leaving only a short result.
+    """
+
+    def test_read_segment_sees_write_from_earlier_segment(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        k = users.id("chain_same_key_rw")
+        session.delete(k).execute()
+
+        stream = (
+            session.upsert(k).put({"seed": "new"})
+            .query(k).bins(["seed"])
+            .execute()
+        )
+        rows = stream.collect()
+
+        # One row per segment, in order, with nothing dropped.
+        assert len(rows) == 2
+        assert [r.result_code for r in rows] == [ResultCode.OK, ResultCode.OK]
+        # The read observed the write issued earlier in the same chain.
+        assert rows[1].record.bins["seed"] == "new"
+
+        # Persisted state, read back through a separate chain.
+        after = session.query(k).bins(["seed"]).execute().first_or_raise()
+        assert after.record.bins["seed"] == "new"
+
+
+class TestBatchWriteMissingKeyRows:
+    """A batch write reports a missing key with no opt-in required.
+
+    The verb names a key it expects to exist, so dropping the row would report
+    success by omission: the caller sees a shorter stream and no error. Read
+    rows stay opt-in, where a missing key is an ordinary outcome.
+    """
+
+    def test_update_missing_key_reports_row_without_opt_in(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        present, missing = users.id("wmk_present"), users.id("wmk_missing")
+        session.upsert(present).put({"v": 1}).execute()
+        session.delete(missing).execute()
+
+        stream = (
+            session.update(present).bin("v").set_to(2)
+            .update(missing).bin("v").set_to(2)
+            .execute()
+        )
+        rows = {r.key.value: r for r in stream.collect()}
+
+        # Default disposition, no include_missing_keys: both rows are present.
+        assert len(rows) == 2
+        assert rows["wmk_present"].result_code == ResultCode.OK
+        assert rows["wmk_missing"].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+        # The applied half persisted; the missing key was not created.
+        after = session.query(present).bins(["v"]).execute().first_or_raise()
+        assert after.record.bins["v"] == 2
+        assert list(session.query(missing).execute()) == []
+
+
+class TestSyncBatchFilterExpression:
+    """Filter expressions carried on a multi-key (batch) operation.
+
+    The single-key filter tests exercise a different dispatch path; nothing
+    covered a filter that fans out across a batch. A filter travels with each
+    row here rather than once for the whole batch, so every row carries its own
+    copy and is judged independently.
+
+    Scope: these use a key list. A chain of several segments on one key is also
+    dispatched as a batch, and a filter on that shape is not covered here (the
+    mixed-expression test in ``TestSyncBatchInvalidFilterError`` chains
+    segments, but across distinct keys).
+
+    Reporting differs by verb, which is the part easiest to regress: a
+    filtered-out *read* is dropped from the stream entirely, while a
+    filtered-out *write* or *delete* comes back as a ``FILTERED_OUT`` row.
+    """
+
+    @staticmethod
+    def _seed(session, users: DataSet, prefix: str, values: dict):
+        keys = {name: users.id(f"{prefix}_{name}") for name in values}
+        for name, key in keys.items():
+            session.upsert(key).put({"v": values[name]}).execute()
+        return keys
+
+    @requires_server_compiled_ael
+    def test_batch_read_returns_only_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfr", {"lo": 1, "hi": 9})
+
+        rows = session.query(list(keys.values())).where("$.v >= 5").execute().collect()
+
+        # A filtered-out read is dropped rather than reported.
+        assert [r.key.value for r in rows] == [keys["hi"].value]
+        assert rows[0].record.bins["v"] == 9
+
+    @requires_server_compiled_ael
+    def test_batch_write_applies_only_to_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfw", {"lo": 1, "hi": 9})
+
+        rows = (
+            session.upsert(list(keys.values()))
+            .bin("tagged").set_to(True)
+            .where("$.v >= 5")
+            .execute()
+            .collect()
+        )
+        by_key = {r.key.value: r for r in rows}
+
+        assert by_key[keys["hi"].value].is_ok
+        assert by_key[keys["lo"].value].result_code == ResultCode.FILTERED_OUT
+
+        # The write reached the match and only the match.
+        for name, expected in (("hi", True), ("lo", None)):
+            rec = session.query(keys[name]).execute().first_or_raise()
+            assert rec.record.bins.get("tagged") is expected
+
+    @requires_server_compiled_ael
+    def test_batch_delete_removes_only_matching_rows(self, cluster: Cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbfd", {"lo": 1, "hi": 9})
+
+        rows = session.delete(list(keys.values())).where("$.v >= 5").execute().collect()
+        by_key = {r.key.value: r for r in rows}
+
+        assert by_key[keys["hi"].value].is_ok
+        assert by_key[keys["lo"].value].result_code == ResultCode.FILTERED_OUT
+
+        present = {
+            r.key.value: r.as_bool()
+            for r in session.exists(list(keys.values())).include_missing_keys().execute().collect()
+        }
+        assert present[keys["hi"].value] is False
+        assert present[keys["lo"].value] is True
+
+    @requires_server_compiled_ael
+    def test_batch_survives_a_long_filter_expression(self, cluster: Cluster, users: DataSet):
+        """A long filter must survive being repeated across every row.
+
+        Each row carries its own copy of the expression, so a long filter
+        multiplies the request size by the row count -- the shape where a
+        length or offset mistake in encoding would show up first.
+        """
+        session = cluster.create_session()
+        keys = self._seed(session, users, "sbflong", {"lo": 1, "hi": 9})
+
+        # Semantically "$.v >= 5", padded with redundant terms to lengthen the
+        # encoded expression without changing which records it selects.
+        padding = " and ".join(f"$.v != {n}" for n in range(100, 140))
+        long_filter = f"$.v >= 5 and {padding}"
+
+        rows = session.query(list(keys.values())).where(long_filter).execute().collect()
+
+        assert [r.key.value for r in rows] == [keys["hi"].value]
+        assert rows[0].record.bins["v"] == 9
+
+
+def _batch_rows_by_key(results):
+    """Index batch rows by ``(namespace, user key)``.
+
+    Precaution rather than an observed failure: nothing in the protocol
+    promises a folded batch response arrives in segment order, so match the
+    invalid-filter row by key instead of by list position.
+    """
+    rows = {(r.key.namespace, r.key.value): r for r in results}
+    assert len(rows) == len(results), "duplicate keys collapsed"
+    return rows
+
+
+def _batch_row(rows, key):
+    ident = (key.namespace, key.value)
+    assert ident in rows, (
+        f"no row for {key.value!r}; returned rows: "
+        + ", ".join(f"{k[1]!r}={v.result_code}" for k, v in rows.items())
+    )
+    return rows[ident]
+
+
+def _invalid_filter_expression() -> Exp:
+    """A packed filter the server cannot decode.
+
+    ``FF FE FD`` is not a valid msgpack prefix, so the bytes fail at expression
+    *build* time on the server rather than being rejected client-side — the
+    sibling of ``query_selection_error_detail_test``'s trailing-``and`` AEL, on
+    the packed path.
+    """
+    return Exp.from_base64(base64.b64encode(bytes([0xFF, 0xFE, 0xFD])).decode())
+
+
+def _assert_batch_invalid_filter_error(res) -> None:
+    """Assert a batch row carrying an undecodable packed filter.
+
+    Values pinned against 8.2.0.0, which ``@requires_server_compiled_ael``
+    already guarantees — the same threshold as the ``supports_error_detail``
+    fixture, so detail is unconditionally present here.
+    """
+    assert not res.is_ok, (
+        f"expected batch filter build failure for {res.key.value!r}, got {res.result_code}"
+    )
+    assert res.result_code == ResultCode.PARAMETER_ERROR
+    assert res.sub_code == SubCode.NONE  # 0, explicitly, not None
+    assert res.server_message is not None
+    assert "invalid filter expression" in res.server_message
+    trace = res.exp_trace
+    assert trace is not None
+    assert trace.phase == ExpressionTrace.PHASE_BUILD
+    # The packed path reports MSGPACK and locates the fault by byte offset;
+    # the AEL path in query_selection_error_detail_test reports LANG_AEL and
+    # fills ael_offset instead. Pinned to keep the two distinguishable.
+    assert trace.lang == ExpressionTrace.LANG_MSGPACK
+    assert trace.byte_offset is not None
+    assert trace.ael_offset is None
+
+
+class TestSyncBatchInvalidFilterError:
+    """Batch row errors for invalid filter expressions (field 45 extended detail)."""
+
+    @staticmethod
+    def _verbose_session(cluster: Cluster):
+        behavior = Behavior(
+            "sync-batch-invalid-filter",
+            {Scope.ALL: Settings(error_detail_verbosity=ErrorDetailVerbosity.EXPRESSION_TRACE)},
+        )
+        return cluster.create_session(behavior=behavior)
+
+    @requires_server_compiled_ael
+    def test_batch_read_mixed_expressions_invalid_row_returns_parameter_error(
+        self, cluster: Cluster, users: DataSet,
+    ):
+        session = self._verbose_session(cluster)
+        k_ok = users.id("sbif_ok")
+        k_bad = users.id("sbif_bad")
+        session.upsert(k_ok).put({"v": 1}).execute()
+        session.upsert(k_bad).put({"v": 2}).execute()
+
+        results = (
+            session.query(k_ok).where(Exp.bin_exists("v"))
+            .query(k_bad).where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+            .collect()
+        )
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        assert _batch_row(rows, k_ok).is_ok
+        _assert_batch_invalid_filter_error(_batch_row(rows, k_bad))
+
+    @requires_server_compiled_ael
+    def test_batch_read_with_invalid_expression_returns_parameter_error(
+        self, cluster: Cluster, users: DataSet,
+    ):
+        session = self._verbose_session(cluster)
+        keys = [users.id(f"sbif_{i}") for i in (1, 2)]
+        for key in keys:
+            session.upsert(key).put({"v": 1}).execute()
+
+        results = (
+            session.query(keys)
+            .where(_invalid_filter_expression())
+            .include_missing_keys()
+            .execute()
+            .collect()
+        )
+
+        assert len(results) == 2
+        rows = _batch_rows_by_key(results)
+        for key in keys:
+            _assert_batch_invalid_filter_error(_batch_row(rows, key))

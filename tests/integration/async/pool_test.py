@@ -27,7 +27,6 @@ import asyncio
 import pytest
 
 from aerospike_sdk import AsyncPool
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
 from tests.integration.namespace import general_namespace
@@ -130,24 +129,6 @@ class TestAsyncPoolDispatch:
 
             ids = [await pool.run(whoami, pick=i) for i in range(3)]
             assert len(set(ids)) == 3, f"expected 3 distinct members, got ids={ids}"
-
-
-class TestAsyncPoolDeprecatedFactory:
-    """The one-cycle client_factory adapter: warns, and hands raw Clients."""
-
-    async def test_client_factory_warns_and_dispatch_hands_client(
-        self, aerospike_host, client_policy
-    ):
-        with pytest.warns(DeprecationWarning, match="client_factory"):
-            pool = AsyncPool(
-                client_factory=lambda: Client(seeds=aerospike_host, policy=client_policy),
-                loop_count=2,
-            )
-        async with pool:
-            async def type_name(member) -> str:
-                return type(member).__name__
-
-            assert await pool.run(type_name) == "Client"
 
 
 class TestAsyncPoolLoopType:

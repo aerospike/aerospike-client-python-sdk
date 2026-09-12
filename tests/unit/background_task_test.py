@@ -156,14 +156,37 @@ def test_expire_record_after_seconds_wired():
     assert wp.expiration == Expiration.seconds(3600)
 
 
-def test_records_per_second_stored_on_builder():
-    s = _session_mock()
-    ds = DataSet.of("test", "bgset")
-    b = (
-        BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
-        .records_per_second(5000)
+def test_records_per_second_reaches_the_write_policy():
+    """Storing the value on the builder is not enough; it has to be applied.
+
+    Asserting only that the builder remembers it is what let this sit as an
+    accept-and-drop knob: the setter looked wired while nothing ever read it.
+    """
+    wp = make_background_write_policy(
+        Behavior.DEFAULT,
+        None,
+        None,
+        None,
+        records_per_second=5000,
     )
-    assert b._records_per_second == 5000
+    assert wp.records_per_second == 5000
+
+
+def test_records_per_second_defaults_to_unthrottled():
+    wp = make_background_write_policy(Behavior.DEFAULT, None, None, None)
+    assert wp.records_per_second == 0
+
+
+async def test_records_per_second_reaches_the_policy_pac_receives():
+    """End of the chain: the value the builder took is on the policy PAC gets."""
+    s = _session_mock()
+    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    b.bin("tier").set_to("gold")
+    await b.records_per_second(2500).execute()
+    wp = s.client._client.query_operate.call_args.kwargs["write_policy"]
+    assert wp.records_per_second == 2500
 
 
 async def test_rejects_cdt_operations():

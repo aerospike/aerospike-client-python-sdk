@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_sdk import ClusterDefinition, Host, Behavior
+from aerospike_sdk import Behavior, ClusterDefinition, Host
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -101,6 +101,30 @@ async def test_cluster_definition_services_alternate(aerospike_host):
         port = 3000
 
     cluster_def = apply_general_auth(ClusterDefinition(hostname, port)).using_services_alternate()
+    cluster = await cluster_def.connect()
+
+    try:
+        assert cluster.is_connected()
+    finally:
+        await cluster.close()
+
+
+async def test_cluster_definition_with_ip_map(aerospike_host):
+    """Test ClusterDefinition with an IP translation map."""
+    if ":" in aerospike_host:
+        hostname, port_str = aerospike_host.split(":", 1)
+        port = int(port_str)
+    else:
+        hostname = aerospike_host
+        port = 3000
+
+    # The mapping targets an address the local cluster never advertises, so a
+    # connection still succeeds — translation only rewrites addresses it matches.
+    cluster_def = (
+        apply_general_auth(ClusterDefinition(hostname, port))
+        .using_services_alternate()
+        .with_ip_map({"10.0.0.1": "3.72.54.187"})
+    )
     cluster = await cluster_def.connect()
 
     try:
@@ -214,4 +238,49 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
         assert cluster.is_connected()
     finally:
         await cluster.close()
+
+
+
+class TestRestrictingClusterToSeeds:
+    """Pinning the cluster view to the seeds, against a live cluster."""
+
+    async def test_seeds_only_view_excludes_discovered_peers(
+        self, aerospike_host_sc, make_cluster_definition
+    ):
+        """Discovery normally finds the peers; restricting keeps only the seed.
+
+        Needs more than one node to mean anything: on a single-node cluster the
+        seed *is* the whole cluster, so both modes look identical and the test
+        would pass without the setting doing anything.
+        """
+        discovered = await make_cluster_definition(aerospike_host_sc, auth=True).connect()
+        try:
+            info = discovered.create_session().info()
+            namespaces = await info.namespaces()
+            namespace = next(iter(namespaces))
+            peer_count = len(await info.namespace_details_per_node(namespace))
+        finally:
+            await discovered.close()
+
+        if peer_count < 2:
+            pytest.skip(
+                f"seed-only is only observable on a multi-node cluster; "
+                f"{aerospike_host_sc} reports {peer_count}"
+            )
+
+        restricted = await (
+            make_cluster_definition(aerospike_host_sc, auth=True)
+            .restricting_cluster_to_seeds()
+            .connect()
+        )
+        try:
+            seen = len(
+                await restricted.create_session()
+                .info()
+                .namespace_details_per_node(namespace)
+            )
+        finally:
+            await restricted.close()
+
+        assert seen == 1, f"expected only the seed, saw {seen} of {peer_count} nodes"
 

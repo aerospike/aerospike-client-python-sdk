@@ -19,9 +19,10 @@ import os
 
 import pytest
 
-from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
+from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 
 async def test_client_policy_use_services_alternate_from_env(client_policy, aerospike_host):
@@ -172,12 +173,16 @@ async def test_create_duplicate_index_fails(cluster):
         pass
 
 
-async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index):
+async def test_create_index_with_cdt_context(cluster, enterprise):
     """Create a numeric index on a nested map element via chainable .context()."""
     index_name = "test_ctx_idx"
     bin_name = "payload"
     ds = DataSet.of(general_namespace(), "test")
-    session = cluster.create_session()
+    # The assertion reads the user key back off the query results, which
+    # requires the key to be stored with the record — an explicit opt-in.
+    session = cluster.create_session(
+        Behavior.DEFAULT.derive_with_changes("ctx-idx-send-key", send_key=True)
+    )
 
     try:
         await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
@@ -198,7 +203,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
         .execute()
     )
 
-    await (
+    index_task = await (
         cluster.create_session().index(general_namespace(), "test")
         .on_bin(bin_name)
         .named(index_name)
@@ -206,9 +211,10 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
         .context([CTX.map_key("inner")])
         .create()
     )
+    # The build task is authoritative; a query probe only infers readiness.
+    await index_task.wait_till_complete()
 
     flt = Filter.equal(bin_name, 10).context([CTX.map_key("inner")])
-    await wait_for_index(cluster, general_namespace(), "test", flt)
 
     try:
         stream = await session.query(general_namespace(), "test").filter(flt).bins([bin_name]).execute()
@@ -229,7 +235,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise, wait_for_index
             pass
 
 
-async def test_create_expression_index_and_query(cluster, server_version, wait_for_index):
+async def test_create_expression_index_and_query(cluster, server_version):
     """Create an expression-based index, list it, query through it, drop it."""
     if server_version is None or server_version < (8, 1, 2, 0):
         pytest.skip("expression-based indexes require server 8.1.2+")
@@ -251,13 +257,15 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
 
     expr = Exp.int_bin("age")
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_expression(expr)
             .named(index_name)
             .numeric()
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         listed = [i for i in await session.list_indexes() if i["name"] == index_name]
         assert listed, "expression index not visible in list_indexes"
@@ -265,7 +273,6 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
         assert listed[0]["set"] == set_name
 
         flt = Filter.range("age", 31, 33).expression(expr)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["age"]).execute()
         ages = sorted(
@@ -282,7 +289,7 @@ async def test_create_expression_index_and_query(cluster, server_version, wait_f
         i["name"] == index_name for i in await session.list_indexes()
     ), "expression index still listed after drop"
 
-async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_for_index):
+async def test_create_blob_index_and_query(cluster, supports_blob_index):
     """Create a blob index on a bytes bin, query through it, drop it."""
     if not supports_blob_index:
         pytest.skip("blob secondary indexes require server 7.0+")
@@ -306,16 +313,17 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         await session.upsert(k).put({"payload": blob}).execute()
 
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_bin("payload")
             .named(index_name)
             .blob()
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         flt = Filter.equal("payload", needle)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payload"]).execute()
         matches = [r.record.bins["payload"] async for r in stream if r.is_ok and r.record]
@@ -327,7 +335,7 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index, wait_fo
         except Exception:
             pass
 
-async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index, wait_for_index):
+async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index):
     """Blob index over LIST collection elements: create, query via contains, drop."""
     if not supports_blob_index:
         pytest.skip("blob secondary indexes require server 7.0+")
@@ -355,7 +363,7 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
         await session.upsert(k).put({"payloads": blobs}).execute()
 
     try:
-        await (
+        index_task = await (
             session.index(general_namespace(), set_name)
             .on_bin("payloads")
             .named(index_name)
@@ -363,13 +371,126 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
             .collection(CollectionIndexType.LIST)
             .create()
         )
+        # The build task is authoritative; a query probe only infers readiness.
+        await index_task.wait_till_complete()
 
         flt = Filter.contains("payloads", needle, CollectionIndexType.LIST)
-        await wait_for_index(cluster, general_namespace(), set_name, flt)
 
         stream = await session.query(general_namespace(), set_name).filter(flt).bins(["payloads"]).execute()
         matches = [r.record.bins["payloads"] async for r in stream if r.is_ok and r.record]
         assert matches == [[b"\x0a", needle]]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index(general_namespace(), set_name).named(index_name).drop()
+        except Exception:
+            pass
+
+
+@requires_server_compiled_ael
+async def test_create_index_from_ael_string_and_query(cluster):
+    """Create an expression index from an AEL string, list it, query through it, drop it."""
+    from aerospike_async import FilterExpression
+
+    set_name = "ael_idx_set"
+    index_name = "psdk_ael_age_idx"
+    ael = "$.age + 1"
+    ds = DataSet.of(general_namespace(), set_name)
+    session = cluster.create_session()
+
+    try:
+        await session.index(general_namespace(), set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+    keys = [ds.id(f"ael_u{i}") for i in range(5)]
+    for i, k in enumerate(keys):
+        await session.upsert(k).put({"age": 30 + i}).execute()
+
+    try:
+        index_task = await (
+            session.index(general_namespace(), set_name)
+            .on_expression(ael)
+            .named(index_name)
+            .numeric()
+            .create()
+        )
+        await index_task.wait_till_complete()
+
+        listed = [i for i in await session.list_indexes() if i["name"] == index_name]
+        assert listed, "AEL-string expression index not visible in list_indexes"
+
+        flt = Filter.range("age", 32, 34).expression(
+            FilterExpression.from_server_compiled_ael(ael),
+        )
+        stream = (
+            await session.query(general_namespace(), set_name)
+            .filter(flt)
+            .bins(["age"])
+            .execute()
+        )
+        ages = sorted(
+            [r.record.bins["age"] async for r in stream if r.is_ok and r.record],
+        )
+        assert ages == [31, 32, 33]
+    finally:
+        await session.delete(keys).execute()
+        try:
+            await session.index(general_namespace(), set_name).named(index_name).drop()
+        except Exception:
+            pass
+
+
+@requires_server_compiled_ael
+async def test_create_index_from_boolean_ael_rejected(cluster):
+    """The index basis must produce a value — a boolean AEL predicate is rejected."""
+    session = cluster.create_session()
+    with pytest.raises(AerospikeError):
+        await (
+            session.index(general_namespace(), "ael_idx_set")
+            .on_expression("$.age > 31")
+            .named("psdk_ael_bool_idx")
+            .numeric()
+            .create()
+        )
+
+
+@requires_server_compiled_ael
+async def test_where_selects_ael_expression_index(cluster):
+    """A where() served through an index created from the same AEL.
+
+    Server query planning began selecting expression-based indexes in the
+    8.2.0.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.2.0.0``,
+    which a pre-RC build of that version also satisfies, so this fails with
+    ``IndexNotFound`` there instead of skipping.
+    """
+    set_name = "ael_idx_sel_set"
+    index_name = "psdk_ael_sel_idx"
+    ael = "$.age + 1"
+    ds = DataSet.of(general_namespace(), set_name)
+    session = cluster.create_session()
+
+    keys = [ds.id(f"sel_u{i}") for i in range(5)]
+    for i, k in enumerate(keys):
+        await session.upsert(k).put({"age": 30 + i}).execute()
+
+    try:
+        index_task = await (
+            session.index(general_namespace(), set_name)
+            .on_expression(ael)
+            .named(index_name)
+            .numeric()
+            .create()
+        )
+        await index_task.wait_till_complete()
+
+        stream = (
+            await session.query(general_namespace(), set_name)
+            .where(f"{ael} == 32")
+            .execute()
+        )
+        ages = [r.record.bins["age"] async for r in stream if r.is_ok and r.record]
+        assert ages == [31]
     finally:
         await session.delete(keys).execute()
         try:

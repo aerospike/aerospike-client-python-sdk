@@ -55,6 +55,7 @@ from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError, _resolve_disposition
 from aerospike_sdk.sync.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 # Bin builders are parent-generic; the same class serves both the async and
 # sync write segments.
@@ -96,6 +97,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
     through Tier 1 (fast path / multi-key list dispatch), Tier 1b
     (multi-spec blocking dispatch), or Tier 2 (dataset / SI / scan
     streaming) using PAC ``_blocking`` entries. No asyncio loop involved.
+
+    Multi-key chains are split into per-node sub-batches, and a node whose
+    sub-batch holds a single key is sent a regular single-record command
+    instead of a batch request — automatically and per-node, so size-1
+    batches need no special-casing by the caller.
     """
 
     # -- Bin / op entry points (inherited base mutates ``self`` directly) -----
@@ -178,6 +184,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._base_read_policy is not None
             and self._read_policy is None
         ):
+            if self._usage_on:
+                self._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client.get_blocking(
@@ -218,6 +226,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
+        if self._usage_on:
+            # The dispatchers finalize internally; doing it here first makes
+            # the shape readable and leaves their own call a no-op.
+            self._finalize_current_spec()
+            self._flush_usage(usage.API_BLOCKING, self._usage_shape())
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self._execute_blocking_fast_path(on_error)
         if fast is not None:
@@ -252,6 +265,61 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         raise NotImplementedError(
             f"sync builder shape not yet covered by a blocking dispatcher: {_describe_specs(self)}",
         )
+
+    def first(self, on_error: Optional[OnError] = None) -> Optional["RecordResult"]:
+        """Execute and return the first row, or ``None`` when there are none.
+
+        Reading one record by key is the most common thing this client does,
+        and going through :meth:`execute` costs a second call for it. This is
+        that pair in one; the stream is closed either way.
+
+        Semantics come from :meth:`SyncRecordStream.first`, not from a second
+        set of rules: per-record failures arrive **as data** (``is_ok=False``),
+        while cluster-level errors raise.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the query matched nothing.
+
+        Example::
+
+            result = session.query(key).first()
+            if result is not None and result.is_ok:
+                print(result.record.bins)
+
+        See Also:
+            :meth:`first_or_raise`: Raise instead of returning ``None``.
+        """
+        return self.execute(on_error).first()
+
+    def first_or_raise(self, on_error: Optional[OnError] = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        Semantics come from :meth:`SyncRecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            StopIteration: The query matched no records.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            record = session.query(key).first_or_raise().record_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return self.execute(on_error).first_or_raise()
+
 
     def stream(
         self, on_error: Optional[OnError] = None,
@@ -501,6 +569,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     # Neither AP nor SC available — fall through to slow path.
                     self._promote()
                     return WriteSegmentBuilder.execute(self, on_error)
+            # Read the flag off the client rather than slotting it here: this
+            # segment counts its per-op attribute stores.
+            sdk_fast = self._sdk_client_fast
+            if sdk_fast is not None and sdk_fast._usage_on:
+                usage.record_point(sdk_fast, usage.API_BLOCKING, self._txn, self._ops)
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client_fast.operate_blocking(
@@ -518,7 +591,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 # (update, replace_if_exists). For upsert/insert/replace,
                 # it's idempotent. KEY_EXISTS_ERROR is always actionable
                 # (e.g. insert into existing record).
-                psdk_exc = _convert_pac_exception(e)
+                hint = (
+                    self._bin_name_hint()
+                    if getattr(e, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
+                    else None
+                )
+                psdk_exc = _convert_pac_exception(e, hint=hint)
                 rc = psdk_exc.result_code
                 if (
                     rc == ResultCode.KEY_NOT_FOUND_ERROR
