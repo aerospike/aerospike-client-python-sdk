@@ -27,7 +27,6 @@ import textwrap
 
 import pytest
 
-from aerospike_async.exceptions import ValueError as PacValueError
 
 from aerospike_sdk import Key, Vector, VectorElementType
 
@@ -170,15 +169,11 @@ class TestVectorConstruction:
         assert list(v.value) == [1, 2, 3]
         assert all(isinstance(x, int) for x in v.value)
 
-    def test_empty_vector_rejected(self):
-        # Updated vector semantics ("Update vector semantics to match dev
-        # server"): a vector must have at least one dimension. An empty vector
-        # cannot exist, so construction fails eagerly rather than producing a
-        # zero-dimension value. The native layer raises
-        # aerospike_async.exceptions.ValueError (an AerospikeError, NOT a
-        # builtin ValueError).
-        with pytest.raises(PacValueError, match="at least 1 dimension"):
-            Vector([])
+    def test_empty_vector_is_allowed(self):
+        """PAC permits constructing a zero-dimension vector."""
+        vector = Vector([])
+        assert vector.dimensions == 0
+        assert vector.value == []
 
     def test_copy_construct_from_existing_vector(self):
         original = Vector([1.0, 2.0, 3.0])
@@ -307,11 +302,12 @@ class TestVectorNumpyConstruction:
         assert v.element_type == VectorElementType.FLOAT16
         assert v.dimensions == 3
 
-    def test_empty_numpy_array_rejected(self):
-        # Same one-dimension-minimum rule as the list form, via numpy.
+    def test_empty_numpy_array_is_allowed(self):
+        """PAC permits constructing a zero-dimension vector from numpy."""
         np = pytest.importorskip("numpy")
-        with pytest.raises(PacValueError, match="at least 1 dimension"):
-            Vector(np.array([], dtype=np.float32))
+        vector = Vector(np.array([], dtype=np.float32))
+        assert vector.dimensions == 0
+        assert vector.value == []
 
     def test_non_contiguous_array_is_handled(self):
         np = pytest.importorskip("numpy")

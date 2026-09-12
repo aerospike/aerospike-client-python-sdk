@@ -803,5 +803,5 @@ async def supports_vector_bins(server_version):
     is a separate, not-yet-implemented feature server-side and is intentionally
     NOT covered by this gate -- see ``tests/integration/async/vector_test.py``.
     """
-    return server_version is not None and server_version >= SERVER_8_1_3
+    return server_version is not None and server_version >= (8, 1, 3, 0)
 

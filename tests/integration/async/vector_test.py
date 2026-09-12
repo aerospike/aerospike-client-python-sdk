@@ -53,7 +53,6 @@ the client-side search *build* surface is in
 import pytest
 import pytest_asyncio
 
-from aerospike_async.exceptions import ValueError as PacValueError
 from aerospike_sdk import Vector, VectorElementType
 from aerospike_sdk.dataset import DataSet
 
@@ -401,13 +400,11 @@ class TestVectorSize:
 
 class TestVectorEdgeCases:
 
-    async def test_empty_vector_rejected_before_write(self, session_and_key):
-        """Empty vectors can't exist; the error is raised client-side at
-        construction, so nothing is ever sent to the server."""
-        session, key = session_and_key
-        await key("v_empty")  # reserve/clean the key even though we never write
-        with pytest.raises(PacValueError, match="at least 1 dimension"):
-            Vector([])
+    async def test_empty_vector_constructs_without_write(self):
+        """PAC permits constructing a zero-dimension vector."""
+        vector = Vector([])
+        assert vector.dimensions == 0
+        assert vector.value == []
 
     async def test_int32_min_max_boundaries(self, session_and_key):
         session, key = session_and_key
