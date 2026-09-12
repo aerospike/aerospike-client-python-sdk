@@ -1198,26 +1198,14 @@ class _QueryBuilderBase:
         query — typically a vector-distance value projected via
         :meth:`with_op_projection`.
 
-        Must be paired with :meth:`top_k`; the native ``Statement`` validates
-        both together (bad bin name, ``CASE_INSENSITIVE`` on a non-``STRING``
-        order type, order-by bin missing from the projection, ``top_k``
-        without ``order_by``, ``k`` outside ``[1, 1000]``) the first time the
-        query executes.
+        Must be paired with :meth:`top_k`. Validation occurs when the query
+        executes.
 
-        .. note::
-
-            **Scalar Top-K works today; vector Top-K does not (server-side).**
-            Ranking by an ordinary *scalar* bin ("``ORDER BY <scalar bin>
-            LIMIT k``") is applied by current dev builds and returns the
-            correctly ordered, limited result set (status not yet formally
-            confirmed by the server team). The vector case -- ranking by a
-            *projected vector distance* -- does not work end to end yet, but
-            not because of Top-K: projecting the distance first requires
-            evaluating an expression over a VECTOR bin, and any such
-            expression currently crashes the node (the server's
-            ``rt_bin_translate`` has no ``VECTOR`` particle case). See
-            ``tests/integration/async/vector_search_test.py`` and
-            ``examples/vector_topk_query.py``.
+        Requires Aerospike Server 8.1.3+. The client uses Top-K pushdown when
+        supported by all queried nodes and always merges the final result.
+        To rank vector similarity, project a vector-distance expression with
+        :meth:`with_op_projection` and order by its output bin. Generic
+        expression reads of VECTOR bins are not supported.
 
         Args:
             bin_name: Name of the bin (or projected expression bin) to rank by.
@@ -1242,12 +1230,6 @@ class _QueryBuilderBase:
 
         Returns:
             This builder for method chaining.
-
-        .. note::
-
-            Scalar Top-K works today; ranking by a projected *vector distance*
-            does not yet (the distance projection crashes the server). See the
-            note on :meth:`order_by`.
 
         See Also:
             :meth:`order_by`
