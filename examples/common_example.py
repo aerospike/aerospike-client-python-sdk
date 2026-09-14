@@ -9,9 +9,9 @@ read/write, and query hints.
 import asyncio
 
 import _env
-from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk import Behavior, DataSet, Session
 from aerospike_sdk.aio.operations.query import QueryHint
-from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError
+from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError, IndexNotFoundError
 
 SET = DataSet.of("test", "set")
 
@@ -23,7 +23,7 @@ async def main() -> None:
         await run_examples(session)
 
 
-async def run_examples(session) -> None:
+async def run_examples(session: Session) -> None:
     # ------------------------------------------------------------------
     # Truncate
     # ------------------------------------------------------------------
@@ -221,7 +221,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("Create index")
     try:
-        await session.index(SET).on_bin("age").named("ageidx").numeric().create()
+        await session.index(dataset=SET).on_bin("age").named("ageidx").numeric().create()
     except IndexAlreadyExistsError:
         pass  # Index may already exist
     await asyncio.sleep(0.3)
@@ -324,8 +324,8 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("\nCleanup: drop index")
     try:
-        await session.index(SET).named("ageidx").drop()
-    except Exception:
+        await session.index(dataset=SET).named("ageidx").drop()
+    except IndexNotFoundError:
         pass
 
     print("Done!")
