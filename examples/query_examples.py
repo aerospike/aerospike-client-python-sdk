@@ -14,9 +14,9 @@ import asyncio
 from datetime import timedelta
 
 import _env
-from aerospike_sdk import Behavior, BitwiseOverflowActions, DataSet, MapOrder
+from aerospike_sdk import Behavior, BitwiseOverflowActions, DataSet, MapOrder, Session
 from aerospike_sdk.aio.operations.query import QueryHint
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError
 
 SET = DataSet.of("test", "person")
 ADDRESS = DataSet.of("test", "address")
@@ -53,6 +53,13 @@ async def main() -> None:
         await demonstrate_filtered_updates(session)
         await demonstrate_point_and_header_reads(session)
         await demonstrate_records_per_second_and_chunking(session)
+
+        try:
+            await session.index(dataset=SET).on_bin("age").named("age_idx").numeric().create()
+        except IndexAlreadyExistsError:
+            pass
+        await asyncio.sleep(0.3)
+
         await demonstrate_sorting_and_pagination(session)
         await demonstrate_reusable_filter(session)
         await demonstrate_ttl(session)
@@ -354,7 +361,7 @@ async def demonstrate_ttl(session) -> None:
     print(await _first_bins(session, SET.id(1)))
 
 
-async def demonstrate_read_write_expressions(session) -> None:
+async def demonstrate_read_write_expressions(session: Session) -> None:
     print("\n--- Expression testing ---")
     await (
         session.upsert(SET.id(223))
@@ -367,7 +374,7 @@ async def demonstrate_read_write_expressions(session) -> None:
     print("Using a read expression")
     stream = await (
         session.query(SET.ids(223))
-        .bin("bob").select_from("$.age + $.value", ignore_eval_failure=True)
+        .bin("bob").select_from("$.age:INT + $.value:INT", ignore_eval_failure=True)
         .execute()
     )
     await _print_stream(stream)
@@ -384,12 +391,6 @@ async def demonstrate_read_write_expressions(session) -> None:
 
 async def demonstrate_query_hints(session) -> None:
     print("\n--- Query hints ---")
-    try:
-        await session.index(SET).on_bin("age").named("age_idx").numeric().create()
-    except Exception:
-        pass
-    await asyncio.sleep(0.3)
-
     # Hint with index name: tell the server to use a specific secondary index.
     stream = await (
         session.query(SET).where("$.age > 30").with_hint(QueryHint(index_name="age_idx")).execute()

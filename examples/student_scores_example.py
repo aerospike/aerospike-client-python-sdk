@@ -9,10 +9,13 @@ back to the client.
 """
 
 import asyncio
+import time
 import random
 
 import _env
-from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk import Behavior, DataSet, QueryHint
+from aerospike_sdk.exceptions import IndexAlreadyExistsError
+from aerospike_async import CollectionIndexType
 
 SUBJECTS = ("math", "english", "science", "history", "art")
 
@@ -49,6 +52,7 @@ async def main() -> None:
             stream = await (
                 session.query(class10a)
                 .where("$.scores.{=90:}.count() > 0")
+                .with_hint(QueryHint(allow_scans_with_where=True))
                 .execute()
             )
             async for result in stream:
