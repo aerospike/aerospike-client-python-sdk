@@ -132,7 +132,7 @@ def test_unlistable_nodes_keep_string_ael_open():
     """Field 43 is the only string-AEL encoding, so an unverifiable cluster gets it.
 
     Regression: the thread-local proxy has no node list, which previously read as
-    "cluster below 8.1.3" and rejected string AEL against a capable cluster.
+    "cluster below 8.2.0" and rejected string AEL against a capable cluster.
     """
     client = _Client(_FakeThreadLocalProxy())
     client._warm_routing_capabilities_blocking()

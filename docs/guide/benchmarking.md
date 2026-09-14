@@ -169,7 +169,7 @@ Every cell in the matrix below was produced by `python -m benchmarks.benchmark -
 
 The Rust-core rows here are on the 3-VM ASD topology. At default settings, rust-core async hits ~306K at t=32 and scales with concurrency — but the apparent plateau between t=32 and t=512 is **client-side**, not the cluster. Historically two `aerospike-core` defaults stacked to cap throughput; one is now fixed in core:
 
-- **Per-op Tokio timer-wheel registration — now fixed in core (`CLIENT-4990`, present in `4dd1a93`).** Every `aerospike_rt::timeout(...)` insert/remove used to go through a shared mutex in Tokio's global time driver, serializing per-op work under contention. The reusable-`Sleep`-per-`Connection` rewrite eliminated it, so the default core already carries this win — no measurement hack needed.
+- **Per-op Tokio timer-wheel registration — now fixed in core.** Every `aerospike_rt::timeout(...)` insert/remove used to go through a shared mutex in Tokio's global time driver, serializing per-op work under contention. The reusable-`Sleep`-per-`Connection` rewrite eliminated it, so the default core already carries this win — no measurement hack needed.
 - **`max_conns_per_node` default**, fail-fast on exhaustion — still the operative default cap, and the runs below were measured when it was 256. Core lowered it to **100** on 2026-07-14 for cross-client parity, so an unset run today caps lower still. At high concurrency the pool refuses past the cap in concurrent ops per node. Sizing the pool to match concurrency (`MAX_CONNS_PER_NODE = 512`) takes t=512 to **575,592 @ 0 errors** — the real ceiling (the "pool sized" row above).
 
 Python clients (PAC, PSDK) hit their own client-side ceilings (PyO3 boundary, asyncio/Tokio bridge, builder allocations) well below 580K, so they don't see either of these two artifacts. Earlier versions of this doc quoted 810K and 405K as "the cluster ceiling"; both were artifacts of the two issues above plus an older services-alternate routing bug. There is no real cluster constraint visible from any default-config Python client.
@@ -297,7 +297,7 @@ Layering the headline single-key TPS numbers across clients shows where every tr
 
 | Layer | TPS | Note |
 |---|---|---|
-| **Rust core async, pool sized** | **575,592** | Real cluster-side ceiling; `MAX_CONNS=512` + 8 pools/node (per-op timer fix now in-core, `CLIENT-4990`) |
+| **Rust core async, pool sized** | **575,592** | Real cluster-side ceiling; `MAX_CONNS=512` + 8 pools/node (per-op timer fix now in-core) |
 | **PSDK async window API × AsyncPool (4 loops, z16·k8)** | **425,808** | `get_many`/`put_many` across pool loops — top async mode (FT), p99 2.6ms; low-latency z8·k4 ~343K @ 0.9ms; peak ~442K @ ~6ms |
 | PSDK async window API, single loop (k=16) | 376,016 | `get_many`/`put_many` — N single-key ops fused per submission (FT, uvloop) |
 | **PSDK async AsyncPool, fast-path (8×64)** | **316,812** | 8 event loops × 64 tasks (FT only, uvloop) |

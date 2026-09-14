@@ -29,6 +29,7 @@ from aerospike_async import DropIndexTask, IndexTask
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:
     from aerospike_sdk.sync.client import SyncClient
@@ -71,6 +72,8 @@ class IndexBuilder(_IndexBuilderBase):
             ValueError: Same validation as async :meth:`~aerospike_sdk.aio.operations.index.IndexBuilder.create`.
             AerospikeError: On failure from the cluster (typed when mapped).
         """
+        if self._async_client._usage_on:
+            usage.record(self._async_client, [usage.ADMIN_INDEX])
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._async_client,
@@ -119,6 +122,8 @@ class IndexBuilder(_IndexBuilderBase):
         """
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
+        if self._async_client._usage_on:
+            usage.record(self._async_client, [usage.ADMIN_INDEX])
         try:
             return self._async_client._async_client.drop_index_blocking(
                 self._namespace, self._set_name, self._index_name,

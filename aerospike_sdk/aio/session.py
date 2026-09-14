@@ -59,6 +59,7 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.session_shared import (
     NamespaceScStatus,
     SessionBase,
@@ -1249,6 +1250,8 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         if self._client._client is None:
             raise RuntimeError("Client is not connected")
 
+        if self._client._usage_on:
+            usage.record(self._client, [usage.ADMIN_TRUNCATE])
         await self._client._client.truncate(dataset.namespace, dataset.set_name, before_nanos)
 
     def __repr__(self) -> str:

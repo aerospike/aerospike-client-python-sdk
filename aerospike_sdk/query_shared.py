@@ -45,7 +45,9 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self, deprecated
+from typing import Self
+
+from typing_extensions import deprecated
 
 from aerospike_async import (
     BasePolicy,
@@ -158,6 +160,7 @@ from aerospike_sdk.record_result import (
     batch_records_to_results,
 )
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:
     # Leaf classes, referenced here only in annotations (safe circular
@@ -169,6 +172,15 @@ if TYPE_CHECKING:
     from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder  # noqa: F401
 
 log = logging.getLogger(SdkLoggers.QUERY)
+
+_QUERY_IN_TXN_WARNING = (
+    "Query executed inside a transaction will not take part in it. The server "
+    "has no multi-record transaction support on the query path, so this query "
+    "reads the state as it was before the transaction began: it will not see "
+    "the transaction's own writes, and the rows it returns are not protected "
+    "against concurrent modification at commit. Call with_txn(None) on this "
+    "query to confirm that is intended and silence this warning."
+)
 
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
@@ -225,7 +237,7 @@ class QueryHint:
     plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
     mutually exclusive.
 
-    On clusters that support field ``44`` query selection (>= 8.1.3),
+    On clusters that support field ``44`` query selection (>= 8.2.0),
     ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
     explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
     Behavior default (strict — primary-index fallback rejected), ``True``
@@ -433,6 +445,12 @@ class _QueryBuilderBase:
     # whether any key in the batch lands in an SC namespace.
     _batch_namespace_modes: Optional[Dict[str, Mode]] = None
     _batch_any_sc: bool = False
+    # Feature-usage counters. `_usage_on` stays False unless the app enabled
+    # the usage group, which keeps every hook point on this path down to one
+    # attribute load. `_usage_features` accumulates across chained segments
+    # because finalizing a segment clears the state it was derived from.
+    _usage_on: bool = False
+    _usage_features: Optional[List[str]] = None
 
     def __init__(
         self,
@@ -516,6 +534,8 @@ class _QueryBuilderBase:
             and sdk_client.supports_query_selection
         ):
             self._supports_query_selection = True
+        if sdk_client is not None and sdk_client._usage_on:
+            self._usage_on = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -691,6 +711,19 @@ class _QueryBuilderBase:
             bp = BatchPolicy()
         return self._apply_txn(bp)
 
+    def _warn_if_query_in_txn(self) -> None:
+        """Warn that a dataset query cannot participate in its transaction.
+
+        The server has no multi-record transaction support on the query
+        path, so a dataset query always reads previously committed state —
+        whether the transaction was passed explicitly or inherited from the
+        session. Warning rather than failing is deliberate: querying for
+        keys inside a transactional block and then writing those keys
+        transactionally is legitimate and has to keep working.
+        """
+        if self._txn is not None:
+            log.warning(_QUERY_IN_TXN_WARNING)
+
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
 
@@ -770,12 +803,9 @@ class _QueryBuilderBase:
         ignores the bin list. Subsequent calls replace the previous
         projection.
 
-        Server compatibility:
-            - Servers older than 8.1.2 accept only the basic ``get_bin`` /
-              ``get_header`` ops.
-            - Server 8.1.2+ also accepts CDT, expression, bit, and HLL
-              reads — for example
-              ``CdtOperation.select_values("bin", [...])``.
+        The server accepts basic ``get_bin`` / ``get_header`` ops as well as
+        CDT, expression, bit, and HLL reads — for example
+        ``CdtOperation.select_values("bin", [...])``.
 
         Args:
             *ops: One or more native ``aerospike_async`` read operations.
@@ -1400,6 +1430,64 @@ class _QueryBuilderBase:
         else:
             raise TypeError(f"requires a Key or List[Key], got {type(arg1).__name__}")
 
+    def _collect_segment_usage(self) -> None:
+        """Fold the current segment's feature counters into the pending set.
+
+        Called from the finalizers, which is the last point at which the
+        segment's filter/op/flag state is still readable — they clear it
+        immediately afterwards. Only reached while ``_usage_on``.
+        """
+        features = self._usage_features
+        if features is None:
+            features = self._usage_features = []
+        if self._where_ael is not None or self._default_where_ael is not None:
+            features.append(usage.FILTER_AEL)
+        elif (
+            self._filter_expression is not None
+            or self._default_filter_expression is not None
+        ):
+            features.append(usage.FILTER_EXP)
+        if self._durable_delete or self._durable_delete_command_default:
+            features.append(usage.WRITE_DURABLE_DELETE)
+        if self._udf_function is not None:
+            features.append(usage.UDF_RECORD)
+        if usage.has_cdt(self._operations):
+            features.append(usage.CDT)
+
+    def _usage_shape(self) -> str:
+        """Classify the finalized builder as a point, batch or query call.
+
+        Call after the specs are finalized. No keys means the call falls
+        through to the dataset/index query path.
+        """
+        specs = self._specs
+        if not specs:
+            return usage.SHAPE_QUERY
+        if len(specs) == 1 and len(specs[0].keys) == 1:
+            return usage.SHAPE_POINT
+        return usage.SHAPE_BATCH
+
+    def _flush_usage(self, execution_mode: str, shape: str) -> None:
+        """Send the accumulated feature set plus this call's mode and shape.
+
+        Only reached while ``_usage_on``. One crossing into the client core
+        per user API call, however many features it touched.
+        """
+        features = self._usage_features
+        if features is None:
+            features = [execution_mode, shape]
+        else:
+            features.append(execution_mode)
+            features.append(shape)
+            self._usage_features = None
+        if self._filter_records:
+            features.append(usage.FILTER_SECONDARY_INDEX)
+        if self._partition_filter is not None:
+            features.append(usage.QUERY_PARTITION_FILTER)
+        if self._txn is not None:
+            features.append(usage.TRANSACTION)
+        usage.record(self._sdk_client, features)
+
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
         if self._single_key is not None:
@@ -1408,6 +1496,8 @@ class _QueryBuilderBase:
             keys = self._keys
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
 
         # Inline the no-AEL fast path: this runs once per segment, and the
         # resolver chain is only needed when a string ``where()`` is pending.
@@ -1475,6 +1565,8 @@ class _QueryBuilderBase:
             keys = list(self._keys)
         else:
             return
+        if self._usage_on:
+            self._collect_segment_usage()
         filt = self._effective_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
@@ -2795,6 +2887,22 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         return self._segment._add_op(ListOperation.size(self._bin))
 
+    def list_join(self, separator: Optional[str] = None) -> WriteSegmentBuilder:
+        """Concatenate the string items of the list (read within operate).
+
+        The list must hold only strings; any other element type fails with
+        ``PARAMETER_ERROR``. An empty list joins to an empty string. The
+        inverse of :meth:`str_split`.
+
+        Args:
+            separator: Inserted between consecutive items. ``None`` = no
+                separator.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder`.
+        """
+        return self._segment._add_op(ListOperation.join(self._bin, separator))
+
     def list_append_items(
         self, items: Any,
         *,
@@ -3944,7 +4052,55 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
-    # -- Server-side string operations (server 8.1.3+) ------------------------
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> WriteSegmentBuilder:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.2.0 or later. The decode direction is
+        :meth:`str_b64_decode`.
+
+        Example::
+
+            stream = await (
+                session.update(key)
+                .bin("payload").bit_b64_encode(0, 16)
+                .execute()
+            )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent :class:`WriteSegmentBuilder` for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`QueryBinBuilder.bit_b64_encode`
+            :meth:`str_b64_decode`
+        """
+        return self._segment._add_op(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
+        )
+
+    # -- Server-side string operations (server 8.2.0+) ------------------------
     #
     # The ``str_*`` family wraps server-side string read/modify ops. Each
     # method registers a single op on the surrounding write segment and
@@ -4271,18 +4427,24 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.prepend(self._bin, value, flags=int(flags)),
         )
 
-    def str_snip(self, start: int, end: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_snip(
+        self, start: int, end: int | None = None, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
+    ) -> WriteSegmentBuilder:
         """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
 
+        When ``end`` is omitted, everything from ``start`` through the end of
+        the string is removed — ``str_snip(5)`` truncates ``"hello world"``
+        to ``"hello"``. Negative indexes count from the end of the string.
+
         Note:
-            ``end`` is REQUIRED. The server-side snip op cannot dispatch a
-            1-arg form. To remove the suffix from ``start`` to the bin's
-            end, pass the codepoint length explicitly (e.g. from a paired
-            :meth:`str_strlen` read).
+            ``flags`` require an explicit ``end``. The server reads the snip
+            arguments by position (``start``, ``end``, then flags), so the
+            truncate-to-end form is sent without a flags element.
 
         Args:
             start: Codepoint index where the removed range starts.
-            end: Exclusive end of the removed range.
+            end: Exclusive end of the removed range, or None to remove
+                through the end of the string.
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
@@ -4403,13 +4565,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             StringOperation.repeat(self._bin, count, flags=int(flags)),
         )
 
-    def str_to_string(self) -> WriteSegmentBuilder:
-        """Register a to-string read: convert a non-string bin to its string representation.
+    def read_as_string(self) -> WriteSegmentBuilder:
+        """Register a to-string read: convert any bin to its string representation.
 
-        Accepts ``int``, ``float``, ``string``, or ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server. Has no
-        ``flags`` argument and no CDT-context support (the wire op has no
-        payload to carry a CTX wrapper).
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int``,
+        ``float``, ``string``, or ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server. Has no ``flags``
+        argument and no CDT-context support (the wire op has no payload to
+        carry a CTX wrapper).
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
@@ -5030,6 +5195,23 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         self._parent.add_operation(ListOperation.size(self._bin))  # type: ignore[union-attr]
         return self._parent
 
+    def list_join(self, separator: Optional[str] = None) -> _T:
+        """Read the string items of the list concatenated into one string.
+
+        The list must hold only strings; any other element type fails with
+        ``PARAMETER_ERROR``. An empty list joins to an empty string. The
+        inverse of :meth:`str_split`.
+
+        Args:
+            separator: Inserted between consecutive items. ``None`` = no
+                separator.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        self._parent.add_operation(ListOperation.join(self._bin, separator))  # type: ignore[union-attr]
+        return self._parent
+
     def list_get(self, index: int) -> _T:
         """Read the list element at *index* into the query result.
 
@@ -5299,7 +5481,50 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )  # type: ignore[union-attr]
         return self._parent
 
-    # -- Server-side string read operations (server 8.1.3+) -------------------
+    def bit_b64_encode(
+        self,
+        byte_offset: Optional[int] = None,
+        byte_size: Optional[int] = None,
+        invert_size: bool = False,
+    ) -> _T:
+        """Read this blob bin as base64 text, whole or by byte range.
+
+        Without a range the whole blob is encoded. With ``byte_offset`` and
+        ``byte_size`` (required together) only that byte range is encoded; a
+        negative ``byte_offset`` counts back from the end of the blob. When
+        ``invert_size`` is ``True``, ``byte_size`` counts back from the end
+        instead, so an inverted size of 0 encodes through to the end.
+
+        Requires server 8.2.0 or later. The decode direction is
+        :meth:`WriteBinBuilder.str_b64_decode`.
+
+        Example::
+            stream = await ( session.query(key).bin("payload").bit_b64_encode().execute() )
+
+        Args:
+            byte_offset: Starting byte index of the range; negative counts
+                back from the end. Given together with ``byte_size``.
+            byte_size: Byte count to encode (or, inverted, the count left
+                off the end).
+            invert_size: ``True`` to measure ``byte_size`` back from the
+                end of the blob.
+
+        Returns:
+            The parent query builder for chaining.
+
+        Raises:
+            ValueError: If only one of ``byte_offset`` / ``byte_size`` is
+                given, or ``invert_size`` is set without a range.
+
+        See Also:
+            :meth:`WriteBinBuilder.bit_b64_encode`
+        """
+        self._parent.add_operation(
+            BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
+        )  # type: ignore[union-attr]
+        return self._parent
+
+    # -- Server-side string read operations (server 8.2.0+) -------------------
     #
     # See :class:`WriteBinBuilder` for the parallel write-side surface +
     # modify-op family. Only reads make sense on a query builder; users
@@ -5419,11 +5644,14 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )
         return self._parent
 
-    def str_to_string(self) -> _T:
-        """Convert a non-string bin to its string representation.
+    def read_as_string(self) -> _T:
+        """Convert any bin to its string representation.
 
-        Accepts ``int`` / ``float`` / ``string`` / ``blob`` source types;
-        any other type returns ``BIN_TYPE_ERROR`` from the server.
+        Type-agnostic — the source bin need not be a string, which is why
+        this method carries no ``str_`` prefix (``str_to_integer`` and
+        friends genuinely require a string source). Accepts ``int`` /
+        ``float`` / ``string`` / ``blob`` source types; any other type
+        returns ``BIN_TYPE_ERROR`` from the server.
         """
         self._parent.add_operation(StringOperation.to_string(self._bin))  # type: ignore[union-attr]
         return self._parent

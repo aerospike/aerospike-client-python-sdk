@@ -201,6 +201,11 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
         ),
         allow_inline=settings.allow_inline,
         allow_inline_ssd=settings.allow_inline_ssd,
+        # Batch node selection reads replica and the read modes from the
+        # parent policy; the per-record policies carry no routing fields.
+        replica=settings.replica,
+        read_mode_ap=settings.read_mode_ap,
+        read_mode_sc=settings.read_mode_sc,
         use_compression=settings.use_compression,
         compression_threshold=settings.compression_threshold,
         error_detail_verbosity=settings.error_detail_verbosity,

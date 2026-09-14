@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Union
 
-from typing_extensions import Self
+from typing import Self
 
 from aerospike_async import (
     CTX,
@@ -83,11 +83,11 @@ class _IndexBuilderBase:
         must match the index type set via :meth:`numeric`, :meth:`string`,
         or :meth:`geo2dsphere` — a boolean predicate is rejected by the
         server, so build a value-producing expression (e.g. via
-        ``FilterExpression.cond``). Requires server 8.1.2 or newer.
+        ``FilterExpression.cond``).
 
         An AEL string may be passed instead of a prebuilt expression; the
         server parses and compiles it when the index is created, so the
-        cluster must support server-compiled AEL (server 8.1.3 or newer on
+        cluster must support server-compiled AEL (server 8.2.0 or newer on
         every node) or :meth:`create` raises with result code
         ``OP_NOT_APPLICABLE``.
 
@@ -125,7 +125,7 @@ class _IndexBuilderBase:
                 .create()
             )
 
-            # Or let the server compile an AEL string (server 8.1.3+):
+            # Or let the server compile an AEL string (server 8.2.0+):
             await (
                 client.index("test", "users")
                 .on_expression("$.age + 1")

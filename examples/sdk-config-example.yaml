@@ -2,7 +2,7 @@
 #
 # Point AEROSPIKE_SDK_CONFIG_URL at this file (file:///path/to/it or a bare
 # path) before connecting. The file is re-read on change while a client is
-# running: connection-level groups (connections, circuitBreaker, refresh)
+# running: connection-level groups (connections, circuit_breaker, refresh)
 # take effect on the next connect; the transactions group applies to the
 # next operation.
 #
@@ -17,59 +17,59 @@ system:
   # Applies to every cluster this process connects to.
   DEFAULT:
     connections:
-      minimumConnectionsPerNode: 10
-      maximumConnectionsPerNode: 300
-      maximumSocketIdleTime: 55s
-    circuitBreaker:
+      minimum_connections_per_node: 10
+      maximum_connections_per_node: 300
+      maximum_socket_idle_time: 55s
+    circuit_breaker:
       # Errors per node tolerated within the window before commands to that
       # node fail fast, and the window length in tend intervals.
-      numTendIntervalsInErrorWindow: 2
-      maximumErrorsInErrorWindow: 100
+      num_tend_intervals_in_error_window: 2
+      maximum_errors_in_error_window: 100
     refresh:
-      tendInterval: 1s
+      tend_interval: 1s
     transactions:
-      implicitBatchWriteTransactions: true
-      sleepBetweenAttempts: 1000ms
-      numberOfAttempts: 5
+      implicit_batch_write_transactions: true
+      sleep_between_attempts: 1000ms
+      number_of_attempts: 5
 
   # Layers on DEFAULT for connections that declare this cluster name via
   # ClusterDefinition.validate_cluster_name_is("prod-cluster").
   prod-cluster:
     connections:
-      maximumConnectionsPerNode: 500
+      maximum_connections_per_node: 500
     transactions:
-      implicitBatchWriteTransactions: false
+      implicit_batch_write_transactions: false
 
 # Named operation-policy profiles, registered as Behavior objects at connect
 # and retrievable via aerospike_sdk.policy.get_behavior("<name>"). Edits
 # hot-reload into live sessions bound to these behaviors.
-# maximumNumberOfCallAttempts counts the initial call (2 = one retry).
+# maximum_number_of_call_attempts counts the initial call (2 = one retry).
 behaviors:
   high-performance:
-    allOperations:
-      abandonCallAfter: 1s
-      waitForCallToComplete: 500ms
-      maximumNumberOfCallAttempts: 2
-      delayBetweenRetries: 25ms
-      replicaOrder: SEQUENCE
-      sendKey: false
-    retryableWrites:
-      useDurableDelete: false
-      maximumNumberOfCallAttempts: 3
-    consistencyModeReads:
-      readConsistency: SESSION
-    availabilityModeReads:
-      migrationReadConsistency: ONE
-    batchReads:
-      maxConcurrentServers: 8
-      allowInlineMemoryAccess: true
+    all_operations:
+      abandon_call_after: 1s
+      wait_for_call_to_complete: 500ms
+      maximum_number_of_call_attempts: 2
+      delay_between_retries: 25ms
+      replica_order: SEQUENCE
+      send_key: false
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 3
+    consistency_mode_reads:
+      read_consistency: SESSION
+    availability_mode_reads:
+      migration_read_consistency: ONE
+    batch_reads:
+      max_concurrent_servers: 8
+      allow_inline_memory_access: true
     query:
-      recordQueueSize: 5000
+      record_queue_size: 5000
 
   # Inherits high-performance, then overrides per field.
   batch-optimized:
     parent: high-performance
-    batchReads:
-      maxConcurrentServers: 16
+    batch_reads:
+      max_concurrent_servers: 16
     query:
-      recordQueueSize: 20000
+      record_queue_size: 20000

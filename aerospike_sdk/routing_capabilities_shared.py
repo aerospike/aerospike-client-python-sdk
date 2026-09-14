@@ -162,7 +162,7 @@ class RoutingCapabilitiesMixin:
         """Resolve both gates for a client that cannot read node versions.
 
         The two gates diverge deliberately. Field ``43`` is the only encoding
-        left for string AEL, so it stays open and a cluster below 8.1.3 rejects
+        left for string AEL, so it stays open and a cluster below 8.2.0 rejects
         the filter itself — pre-failing here would reject string AEL against a
         capable cluster. Field ``44`` has a working field-``43`` execute path to
         fall back on, so an unverifiable cluster keeps it closed.

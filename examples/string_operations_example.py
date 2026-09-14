@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server-side string operations (requires Aerospike server 8.1.3+).
+"""Server-side string operations (requires Aerospike server 8.2.0+).
 
 Strings can be measured, sliced, searched, and transformed entirely on the
 server — the value never round-trips to the client. Three ways to reach them:
@@ -8,7 +8,7 @@ server — the value never round-trips to the client. Three ways to reach them:
 2. the low-level ``StringOperation`` factories via ``add_operation``;
 3. a query projection with ``Exp.string_*`` computed into result bins.
 
-If the cluster is older than 8.1.3, this example prints a skip message and exits.
+If the cluster is older than 8.2.0, this example prints a skip message and exits.
 """
 
 import asyncio
@@ -24,8 +24,8 @@ async def main() -> None:
         key = docs.id("row1")
 
         try:
-            if not await _env.server_at_least(session, (8, 1, 3)):
-                print("Skipped: server-side string operations require Aerospike 8.1.3+.")
+            if not await _env.server_at_least(session, (8, 2, 0)):
+                print("Skipped: server-side string operations require Aerospike 8.2.0+.")
                 return
 
             # --- 1) Fluent bin builder: strlen, substr, find, upper, get in one call ---

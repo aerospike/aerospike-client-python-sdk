@@ -36,15 +36,15 @@ _IMPLICIT_TRUE = """
 system:
   DEFAULT:
     transactions:
-      implicitBatchWriteTransactions: true
+      implicit_batch_write_transactions: true
 """
 _IMPLICIT_FALSE = """
 system:
   DEFAULT:
     connections:
-      maximumConnectionsPerNode: 88
+      maximum_connections_per_node: 88
     transactions:
-      implicitBatchWriteTransactions: false
+      implicit_batch_write_transactions: false
 """
 
 
@@ -118,15 +118,80 @@ async def test_hot_reload_swaps_on_async_client(aerospike_host, tmp_path):
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
 
 
+async def test_metrics_hot_reload_applies_the_whole_policy(aerospike_host, tmp_path):
+    """Flipping metrics.enabled in the file turns collection on without a reconnect.
+
+    The re-apply has to go through the cluster, not just the client: enabling
+    collection is only part of it, and a policy the cluster never saw leaves
+    the histogram shape missing from the exported snapshot.
+    """
+    host, port = _host_port(aerospike_host)
+    off = "system:\n  DEFAULT:\n    metrics:\n      enabled: false\n"
+    on = (
+        "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+        "      latency_unit: microseconds\n      latency_columns: 24\n"
+    )
+    path = _write(tmp_path, "sdk.yaml", off)
+    with _sdk_config_env(path):
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is False
+
+            with open(path, "w") as fh:
+                fh.write(on)
+            _bump_mtime(path)
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 8.0
+            while loop.time() < deadline:
+                if cluster.metrics_enabled():
+                    break
+                await asyncio.sleep(0.2)
+            assert cluster.metrics_enabled() is True
+
+            session = cluster.create_session()
+            ds = DataSet.of(general_namespace(), "metrics_reload")
+            for i in range(3):
+                await session.upsert(ds.id(i)).put({"n": i}).execute()
+
+            document = (await cluster.metrics()).to_canonical_dict()
+            # Present only if the cluster took the policy, not just the flag.
+            assert document["latency_columns"] == 24
+            assert document["latency_unit"] == "microseconds"
+
+
+async def test_usage_counters_enable_from_the_config_file(aerospike_host, tmp_path):
+    """``metrics.extended.usage.enabled`` switches the counters on at connect.
+
+    The counters are recorded by this SDK rather than the client core, so this
+    is the one ``extended`` group whose flag is genuinely honored.
+    """
+    host, port = _host_port(aerospike_host)
+    yaml_text = (
+        "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+        "      extended:\n        usage:\n          enabled: true\n"
+    )
+    path = _write(tmp_path, "sdk.yaml", yaml_text)
+    with _sdk_config_env(path):
+        async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            session = cluster.create_session()
+            ds = DataSet.of(general_namespace(), "usage_from_file")
+            for i in range(3):
+                await session.upsert(ds.id(i)).put({"n": i}).execute()
+
+            usage = (await cluster.metrics()).usage
+            assert usage, "usage counters should be populated"
+            assert any(name.startswith("feature.") for name in usage)
+
+
 async def test_behaviors_section_defines_usable_behavior(aerospike_host, tmp_path):
     """A file-defined behavior is registered at connect and drives real ops."""
     host, port = _host_port(aerospike_host)
     yaml_text = (
         "behaviors:\n"
         "  cfg-reads:\n"
-        "    allOperations:\n"
-        "      abandonCallAfter: 5s\n"
-        "      maximumNumberOfCallAttempts: 2\n"
+        "    all_operations:\n"
+        "      abandon_call_after: 5s\n"
+        "      maximum_number_of_call_attempts: 2\n"
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
@@ -147,7 +212,7 @@ async def test_behaviors_section_defines_usable_behavior(aerospike_host, tmp_pat
 async def test_behaviors_hot_reload_updates_live_session(aerospike_host, tmp_path):
     """Editing a behavior in the file updates an already-created session."""
     host, port = _host_port(aerospike_host)
-    yaml_text = "behaviors:\n  cfg-hot:\n    allOperations:\n      abandonCallAfter: 5s\n"
+    yaml_text = "behaviors:\n  cfg-hot:\n    all_operations:\n      abandon_call_after: 5s\n"
     path = _write(tmp_path, "sdk.yaml", yaml_text)
     with _sdk_config_env(path):
         async with await apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
@@ -185,10 +250,10 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
         "system:\n"
         "  DEFAULT:\n"
         "    transactions:\n"
-        "      implicitBatchWriteTransactions: true\n"
+        "      implicit_batch_write_transactions: true\n"
         f"  {cluster_name}:\n"
         "    transactions:\n"
-        "      implicitBatchWriteTransactions: false\n"
+        "      implicit_batch_write_transactions: false\n"
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         async with await (

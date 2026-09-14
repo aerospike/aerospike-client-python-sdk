@@ -21,18 +21,18 @@ version: "1.0.0"
 system:
   DEFAULT:
     connections:
-      minimumConnectionsPerNode: 10
-      maximumConnectionsPerNode: 300
-      maximumSocketIdleTime: 55s
-    circuitBreaker:
-      numTendIntervalsInErrorWindow: 2
-      maximumErrorsInErrorWindow: 100
+      minimum_connections_per_node: 10
+      maximum_connections_per_node: 300
+      maximum_socket_idle_time: 55s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 2
+      maximum_errors_in_error_window: 100
     refresh:
-      tendInterval: 1s
+      tend_interval: 1s
     transactions:
-      implicitBatchWriteTransactions: true
-      sleepBetweenAttempts: 1000ms
-      numberOfAttempts: 5
+      implicit_batch_write_transactions: true
+      sleep_between_attempts: 1000ms
+      number_of_attempts: 5
 ```
 
 The `system:` section holds named profiles. `DEFAULT` applies to every
@@ -49,15 +49,15 @@ A field absent from one layer falls through to the next, so the file wins
 only for the fields it actually provides. Durations use a unit suffix
 (`250ms`, `55s`, `5m`, `2h`).
 
-Two kinds of settings live in the file. The `connections`, `circuitBreaker`,
+Two kinds of settings live in the file. The `connections`, `circuit_breaker`,
 and `refresh` groups configure the connection itself and take effect at
 `connect()`; changing them on a running client applies on the next connect.
 The `transactions` group is SDK-runtime configuration, read at operation
 time — hot-reloaded changes take effect on the next operation.
-`implicitBatchWriteTransactions` (default `true`) controls whether
+`implicit_batch_write_transactions` (default `true`) controls whether
 multi-key write batches on strong-consistency namespaces are wrapped in
 [implicit transactions](transactions.md);
-`numberOfAttempts` (default `5`) and `sleepBetweenAttempts` (default
+`number_of_attempts` (default `5`) and `sleep_between_attempts` (default
 `1000ms`) drive their retry loop on transient conflicts. See
 [`SystemSettings`](../api/system-settings.md) for the programmatic
 equivalents.
@@ -70,32 +70,32 @@ registered [`Behavior`](../api/behavior.md) objects at `connect()`:
 ```yaml
 behaviors:
   high-performance:
-    allOperations:
-      abandonCallAfter: 1s
-      maximumNumberOfCallAttempts: 2
-      delayBetweenRetries: 25ms
-      errorDetailVerbosity: 2    # 0=none, 1=subcode, 2=+message, 3=+expression trace
-    retryableWrites:
-      useDurableDelete: false
-    batchReads:
-      maxConcurrentServers: 8
+    all_operations:
+      abandon_call_after: 1s
+      maximum_number_of_call_attempts: 2
+      delay_between_retries: 25ms
+      error_detail_verbosity: 2    # 0=none, 1=subcode, 2=+message, 3=+expression trace
+    retryable_writes:
+      use_durable_delete: false
+    batch_reads:
+      max_concurrent_servers: 8
     query:
-      recordQueueSize: 5000
+      record_queue_size: 5000
 
   batch-optimized:
     parent: high-performance   # inherits, then overrides per field
-    batchReads:
-      maxConcurrentServers: 16
+    batch_reads:
+      max_concurrent_servers: 16
 ```
 
-Selector blocks scope the fields to an operation category: `allOperations`,
-`retryableWrites` / `nonRetryableWrites`, `consistencyModeReads` (SC) /
-`availabilityModeReads` (AP), `batchReads` / `batchWrites`, and `query`.
+Selector blocks scope the fields to an operation category: `all_operations`,
+`retryable_writes` / `non_retryable_writes`, `consistency_mode_reads` (SC) /
+`availability_mode_reads` (AP), `batch_reads` / `batch_writes`, and `query`.
 `parent:` names another profile (default: `DEFAULT`) whose resolved settings
 the profile inherits field by field. A `DEFAULT` entry adjusts
 `Behavior.DEFAULT` itself, layered on its built-in settings.
-`maximumNumberOfCallAttempts` counts the initial call, so `2` means one
-retry. `errorDetailVerbosity` opts operations into extended server error
+`maximum_number_of_call_attempts` counts the initial call, so `2` means one
+retry. `error_detail_verbosity` opts operations into extended server error
 detail (see [Error Handling](error-handling.md)); it defaults to `0` (off).
 
 Use a file-defined behavior like any other:
@@ -118,7 +118,7 @@ re-read, re-parsed, and applied without reconnecting.
   every live session bound to them (including sessions on derived child
   behaviors). Nothing is checked on the operation path; in-flight operations
   complete with whichever policy snapshot they started with.
-- **`connections.*` / `refresh.tendInterval`** — applied to the connection at
+- **`connections.*` / `refresh.tend_interval`** — applied to the connection at
   `connect()`; a change to these takes effect on the next connect.
 
 ## Fail-soft
@@ -131,6 +131,31 @@ File handling never breaks a client:
   applies.
 - A file that stops parsing mid-run keeps the last-good settings rather than
   reverting to defaults.
+
+## Key names
+
+Keys are `snake_case`, the format shared across Aerospike SDKs so one file can
+configure clients in different languages.
+
+A key the loader does not recognize is **skipped with a warning naming it**. The
+file still loads and everything else in it still applies — which is what makes a
+shared file usable when one client understands a setting another does not, and
+also why a typo costs you the setting rather than the connection:
+
+```
+WARNING  SDK config: unrecognized key connections.minimumConnections; ignored
+```
+
+If you would rather find out at deploy time than from behavior in production,
+make it fatal:
+
+```python
+cluster_def = ClusterDefinition("localhost", 3000).with_strict_config()
+```
+
+That raises on the connect-time read if anything in the file was unrecognized.
+Hot reload stays fail-soft regardless: the monitor runs in the background with
+no caller to raise to, so it warns and keeps the previous configuration.
 
 ## Complete example
 

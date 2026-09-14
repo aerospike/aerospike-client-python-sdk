@@ -30,14 +30,14 @@ class _FakeVersion:
     def __init__(self, major, minor, patch, build=0, *,
                  ael=None, query_ops=None, string_ops=None, query_selection=None):
         self.major, self.minor, self.patch, self.build = major, minor, patch, build
-        # Default each predicate to "supported iff >= 8.1.3", the real floor,
+        # Default each predicate to "supported iff >= 8.2.0", the real floor,
         # unless the test pins it explicitly.
-        ge813 = (major, minor, patch) >= (8, 1, 3)
-        self._ael = ge813 if ael is None else ael
+        ge820 = (major, minor, patch) >= (8, 2, 0)
+        self._ael = ge820 if ael is None else ael
         self._query_ops = ((major, minor, patch) >= (8, 1, 2)
                            if query_ops is None else query_ops)
-        self._string_ops = ge813 if string_ops is None else string_ops
-        self._query_selection = ge813 if query_selection is None else query_selection
+        self._string_ops = ge820 if string_ops is None else string_ops
+        self._query_selection = ge820 if query_selection is None else query_selection
 
     def supports_server_compiled_ael(self):
         return self._ael
@@ -76,15 +76,15 @@ class TestAllNodesFolds:
     """A single lagging node makes each predicate report unsupported."""
 
     def test_all_capable_supports_everything(self):
-        vs = [_FakeVersion(8, 1, 3), _FakeVersion(8, 1, 3)]
+        vs = [_FakeVersion(8, 2, 0), _FakeVersion(8, 2, 0)]
         assert capabilities.supports_ael(vs)
         assert capabilities.supports_string_operations(vs)
         assert capabilities.supports_query_operations(vs)
         assert capabilities.supports_query_selection(vs)
 
-    def test_one_lagging_node_downgrades_813_features(self):
-        # One node at 8.1.2 fails the >= 8.1.3 features but keeps 8.1.2 ones.
-        vs = [_FakeVersion(8, 1, 3), _FakeVersion(8, 1, 2)]
+    def test_one_lagging_node_downgrades_820_features(self):
+        # One node at 8.1.2 fails the >= 8.2.0 features but keeps 8.1.2 ones.
+        vs = [_FakeVersion(8, 2, 0), _FakeVersion(8, 1, 2)]
         assert not capabilities.supports_ael(vs)
         assert not capabilities.supports_string_operations(vs)
         assert not capabilities.supports_query_selection(vs)

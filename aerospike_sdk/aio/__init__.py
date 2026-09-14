@@ -36,21 +36,3 @@ __all__ = [
     "Session",
     "TransactionalSession",
 ]
-
-
-def __getattr__(name: str):
-    # Deprecated connection primitive, importable for one deprecation cycle.
-    if name == "Client":
-        import warnings
-
-        warnings.warn(
-            "aerospike_sdk.aio.Client is deprecated; connect with "
-            "aerospike_sdk.ClusterDefinition(...).connect() instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from aerospike_sdk.aio.client import Client
-
-        return Client
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-

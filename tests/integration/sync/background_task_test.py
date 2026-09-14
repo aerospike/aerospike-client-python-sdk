@@ -17,6 +17,7 @@
 
 import pytest
 from aerospike_sdk import UDFLang
+from aerospike_async import Operation
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -27,6 +28,7 @@ SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
+MARKER = "bg_marker"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
 
@@ -182,3 +184,30 @@ def test_sync_background_udf_with_validation(cluster):
         rr = session.query(DS.id(f"bg_{i}")).bins([BG_BIN2]).execute().first_or_raise()
         assert rr.record is not None
         assert rr.record.bins.get(BG_BIN2) == 5
+
+
+def test_sync_query_builder_background_scan(cluster):
+    session = cluster.create_session()
+    for i in range(5):
+        session.upsert(DS.id(f"bgq_{i}")).put({BG_BIN: i}).execute()
+    task = (
+        session.query(DS)
+        .with_write_operations([Operation.put(MARKER, 1)])
+        .execute_background_task()
+    )
+    assert _wait_task(cluster, task)
+    rr = session.query(DS.id("bgq_0")).bins([MARKER]).execute().first_or_raise()
+    assert rr.record is not None
+    assert rr.record.bins.get(MARKER) == 1
+
+
+def test_sync_point_query_rejects_background_task(cluster):
+    session = cluster.create_session()
+    key = DS.id("bgq_point")
+    session.upsert(key).put({BG_BIN: 1}).execute()
+    with pytest.raises(ValueError, match="dataset queries"):
+        (
+            session.query(key)
+            .with_write_operations([Operation.put(MARKER, 1)])
+            .execute_background_task()
+        )

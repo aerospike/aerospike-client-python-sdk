@@ -7,8 +7,8 @@ inheritance tree. This enumerates every registered behavior, shows its parent,
 and prints the settings each resolves.
 
 Settings resolve per operation *shape*: a profile that overrides only
-batch- or query-shaped fields (e.g. ``batchReads.maxConcurrentServers``,
-``query.recordQueueSize``) looks identical to its parent for a point read but
+batch- or query-shaped fields (e.g. ``batch_reads.max_concurrent_servers``,
+``query.record_queue_size``) looks identical to its parent for a point read but
 differs once the batch/query shape is resolved. This prints all three shapes
 so a shape-scoped inheritance override is visible.
 """

@@ -77,6 +77,7 @@ def _sdk_client():
         supports_server_compiled_ael=False,
         supports_query_selection=False,
         _sdk_settings=settings,
+        _usage_on=False,
     )
     client._supports_mrt_blocking = lambda: False
     return client

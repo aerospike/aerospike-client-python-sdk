@@ -822,6 +822,7 @@ class _BlockingQueryDispatch:
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
+        self._warn_if_query_in_txn()
         if self._policy is not None:
             policy = self._policy
         elif self._behavior is not None:

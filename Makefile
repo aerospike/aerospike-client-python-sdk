@@ -1,4 +1,4 @@
-.PHONY: test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin test-sc
+.PHONY: test dev docs docs-clean docs-serve examples bench bench-quick bench-compare check-pin test-sc coverage coverage-all
 
 dev:
 	pip install -e ".[dev]"
@@ -24,6 +24,15 @@ test-sc:
 
 check-pin:
 	pytest tests/unit/pin_drift_test.py -q
+
+# Unit-only coverage: the figure CI enforces on every PR.
+coverage:
+	pytest tests/unit --cov=aerospike_sdk --cov-report=term --cov-report=xml
+
+# Full-suite coverage (unit + integration); needs a running server.
+# The 80% line-coverage target is held against this figure.
+coverage-all:
+	pytest tests --cov=aerospike_sdk --cov-report=term --cov-report=xml
 
 examples:
 	@for f in examples/*.py; do \

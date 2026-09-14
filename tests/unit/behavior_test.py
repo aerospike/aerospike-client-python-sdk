@@ -109,11 +109,12 @@ class TestBehaviorGetSettings:
     non-None settings."""
     def test_default_read_point_has_all_scope_values(self):
         s = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.POINT)
-        assert s.total_timeout == timedelta(seconds=30)
-        assert s.socket_timeout == timedelta(seconds=5)
+        assert s.total_timeout == timedelta(seconds=1)
+        assert s.socket_timeout == timedelta(seconds=30)
         assert s.max_retries == 2
         assert s.retry_delay == timedelta(0)
-        assert s.send_key is True
+        assert s.send_key is False
+        assert s.read_mode_ap == ReadModeAP.ONE
         assert s.replica == Replica.SEQUENCE
 
     def test_default_read_ap_has_read_touch_ttl_percent(self):
@@ -136,10 +137,27 @@ class TestBehaviorGetSettings:
         assert s.max_retries == 5
         assert s.record_queue_size == 5000
 
+    def test_default_query_read_has_no_total_cap(self):
+        # Queries stream for as long as the data takes: the point-op total
+        # (1 s) must not apply, only the per-read socket bound.
+        s = Behavior.DEFAULT.get_settings(OpKind.READ, OpShape.QUERY, Mode.AP)
+        assert s.total_timeout == timedelta(0)
+        assert s.socket_timeout == timedelta(seconds=30)
+
     def test_default_query_write_fans_out_in_parallel(self):
         s = Behavior.DEFAULT.get_settings(
             OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, Mode.AP)
         assert s.max_concurrent_nodes == 0
+
+    def test_default_background_op_profile(self):
+        # Background ops resolve through (WRITE_NON_RETRYABLE, QUERY): one
+        # attempt (the server owns the job), a generous submit total, and a
+        # fail-fast per-node ack read.
+        s = Behavior.DEFAULT.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, Mode.AP)
+        assert s.max_retries == 0
+        assert s.total_timeout == timedelta(seconds=30)
+        assert s.socket_timeout == timedelta(seconds=5)
 
     def test_default_batch_write_settings(self):
         s = Behavior.DEFAULT.get_settings(OpKind.WRITE_RETRYABLE, OpShape.BATCH, Mode.AP)
@@ -193,13 +211,13 @@ class TestDeriveWithChanges:
     def test_scope_override(self):
         child = Behavior.DEFAULT.derive_with_changes(
             "child",
-            reads=Settings(total_timeout=timedelta(seconds=1)),
+            reads=Settings(total_timeout=timedelta(seconds=7)),
         )
         s = child.get_settings(OpKind.READ, OpShape.POINT)
-        assert s.total_timeout == timedelta(seconds=1)
+        assert s.total_timeout == timedelta(seconds=7)
         # Writes should still inherit from DEFAULT ALL scope
         w = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
-        assert w.total_timeout == timedelta(seconds=30)
+        assert w.total_timeout == timedelta(seconds=1)
 
     def test_flat_kwargs_apply_to_all_scope(self):
         child = Behavior.DEFAULT.derive_with_changes(
@@ -248,9 +266,9 @@ class TestDeriveWithChanges:
     def test_empty_derive_inherits_defaults(self):
         child = Behavior.DEFAULT.derive_with_changes("empty")
         s = child.get_settings(OpKind.READ, OpShape.POINT)
-        assert s.total_timeout == timedelta(seconds=30)
+        assert s.total_timeout == timedelta(seconds=1)
         assert s.max_retries == 2
-        assert s.send_key is True
+        assert s.send_key is False
 
     def test_child_inherits_and_overrides(self):
         parent = Behavior.DEFAULT.derive_with_changes(
@@ -459,11 +477,11 @@ class TestPreDefinedBehaviors:
 
     def test_read_fast_writes_inherit_from_default(self):
         s = Behavior.READ_FAST.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
-        assert s.total_timeout == timedelta(seconds=30)
+        assert s.total_timeout == timedelta(seconds=1)
 
     def test_strictly_consistent_inherits_defaults(self):
         s = Behavior.STRICTLY_CONSISTENT.get_settings(OpKind.READ, OpShape.POINT)
-        assert s.total_timeout == timedelta(seconds=30)
+        assert s.total_timeout == timedelta(seconds=1)
         assert s.max_retries == 2
         assert s.replica == Replica.SEQUENCE
 
@@ -592,19 +610,19 @@ class TestBackwardCompatProperties:
     socket_timeout, max_retries, retry_delay, send_key) that resolve
     from (READ, POINT, AP) scope, preserving the original flat-field API."""
     def test_total_timeout(self):
-        assert Behavior.DEFAULT.total_timeout == timedelta(seconds=30)
+        assert Behavior.DEFAULT.total_timeout == timedelta(seconds=1)
 
     def test_max_retries(self):
         assert Behavior.DEFAULT.max_retries == 2
 
     def test_socket_timeout(self):
-        assert Behavior.DEFAULT.socket_timeout == timedelta(seconds=5)
+        assert Behavior.DEFAULT.socket_timeout == timedelta(seconds=30)
 
     def test_retry_delay(self):
         assert Behavior.DEFAULT.retry_delay == timedelta(0)
 
     def test_send_key(self):
-        assert Behavior.DEFAULT.send_key is True
+        assert Behavior.DEFAULT.send_key is False
 
     def test_repr(self):
         r = repr(Behavior.DEFAULT)

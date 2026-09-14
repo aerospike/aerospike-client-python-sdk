@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import weakref
+
 import asyncio
 import types
 import typing
-from typing import Optional
+from typing import Any, Optional
 
 from aerospike_async import ClientPolicy, UDFLang, Version
 
@@ -28,7 +30,19 @@ from aerospike_sdk import capabilities
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
-from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
+from aerospike_sdk.metrics.export import (
+    DEFAULT_EXPORT_INTERVAL_SECONDS,
+    AsyncNoOpMetricsExporter,
+    built_in_exporter,
+    check_exporter,
+    dispatch_disable,
+    AsyncMetricsExportTimer,
+)
+from aerospike_sdk.metrics import (
+    MetricsPolicy,
+    MetricsSnapshot,
+    policy_from_settings,
+)
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 
@@ -69,6 +83,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
         self._sdk_client = sdk_client
+        self._metrics_policy: Optional[MetricsPolicy] = None
+        self._metrics_exporter: Any = AsyncNoOpMetricsExporter()
+        self._export_timer: Any = None
+        sdk_client._owner_cluster = weakref.ref(self)
     
     @classmethod
     async def _create(
@@ -100,6 +118,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         if sdk_settings is not None:
             sdk_client._sdk_settings = sdk_settings
         cluster = await cls._connect_and_wrap(sdk_client)
+        if sdk_settings is not None:
+            # After connect: enabling collection needs a live client, and it
+            # goes through the cluster so the export timer starts with it.
+            cluster._apply_metrics_settings(sdk_settings.metrics)
 
         if sdk_config_source is not None:
             sdk_client._start_sdk_config_monitor(sdk_config_source)
@@ -262,7 +284,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         Example::
 
             v = await cluster.server_version()
-            if v is not None and (v.major, v.minor, v.patch) >= (8, 1, 3):
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 2, 0):
                 ...
         """
         return capabilities.min_version(await self._sdk_client._cluster_versions())
@@ -288,7 +310,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             await self._sdk_client._cluster_versions())
 
     async def supports_query_selection(self) -> bool:
-        """Whether every node supports server-led index selection (>= 8.1.3)."""
+        """Whether every node supports server-led index selection (>= 8.2.0)."""
         return capabilities.supports_query_selection(
             await self._sdk_client._cluster_versions())
 
@@ -296,6 +318,86 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
     # Collection lives in the client core and is cluster-scoped; these
     # configure it and pull snapshots. Enable/disable/enabled are instant
     # (no IO) and therefore plain methods even on the async surface.
+
+    @property
+    def metrics_exporter(self) -> Any:
+        """The exporter snapshots are pushed to.
+
+        A cluster has exactly one. Assigning replaces whatever was there,
+        including the built-in default; use
+        :class:`~aerospike_sdk.metrics.export.AsyncMultipleMetricsExporter` to
+        reach several destinations.
+
+        Returns:
+            The current exporter.
+
+        Example::
+
+            cluster.metrics_exporter = LearnMetricsFileExporter("/var/log/aerospike")
+
+        See Also:
+            :meth:`enable_metrics`
+        """
+        return self._metrics_exporter
+
+    @metrics_exporter.setter
+    def metrics_exporter(self, exporter: Any) -> None:
+        if exporter is None:
+            self._metrics_exporter = AsyncNoOpMetricsExporter()
+            return
+        # The two protocols are easy to confuse and a mismatch produces no
+        # data at all -- only a warning once per interval, far from the
+        # assignment that caused it. Fail here instead.
+        check_exporter(exporter, awaitable=True)
+        self._metrics_exporter = exporter
+
+    def _apply_metrics_settings(self, metrics: Any) -> None:
+        """Turn collection on or off to match configuration-file settings.
+
+        Silent settings leave collection alone, so a file that tunes only the
+        histogram shape does not switch collection on by itself.
+        """
+        if metrics is None or metrics.enabled is None:
+            return
+        if metrics.enabled:
+            self.enable_metrics(policy_from_settings(metrics))
+        else:
+            self.disable_metrics()
+
+    def _start_export_timer(self, policy: MetricsPolicy) -> None:
+        """Begin pushing snapshots to the exporter, replacing any running timer.
+
+        The export settings come from the config file when there is one; a
+        client that enables metrics in code and configures no file gets the
+        default interval and no built-in file output.
+        """
+        self._stop_export_timer()
+        settings = getattr(self._sdk_client, "_sdk_settings", None)
+        metrics = getattr(settings, "metrics", None)
+        interval = DEFAULT_EXPORT_INTERVAL_SECONDS
+        if metrics is not None and metrics.export_interval is not None:
+            interval = metrics.export_interval.total_seconds()
+        if isinstance(self._metrics_exporter, AsyncNoOpMetricsExporter) and metrics is not None:
+            built_in = built_in_exporter(metrics, awaitable=True)
+            if built_in is not None:
+                self._metrics_exporter = built_in
+        if isinstance(self._metrics_exporter, AsyncNoOpMetricsExporter):
+            # Nothing consumes the snapshot, and taking one drains and
+            # aggregates per-node state in the client core. Polling
+            # callers still get everything through metrics().
+            return
+        self._export_timer = AsyncMetricsExportTimer(self, self._metrics_exporter, interval, metrics)
+        self._export_timer.start()
+
+    def _stop_export_timer(self) -> None:
+        """Stop the export timer if one is running.
+
+        Cancellation is awaited by :meth:`close`; this only
+        signals, so it is safe from a synchronous caller.
+        """
+        if self._export_timer is not None:
+            self._export_timer.request_stop()
+            self._export_timer = None
 
     def enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
         """Enable metrics collection for this cluster.
@@ -316,12 +418,20 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         See Also:
             :meth:`metrics`, :meth:`disable_metrics`
         """
-        pac_policy = (policy if policy is not None else MetricsPolicy())._to_pac()
-        self._sdk_client.underlying_client.enable_metrics(pac_policy)
+        effective = policy if policy is not None else MetricsPolicy()
+        # Kept because the snapshot does not carry its own histogram shape,
+        # which the structured export has to report.
+        self._metrics_policy = effective
+        self._sdk_client._usage_on = effective.usage_enabled
+        self._sdk_client.underlying_client.enable_metrics(effective._to_pac())
+        self._start_export_timer(effective)
 
     def disable_metrics(self) -> None:
         """Disable metrics collection. Accumulated data is retained."""
         self._sdk_client.underlying_client.disable_metrics()
+        self._sdk_client._usage_on = False
+        self._stop_export_timer()
+        dispatch_disable(self._metrics_exporter, self)
 
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
@@ -345,12 +455,23 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             print(f"{reads.count} reads, avg {reads.average:.1f}")
         """
         pac = self._sdk_client.underlying_client
-        return MetricsSnapshot(await asyncio.to_thread(pac.metrics))
+        raw = await asyncio.to_thread(pac.metrics)
+        # The awaitable entry, not nodes_blocking on a worker thread.
+        nodes = await pac.nodes()
+        return MetricsSnapshot(raw, policy=self._metrics_policy, nodes=nodes,
+                               usage=self._sdk_client._usage_counters.totals())
 
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.
 
         Invoked automatically when used as an async context manager.
         """
+        # Stop exporting before the client goes away: the timer polls the
+        # client every interval and would otherwise keep firing against a
+        # closed one, and the exporter never gets its final flush.
+        if self._export_timer is not None:
+            timer, self._export_timer = self._export_timer, None
+            await timer.stop()
+            dispatch_disable(self._metrics_exporter, self)
         await self._sdk_client.close()
 

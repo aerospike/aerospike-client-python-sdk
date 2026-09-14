@@ -259,6 +259,18 @@ class TestQueryBinBuilder:
         assert result is parent
         assert len(parent.operations) == 1
 
+    def test_list_join_returns_parent(self):
+        qbb, parent = self._build()
+        result = qbb.list_join()
+        assert result is parent
+        assert len(parent.operations) == 1
+
+    def test_list_join_with_separator_returns_parent(self):
+        qbb, parent = self._build()
+        result = qbb.list_join(",")
+        assert result is parent
+        assert len(parent.operations) == 1
+
     def test_on_map_key_returns_cdt_read_builder(self):
         qbb, _ = self._build()
         result = qbb.on_map_key("some_key")

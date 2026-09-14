@@ -34,21 +34,21 @@ _IMPLICIT_FALSE_MAXCONNS = """
 system:
   DEFAULT:
     connections:
-      maximumConnectionsPerNode: 77
+      maximum_connections_per_node: 77
     transactions:
-      implicitBatchWriteTransactions: false
+      implicit_batch_write_transactions: false
 """
 _IMPLICIT_TRUE = """
 system:
   DEFAULT:
     transactions:
-      implicitBatchWriteTransactions: true
+      implicit_batch_write_transactions: true
 """
 _IMPLICIT_FALSE = """
 system:
   DEFAULT:
     transactions:
-      implicitBatchWriteTransactions: false
+      implicit_batch_write_transactions: false
 """
 _MALFORMED = "system: [unbalanced : bracket\n"
 

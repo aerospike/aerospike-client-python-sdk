@@ -44,7 +44,7 @@ an example, keep the contract below.
    to a clear skip rather than an error:
    - strong consistency → `_env.connect_sc()` (reads `AEROSPIKE_HOST_SC` + auth, SC namespace via
      `_env.sc_namespace()`);
-   - a server version → `if not await _env.server_at_least(session, (8, 1, 3)): …return`.
+   - a server version → `if not await _env.server_at_least(session, (8, 2, 0)): …return`.
 
 8. **`_env` is examples-only infrastructure**, not part of the published package — the mirror of
    `benchmarks/_env.py`. It resolves connection settings from the environment so the scripts run

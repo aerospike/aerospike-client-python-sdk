@@ -220,6 +220,104 @@ class TestCdtListReads:
         assert result.record.bins["ll"] == 20
         await session.delete(key).execute()
 
+    async def test_list_join_with_and_without_separator(
+        self, session, supports_string_operations,
+    ):
+        """Join concatenates the string items; the separator is optional."""
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join")
+        await session.upsert(key).bin("tags").set_to(["one", "two", "three"]).execute()
+
+        rs = await session.query(key=key).bin("tags").list_join(",").execute()
+        result = await rs.first_or_raise()
+        assert result.record.bins["tags"] == "one,two,three"
+
+        rs = await session.query(key=key).bin("tags").list_join().execute()
+        result = await rs.first_or_raise()
+        assert result.record.bins["tags"] == "onetwothree"
+        await session.delete(key).execute()
+
+    async def test_list_join_in_write_chain(self, session, supports_string_operations):
+        """Join registered as a read within an operate chain."""
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join_chain")
+        await session.upsert(key).bin("tags").set_to(["one", "two"]).execute()
+
+        result = await (await session.upsert(key)
+            .bin("touched").set_to(1)
+            .bin("tags").list_join("|")
+            .execute()).first_or_raise()
+        assert result.record_or_raise().bins["tags"] == "one|two"
+        await session.delete(key).execute()
+
+    async def test_nested_list_join(self, session, supports_string_operations):
+        """Join a list nested under a map key via the CDT read path."""
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join_nested")
+        await session.upsert(key).put({"outer": {"strs": ["a", "b"]}}).execute()
+
+        rs = await (
+            session.query(key=key).bin("outer").on_map_key("strs").list_join("-").execute()
+        )
+        result = await rs.first_or_raise()
+        assert result.record.bins["outer"] == "a-b"
+        await session.delete(key).execute()
+
+    async def test_stacked_list_joins_return_positional_results(
+        self, session, supports_string_operations,
+    ):
+        """Two joins on one bin come back as an ordered list of results."""
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join_stacked")
+        await session.upsert(key).bin("tags").set_to(["alpha", "beta", "gamma"]).execute()
+
+        rs = await (
+            session.query(key=key)
+            .bin("tags").list_join()
+            .bin("tags").list_join(", ")
+            .execute()
+        )
+        result = await rs.first_or_raise()
+        assert result.record.bins["tags"] == ["alphabetagamma", "alpha, beta, gamma"]
+        await session.delete(key).execute()
+
+    async def test_list_join_empty_list_is_empty_string(
+        self, session, supports_string_operations,
+    ):
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join_empty")
+        await session.upsert(key).bin("tags").set_to([]).execute()
+
+        rs = await session.query(key=key).bin("tags").list_join(",").execute()
+        result = await rs.first_or_raise()
+        assert result.record.bins["tags"] == ""
+        await session.delete(key).execute()
+
+    async def test_list_join_non_string_item_raises(
+        self, session, supports_string_operations,
+    ):
+        """Every item must be a string; the server rejects the whole op otherwise."""
+        if not supports_string_operations:
+            pytest.skip("list join requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}join_bad")
+        await session.upsert(key).bin("tags").set_to(["alpha", 7]).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await (await session.query(key=key).bin("tags").list_join(",").execute()).first_or_raise()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        await session.delete(key).execute()
+
 
 # ===================================================================
 # Index-based list writes (mutating)

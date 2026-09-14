@@ -651,7 +651,7 @@ class TestOperateWithFilter:
         into the raised error (not visible at default verbosity).
         """
         if not supports_error_detail:
-            pytest.skip("cluster does not supply extended error detail (server < 8.1.3)")
+            pytest.skip("cluster does not supply extended error detail (server < 8.2.0)")
 
         behavior = Behavior(
             "error-handling-untyped-select-from",

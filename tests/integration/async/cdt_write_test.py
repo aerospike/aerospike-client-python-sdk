@@ -17,7 +17,8 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import CTX, CdtOperation, Exp, ExpType, ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import LoopVarPart
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
@@ -1427,3 +1428,50 @@ class TestBatchCdtWrite:
         for k in (k1, k2):
             rec = await (await session.query(k).execute()).first_or_raise()
             assert rec.record.bins["tags"] == ["a", "b"]
+
+
+# ===================================================================
+# Path-expression removal (server >= 8.1.1)
+# ===================================================================
+
+class TestPathExpressionRemove:
+    """Remove nested elements matched by a CTX path filter."""
+
+    async def test_remove_strips_matching_list_elements(
+        self, cluster, supports_cdt_path_expressions
+    ):
+        """``CdtOperation.remove`` drops every element the path filter matches."""
+        if not supports_cdt_path_expressions:
+            pytest.skip("CDT path expressions require server >= 8.1.1")
+        session = cluster.create_session()
+        k = DS.id("path_remove_op")
+        await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()
+
+        over_5 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))
+        await session.update(k).add_operation(
+            CdtOperation.remove("nums", [CTX.all_children_with_filter(over_5)])
+        ).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["nums"] == [3, 2]
+
+    async def test_exp_remove_strips_matching_list_elements(
+        self, cluster, supports_cdt_path_expressions
+    ):
+        """The expression-level ``Exp.exp_remove`` form works on the same floor."""
+        if not supports_cdt_path_expressions:
+            pytest.skip("CDT path expressions require server >= 8.1.1")
+        session = cluster.create_session()
+        k = DS.id("path_remove_exp")
+        await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()
+
+        over_5 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))
+        removed = Exp.exp_remove(
+            ExpType.LIST,
+            Exp.list_bin("nums"),
+            [CTX.all_children_with_filter(over_5)],
+        )
+        await session.update(k).bin("nums").update_from(removed).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["nums"] == [3, 2]

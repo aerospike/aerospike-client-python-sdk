@@ -86,6 +86,28 @@ stream = await (
 )
 ```
 
+### Joining String Lists
+
+`list_join` concatenates the string items of a list into a single string.
+The separator is optional; the list must hold only strings, and an empty
+list joins to an empty string.
+
+```python
+# ["one", "two", "three"] → "one,two,three"
+stream = await (
+    session.query(users.id(1))
+    .bin("tags").list_join(",")
+    .execute()
+)
+
+# Join a list nested under a map key
+stream = await (
+    session.query(users.id(1))
+    .bin("profile").on_map_key("nicknames").list_join(", ")
+    .execute()
+)
+```
+
 ## Writing CDT Data
 
 ### Set a Value

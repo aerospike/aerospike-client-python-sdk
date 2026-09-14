@@ -79,6 +79,7 @@ from aerospike_sdk.exceptions import (
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.metrics import usage
 
 
 # Shared chain layer — re-exported so existing import paths keep resolving.
@@ -106,6 +107,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
+
+    Multi-key chains are split into per-node sub-batches, and a node whose
+    sub-batch holds a single key is sent a regular single-record command
+    instead of a batch request — automatically and per-node, so size-1
+    batches need no special-casing by the caller.
 
     Example::
 
@@ -286,6 +292,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             rp_sc = self._base_read_policy_sc
             if rp_ap is not None and rp_sc is not None:
                 key = self._single_key
+                if self._usage_on:
+                    self._flush_usage(usage.API_DEFERRED, usage.SHAPE_POINT)
                 cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
                 try:
                     record = await self._client.get(
@@ -306,6 +314,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # them): legacy path with explicit mode resolution.
 
         self._finalize_current_spec()
+        if self._usage_on:
+            self._flush_usage(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()
         await self._ensure_batch_namespace_modes()
 
@@ -1136,6 +1146,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
+        self._warn_if_query_in_txn()
         if self._policy is not None:
             policy = self._policy
         elif self._behavior is not None:
@@ -1380,6 +1391,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
 
         key = self._key
         op_type = self._op_type_fast
+        # Read the flag off the client rather than slotting it here: this
+        # segment counts its per-op attribute stores.
+        sdk_fast = self._sdk_client_fast
+        if sdk_fast is not None and sdk_fast._usage_on:
+            usage.record_point(sdk_fast, usage.API_DEFERRED, self._txn, self._ops)
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the

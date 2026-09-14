@@ -75,6 +75,6 @@ class TestSyncCapabilityProbes:
         assert v is not None
         vt = (v.major, v.minor, v.patch)
         assert cluster.supports_query_operations() == (vt >= (8, 1, 2))
-        assert cluster.supports_string_operations() == (vt >= (8, 1, 3))
-        assert cluster.supports_ael() == (vt >= (8, 1, 3))
-        assert cluster.supports_query_selection() == (vt >= (8, 1, 3))
+        assert cluster.supports_string_operations() == (vt >= (8, 2, 0))
+        assert cluster.supports_ael() == (vt >= (8, 2, 0))
+        assert cluster.supports_query_selection() == (vt >= (8, 2, 0))

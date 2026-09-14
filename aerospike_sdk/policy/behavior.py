@@ -22,7 +22,7 @@ import weakref
 from datetime import timedelta
 from typing import ClassVar, Dict, List, Optional, Tuple
 
-from aerospike_async import CommitLevel, ReadModeSC, Replica
+from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy.behavior_registry import _register
 from aerospike_sdk.policy.behavior_settings import (
@@ -70,7 +70,8 @@ class Behavior:
         session = cluster.create_session(fast)
 
     Attributes:
-        DEFAULT: Balanced defaults (30 s total timeout, 2 retries, send key).
+        DEFAULT: Balanced defaults (1 s total / 30 s socket timeout, 2
+            retries; queries and background ops carry their own timeouts).
         READ_FAST: Low-latency reads (200 ms total, 50 ms socket, 3 retries).
         STRICTLY_CONSISTENT: SC-namespace reads with linearizable consistency.
         FAST_RACK_AWARE: Low-latency rack-preferred reads.
@@ -385,12 +386,23 @@ Behavior.DEFAULT = Behavior(
     name="DEFAULT",
     patches={
         Scope.ALL: Settings(
-            total_timeout=timedelta(seconds=30),
-            socket_timeout=timedelta(seconds=5),
+            # 1 s total / 30 s socket: the total is the hard per-call SLA cap
+            # and the value every other Aerospike client defaults to; query
+            # shapes override the total below because streaming calls cannot
+            # live under a point-op cap.
+            total_timeout=timedelta(seconds=1),
+            socket_timeout=timedelta(seconds=30),
             max_retries=2,
             retry_delay=timedelta(0),
-            send_key=True,
+            # False: storing the user key with every record is an opt-in
+            # storage/wire cost, not a default.
+            send_key=False,
             replica=Replica.SEQUENCE,
+            # Pinned explicitly (not left to the client default) so the wire
+            # behavior cannot drift under a dependency upgrade. ONE reads a
+            # single replica; ALL would consult duplicate partition copies
+            # during migration windows.
+            read_mode_ap=ReadModeAP.ONE,
             durable_delete=False,
             max_concurrent_nodes=1,
             read_touch_ttl_percent=0,
@@ -407,6 +419,9 @@ Behavior.DEFAULT = Behavior(
             max_concurrent_nodes=0,
         ),
         Scope.READS_QUERY: Settings(
+            # Queries stream for as long as the data takes; 0 disables the
+            # total cap (each socket read is still bounded by socket_timeout).
+            total_timeout=timedelta(0),
             max_retries=5,
             record_queue_size=5000,
             max_concurrent_nodes=0,
@@ -417,7 +432,16 @@ Behavior.DEFAULT = Behavior(
             # query selection; queries without a where clause are unaffected.
             allow_scans_with_where=False,
         ),
+        # Background operations (query-shaped writes). The policy bounds only
+        # the per-node job-submit round trip — the job itself runs server-side
+        # and is monitored via the returned task, so a generous total covers
+        # the fan-out while the 5 s socket cap fails fast on a node that
+        # accepts the submit but stalls on its ack. Attempts stay at 1 via
+        # WRITES_NON_RETRYABLE: the server owns the job, the client never
+        # resubmits.
         Scope.WRITES_QUERY: Settings(
+            total_timeout=timedelta(seconds=30),
+            socket_timeout=timedelta(seconds=5),
             max_concurrent_nodes=0,
         ),
         Scope.WRITES_NON_RETRYABLE: Settings(

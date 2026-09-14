@@ -782,7 +782,7 @@ async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_de
     """Connected cluster + CDT dataset on the default 8.1.2+ seed.
 
 
-    Used by tests that exercise convenience wrappers around server-8.1.3
+    Used by tests that exercise convenience wrappers around server-8.2.0
     ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
     ``aerospike_host_812_required`` fixture connects to the default
     ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
@@ -2061,7 +2061,7 @@ class TestInExpressionAel:
 class TestConvenienceWrappers:
     """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    These helpers are thin pass-throughs to the native 8.1.3 ExpOps (see
+    These helpers are thin pass-throughs to the native 8.2.0 ExpOps (see
     the docstrings in ``aerospike_sdk/exp.py``). Server versions older
     than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
     consume ``session_with_cdt_data_812`` which uses the default

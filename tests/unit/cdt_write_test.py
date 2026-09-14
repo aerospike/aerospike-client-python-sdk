@@ -866,3 +866,235 @@ class TestMapItemPairs:
 
     def test_sequence_passthrough(self):
         assert _map_item_pairs([("x", 10)]) == [("x", 10)]
+
+
+# ===================================================================
+# Nested range navigation and removal
+# ===================================================================
+
+class TestNestedWriteNavigationRanges:
+    """Range navigation from an already-nested write builder.
+
+    First-hop navigation from :class:`WriteBinBuilder` is covered above;
+    these exercise the write-builder overrides that fire once the chain is
+    already inside a CDT, including the remove terminals on each shape.
+    """
+
+    def _inner(self, bin_name: str = "doc"):
+        qb = _make_qb()
+        qb._single_key = _make_key()
+        segment = WriteSegmentBuilder(qb)
+        wbb = WriteBinBuilder(segment, bin_name)
+        return wbb.on_map_key("outer"), segment
+
+    def _ops(self, segment):
+        return segment._qb._operations
+
+    def test_on_map_rank_nested_returns_write_builder(self):
+        inner, segment = self._inner()
+        deep = inner.on_map_rank(0)
+        assert isinstance(deep, CdtWriteBuilder)
+        deep.remove()
+        assert len(self._ops(segment)) == 1
+
+    def test_on_list_rank_nested_returns_write_builder(self):
+        inner, segment = self._inner()
+        deep = inner.on_list_rank(0)
+        assert isinstance(deep, CdtWriteBuilder)
+        deep.remove()
+        assert len(self._ops(segment)) == 1
+
+    def test_on_map_index_range_open_exists_and_remove(self):
+        inner, segment = self._inner()
+        b = inner.on_map_index_range(2)
+        assert isinstance(b, CdtWriteInvertableBuilder)
+        b.exists()
+        inner2, segment2 = self._inner()
+        inner2.on_map_index_range(2).remove()
+        assert isinstance(self._ops(segment2)[-1], MapOperation)
+
+    def test_on_map_index_range_count_exists_and_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_index_range(0, 2).exists()
+        inner2, segment2 = self._inner()
+        inner2.on_map_index_range(0, 2).remove()
+        assert isinstance(self._ops(segment2)[-1], MapOperation)
+
+    def test_on_map_rank_range_open_exists_and_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_rank_range(1).exists()
+        inner2, segment2 = self._inner()
+        inner2.on_map_rank_range(1).remove()
+        assert isinstance(self._ops(segment2)[-1], MapOperation)
+
+    def test_on_map_rank_range_count_exists_and_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_rank_range(0, 3).exists()
+        inner2, segment2 = self._inner()
+        inner2.on_map_rank_range(0, 3).remove()
+        assert isinstance(self._ops(segment2)[-1], MapOperation)
+
+    def test_on_map_value_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_value_range(1, 5).remove()
+        assert isinstance(self._ops(segment)[-1], MapOperation)
+
+    def test_on_map_key_relative_index_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_key_relative_index_range("anchor", 0, 2).remove()
+        assert isinstance(self._ops(segment)[-1], MapOperation)
+
+    def test_on_map_value_relative_rank_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_value_relative_rank_range(10, 0).remove()
+        assert isinstance(self._ops(segment)[-1], MapOperation)
+
+    def test_on_map_key_list_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_key_list(["a", "b"]).remove()
+        assert isinstance(self._ops(segment)[-1], MapOperation)
+
+    def test_on_map_value_list_remove(self):
+        inner, segment = self._inner()
+        inner.on_map_value_list([1, 2]).remove()
+        assert isinstance(self._ops(segment)[-1], MapOperation)
+
+    def test_on_list_index_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_list_index_range(0, 2).remove()
+        assert isinstance(self._ops(segment)[-1], ListOperation)
+
+    def test_on_list_rank_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_list_rank_range(1).remove()
+        assert isinstance(self._ops(segment)[-1], ListOperation)
+
+    def test_on_list_value_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_list_value_range(1, 5).remove()
+        assert isinstance(self._ops(segment)[-1], ListOperation)
+
+    def test_on_list_value_relative_rank_range_remove(self):
+        inner, segment = self._inner()
+        inner.on_list_value_relative_rank_range(10, 0).remove()
+        assert isinstance(self._ops(segment)[-1], ListOperation)
+
+    def test_on_list_value_list_remove(self):
+        inner, segment = self._inner()
+        inner.on_list_value_list([1, 2]).remove()
+        assert isinstance(self._ops(segment)[-1], ListOperation)
+
+
+# ===================================================================
+# Nested map and list verbs
+# ===================================================================
+
+class TestNestedWriteVerbs:
+    """Map and list verbs applied at a nested CDT path.
+
+    Each verb builds a concrete PAC operation against the current context
+    and hands the chain back to the parent segment.
+    """
+
+    def _inner(self, bin_name: str = "doc"):
+        qb = _make_qb()
+        qb._single_key = _make_key()
+        segment = WriteSegmentBuilder(qb)
+        wbb = WriteBinBuilder(segment, bin_name)
+        return wbb.on_map_key("outer"), segment
+
+    def _sole_op(self, segment):
+        ops = segment._qb._operations
+        assert len(ops) == 1
+        return ops[0]
+
+    def test_map_insert_items(self):
+        inner, segment = self._inner()
+        result = inner.map_insert_items({"city": "Reno"})
+        assert result is segment
+        assert isinstance(self._sole_op(segment), MapOperation)
+
+    def test_map_insert_items_persist_index(self):
+        inner, segment = self._inner()
+        inner.map_insert_items({"city": "Reno"}, persist_index=True)
+        assert isinstance(self._sole_op(segment), MapOperation)
+
+    def test_map_update_items(self):
+        inner, segment = self._inner()
+        result = inner.map_update_items([("city", "Reno")])
+        assert result is segment
+        assert isinstance(self._sole_op(segment), MapOperation)
+
+    def test_map_create(self):
+        inner, segment = self._inner()
+        result = inner.map_create(MapOrder.KEY_ORDERED)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), MapOperation)
+
+    def test_map_set_policy(self):
+        inner, segment = self._inner()
+        result = inner.map_set_policy(MapOrder.KEY_ORDERED)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), MapOperation)
+
+    def test_list_clear(self):
+        inner, segment = self._inner()
+        result = inner.list_clear()
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_sort(self):
+        inner, segment = self._inner()
+        result = inner.list_sort(ListSortFlags.DROP_DUPLICATES)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_add_items_unique(self):
+        inner, segment = self._inner()
+        result = inner.list_add_items([1, 2], unique=True)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_create(self):
+        inner, segment = self._inner()
+        result = inner.list_create(ListOrderType.ORDERED, persist_index=True)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_set_order(self):
+        inner, segment = self._inner()
+        result = inner.list_set_order(ListOrderType.ORDERED)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_remove(self):
+        inner, segment = self._inner()
+        result = inner.list_remove(0)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_remove_range_open(self):
+        inner, segment = self._inner()
+        inner.list_remove_range(1)
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_remove_range_count(self):
+        inner, segment = self._inner()
+        inner.list_remove_range(1, 2)
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_pop_range_open(self):
+        inner, segment = self._inner()
+        inner.list_pop_range(1)
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_pop_range_count(self):
+        inner, segment = self._inner()
+        inner.list_pop_range(1, 2)
+        assert isinstance(self._sole_op(segment), ListOperation)
+
+    def test_list_trim(self):
+        inner, segment = self._inner()
+        result = inner.list_trim(0, 2)
+        assert result is segment
+        assert isinstance(self._sole_op(segment), ListOperation)

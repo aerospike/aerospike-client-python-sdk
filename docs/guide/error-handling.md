@@ -129,7 +129,7 @@ except AerospikeError as err:
 
 A subcode value is scoped to its parent result code — it is **not** globally
 unique, so always interpret the `(result_code, sub_code)` pair together. The
-`SubCode` catalog enumerates the known subcodes. Requires Aerospike server 8.1.3
+`SubCode` catalog enumerates the known subcodes. Requires Aerospike server 8.2.0
 or later; older servers ignore the request and leave the attributes `None`.
 
 Batches report failures per record rather than raising, so the same detail

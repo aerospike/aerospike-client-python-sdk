@@ -41,7 +41,7 @@ from tests.pac_compat import requires_query_selection
 _BAD_AEL = "$.age > 30 and"
 _FILTER_BUILD_MSG = "invalid filter expression in query"
 # The parser runs out of input after the dangling ``and``, so it faults at the
-# end of the expression rather than at the token itself. Measured on 8.1.3.0,
+# end of the expression rather than at the token itself. Measured on 8.2.0.0,
 # where the message agrees: "unexpected end of expression at line 1 col 15".
 _BAD_AEL_FAULT_OFFSET = len(_BAD_AEL)
 _BAD_AEL_DIAGNOSTIC = "unexpected end of expression"
@@ -59,7 +59,7 @@ class TestSyncQuerySelectionErrorDetail:
     """Error detail on the explain path.
 
     No test here guards on ``supports_error_detail``: that fixture and
-    ``@requires_query_selection`` share the 8.1.3.0 threshold, so a cluster
+    ``@requires_query_selection`` share the 8.2.0.0 threshold, so a cluster
     that reaches these bodies always supplies extended detail.
     """
 

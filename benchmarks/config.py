@@ -483,6 +483,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "tax because their PRNGs are essentially free. 0 (default) keeps "
         "per-op RNG.",
     )
+    p.add_argument(
+        "--metrics-mode",
+        choices=("off", "on", "sampled", "usage"),
+        default="off",
+        help=(
+            "Client metrics during the run: off (default), on (operational "
+            "collection), sampled (operational at 10%% via Sampler.probability), "
+            "or usage (feature-usage counters only). Measures collection "
+            "overhead; the default keeps the benchmark comparable to history."
+        ),
+    )
     return p
 
 

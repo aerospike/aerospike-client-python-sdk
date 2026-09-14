@@ -277,6 +277,11 @@ await (
 Mixed operations across different keys are handled automatically when you chain
 multiple write segments.
 
+As with [batch reads](reads.md), any node whose sub-batch holds a single key is
+sent a regular single-record command instead of a batch request, automatically
+and per-node — there is nothing to gain from splitting out size-1 groups in
+application code.
+
 A UDF apply can be part of that mix. Chain `execute_udf(*keys).function(...)`
 into a batch alongside reads, writes, and deletes; the per-key UDF applies
 travel in the same single round-trip rather than a separate call:

@@ -67,8 +67,8 @@ await (
 
 ## Expression-Based Indexes
 
-On server 8.1.2+, an index can cover the value an expression computes per
-record instead of a plain bin. Replace `on_bin()` with `on_expression()`
+An index can cover the value an expression computes per record instead of a
+plain bin. Replace `on_bin()` with `on_expression()`
 (they are mutually exclusive). The expression's result type must match the
 index type — index a value-producing expression, not a boolean predicate:
 
@@ -100,12 +100,12 @@ navigation inside the expression instead.
 
 ### From an AEL string
 
-On server 8.1.3+, `on_expression()` also accepts an AEL string. The client
+On server 8.2.0+, `on_expression()` also accepts an AEL string. The client
 sends the string as-is and the server parses and compiles it when the index
 is created, so the AEL dialect is the server's:
 
 ```python
-from aerospike_async import FilterExpression
+from aerospike_sdk import Exp
 
 ael = "$.age + 1"
 
@@ -119,14 +119,14 @@ await (
 
 # Query through it with the same AEL, server-compiled on the filter:
 flt = Filter.range("age", 26, 41).expression(
-    FilterExpression.from_server_compiled_ael(ael),
+    Exp.from_server_compiled_ael(ael),
 )
 stream = await session.query(users).filter(flt).execute()
 ```
 
 The same rules apply as for prebuilt expressions: the AEL must produce a
 value of the index's type, so a boolean predicate like `"$.age > 21"` is
-rejected by the server. If any node is older than 8.1.3, `create()` raises
+rejected by the server. If any node is older than 8.2.0, `create()` raises
 with result code `OP_NOT_APPLICABLE` — build the expression with `Exp`
 instead on those clusters.
 

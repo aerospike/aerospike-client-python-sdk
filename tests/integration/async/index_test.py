@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from aerospike_sdk import CollectionIndexType, CTX, DataSet, Filter
+from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
@@ -178,7 +178,11 @@ async def test_create_index_with_cdt_context(cluster, enterprise):
     index_name = "test_ctx_idx"
     bin_name = "payload"
     ds = DataSet.of(general_namespace(), "test")
-    session = cluster.create_session()
+    # The assertion reads the user key back off the query results, which
+    # requires the key to be stored with the record — an explicit opt-in.
+    session = cluster.create_session(
+        Behavior.DEFAULT.derive_with_changes("ctx-idx-send-key", send_key=True)
+    )
 
     try:
         await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
@@ -456,7 +460,7 @@ async def test_where_selects_ael_expression_index(cluster):
     """A where() served through an index created from the same AEL.
 
     Server query planning began selecting expression-based indexes in the
-    8.1.3.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.1.3.0``,
+    8.2.0.0 RC. ``requires_server_compiled_ael`` only asserts ``>= 8.2.0.0``,
     which a pre-RC build of that version also satisfies, so this fails with
     ``IndexNotFound`` there instead of skipping.
     """

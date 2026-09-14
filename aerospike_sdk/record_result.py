@@ -57,7 +57,7 @@ class RecordResult:
         sub_code: Server error subcode for this row, or ``None``. Populated
             only for failed batch rows when the request asked for extended
             error detail (``error_detail_verbosity``) and the server supplies
-            it (8.1.3+). Subcode values are scoped to their parent
+            it (8.2.0+). Subcode values are scoped to their parent
             :attr:`result_code` — interpret the pair together.
         server_message: The server's human-readable explanation for this
             row's failure, or ``None``. Populated on the same terms as
