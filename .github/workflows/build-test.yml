@@ -190,6 +190,7 @@ jobs:
         env:
           AEROSPIKE_HOST: localhost:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+          AEROSPIKE_SC_NAMESPACE: test
 
       - name: Run integration tests
         if: ${{ matrix.test == 'integration-tests' }}
