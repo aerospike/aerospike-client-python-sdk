@@ -9,7 +9,6 @@ back to the client.
 """
 
 import asyncio
-import time
 import random
 
 import _env
