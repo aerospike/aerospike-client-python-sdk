@@ -127,9 +127,15 @@ jobs:
       matrix:
         python: ['3.11', '3.12', '3.13', '3.14']
         test: [
-          code-examples,
           integration-tests
         ]
+        # No way to refer to the matrix context in "include"
+        # So we can't dynamically get the lowest and highest supported Python versions
+        include:
+        - test: code-examples
+          python: 3.11
+        - test: code-examples
+          python: 3.14
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
