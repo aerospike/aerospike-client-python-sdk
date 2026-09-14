@@ -11,7 +11,7 @@ import asyncio
 import _env
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.aio.operations.query import QueryHint
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError
 
 SET = DataSet.of("test", "set")
 
@@ -222,7 +222,7 @@ async def run_examples(session) -> None:
     print("Create index")
     try:
         await session.index(SET).on_bin("age").named("ageidx").numeric().create()
-    except Exception:
+    except IndexAlreadyExistsError:
         pass  # Index may already exist
     await asyncio.sleep(0.3)
 
