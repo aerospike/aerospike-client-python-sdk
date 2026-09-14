@@ -14,8 +14,7 @@ import random
 
 import _env
 from aerospike_sdk import Behavior, DataSet, QueryHint
-from aerospike_sdk.exceptions import IndexAlreadyExistsError
-from aerospike_async import CollectionIndexType
+
 
 SUBJECTS = ("math", "english", "science", "history", "art")
 
