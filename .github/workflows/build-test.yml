@@ -126,6 +126,16 @@ jobs:
     strategy:
       matrix:
         python: ['3.11', '3.12', '3.13', '3.14']
+        test: [
+          integration-tests
+        ]
+        # No way to refer to the matrix context in "include"
+        # So we can't dynamically get the lowest and highest supported Python versions
+        include:
+        - test: code-examples
+          python: 3.11
+        - test: code-examples
+          python: 3.14
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +184,16 @@ jobs:
           pip install ".[dev]" --only-binary aerospike-async \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
+      - name: Run canonical code examples
+        if: ${{ matrix.test == 'code-examples' }}
+        run: make examples
+        env:
+          AEROSPIKE_HOST: localhost:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+          AEROSPIKE_SC_NAMESPACE: test
+
       - name: Run integration tests
+        if: ${{ matrix.test == 'integration-tests' }}
         env:
           AEROSPIKE_HOST: localhost:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
