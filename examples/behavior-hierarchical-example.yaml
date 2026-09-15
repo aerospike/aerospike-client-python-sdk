@@ -1,0 +1,73 @@
+# Behavior profiles for behavior_hierarchical_example.py. Edit a value while
+# the example's two passes run to watch the reload pick it up.
+# maximum_number_of_call_attempts counts the initial call (2 = one retry).
+
+behaviors:
+  high-performance:
+    all_operations:
+      abandon_call_after: 10s
+      maximum_number_of_call_attempts: 2
+      delay_between_retries: 50ms
+      wait_for_call_to_complete: 5s
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 4
+      delay_between_retries: 100ms
+    batch_reads:
+      max_concurrent_servers: 2
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+    query:
+      record_queue_size: 1000
+      allow_scans_with_where: false
+
+  high-reliability:
+    all_operations:
+      abandon_call_after: 10s
+      maximum_number_of_call_attempts: 5
+      delay_between_retries: 1s
+      wait_for_call_to_complete: 15s
+    retryable_writes:
+      use_durable_delete: true
+      maximum_number_of_call_attempts: 7
+      delay_between_retries: 2s
+    consistency_mode_reads:
+      read_consistency: SESSION
+      abandon_call_after: 8s
+    batch_reads:
+      max_concurrent_servers: 5
+      allow_inline_memory_access: false
+      allow_inline_ssd_access: false
+
+  batch-optimized:
+    parent: high-performance
+    batch_reads:
+      max_concurrent_servers: 16
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 5s
+    batch_writes:
+      max_concurrent_servers: 12
+      abandon_call_after: 8s
+    query:
+      record_queue_size: 12000
+      allow_scans_with_where: false
+      max_concurrent_servers: 1
+
+  development:
+    all_operations:
+      abandon_call_after: 30s
+      maximum_number_of_call_attempts: 1
+      delay_between_retries: 0ms
+      wait_for_call_to_complete: 60s
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 1
+    batch_reads:
+      max_concurrent_servers: 2
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+    query:
+      record_queue_size: 1000
+      allow_scans_with_where: true
+      max_concurrent_servers: 2

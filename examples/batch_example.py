@@ -13,13 +13,6 @@ from aerospike_sdk import Behavior, DataSet
 SET = DataSet.of("test", "set")
 
 
-async def main() -> None:
-    async with await _env.connect().connect() as cluster:
-        session = cluster.create_session(Behavior.DEFAULT)
-
-        await run_examples(session)
-
-
 async def run_examples(session) -> None:
     print("*************")
     print("* Batch tests")
@@ -28,9 +21,7 @@ async def run_examples(session) -> None:
     await session.truncate(SET)
     await asyncio.sleep(0.2)
 
-    # ------------------------------------------------------------------
-    # Batch Insert — 5 keys with same bin values
-    # ------------------------------------------------------------------
+    # --- 1) Batch Insert — 5 keys with same bin values ---
     print("Batch Insert:")
     await (
         session.insert(SET.ids(1, 2, 3, 4, 5))
@@ -40,14 +31,11 @@ async def run_examples(session) -> None:
         .execute()
     )
 
-    stream = await session.query(SET).execute()
-    async for rec in stream:
-        print(f"  {rec.record_or_raise().bins}")
-    stream.close()
+    async with await session.query(SET).execute() as stream:
+        async for rec in stream:
+            print(f"  {rec.record_or_raise().bins}")
 
-    # ------------------------------------------------------------------
-    # Batch Modify — insert 3 + update 1 + delete 1 in one execute
-    # ------------------------------------------------------------------
+    # --- 2) Batch Modify — insert 3 + update 1 + delete 1 in one execute ---
     print("Batch Modify:")
     await (
         session.insert(SET.ids(6, 7, 8))
@@ -59,10 +47,16 @@ async def run_examples(session) -> None:
         .execute()
     )
 
-    stream = await session.query(SET).execute()
-    async for rec in stream:
-        print(f"  {rec.record_or_raise().bins}")
-    stream.close()
+    async with await session.query(SET).execute() as stream:
+        async for rec in stream:
+            print(f"  {rec.record_or_raise().bins}")
+
+
+async def main() -> None:
+    async with await _env.connect().connect() as cluster:
+        session = cluster.create_session(Behavior.DEFAULT)
+
+        await run_examples(session)
 
 
 if __name__ == "__main__":

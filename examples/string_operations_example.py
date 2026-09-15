@@ -16,81 +16,90 @@ import asyncio
 import _env
 from aerospike_sdk import Behavior, DataSet, Exp, StringOperation
 
+DOCS = DataSet.of("test", "string_ops_demo")
+
 
 async def main() -> None:
     async with await _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
-        docs = DataSet.of("test", "string_ops_demo")
-        key = docs.id("row1")
 
-        try:
-            if not await _env.server_at_least(session, (8, 2, 0)):
-                print("Skipped: server-side string operations require Aerospike 8.2.0+.")
-                return
+        await run_examples(session)
 
-            # --- 1) Fluent bin builder: strlen, substr, find, upper, get in one call ---
-            # Each op contributes one positional result slot in request order,
-            # read back by index with operation_result(i).
-            await session.upsert(key).bin("message").set_to("hello").execute()
 
-            result = await (
-                await session.upsert(key)
-                .bin("message").str_strlen()
-                .bin("message").str_substr(1, 4)
-                .bin("message").str_substr(3)
-                .bin("message").str_find("ll")
-                .bin("message").str_upper()
-                .bin("message").get()
-                .execute()
-            ).first_or_raise()
-            print(f"  strlen           -> {result.operation_result(0)}")
-            print(f"  substr(1, 4)     -> {result.operation_result(1)!r}")
-            print(f"  substr(3) suffix -> {result.operation_result(2)!r}")
-            print(f"  find('ll')       -> {result.operation_result(3)}")
-            # A modify op yields nil positionally; the trailing get shows the new value.
-            print(f"  upper (modify)   -> {result.operation_result(4)!r}")
-            print(f"  get after upper  -> {result.operation_result(5)!r}")
+async def run_examples(session) -> None:
+    key = DOCS.id("row1")
 
-            # --- 2) Low-level StringOperation factories: same reads on a fresh value ---
-            await session.upsert(key).bin("message").set_to("hello").execute()
+    try:
+        if not await _env.server_at_least(session, (8, 2, 0)):
+            print("Skipped: server-side string operations require Aerospike 8.2.0+.")
+            return
 
-            result = await (
-                await session.upsert(key)
-                .add_operation(StringOperation.strlen("message"))
-                .add_operation(StringOperation.substr("message", 1, 4))
-                .add_operation(StringOperation.find("message", "ll"))
-                .execute()
-            ).first_or_raise()
-            print(
-                f"  strlen / substr / find via factories -> "
-                f"{result.operation_result(0)}, "
-                f"{result.operation_result(1)!r}, "
-                f"{result.operation_result(2)}"
+        # --- 1) Fluent bin builder: strlen, substr, find, upper, get in one call ---
+        # Each op contributes one positional result slot in request order,
+        # read back by index with operation_result(i).
+        print("--- 1) Fluent bin builder: strlen, substr [1,4), substr from 3, find, upper ---")
+        await session.upsert(key).bin("message").set_to("hello").execute()
+
+        result = await (
+            await session.upsert(key)
+            .bin("message").str_strlen()
+            .bin("message").str_substr(1, 4)
+            .bin("message").str_substr(3)
+            .bin("message").str_find("ll")
+            .bin("message").str_upper()
+            .bin("message").get()
+            .execute()
+        ).first_or_raise()
+        print(f"  strlen           -> {result.operation_result(0)}")
+        print(f"  substr(1, 4)     -> {result.operation_result(1)!r}")
+        print(f"  substr(3) suffix -> {result.operation_result(2)!r}")
+        print(f"  find('ll')       -> {result.operation_result(3)}")
+        # A modify op yields nil positionally; the trailing get shows the new value.
+        print(f"  upper (modify)   -> {result.operation_result(4)!r}")
+        print(f"  get after upper  -> {result.operation_result(5)!r}")
+
+        # --- 2) Low-level StringOperation factories: same reads on a fresh value ---
+        print("--- 2) add_operation(StringOperation.*): same reads on a fresh value ---")
+        await session.upsert(key).bin("message").set_to("hello").execute()
+
+        result = await (
+            await session.upsert(key)
+            .add_operation(StringOperation.strlen("message"))
+            .add_operation(StringOperation.substr("message", 1, 4))
+            .add_operation(StringOperation.find("message", "ll"))
+            .execute()
+        ).first_or_raise()
+        print(
+            f"  strlen / substr / find via factories -> "
+            f"{result.operation_result(0)}, "
+            f"{result.operation_result(1)!r}, "
+            f"{result.operation_result(2)}"
+        )
+
+        # --- 3) Query: select_from(Exp.string_*) projection into result bins ---
+        print("--- 3) Query: select_from(Exp.string_*) projection bins ---")
+        await session.upsert(key).bin("message").set_to("hello").execute()
+
+        result = await (
+            await session.query(key)
+            .bin("slen").select_from(Exp.string_strlen(Exp.string_bin("message")))
+            .bin("stail").select_from(
+                Exp.string_substr(Exp.val(3), Exp.string_bin("message"))
             )
-
-            # --- 3) Query: select_from(Exp.string_*) projection into result bins ---
-            await session.upsert(key).bin("message").set_to("hello").execute()
-
-            result = await (
-                await session.query(key)
-                .bin("slen").select_from(Exp.string_strlen(Exp.string_bin("message")))
-                .bin("stail").select_from(
-                    Exp.string_substr(Exp.val(3), Exp.string_bin("message"))
-                )
-                .bin("atLl").select_from(
-                    Exp.string_find(Exp.val("ll"), Exp.string_bin("message"))
-                )
-                .execute()
-            ).first_or_raise()
-            record = result.record_or_raise()
-            print(
-                f"  slen={record.bins['slen']}, "
-                f"stail={record.bins['stail']!r}, "
-                f"find(ll)={record.bins['atLl']}"
+            .bin("atLl").select_from(
+                Exp.string_find(Exp.val("ll"), Exp.string_bin("message"))
             )
+            .execute()
+        ).first_or_raise()
+        record = result.record_or_raise()
+        print(
+            f"  slen={record.bins['slen']}, "
+            f"stail={record.bins['stail']!r}, "
+            f"find(ll)={record.bins['atLl']}"
+        )
 
-        finally:
-            await session.delete(key).execute()
+    finally:
+        await session.delete(key).execute()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,62 @@
+# SDK configuration for yaml_config_connection_example.py. Point
+# AEROSPIKE_SDK_CONFIG_URL at this file to load it at connect.
+# maximum_number_of_call_attempts counts the initial call (2 = one retry).
+
+system:
+  # Default settings apply to all clusters unless overridden.
+  DEFAULT:
+    connections:
+      minimum_connections_per_node: 200
+      maximum_connections_per_node: 500
+  # Cluster-specific settings for the cluster named "bncluster".
+  bncluster:
+    connections:
+      minimum_connections_per_node: 400
+      maximum_connections_per_node: 600
+
+
+# Behavior definitions for operation policies
+behaviors:
+  # High-performance configuration with aggressive timeouts.
+  fast-operations:
+    all_operations:
+      abandon_call_after: 1s
+      maximum_number_of_call_attempts: 2
+      delay_between_retries: 25ms
+      wait_for_call_to_complete: 3s
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 3
+    batch_reads:
+      max_concurrent_servers: 8
+      allow_inline_memory_access: true
+    query:
+      record_queue_size: 5000
+      max_concurrent_servers: 8
+
+  # Conservative configuration for critical operations.
+  safe-operations:
+    all_operations:
+      abandon_call_after: 10s
+      maximum_number_of_call_attempts: 5
+      delay_between_retries: 500ms
+      wait_for_call_to_complete: 30s
+    retryable_writes:
+      use_durable_delete: true
+      maximum_number_of_call_attempts: 5
+      delay_between_retries: 1s
+    consistency_mode_reads:
+      read_consistency: SESSION
+      abandon_call_after: 8s
+
+  # Child behavior inheriting from fast-operations with batch optimizations.
+  batch-fast:
+    parent: fast-operations
+    batch_reads:
+      max_concurrent_servers: 16
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 3s
+    batch_writes:
+      max_concurrent_servers: 12
+      abandon_call_after: 5s
