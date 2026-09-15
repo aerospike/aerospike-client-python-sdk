@@ -317,3 +317,39 @@ class TestCommitRetrySync:
         assert excinfo.value.commit_error_type is not None
         assert excinfo.value.result_code == ResultCode.MRT_VERSION_MISMATCH
         session.delete(key).execute()
+
+
+class TestManualTransactionCommitFailureSync:
+    """The manual form reports a failed commit the same way; it just retries nothing.
+
+    ``transaction()`` commits on clean exit and aborts on an exception, leaving
+    any looping to the caller -- ``do_in_transaction`` is the retrying form
+    built on it. The error a caller has to handle should not depend on which
+    form they picked, so the two must agree on everything except the retrying.
+
+    The async suite covers the same ground; this is the blocking twin, and
+    ``__exit__`` is a separate implementation from ``__aexit__``, so the
+    agreement has to be asserted on both.
+    """
+
+    def test_commit_failure_carries_the_same_detail(self, session, mrt_set):
+        key = mrt_set.id("syncManualCommit")
+        session.upsert(key).put({BIN_NAME: "seed"}).execute()
+
+        with pytest.raises(CommitError) as excinfo:
+            with session.transaction() as tx:
+                stream = tx.query(key).execute()
+                stream.first_or_raise()
+                # Outside the transaction: moves the generation it verified, so
+                # the failure lands on the context manager's exit.
+                session.upsert(key).put({BIN_NAME: "raced"}).execute()
+
+        exc = excinfo.value
+        assert exc.commit_error_type is not None
+        assert exc.result_code == ResultCode.MRT_VERSION_MISMATCH
+        assert len(exc.verify_records) == 1
+        # Nothing was applied, so the outside write is what stands.
+        stream = session.query(key).execute()
+        record = stream.first_or_raise().record_or_raise()
+        assert record.bins[BIN_NAME] == "raced"
+        session.delete(key).execute()

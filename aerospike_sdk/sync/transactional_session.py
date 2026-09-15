@@ -109,7 +109,23 @@ class TransactionalSession(TransactionalSessionBase, Session):
         return operation(self)
 
     def commit(self) -> CommitStatus:
-        """Commit the transaction and return the server-reported status."""
+        """Commit the transaction and return the server-reported status.
+
+        ``CLOSE_ABANDONED`` is still success: the writes are durable and only
+        monitor cleanup was left to the server. An abandoned roll-forward
+        raises instead — those writes are not yet visible.
+
+        Raises:
+            RuntimeError: If the session has no active transaction.
+            CommitError: The roll-forward was abandoned, or another commit
+                stage failed.
+
+        Returns:
+            :class:`~aerospike_async.CommitStatus` reported by the server.
+
+        See Also:
+            :meth:`abort`: Undo the transaction instead of committing.
+        """
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to commit.")
         try:
