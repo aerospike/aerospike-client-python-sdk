@@ -10,9 +10,16 @@
 #   system.<cluster-name>  >  system.DEFAULT  >  with_system_settings(...)  >  defaults
 #
 # Durations take a unit suffix: 250ms, 55s, 5m, 2h.
+#
+# Keys the loader does not recognize are logged and ignored, so a file is never
+# silently misread. Connection-level timeouts and the system-transaction blocks
+# have no counterpart here and are therefore left out rather than set.
 
 version: "1.0.0"
 
+# =============================================================================
+# SYSTEM SETTINGS
+# =============================================================================
 system:
   # Applies to every cluster this process connects to.
   DEFAULT:
@@ -28,48 +35,254 @@ system:
     refresh:
       tend_interval: 1s
     transactions:
-      implicit_batch_write_transactions: true
-      sleep_between_attempts: 1000ms
+      implicit_batch_write_transactions: false
+      sleep_between_attempts: 250ms
+      number_of_attempts: 3
+
+  # Layers on DEFAULT for connections that name this cluster via
+  # ClusterDefinition.validate_cluster_name_is("production").
+  production:
+    connections:
+      minimum_connections_per_node: 50
+      maximum_connections_per_node: 500
+      maximum_socket_idle_time: 60s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 3
+      maximum_errors_in_error_window: 50
+    refresh:
+      tend_interval: 500ms
+    transactions:
+      sleep_between_attempts: 500ms
       number_of_attempts: 5
 
-  # Layers on DEFAULT for connections that declare this cluster name via
-  # ClusterDefinition.validate_cluster_name_is("prod-cluster").
-  prod-cluster:
+  development:
     connections:
-      maximum_connections_per_node: 500
-    transactions:
-      implicit_batch_write_transactions: false
+      minimum_connections_per_node: 1
+      maximum_connections_per_node: 20
+      maximum_socket_idle_time: 30s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 1
+      maximum_errors_in_error_window: 200
+    refresh:
+      tend_interval: 2s
 
+  bncluster:
+    connections:
+      minimum_connections_per_node: 400
+      maximum_connections_per_node: 600
+      maximum_socket_idle_time: 45s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 2
+      maximum_errors_in_error_window: 75
+
+# =============================================================================
+# BEHAVIOR DEFINITIONS
+# =============================================================================
 # Named operation-policy profiles, registered as Behavior objects at connect
 # and retrievable via aerospike_sdk.policy.get_behavior("<name>"). Edits
 # hot-reload into live sessions bound to these behaviors.
-# maximum_number_of_call_attempts counts the initial call (2 = one retry).
+#
+# Policy fields live under a selector block (all_operations, retryable_writes,
+# batch_reads, ...); only `parent` and an optional `name` are valid beside those
+# blocks. maximum_number_of_call_attempts counts the initial call (2 = one retry).
 behaviors:
   high-performance:
     all_operations:
       abandon_call_after: 1s
-      wait_for_call_to_complete: 500ms
       maximum_number_of_call_attempts: 2
       delay_between_retries: 25ms
+      wait_for_call_to_complete: 3s
       replica_order: SEQUENCE
       send_key: false
+      use_compression: false
+      # Touch a record on read once its TTL drops below this percentage.
+      reset_ttl_on_read_at_percent: 50
+
     retryable_writes:
       use_durable_delete: false
       maximum_number_of_call_attempts: 3
+      delay_between_retries: 50ms
+      abandon_call_after: 2s
+
+    non_retryable_writes:
+      use_durable_delete: false
+      abandon_call_after: 2s
+      maximum_number_of_call_attempts: 1
+
     consistency_mode_reads:
       read_consistency: SESSION
+      abandon_call_after: 1s
+      maximum_number_of_call_attempts: 2
+
     availability_mode_reads:
       migration_read_consistency: ONE
+      abandon_call_after: 1s
+      maximum_number_of_call_attempts: 2
+
     batch_reads:
       max_concurrent_servers: 8
       allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 3s
+      maximum_number_of_call_attempts: 2
+
+    batch_writes:
+      max_concurrent_servers: 6
+      abandon_call_after: 5s
+      maximum_number_of_call_attempts: 2
+
     query:
       record_queue_size: 5000
+      allow_scans_with_where: false
+      max_concurrent_servers: 8
+      abandon_call_after: 30s
+      maximum_number_of_call_attempts: 1
+
+  high-reliability:
+    all_operations:
+      abandon_call_after: 10s
+      maximum_number_of_call_attempts: 5
+      delay_between_retries: 1s
+      wait_for_call_to_complete: 30s
+      replica_order: MASTER_PROLES
+      send_key: true
+      use_compression: true
+      # Touch earlier for critical data.
+      reset_ttl_on_read_at_percent: 30
+
+    retryable_writes:
+      use_durable_delete: true
+      maximum_number_of_call_attempts: 7
+      delay_between_retries: 2s
+      abandon_call_after: 20s
+
+    non_retryable_writes:
+      use_durable_delete: true
+      abandon_call_after: 15s
+      maximum_number_of_call_attempts: 3
+
+    consistency_mode_reads:
+      read_consistency: LINEARIZE
+      abandon_call_after: 8s
+      maximum_number_of_call_attempts: 4
+
+    availability_mode_reads:
+      migration_read_consistency: ALL
+      abandon_call_after: 8s
+      maximum_number_of_call_attempts: 4
+
+    batch_reads:
+      max_concurrent_servers: 5
+      allow_inline_memory_access: false
+      allow_inline_ssd_access: false
+      abandon_call_after: 15s
+      maximum_number_of_call_attempts: 3
+
+    batch_writes:
+      max_concurrent_servers: 4
+      abandon_call_after: 20s
+      maximum_number_of_call_attempts: 4
+
+    query:
+      record_queue_size: 10000
+      allow_scans_with_where: false
+      max_concurrent_servers: 4
+      abandon_call_after: 60s
 
   # Inherits high-performance, then overrides per field.
   batch-optimized:
     parent: high-performance
+
     batch_reads:
       max_concurrent_servers: 16
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 5s
+      maximum_number_of_call_attempts: 3
+
+    batch_writes:
+      max_concurrent_servers: 12
+      abandon_call_after: 8s
+      maximum_number_of_call_attempts: 3
+
     query:
       record_queue_size: 20000
+      allow_scans_with_where: false
+      max_concurrent_servers: 16
+      abandon_call_after: 45s
+
+  development:
+    all_operations:
+      abandon_call_after: 30s
+      maximum_number_of_call_attempts: 1
+      delay_between_retries: 0ms
+      wait_for_call_to_complete: 60s
+      send_key: true
+      use_compression: false
+
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 1
+
+    non_retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 1
+
+    batch_reads:
+      max_concurrent_servers: 2
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 60s
+
+    query:
+      record_queue_size: 1000
+      allow_scans_with_where: false
+      max_concurrent_servers: 2
+      abandon_call_after: 120s
+
+  analytics:
+    parent: high-reliability
+
+    query:
+      record_queue_size: 50000
+      allow_scans_with_where: false
+      max_concurrent_servers: 32
+      abandon_call_after: 300s
+      maximum_number_of_call_attempts: 2
+
+    batch_reads:
+      max_concurrent_servers: 32
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+      abandon_call_after: 60s
+
+  real-time:
+    all_operations:
+      abandon_call_after: 500ms
+      maximum_number_of_call_attempts: 1
+      delay_between_retries: 0ms
+      wait_for_call_to_complete: 1s
+      replica_order: MASTER
+      send_key: false
+      use_compression: false
+
+    retryable_writes:
+      use_durable_delete: false
+      maximum_number_of_call_attempts: 1
+      abandon_call_after: 500ms
+
+    availability_mode_reads:
+      migration_read_consistency: ONE
+      abandon_call_after: 300ms
+
+  # Extends a record's TTL on read, keeping hot records from expiring.
+  cache-refresh:
+    parent: high-performance
+
+    all_operations:
+      reset_ttl_on_read_at_percent: 80
+
+    # Cache reads favor speed: one replica is enough.
+    availability_mode_reads:
+      migration_read_consistency: ONE
+      abandon_call_after: 500ms

@@ -1,0 +1,75 @@
+# Example SDK configuration for yaml_config_example.py: behaviors plus
+# system settings in one file.
+# maximum_number_of_call_attempts counts the initial call (2 = one retry).
+
+behaviors:
+  # Baseline the other profiles inherit from.
+  DEFAULT:
+    all_operations:
+      abandon_call_after: 30s
+      wait_for_call_to_complete: 10s
+      # wait_for_connection_to_complete is not configurable here.
+      maximum_number_of_call_attempts: 3
+      delay_between_retries: 100ms
+      send_key: true
+      use_compression: false
+
+  # Optimized for production workloads.
+  production:
+    parent: DEFAULT
+    all_operations:
+      abandon_call_after: 15s
+      maximum_number_of_call_attempts: 5
+    consistency_mode_reads:
+      read_consistency: SESSION
+    batch_reads:
+      max_concurrent_servers: 12
+      allow_inline_memory_access: true
+      allow_inline_ssd_access: true
+    batch_writes:
+      max_concurrent_servers: 8
+      allow_inline_memory_access: true
+    query:
+      record_queue_size: 5000
+      max_concurrent_servers: 10
+
+  # For time-sensitive operations.
+  low-latency:
+    parent: DEFAULT
+    all_operations:
+      abandon_call_after: 500ms
+      wait_for_call_to_complete: 250ms
+      maximum_number_of_call_attempts: 2
+    consistency_mode_reads:
+      read_consistency: LINEARIZE
+
+# System settings - cluster-level configuration
+system:
+  # Default system settings for all clusters.
+  DEFAULT:
+    connections:
+      minimum_connections_per_node: 10
+      maximum_connections_per_node: 100
+      maximum_socket_idle_time: 55s
+    circuit_breaker:
+      num_tend_intervals_in_error_window: 1
+      maximum_errors_in_error_window: 100
+    refresh:
+      tend_interval: 1s
+    transactions:
+      sleep_between_attempts: 250ms
+      number_of_attempts: 3
+
+  # Production cluster specific settings.
+  production:
+    connections:
+      minimum_connections_per_node: 50
+      maximum_connections_per_node: 300
+    circuit_breaker:
+      maximum_errors_in_error_window: 200
+
+  # Development cluster specific settings.
+  development:
+    connections:
+      minimum_connections_per_node: 5
+      maximum_connections_per_node: 50
