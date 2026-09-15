@@ -32,6 +32,7 @@ from aerospike_sdk import (
     Txn,
 )
 from aerospike_async.exceptions import CommitFailedError
+from aerospike_async import CommitErrorType
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
@@ -47,10 +48,15 @@ class _FakePacClient:
         self.commit_calls: list = []
         self.abort_calls: list = []
         self.commit_return: CommitStatus = CommitStatus.OK
+        # PAC raises for an abandoned roll-forward rather than returning
+        # a status; set this to model that.
+        self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
 
     def commit_blocking(self, txn):
         self.commit_calls.append(txn)
+        if self.commit_raises is not None:
+            raise self.commit_raises
         return self.commit_return
 
     def abort_blocking(self, txn):
@@ -141,6 +147,49 @@ def test_explicit_commit_returns_status(
         assert tx.active is False
     # __exit__ must not double-commit after an explicit commit:
     assert len(sync_client._pac.commit_calls) == 1
+
+
+def test_roll_forward_abandoned_raises_on_explicit_commit(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    sync_client._pac.commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+    with sync_tx as tx:
+        with pytest.raises(CommitError) as excinfo:
+            tx.commit()
+        assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+        assert tx.active is False
+    assert len(sync_client._pac.commit_calls) == 1
+    assert len(sync_client._pac.abort_calls) == 0
+
+
+def test_roll_forward_abandoned_raises_on_clean_exit(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    sync_client._pac.commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+    with pytest.raises(CommitError) as excinfo:
+        with sync_tx:
+            pass
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(sync_client._pac.commit_calls) == 1
+    assert len(sync_client._pac.abort_calls) == 0
+
+
+def test_close_abandoned_is_still_success(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    sync_client._pac.commit_return = CommitStatus.CLOSE_ABANDONED
+    with sync_tx as tx:
+        status = tx.commit()
+    assert status is CommitStatus.CLOSE_ABANDONED
 
 
 def test_ops_after_explicit_commit_run_txn_free(
@@ -369,6 +418,38 @@ def test_do_in_transaction_commit_failure_exhausts_retries() -> None:
     with pytest.raises(CommitError):
         sync_session.do_in_transaction(lambda tx: None, max_attempts=3, sleep_between_retries=0.0)
     assert len(client._pac.commit_calls) == 3
+
+
+def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None:
+    """An abandoned roll-forward is not a conflict: the server will commit."""
+    sync_session, client = _make_sync_session()
+    client._pac.commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+
+    with pytest.raises(CommitError) as excinfo:
+        sync_session.do_in_transaction(lambda tx: None, max_attempts=5, sleep_between_retries=0.0)
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(client._pac.commit_calls) == 1
+
+
+def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
+    """Current PAC raises CommitFailedError with the roll-forward type."""
+    sync_session, client = _make_sync_session()
+
+    def commit_blocking(txn):
+        client._pac.commit_calls.append(txn)
+        err = CommitFailedError("roll forward abandoned")
+        err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED
+        raise err
+
+    client._pac.commit_blocking = commit_blocking
+
+    with pytest.raises(CommitError) as excinfo:
+        sync_session.do_in_transaction(lambda tx: None, max_attempts=5, sleep_between_retries=0.0)
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(client._pac.commit_calls) == 1
 
 
 def test_nested_do_in_transaction_joins_the_outer_one() -> None:

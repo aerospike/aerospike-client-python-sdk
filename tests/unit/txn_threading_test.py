@@ -26,7 +26,7 @@ network I/O.
 import pytest
 
 from aerospike_sdk import Key, ResultCode, Txn
-from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy
+from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
 from aerospike_async.exceptions import CommitFailedError as PacCommitFailedError
@@ -250,9 +250,14 @@ class _FakePacClient:
         self.abort_calls: list = []
         self._commit_ok = CommitStatus.OK
         self._abort_ok = AbortStatus.OK
+        # PAC raises for an abandoned roll-forward rather than returning a
+        # status; set this to model that.
+        self._commit_raises: BaseException | None = None
 
     async def commit(self, txn):
         self.commit_calls.append(txn)
+        if self._commit_raises is not None:
+            raise self._commit_raises
         return self._commit_ok
 
     async def abort(self, txn):
@@ -430,6 +435,48 @@ async def test_do_in_transaction_commit_failure_surfaces_psdk_type() -> None:
     with pytest.raises(CommitError):
         await session.do_in_transaction(lambda tx: _noop(), max_attempts=2, sleep_between_retries=0.0)
     assert len(pac.commit_calls) == 2
+
+
+async def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None:
+    """An abandoned roll-forward is not a conflict: the server will commit.
+
+    Retrying would open a second transaction on keys the first attempt still
+    holds. One raise, one attempt.
+    """
+    session = _make_session_for_retry()
+    pac = session._client._async_client
+    pac._commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+
+    with pytest.raises(CommitError) as excinfo:
+        await session.do_in_transaction(
+            lambda tx: _noop(), max_attempts=5, sleep_between_retries=0.0,
+        )
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(pac.commit_calls) == 1
+
+
+async def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
+    """Current PAC raises CommitFailedError with the roll-forward type."""
+    session = _make_session_for_retry()
+    pac = session._client._async_client
+
+    async def commit(txn):
+        pac.commit_calls.append(txn)
+        err = PacCommitFailedError("roll forward abandoned")
+        err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED
+        raise err
+
+    pac.commit = commit
+
+    with pytest.raises(CommitError) as excinfo:
+        await session.do_in_transaction(
+            lambda tx: _noop(), max_attempts=5, sleep_between_retries=0.0,
+        )
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(pac.commit_calls) == 1
 
 
 async def _noop():

@@ -462,6 +462,41 @@ def _report_sc_routing(client, config) -> None:
 
 
 @pytest.fixture(scope="session")
+def aerospike_host_sc_single(pytestconfig):
+    """Seed for tests needing an SC cluster where one node owns every partition.
+
+    ``AEROSPIKE_HOST_SC_SINGLE``, default ``127.0.0.1:3130``. Stand one up with
+    ``~/tmp/sc-single-node/create-sc-single``.
+
+    The gated commit tests route the client through a proxy, which means the
+    node behind it has to own all 4096 partitions: ``force_single_node``
+    restricts the node set but does not rewrite the partition map, so on the
+    replication-factor-2 SC cluster most partitions would be unroutable and the
+    tests would fail for that reason instead of the one under test.
+
+    Probes once at session scope and skips dependent tests when absent, the
+    same way :func:`aerospike_host_sc` does.
+    """
+    seed = os.environ.get("AEROSPIKE_HOST_SC_SINGLE", "127.0.0.1:3130").strip()
+
+    probe_policy = ClientPolicy()
+    probe_policy.timeout = 2000
+    try:
+        client = new_client_blocking(probe_policy, seed)
+    except PacConnectionError:
+        emit = _terminal_emit(pytestconfig)
+        emit("")
+        emit(
+            f"single-node SC seed {seed!r} is UNREACHABLE "
+            "-> gated commit tests will SKIP",
+        )
+        pytest.skip(f"no single-node SC cluster at {seed}")
+    else:
+        client.close_blocking()
+    return seed
+
+
+@pytest.fixture(scope="session")
 def aerospike_host_sc(pytestconfig):
     """Seed for SC / MRT / durable-delete integration tests.
 

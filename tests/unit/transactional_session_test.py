@@ -24,10 +24,11 @@ without requiring an SC cluster.
 import pytest
 
 from aerospike_sdk import TxnState
-from aerospike_async import WritePolicy
+from aerospike_async import CommitErrorType, WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, Txn, TransactionalSession
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.exceptions import CommitError
 from aerospike_sdk.policy.behavior import Behavior
 
 
@@ -39,10 +40,15 @@ class _FakePacClient:
         self.commit_calls: list = []
         self.abort_calls: list = []
         self.commit_return: CommitStatus = CommitStatus.OK
+        # PAC raises for an abandoned roll-forward rather than returning
+        # a status; set this to model that.
+        self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
 
     async def commit(self, txn):
         self.commit_calls.append(txn)
+        if self.commit_raises is not None:
+            raise self.commit_raises
         return self.commit_return
 
     async def abort(self, txn):
@@ -129,6 +135,49 @@ async def test_explicit_commit_returns_status(
         assert tx.active is False
         # Subsequent __aexit__ should not double-commit:
     assert len(sdk_client._async_client.commit_calls) == 1
+
+
+async def test_roll_forward_abandoned_raises_on_explicit_commit(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    sdk_client._async_client.commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+    async with tx_session as tx:
+        with pytest.raises(CommitError) as excinfo:
+            await tx.commit()
+        assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+        assert tx.active is False
+    assert len(sdk_client._async_client.commit_calls) == 1
+    assert len(sdk_client._async_client.abort_calls) == 0
+
+
+async def test_roll_forward_abandoned_raises_on_clean_exit(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    sdk_client._async_client.commit_raises = CommitError(
+        "roll forward abandoned",
+        commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
+    )
+    with pytest.raises(CommitError) as excinfo:
+        async with tx_session:
+            pass
+    assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
+    assert len(sdk_client._async_client.commit_calls) == 1
+    assert len(sdk_client._async_client.abort_calls) == 0
+
+
+async def test_close_abandoned_is_still_success(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    sdk_client._async_client.commit_return = CommitStatus.CLOSE_ABANDONED
+    async with tx_session as tx:
+        status = await tx.commit()
+    assert status is CommitStatus.CLOSE_ABANDONED
 
 
 async def test_ops_after_explicit_commit_run_txn_free(
