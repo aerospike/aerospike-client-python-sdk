@@ -24,6 +24,7 @@ async def main() -> None:
 
 
 async def run_examples(session) -> None:
+    errors = 0
     await session.truncate(SET)
     await asyncio.sleep(0.2)
 
@@ -72,6 +73,7 @@ async def run_examples(session) -> None:
             print(f"Type:     {type(reported).__name__}")
         except Exception as e:
             print(f"ERROR:    {type(e).__name__}: {e}")
+            errors += 1
 
         # Restore the map so the next return type starts from the same state.
         await session.upsert(SET.id(1)).bin("m").set_to(source_map).execute()
@@ -95,6 +97,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -115,6 +118,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -135,6 +139,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -155,6 +160,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -176,6 +182,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # Restore original map
@@ -203,6 +210,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -223,6 +231,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -250,6 +259,7 @@ async def run_examples(session) -> None:
             print("Actual:   no result")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -269,6 +279,7 @@ async def run_examples(session) -> None:
         print(f"Actual:   {'record returned (filter passed)' if found else 'filtered out'}")
     except Exception as e:
         print(f"ERROR:    {type(e).__name__}: {e}")
+        errors += 1
     print()
 
     # ==================================================================
@@ -279,6 +290,9 @@ async def run_examples(session) -> None:
     first = await stream.first()
     if first and first.is_ok:
         print(f"Original map after all tests: {first.record.bins.get('m')}")
+
+    if errors:
+        raise AssertionError(f"{errors} test(s) reported ERROR")
 
 
 if __name__ == "__main__":
