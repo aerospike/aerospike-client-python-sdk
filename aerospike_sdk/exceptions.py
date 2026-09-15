@@ -624,7 +624,9 @@ class CommitError(TransactionError):
 
     Attributes:
         commit_error_type: Implementation-defined label for the failure phase,
-            if available.
+            if available. ``ROLL_FORWARD_ABANDONED`` means the writes are not
+            yet visible; the server will eventually commit them, so a retry
+            of the same work is not safe.
         verify_records: Verify-phase records or summaries, if available.
         roll_records: Roll-forward or rollback-phase records, if available.
         result_code: Server or client result associated with the commit, when set.

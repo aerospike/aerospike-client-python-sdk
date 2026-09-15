@@ -26,7 +26,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Optional, Union
 
-from aerospike_async import ResultCode
+from aerospike_async import CommitErrorType, ResultCode
 
 from aerospike_sdk.exceptions import CommitError
 
@@ -39,14 +39,27 @@ RETRYABLE_TXN_CODES = frozenset(
     }
 )
 
+# PyO3 enums have no ``.name``, so identity against the member is the check.
+# Only the error-type is reachable: core raises for an abandoned roll-forward
+# rather than returning it as a status.
+_ROLL_FORWARD_ABANDONED = frozenset(
+    value
+    for value in (getattr(CommitErrorType, "ROLL_FORWARD_ABANDONED", None),)
+    if value is not None
+)
+
 
 def is_retryable_txn_error(exc: BaseException) -> bool:
     """Report whether a failed transaction attempt is worth retrying.
 
     A commit failure is classified by type rather than by result code: it is
     the roll-up of a failed verify or roll phase and carries no code of its
-    own. It means the same thing as a conflict raised mid-block -- nothing was
-    applied -- so it is retryable on the same grounds.
+    own. Verify-fail and mark-roll-forward-abandoned mean nothing was applied,
+    so they are retryable on the same grounds as a mid-block conflict.
+
+    An abandoned roll-forward is the opposite: the client already marked the
+    transaction committed and the server will eventually make the writes
+    visible. Retrying would open a second transaction on the same keys.
 
     Args:
         exc: The exception that ended the attempt.
@@ -55,7 +68,7 @@ def is_retryable_txn_error(exc: BaseException) -> bool:
         ``True`` when a fresh attempt may succeed.
     """
     if isinstance(exc, CommitError):
-        return True
+        return exc.commit_error_type not in _ROLL_FORWARD_ABANDONED
     return getattr(exc, "result_code", None) in RETRYABLE_TXN_CODES
 
 

@@ -182,7 +182,7 @@ transactions the SDK opens for batch writes, so both get identical treatment.
 
 | Error | Meaning |
 |-------|---------|
-| `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries this automatically. |
+| `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries verify and mark-roll-forward failures automatically. An abandoned roll-forward (`commit_error_type` `ROLL_FORWARD_ABANDONED`) is **not** retried: those writes are still provisional and the server will eventually commit them. Retrying would open a second transaction on the same keys. `CLOSE_ABANDONED` is still a successful `CommitStatus` — the writes are durable and only monitor cleanup was left to the server. |
 | `MRT_BLOCKED` | Another transaction has one of the records locked. Retry. |
 | `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry. |
 | `MRT_EXPIRED` | Transaction monitor TTL elapsed before commit. |

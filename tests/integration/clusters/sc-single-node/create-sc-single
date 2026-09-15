@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Single-node strong-consistency cluster on port 3130.
+#
+# Why a second SC cluster: the gated commit tests route the client through a
+# TCP proxy, so the node behind it has to own every partition.
+# ``force_single_node`` restricts the node set but does not rewrite the
+# partition map the way the Java and C clients do, so on a
+# replication-factor-2 cluster most partitions would be unroutable and those
+# tests would fail for that reason instead of the one under test. One node
+# owning all 4096 partitions makes the restriction consistent.
+#
+# Two things the base image forces:
+#   - its entrypoint templates over /etc/aerospike/aerospike.conf, so the
+#     config is mounted at a different path and the entrypoint is bypassed;
+#   - it needs a feature key, which is licensed and therefore not in this
+#     repo. Fetched from the server repo with `gh api` (private, so this
+#     reuses your existing gh auth); override with FEATURES=/path/to/one.
+set -Eeuo pipefail
+cd "$(dirname "$0")"
+
+R=podman; command -v podman >/dev/null || R=docker
+NAME=as-sc-single
+
+IMG=${IMAGE:-artifact.aerospike.io/database-docker-test-local/aerospike-server-enterprise:8.2.0.0}
+# The key is licensed, so it is fetched rather than committed. Landing it
+# beside this script keeps it out of git (see .gitignore) and lets the mount
+# below be a plain path.
+FEATURES=${FEATURES:-$PWD/features.conf}
+FEATURES_REPO=${FEATURES_REPO:-citrusleaf/aerospike-server-enterprise}
+FEATURES_PATH=${FEATURES_PATH:-etc/features.conf}
+
+if [[ ! -f "$FEATURES" ]]; then
+    echo "fetching a feature key from $FEATURES_REPO/$FEATURES_PATH ..."
+    if ! command -v gh >/dev/null; then
+        echo "error: 'gh' is not installed, and no feature key at '$FEATURES'." >&2
+        echo "       Install gh, or set FEATURES=/path/to/features.conf." >&2
+        exit 1
+    fi
+    if ! gh api "repos/$FEATURES_REPO/contents/$FEATURES_PATH" \
+            -H "Accept: application/vnd.github.raw" > "$FEATURES"; then
+        rm -f "$FEATURES"
+        echo "error: could not fetch the feature key." >&2
+        echo "       The server repo is private -- check 'gh auth status'," >&2
+        echo "       or set FEATURES=/path/to/features.conf." >&2
+        exit 1
+    fi
+fi
+
+$R rm -f "$NAME" >/dev/null 2>&1 || true
+$R run -d --name "$NAME" --arch arm64 -p 3130:3130 \
+    -v "$PWD/aerospike-single.conf:/etc/aerospike/sc.conf:ro,Z" \
+    -v "$FEATURES:/etc/aerospike/features.conf:ro,Z" \
+    --entrypoint '["/usr/bin/as-tini-static","-r","SIGUSR1","-t","SIGTERM","--","asd","--foreground","--config-file","/etc/aerospike/sc.conf"]' \
+    "$IMG" >/dev/null
+echo "started $NAME (127.0.0.1:3130)"
+
+echo "waiting for the node to come up..."
+sleep 10
+
+# An SC namespace serves nothing until its roster is set, so this is not
+# optional -- without it every read and write answers "partition unavailable".
+# roster.py drives the node through the client, so it needs an interpreter
+# with aerospike_async installed.
+PYTHON=${PYTHON:-python3}
+if ! "$PYTHON" -c 'import aerospike_async' 2>/dev/null; then
+    echo "error: '$PYTHON' cannot import aerospike_async." >&2
+    echo "       Run from the PSDK dev environment, or set PYTHON=/path/to/python." >&2
+    exit 1
+fi
+"$PYTHON" roster.py

@@ -502,6 +502,10 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Raises:
             ValueError: If ``max_attempts`` is given and is less than 1.
+            CommitError: The commit's roll-forward was abandoned (not
+                retried: the server will eventually commit those writes).
+            AerospikeError: The last-seen transient error after retries
+                are exhausted, or any non-transient error from ``operation``.
 
         Example::
 
