@@ -241,13 +241,13 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
 
 
 
-class TestRestrictingClusterToSeeds:
+class TestForceSingleNode:
     """Pinning the cluster view to the seeds, against a live cluster."""
 
-    async def test_seeds_only_view_excludes_discovered_peers(
+    async def test_single_node_view_excludes_discovered_peers(
         self, aerospike_host_sc, make_cluster_definition
     ):
-        """Discovery normally finds the peers; restricting keeps only the seed.
+        """Discovery normally finds the peers; force_single_node keeps only the seed.
 
         Needs more than one node to mean anything: on a single-node cluster the
         seed *is* the whole cluster, so both modes look identical and the test
@@ -270,7 +270,7 @@ class TestRestrictingClusterToSeeds:
 
         restricted = await (
             make_cluster_definition(aerospike_host_sc, auth=True)
-            .restricting_cluster_to_seeds()
+            .force_single_node()
             .connect()
         )
         try:

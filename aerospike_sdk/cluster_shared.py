@@ -402,31 +402,37 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._use_services_alternate = enabled
         return self
 
-    def restricting_cluster_to_seeds(self, enabled: bool = True) -> Self:
-        """Pin the cluster view to the seed addresses, disabling peer discovery.
+    def force_single_node(self, enabled: bool = True) -> Self:
+        """Talk to the first seed only, bypassing peer discovery. **Testing only.**
 
-        Normally the client bootstraps from the seeds and then discovers the
-        rest of the cluster, addressing each node at whatever it advertises.
-        That fails wherever the advertised addresses are not routable from the
-        client. Restricting the view keeps the seeds as the whole cluster:
+        Every other client names this ``force_single_node`` / ``forceSingleNode``
+        and documents it for testing, and so does the underlying flag's own
+        origin. Do not enable it in production.
 
-        - peers reported by other nodes are ignored;
-        - seeds are retained across connection failures rather than being
-          dropped by the tend loop, and are re-seeded if the live node count
-          falls below the seed count;
-        - load-balancer detection is skipped, so a seed address is treated as
-          the canonical service endpoint rather than resolved to a backend.
+        With this set, peer discovery is skipped and the seed addresses become
+        the whole cluster: peers reported by other nodes are ignored, seeds are
+        retained across connection failures rather than dropped by the tend
+        loop, and load-balancer detection is skipped so a seed address is
+        treated as the canonical service endpoint. No tend task is spawned, so
+        node restarts, master failover and rebalances are invisible.
 
-        The deployment case is a client behind a fixed VIP or proxy fronting
-        the cluster. The other use is a test or benchmark that wants a node set
-        that cannot shift under it as tending discovers or drops peers.
+        .. warning::
 
-        This is a different remedy from :meth:`using_services_alternate`, which
-        still discovers peers but addresses them by their alternate address.
-        Reach for this one when the peers should not be contacted at all.
+            On a multi-node cluster this yields **partial availability**, not a
+            restricted-but-working view. The partition map still names the real
+            owners, including nodes that discovery was told to ignore, so every
+            partition the seed does not own becomes unroutable and its
+            operations raise ``Cannot get appropriate node for namespace ...
+            partition N``. Measured against a 3-node cluster: 6 of 30 writes
+            succeeded and 24 raised. Other clients avoid this by rewriting the
+            partition map to point every partition at the seed; this client
+            does not.
+
+            Use it only against a single-node cluster, or where a test or
+            benchmark needs a node set that cannot shift under it.
 
         Args:
-            enabled: Whether to restrict the cluster to its seeds. Defaults to
+            enabled: Whether to talk to the first seed only. Defaults to
                 ``True`` so the no-argument call reads as an enable.
 
         Returns:
@@ -434,12 +440,13 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         Example::
 
-            # Behind a load balancer that fronts the cluster.
-            cd = ClusterDefinition("aerospike-vip", 3000).restricting_cluster_to_seeds()
+            # Benchmark against a single-node cluster, with no tend noise.
+            cd = ClusterDefinition("localhost", 3000).force_single_node()
 
         See Also:
-            :meth:`using_services_alternate`: Discover peers, but address them
-                by their alternate address.
+            :meth:`using_services_alternate`: The production remedy when
+                advertised addresses are not routable — discovers peers, but
+                addresses them by their alternate address.
             :meth:`with_ip_map`: Client-side translation of discovered
                 addresses.
         """

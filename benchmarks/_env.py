@@ -135,7 +135,7 @@ def cluster_def_from_config(cfg: object):
     cluster_def = ClusterDefinition(hosts=Host.parse_hosts(cfg.seeds, 3000))
 
     if getattr(cfg, "seed_only_cluster", False):
-        cluster_def.restricting_cluster_to_seeds()
+        cluster_def.force_single_node()
 
     # Always set both directions explicitly. `ClusterDefinition` seeds this from
     # AEROSPIKE_USE_SERVICES_ALTERNATE, so only enabling it here would let the

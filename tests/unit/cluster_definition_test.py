@@ -401,27 +401,27 @@ class TestSyncConnectionPoolDefaults:
         assert seen["policy"].conn_pools_per_node == 3
 
 
-class TestRestrictingClusterToSeeds:
+class TestForceSingleNode:
     """Pinning the cluster view to the seeds, for VIP/proxy deployments."""
 
     def test_defaults_to_discovery(self):
-        """Peer discovery is the normal mode; restricting is opt-in."""
+        """Peer discovery is the normal mode; single-node is opt-in."""
         assert ClusterDefinition("localhost", 3000)._get_policy().seed_only_cluster is False
 
     def test_enabled_reaches_the_client_policy(self):
         """Storing it on the builder is not enough; it has to reach the policy."""
-        cd = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds()
+        cd = ClusterDefinition("localhost", 3000).force_single_node()
         assert cd._get_policy().seed_only_cluster is True
 
     def test_can_be_turned_back_off(self):
-        cd = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds(False)
+        cd = ClusterDefinition("localhost", 3000).force_single_node(False)
         assert cd._get_policy().seed_only_cluster is False
 
     def test_chains(self):
         cd = (
             ClusterDefinition("localhost", 3000)
             .with_native_credentials("admin", "password")
-            .restricting_cluster_to_seeds()
+            .force_single_node()
             .validate_cluster_name_is("my-cluster")
         )
         assert cd._get_policy().seed_only_cluster is True
@@ -437,8 +437,8 @@ class TestRestrictingClusterToSeeds:
         """
         baseline = ClusterDefinition("localhost", 3000)._get_policy()
 
-        seeds_only = ClusterDefinition("localhost", 3000).restricting_cluster_to_seeds()
-        assert seeds_only._get_policy().use_services_alternate == (
+        single_node = ClusterDefinition("localhost", 3000).force_single_node()
+        assert single_node._get_policy().use_services_alternate == (
             baseline.use_services_alternate
         )
 
