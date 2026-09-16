@@ -13,49 +13,16 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""``Vector`` bin (``VECTOR`` particle) round-trip integration tests.
+"""VECTOR bin round-trip integration tests."""
 
-Scope: storing and retrieving :class:`~aerospike_sdk.Vector` bins through the
-SDK's fluent API -- construction, put/get, every element type, numpy input,
-special float values (non-finite, signed zero, bit-exact), large vectors
-(including the 16-bit msgpack length boundary, top-level and nested),
-multi-bin records, absence, overwrite/type-churn, bin selection,
-exists/touch/delete + generation, batch, element-type fidelity, and nesting
-inside CDT list/map bins (including map-in-list and list-in-map). Read back
-through both ``.value`` and ``.numpy_value`` so a value written as a list can
-be read as a numpy array and vice versa. This mirrors the hardened suites in
-the two dependency repos -- ``aerospike-client-rust``'s ``tests/src/vector.rs``
-and ``aerospike-client-python-async``'s ``tests/integration/vector_test.py``.
-
-VECTOR bins are an unreleased, dev-server-only feature. Support is gated via
-the ``supports_vector_bins`` fixture (see ``conftest.py``): point
-``AEROSPIKE_HOST`` at such a dev build to run these; they skip cleanly
-otherwise.
-
-Out of scope -- vector SEARCH (Top-K ``ORDER BY <bin> LIMIT k`` and
-vector-distance expressions), which lives in ``vector_search_test.py``. The
-key finding, confirmed by the hardened dependency suites: *scalar* Top-K
-works today, but evaluating **any** expression over a VECTOR bin (a plain
-read, ``bin_exists``, a filter, or a distance metric) crashes ``asd``. The
-root cause is server-side -- ``rt_bin_translate``
-(``aerospike-server/as/src/exp/exp_rt.c``) has no ``AS_PARTICLE_TYPE_VECTOR``
-case and falls through to ``cf_crash``. Because those paths take the whole
-node down, they are marked TODO/WIP with a permanent ``pytest.skip`` in
-``vector_search_test.py`` (mirroring the rust core's ``#[ignore]``). Nothing
-here routes a vector bin through an expression, so this file is always safe to
-run.
-
-Construction/defaults/error cases are in ``tests/unit/vector_builder_test.py``;
-the client-side search *build* surface is in
-``tests/unit/vector_search_wip_test.py``.
-"""
+from contextlib import suppress
 
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Vector, VectorElementType
+from aerospike_sdk import ResultCode, Vector, VectorElementType
 from aerospike_sdk.dataset import DataSet
-
+from aerospike_sdk.exceptions import AerospikeError
 
 NAMESPACE = "test"
 SET = "vector_psdk"
@@ -64,24 +31,19 @@ SET = "vector_psdk"
 @pytest_asyncio.fixture(autouse=True)
 async def _skip_without_vector_support(supports_vector_bins):
     if not supports_vector_bins:
-        pytest.skip("cluster does not support VECTOR bins (requires a dev server build)")
+        pytest.skip("cluster does not support VECTOR bins (requires Server 8.1.3+)")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
-    """One connected cluster for the whole module (connect is ~1s)."""
+    """Shared cluster connection."""
     async with await make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 
 @pytest_asyncio.fixture
 async def session_and_key(cluster):
-    """A fresh session plus a factory of clean, auto-deleted keys.
-
-    Each returned key is deleted before the test (so a crashed prior run
-    can't leak state) and again after (teardown), keeping tests isolated
-    without a fixed shared key list.
-    """
+    """Session and clean-key factory."""
     session = cluster.create_session()
     ds = DataSet.of(NAMESPACE, SET)
     used: list = []
@@ -89,19 +51,15 @@ async def session_and_key(cluster):
     async def _key(name: str):
         k = ds.id(name)
         used.append(k)
-        try:
+        with suppress(AerospikeError):
             await session.delete(k).execute()
-        except Exception:
-            pass
         return k
 
     yield session, _key
 
     for k in used:
-        try:
+        with suppress(AerospikeError):
             await session.delete(k).execute()
-        except Exception:
-            pass
 
 
 async def _read_bin(session, key, bin_name):
@@ -247,7 +205,6 @@ class TestVectorNumpyPutGet:
 
         vector = await _read_bin(session, k, "embedding")
         assert vector.element_type == VectorElementType.FLOAT16
-        # FLOAT16 is only readable via .numpy_value.
         with pytest.raises(TypeError):
             _ = vector.value
         out = vector.numpy_value
@@ -401,10 +358,19 @@ class TestVectorSize:
 class TestVectorEdgeCases:
 
     async def test_empty_vector_constructs_without_write(self):
-        """PAC permits constructing a zero-dimension vector."""
+        """Zero-dimension vectors can be constructed locally."""
         vector = Vector([])
         assert vector.dimensions == 0
         assert vector.value == []
+
+    async def test_empty_vector_write_is_rejected_by_server(self, session_and_key):
+        """Construction is valid, but the server requires at least one dimension."""
+        session, key = session_and_key
+        k = await key("v_empty_write")
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await session.upsert(k).put({"embedding": Vector([])}).execute()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
     async def test_int32_min_max_boundaries(self, session_and_key):
         session, key = session_and_key
@@ -437,9 +403,7 @@ class TestVectorEdgeCases:
 # ---------------------------------------------------------------------------
 
 class TestVectorTypeChurn:
-    """A vector bin is not pinned to VECTOR once written; the last write wins.
-    Mirrors the rust core's ``a_vector_bin_can_be_replaced_by_a_scalar_and_back``.
-    """
+    """A bin may change between VECTOR and scalar values."""
 
     async def test_overwrite_same_type_new_dimensions(self, session_and_key):
         session, key = session_and_key
@@ -549,9 +513,18 @@ class TestVectorRecordLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestVectorBatch:
-    """Batch reads/exists round-trip vector bins across multiple keys.
-    Mirrors the rust core's ``batch_read_returns_records_with_vector_bins``.
-    """
+    """Batch operations on VECTOR bins."""
+
+    async def test_batch_write_and_read_round_trip_vector(self, session_and_key):
+        """A multi-key fluent upsert serializes VECTOR payloads in a batch command."""
+        session, key = session_and_key
+        keys = [await key(f"v_batch_write_{i}") for i in range(3)]
+        vector = Vector([0.25, -0.5, 1.0], VectorElementType.FLOAT32)
+
+        await session.upsert(*keys).put({"embedding": vector}).execute()
+
+        results = await (await session.query(*keys).bins(["embedding"]).execute()).collect()
+        assert [row.record_or_raise().bins["embedding"] for row in results] == [vector] * 3
 
     async def test_batch_read_returns_vector_bins(self, session_and_key):
         session, key = session_and_key
@@ -622,9 +595,7 @@ class TestVectorAllElementTypesInOneRecord:
 
 
 class TestVectorElementTypeFidelity:
-    """Element-type and dimension edge cases on the round trip. Mirrors the
-    rust core's ``element_type_is_preserved_distinctly_through_the_server`` and
-    ``signed_zero_and_non_finite_survive_the_server_bit_exact``."""
+    """Element-type and dimension round-trip coverage."""
 
     @pytest.mark.parametrize("element_type, values", _STORAGE_TYPES)
     async def test_single_dimension_vector_round_trips(
@@ -745,9 +716,7 @@ class TestVectorTopLevelSize:
 
     async def test_top_level_vector_crossing_16bit_length_boundary(self, session_and_key):
         """A top-level vector *bin* (not nested) whose particle exceeds the
-        16-bit msgpack length boundary round-trips. 9000 f64 elements =>
-        8 + 9000*8 = 72008 bytes, past 65_535. Mirrors the rust core's
-        ``large_vector_crossing_16bit_length_boundary_round_trips``."""
+        16-bit msgpack length boundary round-trips."""
         session, key = session_and_key
         k = await key("v_toplevel_16bit")
         v = Vector([i * 0.5 for i in range(9000)], VectorElementType.FLOAT64)

@@ -1,32 +1,12 @@
 #!/usr/bin/env python3
-"""Vector bins + Top-K ("ORDER BY <bin> LIMIT k") hybrid search PREVIEW.
-
-Two parts:
-
-1. Writing/reading ``Vector`` bins -- FULLY WORKING. A Vector round-trips
-   through put/get like any other bin value (see ``write_products``).
-
-2. Vector *similarity search* -- NOT YET SUPPORTED SERVER-SIDE. Projecting a
-   distance expression (``Exp.cosine_similarity`` etc.) and ranking with
-   ``.order_by(...)`` / ``.top_k(...)`` is a preview of the intended fluent
-   API. Scalar Top-K works on the current dev server, but the vector case does
-   not because evaluating **any** expression over a VECTOR bin is currently a
-   server crash:
-
-     * ``rt_bin_translate`` has no ``AS_PARTICLE_TYPE_VECTOR`` case, so
-       ``Exp.vector_bin`` (and consequently a distance expression, a filter,
-       or ``bin_exists``) falls through to ``cf_crash`` and aborts ``asd``.
-
-   The search functions below are shown for API illustration and are
-   deliberately **not executed** by ``main()``. They remain ordinary TODO/WIP
-   examples until a server build fixes VECTOR expression evaluation.
-"""
+"""Vector bins and Top-K similarity search (Server 8.1.3+)."""
 
 import asyncio
 
 import _env
-from aerospike_async import ExpOperation, ExpReadFlags, Vector
-from aerospike_sdk import Behavior, DataSet, Order, OrderByType
+from aerospike_async import ExpOperation, ExpReadFlags
+
+from aerospike_sdk import Behavior, DataSet, Order, OrderByType, QueryHint, Vector
 from aerospike_sdk.exp import Exp
 
 
@@ -36,8 +16,7 @@ def embed(_text: str) -> list[float]:
 
 
 async def write_products(session, products: DataSet) -> None:
-    """Milestone 1: a Vector bin round-trips through put/get like any other
-    bin value — no new write/read methods needed."""
+    """Write product records with vector embeddings."""
     await session.upsert(products.id("sku-1")).put({
         "name": "wireless mouse",
         "category": "electronics",
@@ -52,18 +31,10 @@ async def write_products(session, products: DataSet) -> None:
 
 
 async def vector_topk_example(session, products: DataSet) -> None:
-    """PREVIEW (not yet supported server-side). Rank every record in the set by
-    cosine similarity to a query vector, keeping the top 10.
-
-    `Exp.cosine_similarity(query, bin)` projects a distance value into the
-    "similarity" bin via `.with_op_projection(...)` — the query op-projection
-    mechanism the server applies per matching record. `.order_by(...)` names
-    that projected bin as the Top-K order key; larger cosine similarity means
-    "more similar", hence `Order.DESC`.
-    """
+    """Rank products by cosine similarity to a query vector."""
     query_vector = Vector(embed("running shoes for marathons"))
 
-    stream = await (
+    async with await (
         session.query(products)
         .with_op_projection(
             ExpOperation.read(
@@ -74,21 +45,20 @@ async def vector_topk_example(session, products: DataSet) -> None:
         .order_by("similarity", OrderByType.DOUBLE, Order.DESC)
         .top_k(10)
         .execute()
-    )
-    async for row in stream:
-        print(row.record.bins)  # would include the projected "similarity" bin
-    stream.close()
+    ) as stream:
+        async for row in stream:
+            print(row.record.bins)
 
 
 async def hybrid_search_example(session, products: DataSet) -> None:
-    """PREVIEW (not yet supported server-side). Filter to a category first, then
-    Top-K-rank only the records that pass. Top-K would compose with
-    `.where(...)` the same way non-vector queries do."""
+    """Filter to a category first, then rank its products by similarity."""
     query_vector = Vector(embed("running shoes for marathons"))
 
-    stream = await (
+    async with await (
         session.query(products)
         .where("$.category == 'footwear'")
+        # Permit a primary-index scan because this example defines no index.
+        .with_hint(QueryHint(allow_scans_with_where=True))
         .with_op_projection(
             ExpOperation.read(
                 "similarity",
@@ -98,10 +68,9 @@ async def hybrid_search_example(session, products: DataSet) -> None:
         .order_by("similarity", OrderByType.DOUBLE, Order.DESC)
         .top_k(10)
         .execute()
-    )
-    async for row in stream:
-        print(row.record.bins)
-    stream.close()
+    ) as stream:
+        async for row in stream:
+            print(row.record.bins)
 
 
 async def main() -> None:
@@ -110,17 +79,9 @@ async def main() -> None:
     products = DataSet.of("test", "products")
 
     try:
-        # Part 1: writing/reading Vector bins — fully working.
         await write_products(session, products)
-
-        # TODO(vector-expression-support): Re-enable these normal examples
-        # once the server handles AS_PARTICLE_TYPE_VECTOR in rt_bin_translate.
-        # They are intentionally commented out: executing either currently
-        # crashes the server, rather than returning a regular query error.
-        #
-        # await vector_topk_example(session, products)
-        # await hybrid_search_example(session, products)
-        print("\nVector search examples are TODO/WIP: VECTOR expressions currently crash the server.")
+        await vector_topk_example(session, products)
+        await hybrid_search_example(session, products)
     finally:
         await cluster.close()
 

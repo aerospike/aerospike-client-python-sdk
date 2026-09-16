@@ -244,13 +244,13 @@ Connection variables are the same ones the test suite uses — see
 ## Vector bins and Top-K queries
 
 `Vector` is a native bin type for fixed-dimension numeric embeddings
-(`FLOAT16`/`INT32`/`FLOAT32`/`FLOAT64` elements via `VectorElementType`),
-constructible from a plain list or a 1-D numpy array. It round-trips through
-the same `put`/`get` paths as any other bin value — no dedicated write/read
-methods needed:
+(`FLOAT16`/`INT32`/`FLOAT32`/`FLOAT64` elements via `VectorElementType`).
+Construct it from a plain list or 1-D numpy array and use it with the usual
+`put`/`get` paths. VECTOR values and Top-K queries require Aerospike Server
+8.1.3+:
 
 ```python
-from aerospike_async import Vector
+from aerospike_sdk import Vector
 
 await session.upsert(key).bin("embedding").set_to(Vector([0.1, 0.2, 0.3, 0.4])).execute()
 stream = await session.query(key).bins(["embedding"]).execute()
@@ -258,7 +258,7 @@ row = await stream.first_or_raise()
 row.record.bins["embedding"].numpy_value  # typed numpy array
 ```
 
-### Vector search / Top-K (preview — not yet supported server-side)
+### Vector search / Top-K
 
 `Exp.vector_bin`/`euclidean_squared_distance`/`dot_product`/`cosine_similarity`
 (reachable through `aerospike_sdk.exp.Exp`, the SDK's `FilterExpression`
@@ -293,18 +293,12 @@ async for row in stream:
 stream.close()
 ```
 
-See [`examples/vector_topk_query.py`](examples/vector_topk_query.py) for a
-full TODO/WIP example.
+Top-K uses server pushdown when supported by all queried nodes; otherwise the
+client merges ordinary query results. See
+[`examples/vector_topk_query.py`](examples/vector_topk_query.py).
 
-> **Work in progress — vector-distance search is not functional yet.** Scalar
-> Top-K (`ORDER BY <scalar bin> LIMIT k`) works on the current dev server, but
-> vector search first needs an expression to load the VECTOR bin. The server's
-> `rt_bin_translate` has no `AS_PARTICLE_TYPE_VECTOR` case, so *any* expression
-> over a vector bin (`Exp.vector_bin`, `bin_exists`, filters, or vector-distance
-> expressions) falls through to `cf_crash` and aborts `asd`. The normal
-> regression examples/tests are therefore marked TODO/WIP and disabled until
-> the server fixes VECTOR expression evaluation. **Vector bin storage** (above)
-> works today.
+Generic expression reads of VECTOR bins are not supported. Use
+`Exp.vector_bin(...)` only as an operand to a distance expression.
 
 ## Performance
 

@@ -650,6 +650,7 @@ async def aerospike_host_812_required(aerospike_host, server_version):
 # here rather than inlining a tuple in a new ``supports_*`` gate.
 SERVER_8_1_1 = (8, 1, 1, 0)
 SERVER_8_1_2 = (8, 1, 2, 0)
+SERVER_8_1_3 = (8, 1, 3, 0)
 SERVER_8_2_0 = (8, 2, 0, 0)
 
 
@@ -783,25 +784,6 @@ async def supports_blob_index(server_version):
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def supports_vector_bins(server_version):
-    """``True`` when the (default-host) cluster likely supports ``VECTOR`` bins.
-
-    Covers storing/retrieving :class:`~aerospike_sdk.Vector` bin values
-    (put/get, ``set_to_vector``, and vectors nested in CDT list/map bins).
-
-    TODO(vector-capability-gate): interim/temporary. Unlike the other
-    ``supports_*`` gates, neither the Rust core nor PAC assigns a
-    ``supports_vector_bins()`` version yet -- ``VECTOR`` particle support is
-    still an unreleased, dev-server-only feature with no assigned version
-    floor. This reuses the 8.1.3 floor only because current dev builds happen
-    to report that version (``git describe``-style, e.g.
-    ``8.1.3.0-76-g<hash>``); it will false-positive on a genuine (non-dev)
-    8.1.3+ release that lacks ``VECTOR`` support. Mirrors the same interim
-    fixture in the ``aerospike-async`` test suite. Replace with a real
-    capability check once the core assigns one, and drop this TODO.
-
-    Vector *search* (distance expressions + Top-K ``ORDER BY <bin> LIMIT k``)
-    is a separate, not-yet-implemented feature server-side and is intentionally
-    NOT covered by this gate -- see ``tests/integration/async/vector_test.py``.
-    """
-    return server_version is not None and server_version >= (8, 1, 3, 0)
+    """``True`` when the default cluster supports VECTOR and Top-K (8.1.3+)."""
+    return server_version is not None and server_version >= SERVER_8_1_3
 
