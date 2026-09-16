@@ -25,6 +25,7 @@ from aerospike_async import AbortStatus, CommitStatus, Txn
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
 if TYPE_CHECKING:
@@ -156,7 +157,14 @@ class TransactionalSession(TransactionalSessionBase, Session):
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to commit.")
         try:
-            status = await self._client._async_client.commit(self._txn)
+            # Built per commit rather than cached so a behavior or config-file
+            # reload between operations is honored; commits are rare enough
+            # that two policy constructions cost nothing measurable.
+            status = await self._client._async_client.commit(
+                self._txn,
+                verify_policy=to_txn_verify_policy(self._behavior.get_txn_verify_settings()),
+                roll_policy=to_txn_roll_policy(self._behavior.get_txn_roll_settings()),
+            )
         except Exception as e:
             self._finalized = True
             self._txn = None
@@ -184,7 +192,10 @@ class TransactionalSession(TransactionalSessionBase, Session):
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to abort.")
         try:
-            status = await self._client._async_client.abort(self._txn)
+            status = await self._client._async_client.abort(
+                self._txn,
+                roll_policy=to_txn_roll_policy(self._behavior.get_txn_roll_settings()),
+            )
         except Exception as e:
             self._finalized = True
             self._txn = None

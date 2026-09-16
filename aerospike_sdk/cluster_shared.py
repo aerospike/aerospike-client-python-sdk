@@ -462,6 +462,12 @@ class ClusterDefinitionBase(Generic[_TB]):
         for a file shared across SDKs, and the wrong one if you would rather
         find out at deploy time than from behavior in production.
 
+        Strict mode raises on what the loader does not *recognize*, not on
+        what it honors at a different scope: a key this SDK accepts elsewhere
+        (for example ``wait_for_connection_to_complete``, honored client-wide
+        under ``system.<cluster>.connections``) warns with a pointer to the
+        right spelling and still connects.
+
         Applies to the connect-time read only. Hot reload stays fail-soft
         whatever this is set to: the monitor runs in the background with no
         caller to raise to, so it warns and keeps the previous configuration.

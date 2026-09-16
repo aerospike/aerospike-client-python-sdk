@@ -25,6 +25,8 @@ from aerospike_async import (
     Concurrency,
     ReadPolicy,
     QueryPolicy,
+    TxnRollPolicy,
+    TxnVerifyPolicy,
     WritePolicy,
 )
 from aerospike_async.exceptions import ValueError as _PacValueError
@@ -80,6 +82,9 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
             socket_timeout=(
                 _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
             ),
+            timeout_delay=(
+                _ms(settings.timeout_delay) if settings.timeout_delay is not None else None
+            ),
             max_retries=settings.max_retries,
             sleep_between_retries=(
                 _ms(settings.retry_delay) if settings.retry_delay is not None else None
@@ -107,6 +112,9 @@ def to_write_policy(settings: Settings) -> WritePolicy:
         socket_timeout=(
             _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
+        timeout_delay=(
+            _ms(settings.timeout_delay) if settings.timeout_delay is not None else None
+        ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
             _ms(settings.retry_delay) if settings.retry_delay is not None else None
@@ -131,6 +139,8 @@ def to_query_policy(settings: Settings) -> QueryPolicy:
         p.total_timeout = _ms(settings.total_timeout)
     if settings.socket_timeout is not None:
         p.socket_timeout = _ms(settings.socket_timeout)
+    if settings.timeout_delay is not None:
+        p.timeout_delay = _ms(settings.timeout_delay)
     if settings.max_retries is not None:
         p.max_retries = settings.max_retries
     if settings.retry_delay is not None:
@@ -195,6 +205,9 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
         socket_timeout=(
             _ms(settings.socket_timeout) if settings.socket_timeout is not None else None
         ),
+        timeout_delay=(
+            _ms(settings.timeout_delay) if settings.timeout_delay is not None else None
+        ),
         max_retries=settings.max_retries,
         sleep_between_retries=(
             _ms(settings.retry_delay) if settings.retry_delay is not None else None
@@ -213,6 +226,50 @@ def to_batch_policy(settings: Settings) -> BatchPolicy:
     )
 
 
+def to_txn_verify_policy(settings: Settings) -> TxnVerifyPolicy:
+    """Build a TxnVerifyPolicy from resolved transaction-verify Settings.
+
+    Only the fields the policy carries are mapped; the resolved settings may
+    hold more (inherited through the ``ALL`` scope), and those govern nothing
+    in the verify phase.
+    """
+    p = TxnVerifyPolicy()
+    if settings.total_timeout is not None:
+        p.total_timeout = _ms(settings.total_timeout)
+    if settings.socket_timeout is not None:
+        p.socket_timeout = _ms(settings.socket_timeout)
+    if settings.max_retries is not None:
+        p.max_retries = settings.max_retries
+    if settings.retry_delay is not None:
+        p.sleep_between_retries = _ms(settings.retry_delay)
+    if settings.replica is not None:
+        p.replica = settings.replica
+    if settings.read_mode_sc is not None:
+        p.read_mode_sc = settings.read_mode_sc
+    return p
+
+
+def to_txn_roll_policy(settings: Settings) -> TxnRollPolicy:
+    """Build a TxnRollPolicy from resolved transaction-roll Settings.
+
+    Only the fields the policy carries are mapped, as with
+    :func:`to_txn_verify_policy`; the roll phase is a batch of writes, so it
+    takes no read-consistency field.
+    """
+    p = TxnRollPolicy()
+    if settings.total_timeout is not None:
+        p.total_timeout = _ms(settings.total_timeout)
+    if settings.socket_timeout is not None:
+        p.socket_timeout = _ms(settings.socket_timeout)
+    if settings.max_retries is not None:
+        p.max_retries = settings.max_retries
+    if settings.retry_delay is not None:
+        p.sleep_between_retries = _ms(settings.retry_delay)
+    if settings.replica is not None:
+        p.replica = settings.replica
+    return p
+
+
 def apply_to_read_policy(settings: Settings, policy: ReadPolicy) -> ReadPolicy:
     """Apply non-None Settings fields onto an existing ReadPolicy.
 
@@ -223,6 +280,10 @@ def apply_to_read_policy(settings: Settings, policy: ReadPolicy) -> ReadPolicy:
         policy.total_timeout = _ms(settings.total_timeout)
     if settings.socket_timeout is not None and policy.socket_timeout == 0:
         policy.socket_timeout = _ms(settings.socket_timeout)
+    # 0 (close the socket on timeout) is the policy default; treat it as unset
+    # so behavior settings fill it without clobbering an explicit drain window.
+    if settings.timeout_delay is not None and policy.timeout_delay == 0:
+        policy.timeout_delay = _ms(settings.timeout_delay)
     if settings.max_retries is not None and policy.max_retries == 0:
         policy.max_retries = settings.max_retries
     if settings.replica is not None:
@@ -259,6 +320,10 @@ def apply_to_write_policy(settings: Settings, policy: WritePolicy) -> WritePolic
         policy.total_timeout = _ms(settings.total_timeout)
     if settings.socket_timeout is not None and policy.socket_timeout == 0:
         policy.socket_timeout = _ms(settings.socket_timeout)
+    # 0 (close the socket on timeout) is the policy default; treat it as unset
+    # so behavior settings fill it without clobbering an explicit drain window.
+    if settings.timeout_delay is not None and policy.timeout_delay == 0:
+        policy.timeout_delay = _ms(settings.timeout_delay)
     if settings.max_retries is not None and policy.max_retries == 0:
         policy.max_retries = settings.max_retries
     if settings.send_key is not None:

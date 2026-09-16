@@ -47,6 +47,12 @@ class TestSystemSettingsApplyTo:
         ss.apply_to(p)
         assert p.idle_timeout == 30_000
 
+    def test_wait_for_connection_to_complete(self):
+        ss = SystemSettings(wait_for_connection_to_complete=timedelta(seconds=5))
+        p = ClientPolicy()
+        ss.apply_to(p)
+        assert p.connect_timeout == 5_000
+
     def test_tend_interval(self):
         ss = SystemSettings(tend_interval=timedelta(seconds=2))
         p = ClientPolicy()

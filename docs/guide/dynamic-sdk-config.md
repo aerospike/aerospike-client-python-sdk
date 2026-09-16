@@ -24,6 +24,7 @@ system:
       minimum_connections_per_node: 10
       maximum_connections_per_node: 300
       maximum_socket_idle_time: 55s
+      wait_for_connection_to_complete: 5s
     circuit_breaker:
       num_tend_intervals_in_error_window: 2
       maximum_errors_in_error_window: 100
@@ -62,6 +63,15 @@ multi-key write batches on strong-consistency namespaces are wrapped in
 [`SystemSettings`](../api/system-settings.md) for the programmatic
 equivalents.
 
+`wait_for_connection_to_complete` bounds how long the pool may spend
+establishing one connection (TCP connect, TLS, authentication). It is a
+`connections` key rather than a behavior field because the pool does the
+connecting and the pool is client-scoped: commands never open connections
+inline, so there is no per-operation moment for a connect bound to govern.
+Unset, establishment falls back to the client policy's total timeout. A
+command's own wait for a pooled connection is already bounded per behavior
+by `abandon_call_after`.
+
 ## Named behaviors (`behaviors:`)
 
 The same file can define named operation-policy profiles that become
@@ -74,6 +84,7 @@ behaviors:
       abandon_call_after: 1s
       maximum_number_of_call_attempts: 2
       delay_between_retries: 25ms
+      wait_for_socket_response_after_call_fails: 3s  # drain window; 0 closes the socket
       error_detail_verbosity: 2    # 0=none, 1=subcode, 2=+message, 3=+expression trace
     retryable_writes:
       use_durable_delete: false
@@ -81,6 +92,10 @@ behaviors:
       max_concurrent_servers: 8
     query:
       record_queue_size: 5000
+    system_txn_verify:
+      abandon_call_after: 30s     # transaction verify phase
+    system_txn_roll:
+      maximum_number_of_call_attempts: 8
 
   batch-optimized:
     parent: high-performance   # inherits, then overrides per field
@@ -90,10 +105,17 @@ behaviors:
 
 Selector blocks scope the fields to an operation category: `all_operations`,
 `retryable_writes` / `non_retryable_writes`, `consistency_mode_reads` (SC) /
-`availability_mode_reads` (AP), `batch_reads` / `batch_writes`, and `query`.
+`availability_mode_reads` (AP), `batch_reads` / `batch_writes`, `query`, and
+the transaction phases `system_txn_verify` / `system_txn_roll`. The
+transaction blocks tune the batch commands that verify record versions before
+commit and roll records forward or back; their shape and consistency mode are
+fixed by the protocol, so they take only the timeout, retry, and replica keys
+(plus `read_consistency` on verify), layered on `all_operations` like any
+other block.
 `parent:` names another profile (default: `DEFAULT`) whose resolved settings
-the profile inherits field by field. A `DEFAULT` entry adjusts
-`Behavior.DEFAULT` itself, layered on its built-in settings.
+the profile inherits field by field. A `DEFAULT` entry — spelled either
+`DEFAULT` or `default` — adjusts `Behavior.DEFAULT` itself, layered on its
+built-in settings, rather than registering a separate profile.
 `maximum_number_of_call_attempts` counts the initial call, so `2` means one
 retry. `error_detail_verbosity` opts operations into extended server error
 detail (see [Error Handling](error-handling.md)); it defaults to `0` (off).
@@ -156,6 +178,13 @@ cluster_def = ClusterDefinition("localhost", 3000).with_strict_config()
 That raises on the connect-time read if anything in the file was unrecognized.
 Hot reload stays fail-soft regardless: the monitor runs in the background with
 no caller to raise to, so it warns and keeps the previous configuration.
+
+Strict mode raises on what the loader does not *recognize*, not on what it
+honors at a different scope. A key this SDK accepts elsewhere — currently
+`wait_for_connection_to_complete` placed in a behavior block, which is honored
+client-wide under `system.<cluster>.connections` — warns with a pointer to the
+right spelling and still connects, so a file ported from another SDK deploys
+under strict config while the log says where the knob lives.
 
 ## Complete example
 

@@ -8,7 +8,8 @@ behaviors:
     all_operations:
       abandon_call_after: 30s
       wait_for_call_to_complete: 10s
-      # wait_for_connection_to_complete is not configurable here.
+      # wait_for_connection_to_complete lives under system.<cluster>.connections:
+      # the pool does the connecting, so the bound is client-wide.
       maximum_number_of_call_attempts: 3
       delay_between_retries: 100ms
       send_key: true

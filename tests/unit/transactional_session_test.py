@@ -21,15 +21,18 @@ context-manager semantics, and implicit Session -> builder threading)
 without requiring an SC cluster.
 """
 
+from datetime import timedelta
+
 import pytest
 
 from aerospike_sdk import TxnState
-from aerospike_async import CommitErrorType, WritePolicy
+from aerospike_async import CommitErrorType, ReadModeSC, WritePolicy
 
 from aerospike_sdk import AbortStatus, CommitStatus, Txn, TransactionalSession
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import CommitError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Settings
 
 
 class _FakePacClient:
@@ -44,15 +47,19 @@ class _FakePacClient:
         # a status; set this to model that.
         self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
+        self.commit_policies: list = []
+        self.abort_policies: list = []
 
-    async def commit(self, txn):
+    async def commit(self, txn, *, verify_policy=None, roll_policy=None):
         self.commit_calls.append(txn)
+        self.commit_policies.append((verify_policy, roll_policy))
         if self.commit_raises is not None:
             raise self.commit_raises
         return self.commit_return
 
-    async def abort(self, txn):
+    async def abort(self, txn, *, roll_policy=None):
         self.abort_calls.append(txn)
+        self.abort_policies.append(roll_policy)
         return self.abort_return
 
 
@@ -361,3 +368,31 @@ def test_pac_txn_timeout_setter_rejects_after_sharing() -> None:
     p.txn = t  # clones the underlying Arc, refcount > 1
     with pytest.raises(ValueError, match="shared with a policy"):
         t.timeout = 5
+
+
+async def test_commit_passes_behavior_txn_policies(sdk_client: _FakeSdkClient) -> None:
+    """The session's behavior drives the verify/roll policies at commit."""
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "txn_wiring_async",
+        system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+    )
+    session = TransactionalSession(client=sdk_client, behavior=behavior)  # type: ignore[arg-type]
+    async with session:
+        pass
+    verify, roll = sdk_client._async_client.commit_policies[0]
+    assert verify.total_timeout == 30_000
+    # Untouched fields carry the factory txn defaults through inheritance.
+    assert verify.read_mode_sc == ReadModeSC.LINEARIZE
+    assert roll.total_timeout == 10_000
+
+
+async def test_abort_passes_behavior_roll_policy(sdk_client: _FakeSdkClient) -> None:
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "txn_wiring_async_abort",
+        system_txn_roll=Settings(max_retries=9),
+    )
+    session = TransactionalSession(client=sdk_client, behavior=behavior)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError):
+        async with session:
+            raise RuntimeError("force abort")
+    assert sdk_client._async_client.abort_policies[0].max_retries == 9

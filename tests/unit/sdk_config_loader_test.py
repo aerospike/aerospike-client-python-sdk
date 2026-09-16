@@ -21,6 +21,7 @@ from datetime import timedelta
 import pytest
 
 from aerospike_sdk.policy.sdk_config_loader import (
+    _collect_drops,
     parse_behaviors,
     load_at_connect,
     ENV_VAR,
@@ -173,6 +174,36 @@ class TestParseSdkConfig:
     def test_bad_duration_skipped(self):
         profiles = parse_sdk_config("system:\n  DEFAULT:\n    refresh:\n      tend_interval: fast\n")
         assert profiles["DEFAULT"].tend_interval is None
+
+
+class TestConnectTimeoutKey:
+    """wait_for_connection_to_complete: a connections key, acknowledged elsewhere."""
+
+    def test_connections_key_parses(self):
+        profiles = parse_sdk_config(
+            "system:\n  DEFAULT:\n    connections:\n"
+            "      wait_for_connection_to_complete: 5s\n"
+        )
+        assert profiles["DEFAULT"].wait_for_connection_to_complete == timedelta(seconds=5)
+
+    def test_behavior_block_spelling_acknowledged_not_dropped(self, caplog):
+        with _collect_drops() as drops:
+            with caplog.at_level(logging.WARNING):
+                specs = parse_behaviors(
+                    "behaviors:\n  default:\n    all_operations:\n"
+                    "      wait_for_connection_to_complete: 5s\n"
+                )
+        assert drops == []
+        assert "system.<cluster>.connections" in caplog.text
+        # Acknowledged keys contribute no patch; the knob is honored client-wide.
+        assert specs["DEFAULT"].patches == {}
+
+    def test_unknown_behavior_key_still_drops(self):
+        with _collect_drops() as drops:
+            parse_behaviors(
+                "behaviors:\n  default:\n    all_operations:\n      bogus_knob: 1\n"
+            )
+        assert drops == ["key default.all_operations.bogus_knob"]
 
 
 class TestResolveForCluster:

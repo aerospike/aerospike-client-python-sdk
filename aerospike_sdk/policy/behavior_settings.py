@@ -66,6 +66,13 @@ class Scope(Enum):
     WRITES_QUERY = "writes_query"
     WRITES_AP = "writes_ap"
     WRITES_SC = "writes_sc"
+    # System transaction phases. These are cells beside the (kind, shape, mode)
+    # matrix, not members of it: verify is always a batch of reads and roll a
+    # batch of writes against a strong-consistency namespace, so shape and mode
+    # are protocol constants with nothing to select on. They resolve as
+    # (ALL, <txn scope>) plus the parent chain.
+    SYSTEM_TXN_VERIFY = "system_txn_verify"
+    SYSTEM_TXN_ROLL = "system_txn_roll"
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,7 @@ class Settings:
 
     total_timeout: Optional[timedelta] = None
     socket_timeout: Optional[timedelta] = None
+    timeout_delay: Optional[timedelta] = None
     max_retries: Optional[int] = None
     retry_delay: Optional[timedelta] = None
 
@@ -108,6 +116,7 @@ class Settings:
         return cls(
             total_timeout=_pick(override.total_timeout, base.total_timeout),
             socket_timeout=_pick(override.socket_timeout, base.socket_timeout),
+            timeout_delay=_pick(override.timeout_delay, base.timeout_delay),
             max_retries=_pick(override.max_retries, base.max_retries),
             retry_delay=_pick(override.retry_delay, base.retry_delay),
             send_key=_pick(override.send_key, base.send_key),

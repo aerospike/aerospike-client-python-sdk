@@ -131,6 +131,7 @@ _CONNECTIONS_KEYS: _KeyMap = {
     "minimum_connections_per_node": ("min_connections_per_node", int),
     "maximum_connections_per_node": ("max_connections_per_node", int),
     "maximum_socket_idle_time": ("max_socket_idle_time", "duration"),
+    "wait_for_connection_to_complete": ("wait_for_connection_to_complete", "duration"),
 }
 _CIRCUIT_BREAKER_KEYS: _KeyMap = {
     "num_tend_intervals_in_error_window": ("num_tend_intervals_in_error_window", int),
@@ -194,18 +195,25 @@ _BEHAVIOR_SELECTOR_SCOPES: Dict[str, Scope] = {
     "batch_reads": Scope.READS_BATCH,
     "batch_writes": Scope.WRITES_BATCH,
     "query": Scope.READS_QUERY,
+    "system_txn_verify": Scope.SYSTEM_TXN_VERIFY,
+    "system_txn_roll": Scope.SYSTEM_TXN_ROLL,
 }
 
-# Behavior profile root keys that are not selector blocks. Blocks with no
-# Settings scope yet (system_txn_verify / system_txn_roll) share the
-# unknown-block path.
+# Behavior profile root keys that are not selector blocks.
 _BEHAVIOR_META_KEYS = frozenset({"parent", "name"})
 
+# The root behavior is addressable in a file under either spelling. Both fold to
+# the canonical one, so such a block overlays the root instead of registering a
+# second behavior that merely inherits it.
+_ROOT_BEHAVIOR_ALIASES = frozenset({Behavior.DEFAULT.name, Behavior.DEFAULT.name.lower()})
+
 # behaviors: policy fields -> Settings fields. Fields with no Settings
-# equivalent (connection timeouts) fall through to the unrecognized-key warning.
+# equivalent fall through to the unrecognized-key warning, except the
+# acknowledged keys below, which are honored at a different scope.
 _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "abandon_call_after": ("total_timeout", "duration"),
     "wait_for_call_to_complete": ("socket_timeout", "duration"),
+    "wait_for_socket_response_after_call_fails": ("timeout_delay", "duration"),
     "delay_between_retries": ("retry_delay", "duration"),
     "maximum_number_of_call_attempts": ("max_retries", "attempts"),
     "replica_order": ("replica", Replica),
@@ -222,6 +230,32 @@ _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "record_queue_size": ("record_queue_size", int),
     "allow_scans_with_where": ("allow_scans_with_where", bool),
     "error_detail_verbosity": ("error_detail_verbosity", int),
+}
+
+# The transaction-phase blocks accept only the keys their PAC policies can
+# carry; anything else warns as unrecognized instead of parsing into a Settings
+# field that would silently never reach the wire. Verify additionally takes the
+# read-consistency keys (it is a batch of reads); roll does not.
+_TXN_ROLL_FIELD_KEYS: _KeyMap = {
+    "abandon_call_after": ("total_timeout", "duration"),
+    "wait_for_call_to_complete": ("socket_timeout", "duration"),
+    "delay_between_retries": ("retry_delay", "duration"),
+    "maximum_number_of_call_attempts": ("max_retries", "attempts"),
+    "replica_order": ("replica", Replica),
+}
+_TXN_VERIFY_FIELD_KEYS: _KeyMap = {
+    **_TXN_ROLL_FIELD_KEYS,
+    "read_consistency": ("read_mode_sc", ReadModeSC),
+    "consistency": ("read_mode_sc", ReadModeSC),
+}
+
+# Keys from the shared file contract that this SDK honors at a different scope.
+# They warn with a pointer to the right spelling instead of counting as
+# strict-mode drops, so a ported file still deploys under strict config while
+# the log says where the knob actually lives.
+_BEHAVIOR_ACKNOWLEDGED_KEYS: Dict[str, str] = {
+    "wait_for_connection_to_complete":
+        "honored client-wide; set it under system.<cluster>.connections",
 }
 
 
@@ -339,11 +373,15 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
 
 def _parse_section(
     section_name: str, section: object, key_map: Mapping[str, tuple],
+    *, acknowledged: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, object]:
     """Translate one on-disk section mapping into Settings kwargs.
 
     Unrecognized keys are ignored with a warning; a value that fails to convert
     is skipped with a warning while the rest of the section still applies.
+    *acknowledged* keys warn with a pointer to where the knob is honored, and
+    are deliberately not recorded as drops — strict mode raises on what the
+    loader does not recognize, not on what it applies elsewhere.
     """
     if not isinstance(section, Mapping):
         log.warning("SDK config: section %r is not a mapping; ignored", section_name)
@@ -354,7 +392,13 @@ def _parse_section(
             continue  # mappings, parsed by _parse_metrics_extras
         entry = key_map.get(disk_key)
         if entry is None:
-            _record_drop(f"key {section_name}.{disk_key}")
+            if acknowledged is not None and disk_key in acknowledged:
+                log.warning(
+                    "SDK config: %s.%s is %s",
+                    section_name, disk_key, acknowledged[disk_key],
+                )
+            else:
+                _record_drop(f"key {section_name}.{disk_key}")
             continue
         field_name, converter = entry
         try:
@@ -492,6 +536,11 @@ class BehaviorSpec:
     patches: Dict[Scope, Settings] = field(default_factory=dict)
 
 
+def _canonical_behavior_name(name: str) -> str:
+    """Fold an alias of the root behavior's name onto its canonical spelling."""
+    return Behavior.DEFAULT.name if name in _ROOT_BEHAVIOR_ALIASES else name
+
+
 def _parse_behavior_profile(name: str, profile: object) -> Optional[BehaviorSpec]:
     """Parse one behavior profile mapping into a :class:`BehaviorSpec`."""
     if not isinstance(profile, Mapping):
@@ -509,10 +558,23 @@ def _parse_behavior_profile(name: str, profile: object) -> Optional[BehaviorSpec
         if scope is None:
             _record_drop(f"block {block_name!r} in behavior {name!r}")
             continue
-        kwargs = _parse_section(f"{name}.{block_name}", block, _BEHAVIOR_FIELD_KEYS)
+        if scope is Scope.SYSTEM_TXN_VERIFY:
+            key_map = _TXN_VERIFY_FIELD_KEYS
+        elif scope is Scope.SYSTEM_TXN_ROLL:
+            key_map = _TXN_ROLL_FIELD_KEYS
+        else:
+            key_map = _BEHAVIOR_FIELD_KEYS
+        kwargs = _parse_section(
+            f"{name}.{block_name}", block, key_map,
+            acknowledged=_BEHAVIOR_ACKNOWLEDGED_KEYS,
+        )
         if kwargs:
             patches[scope] = Settings(**kwargs)  # type: ignore[arg-type]
-    return BehaviorSpec(name=name, parent=parent, patches=patches)
+    return BehaviorSpec(
+        name=_canonical_behavior_name(name),
+        parent=_canonical_behavior_name(parent) if parent is not None else None,
+        patches=patches,
+    )
 
 
 def _behaviors_from_doc(doc: Mapping) -> Dict[str, BehaviorSpec]:
@@ -527,7 +589,9 @@ def _behaviors_from_doc(doc: Mapping) -> Dict[str, BehaviorSpec]:
     for name, profile in behaviors.items():
         spec = _parse_behavior_profile(str(name), profile)
         if spec is not None:
-            specs[str(name)] = spec
+            # Keyed by the parsed (canonical) name, so the root's two spellings
+            # collapse to one entry rather than racing each other on apply.
+            specs[spec.name] = spec
     return specs
 
 

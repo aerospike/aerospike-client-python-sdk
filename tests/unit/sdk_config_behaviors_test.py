@@ -122,6 +122,24 @@ class TestParseBehaviors:
         )
         assert specs["child"].parent == "high-performance"
 
+    def test_root_alias_folds_to_canonical_name(self):
+        specs = loader.parse_behaviors(
+            "behaviors:\n"
+            "  default:\n    all_operations:\n      abandon_call_after: 7s\n"
+            "  child:\n    parent: default\n    query:\n      record_queue_size: 42\n"
+        )
+        assert set(specs) == {"DEFAULT", "child"}
+        assert specs["child"].parent == "DEFAULT"
+
+    def test_both_root_spellings_collapse_to_one_entry(self):
+        specs = loader.parse_behaviors(
+            "behaviors:\n"
+            "  DEFAULT:\n    all_operations:\n      abandon_call_after: 7s\n"
+            "  default:\n    all_operations:\n      abandon_call_after: 9s\n"
+        )
+        assert set(specs) == {"DEFAULT"}
+        assert specs["DEFAULT"].patches[Scope.ALL].total_timeout == timedelta(seconds=9)
+
     def test_unsupported_block_ignored(self):
         specs = loader.parse_behaviors(
             "behaviors:\n  b:\n    systemTxnVerify:\n      abandon_call_after: 2s\n"
@@ -242,6 +260,28 @@ class TestApplyBehaviors:
         # The factory send_key default still shows through the YAML overlay.
         assert settings.send_key is False
 
+    def test_root_alias_entry_overlays_instead_of_registering_twin(self):
+        loader.apply_behaviors(loader.parse_behaviors(
+            "behaviors:\n  default:\n    all_operations:\n      abandon_call_after: 42s\n"
+        ))
+        assert Behavior.DEFAULT.get_settings(
+            OpKind.READ, OpShape.POINT, Mode.AP).total_timeout == timedelta(seconds=42)
+        assert behavior_registry.get_behavior("default") is None
+
+    def test_child_of_root_alias_inherits_the_overlay(self):
+        loader.apply_behaviors(loader.parse_behaviors(
+            "behaviors:\n"
+            "  default:\n    all_operations:\n      abandon_call_after: 7s\n"
+            "  child:\n    parent: default\n    query:\n      record_queue_size: 42\n"
+        ))
+        child = behavior_registry.get_behavior("child")
+        assert child.parent is Behavior.DEFAULT
+        assert child.get_settings(
+            OpKind.READ, OpShape.QUERY, Mode.AP).record_queue_size == 42
+        # The overlay reaches the child through the root it layered onto.
+        assert child.get_settings(
+            OpKind.READ, OpShape.POINT, Mode.AP).total_timeout == timedelta(seconds=7)
+
     def test_unchanged_spec_is_skipped(self):
         specs = loader.parse_behaviors(_FULL)
         loader.apply_behaviors(specs)
@@ -300,3 +340,85 @@ class TestSessionPush:
         import gc
         gc.collect()
         assert len(behavior._sessions) == 0
+
+
+class TestSocketDrainKey:
+    """wait_for_socket_response_after_call_fails is a per-behavior key."""
+
+    def test_parses_to_timeout_delay(self):
+        specs = loader.parse_behaviors(
+            "behaviors:\n  draining:\n    all_operations:\n"
+            "      wait_for_socket_response_after_call_fails: 3s\n"
+        )
+        assert specs["draining"].patches[Scope.ALL].timeout_delay == timedelta(seconds=3)
+
+    def test_applied_behavior_reaches_resolved_settings(self):
+        loader.apply_behaviors(loader.parse_behaviors(
+            "behaviors:\n  draining:\n    all_operations:\n"
+            "      wait_for_socket_response_after_call_fails: 3s\n"
+        ))
+        b = behavior_registry.get_behavior("draining")
+        s = b.get_settings(OpKind.READ, OpShape.POINT, Mode.AP)
+        assert s.timeout_delay == timedelta(seconds=3)
+
+
+class TestSystemTxnBlocks:
+    """system_txn_verify / system_txn_roll parse as selector blocks and
+    reach the resolved txn cells."""
+
+    def test_blocks_parse_to_txn_scopes(self):
+        specs = loader.parse_behaviors(
+            "behaviors:\n  careful:\n"
+            "    system_txn_verify:\n      abandon_call_after: 30s\n"
+            "    system_txn_roll:\n      maximum_number_of_call_attempts: 9\n"
+        )
+        patches = specs["careful"].patches
+        assert patches[Scope.SYSTEM_TXN_VERIFY].total_timeout == timedelta(seconds=30)
+        assert patches[Scope.SYSTEM_TXN_ROLL].max_retries == 8
+
+    def test_applied_behavior_resolves_txn_cells(self):
+        loader.apply_behaviors(loader.parse_behaviors(
+            "behaviors:\n  careful:\n"
+            "    system_txn_verify:\n      abandon_call_after: 30s\n"
+        ))
+        b = behavior_registry.get_behavior("careful")
+        assert b.get_txn_verify_settings().total_timeout == timedelta(seconds=30)
+        # Unnamed fields keep the factory txn defaults through inheritance.
+        assert b.get_txn_verify_settings().socket_timeout == timedelta(seconds=3)
+        assert b.get_txn_roll_settings().total_timeout == timedelta(seconds=10)
+
+    def test_all_operations_layers_under_txn_block(self):
+        loader.apply_behaviors(loader.parse_behaviors(
+            "behaviors:\n  careful:\n"
+            "    all_operations:\n      use_compression: true\n"
+            "    system_txn_roll:\n      abandon_call_after: 20s\n"
+        ))
+        s = behavior_registry.get_behavior("careful").get_txn_roll_settings()
+        assert s.use_compression is True
+        assert s.total_timeout == timedelta(seconds=20)
+
+    def test_txn_block_rejects_keys_with_no_policy_landing_spot(self):
+        with loader._collect_drops() as drops:
+            specs = loader.parse_behaviors(
+                "behaviors:\n  careful:\n"
+                "    system_txn_verify:\n"
+                "      use_compression: true\n"
+                "      abandon_call_after: 30s\n"
+                "    system_txn_roll:\n"
+                "      read_consistency: LINEARIZE\n"
+            )
+        assert "key careful.system_txn_verify.use_compression" in drops
+        # Roll is a batch of writes; the read-consistency key is verify-only.
+        assert "key careful.system_txn_roll.read_consistency" in drops
+        assert specs["careful"].patches[Scope.SYSTEM_TXN_VERIFY].total_timeout == (
+            timedelta(seconds=30)
+        )
+
+    def test_txn_blocks_are_not_drops(self):
+        with loader._collect_drops() as drops:
+            loader.parse_behaviors(
+                "behaviors:\n  careful:\n"
+                "    system_txn_verify:\n      abandon_call_after: 30s\n"
+                "    system_txn_roll:\n      abandon_call_after: 20s\n"
+            )
+        assert drops == []

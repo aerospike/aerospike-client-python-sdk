@@ -32,12 +32,12 @@ from aerospike_sdk import (
     Txn,
 )
 from aerospike_async.exceptions import CommitFailedError
-from aerospike_async import CommitErrorType
+from aerospike_async import CommitErrorType, ReadModeSC
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import TransactionSettings
-from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.policy.behavior_settings import Mode, Settings
 from aerospike_sdk.sync.session import SyncSession
 
 
@@ -52,15 +52,19 @@ class _FakePacClient:
         # a status; set this to model that.
         self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
+        self.commit_policies: list = []
+        self.abort_policies: list = []
 
-    def commit_blocking(self, txn):
+    def commit_blocking(self, txn, *, verify_policy=None, roll_policy=None):
         self.commit_calls.append(txn)
+        self.commit_policies.append((verify_policy, roll_policy))
         if self.commit_raises is not None:
             raise self.commit_raises
         return self.commit_return
 
-    def abort_blocking(self, txn):
+    def abort_blocking(self, txn, *, roll_policy=None):
         self.abort_calls.append(txn)
+        self.abort_policies.append(roll_policy)
         return self.abort_return
 
 
@@ -384,7 +388,7 @@ def test_do_in_transaction_retries_commit_failure() -> None:
     sync_session, client = _make_sync_session()
     calls = 0
 
-    def commit_blocking(txn):
+    def commit_blocking(txn, **kwargs):
         nonlocal calls
         client._pac.commit_calls.append(txn)
         calls += 1
@@ -409,7 +413,7 @@ def test_do_in_transaction_commit_failure_exhausts_retries() -> None:
     """
     sync_session, client = _make_sync_session()
 
-    def commit_blocking(txn):
+    def commit_blocking(txn, **kwargs):
         client._pac.commit_calls.append(txn)
         raise CommitFailedError("commit verify failed")
 
@@ -438,7 +442,7 @@ def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
     """Current PAC raises CommitFailedError with the roll-forward type."""
     sync_session, client = _make_sync_session()
 
-    def commit_blocking(txn):
+    def commit_blocking(txn, **kwargs):
         client._pac.commit_calls.append(txn)
         err = CommitFailedError("roll forward abandoned")
         err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED
@@ -534,3 +538,35 @@ def test_sleep_between_retries_accepts_a_timedelta() -> None:
             always_blocked, max_attempts=2, sleep_between_retries=timedelta(0),
         )
     assert attempts == 2
+
+
+def test_commit_passes_behavior_txn_policies(sync_client: _FakeSyncClient) -> None:
+    """The session's behavior drives the verify/roll policies at commit."""
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "txn_wiring_sync",
+        system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+    )
+    session = SyncTransactionalSession(
+        client=sync_client, behavior=behavior,
+    )  # type: ignore[arg-type]
+    with session:
+        pass
+    verify, roll = sync_client._pac.commit_policies[0]
+    assert verify.total_timeout == 30_000
+    # Untouched fields carry the factory txn defaults through inheritance.
+    assert verify.read_mode_sc == ReadModeSC.LINEARIZE
+    assert roll.total_timeout == 10_000
+
+
+def test_abort_passes_behavior_roll_policy(sync_client: _FakeSyncClient) -> None:
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "txn_wiring_sync_abort",
+        system_txn_roll=Settings(max_retries=9),
+    )
+    session = SyncTransactionalSession(
+        client=sync_client, behavior=behavior,
+    )  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError):
+        with session:
+            raise RuntimeError("force abort")
+    assert sync_client._pac.abort_policies[0].max_retries == 9

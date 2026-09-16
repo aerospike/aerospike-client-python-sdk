@@ -102,6 +102,40 @@ transaction. Querying for keys and then writing those keys
 transactionally is still a valid pattern; call `.with_txn(None)` on the
 query to confirm that is intended and silence the warning.
 
+## Tuning the Verify and Roll Phases
+
+A commit runs two system phases: *verify* re-reads every record the
+transaction touched to confirm its version, and *roll* moves the records
+forward on commit (or back on abort). Both are batch commands with their own
+timeouts and retries — out of the box they use generous defaults (10 s total,
+3 s socket, 5 retries, 1 s between attempts, master replica; verify reads
+linearized) because giving up mid-commit is far more expensive than a slow
+one.
+
+Tune them per behavior with the ``system_txn_verify`` / ``system_txn_roll``
+scopes — from code:
+
+```python
+from datetime import timedelta
+from aerospike_sdk import Behavior, Settings
+
+patient = Behavior.DEFAULT.derive_with_changes(
+    "patient_commits",
+    system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+    system_txn_roll=Settings(max_retries=8),
+)
+
+async with client.create_session(patient).transaction() as tx:
+    ...
+```
+
+or from the [SDK config file](dynamic-sdk-config.md) with the same block
+names. The resolved values are inspectable via
+`Behavior.get_txn_verify_settings()` / `get_txn_roll_settings()`, and apply
+to explicit transactions (``transaction()`` sessions and
+``do_in_transaction``). Implicit batch-write transactions (below) run on the
+built-in defaults.
+
 ## Implicit Batch-Write Transactions
 
 A multi-key write batch against a strong-consistency namespace is

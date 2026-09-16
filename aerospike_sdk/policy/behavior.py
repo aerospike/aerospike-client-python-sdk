@@ -44,6 +44,12 @@ _ALL_KEYS: List[_OpKey] = [
     (kind, shape, mode) for kind in OpKind for shape in OpShape for mode in Mode
 ]
 
+# The system transaction phases resolve beside the matrix, not inside it:
+# their shape and mode are protocol constants (verify is a batch of reads,
+# roll a batch of writes, both against a strong-consistency namespace), so
+# they layer as (ALL, <txn scope>) plus the parent chain.
+_TXN_SCOPES: Tuple[Scope, Scope] = (Scope.SYSTEM_TXN_VERIFY, Scope.SYSTEM_TXN_ROLL)
+
 
 class Behavior:
     """Immutable, scope-aware configuration for Aerospike operation policies.
@@ -82,7 +88,10 @@ class Behavior:
     STRICTLY_CONSISTENT: ClassVar[Behavior]
     FAST_RACK_AWARE: ClassVar[Behavior]
 
-    __slots__ = ("_name", "_patches", "_parent", "_children", "_resolved", "_sessions")
+    __slots__ = (
+        "_name", "_patches", "_parent", "_children", "_resolved", "_resolved_txn",
+        "_sessions",
+    )
 
     def __init__(
         self,
@@ -95,6 +104,7 @@ class Behavior:
         self._parent = parent
         self._children: List[Behavior] = []
         self._resolved: Dict[_OpKey, Settings] = {}
+        self._resolved_txn: Dict[Scope, Settings] = {}
         # Live sessions bound to this behavior; config hot-reload pushes
         # rebuilt policies into them so nothing checks on the op path.
         self._sessions: weakref.WeakSet = weakref.WeakSet()
@@ -132,6 +142,52 @@ class Behavior:
         construction time.
         """
         return self._resolved[(kind, shape, mode)]
+
+    def get_txn_verify_settings(self) -> Settings:
+        """Return the resolved settings for the transaction verify phase.
+
+        The verify phase re-reads every record a transaction touched to
+        confirm its version before commit. Its shape and mode are fixed by
+        the protocol (a batch of reads against a strong-consistency
+        namespace), so the cell resolves from the ``ALL`` scope plus the
+        ``system_txn_verify`` scope, layered through the parent chain.
+
+        This is a cached O(1) dict lookup, like :meth:`get_settings`.
+
+        Returns:
+            The fully-resolved :class:`Settings` for the verify phase.
+
+        Example::
+
+            patient_commits = Behavior.DEFAULT.derive_with_changes(
+                "patient_commits",
+                system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+            )
+            verify = patient_commits.get_txn_verify_settings()
+
+        See Also:
+            :meth:`get_txn_roll_settings`: The roll (commit/abort) phase.
+        """
+        return self._resolved_txn[Scope.SYSTEM_TXN_VERIFY]
+
+    def get_txn_roll_settings(self) -> Settings:
+        """Return the resolved settings for the transaction roll phase.
+
+        The roll phase moves every record a transaction touched forward on
+        commit or back on abort. Like verify, its shape and mode are fixed
+        by the protocol (a batch of writes against a strong-consistency
+        namespace), so the cell resolves from the ``ALL`` scope plus the
+        ``system_txn_roll`` scope, layered through the parent chain.
+
+        This is a cached O(1) dict lookup, like :meth:`get_settings`.
+
+        Returns:
+            The fully-resolved :class:`Settings` for the roll phase.
+
+        See Also:
+            :meth:`get_txn_verify_settings`: The pre-commit verify phase.
+        """
+        return self._resolved_txn[Scope.SYSTEM_TXN_ROLL]
 
     def clear_cache(self) -> None:
         """Recompute the resolved settings matrix and cascade to children.
@@ -182,6 +238,8 @@ class Behavior:
         writes_query: Optional[Settings] = None,
         writes_ap: Optional[Settings] = None,
         writes_sc: Optional[Settings] = None,
+        system_txn_verify: Optional[Settings] = None,
+        system_txn_roll: Optional[Settings] = None,
         # Flat shortcuts (backward-compat, applied to the ALL scope)
         total_timeout: Optional[timedelta] = None,
         socket_timeout: Optional[timedelta] = None,
@@ -237,6 +295,8 @@ class Behavior:
         _set_if(patches, Scope.WRITES_QUERY, writes_query)
         _set_if(patches, Scope.WRITES_AP, writes_ap)
         _set_if(patches, Scope.WRITES_SC, writes_sc)
+        _set_if(patches, Scope.SYSTEM_TXN_VERIFY, system_txn_verify)
+        _set_if(patches, Scope.SYSTEM_TXN_ROLL, system_txn_roll)
 
         return Behavior(name=name, patches=patches, parent=self)
 
@@ -279,13 +339,19 @@ class Behavior:
             if s is not None:
                 lines.append(f"{kind.value}:{shape.value}:{mode.value} => {s}")
 
+        for scope in _TXN_SCOPES:
+            s = self._resolved_txn.get(scope)
+            if s is not None:
+                lines.append(f"{scope.value} => {s}")
+
         return "\n".join(lines)
 
     # -- Internal -------------------------------------------------------------
 
     def _build_cache(self) -> None:
-        """Pre-compute the resolved Settings for every OpKey."""
+        """Pre-compute the resolved Settings for every OpKey and txn phase."""
         self._resolved = {key: self._resolve(*key) for key in _ALL_KEYS}
+        self._resolved_txn = {scope: self._resolve_txn(scope) for scope in _TXN_SCOPES}
 
     def _resolve(self, kind: OpKind, shape: OpShape, mode: Mode) -> Settings:
         """Walk the parent chain and layer patches (uncached)."""
@@ -294,6 +360,18 @@ class Behavior:
         else:
             base = Settings()
         for scope in resolution_order(kind, shape, mode):
+            patch = self._patches.get(scope)
+            if patch is not None:
+                base = Settings.merge(base, patch)
+        return base
+
+    def _resolve_txn(self, txn_scope: Scope) -> Settings:
+        """Walk the parent chain and layer (ALL, txn scope) patches (uncached)."""
+        if self._parent is not None:
+            base = self._parent._resolve_txn(txn_scope)
+        else:
+            base = Settings()
+        for scope in (Scope.ALL, txn_scope):
             patch = self._patches.get(scope)
             if patch is not None:
                 base = Settings.merge(base, patch)
@@ -456,6 +534,30 @@ Behavior.DEFAULT = Behavior(
         Scope.WRITES_BATCH: Settings(
             allow_inline=True,
             allow_inline_ssd=False,
+            max_concurrent_nodes=0,
+        ),
+        # System transaction phases, mirroring the client core's own defaults
+        # so the out-of-the-box policies match what an unconfigured commit
+        # uses. Verify re-reads under linearized consistency from the master;
+        # both phases get generous timeouts and retries because giving up
+        # mid-commit is far more expensive than a slow one. The fan-out
+        # override counters the serial value inherited from Scope.ALL, as the
+        # batch shapes above do.
+        Scope.SYSTEM_TXN_VERIFY: Settings(
+            total_timeout=timedelta(seconds=10),
+            socket_timeout=timedelta(seconds=3),
+            max_retries=5,
+            retry_delay=timedelta(seconds=1),
+            replica=Replica.MASTER,
+            read_mode_sc=ReadModeSC.LINEARIZE,
+            max_concurrent_nodes=0,
+        ),
+        Scope.SYSTEM_TXN_ROLL: Settings(
+            total_timeout=timedelta(seconds=10),
+            socket_timeout=timedelta(seconds=3),
+            max_retries=5,
+            retry_delay=timedelta(seconds=1),
+            replica=Replica.MASTER,
             max_concurrent_nodes=0,
         ),
     },

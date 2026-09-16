@@ -748,3 +748,62 @@ class TestRegistry:
         assert "READ_FAST" in all_b
         assert "STRICTLY_CONSISTENT" in all_b
         assert "FAST_RACK_AWARE" in all_b
+
+
+class TestSystemTxnSettings:
+    """The transaction verify/roll phases resolve as cells beside the
+    (kind, shape, mode) matrix: (ALL, txn scope) layered through the
+    parent chain."""
+    def test_default_verify_matches_core_defaults(self):
+        s = Behavior.DEFAULT.get_txn_verify_settings()
+        assert s.total_timeout == timedelta(seconds=10)
+        assert s.socket_timeout == timedelta(seconds=3)
+        assert s.max_retries == 5
+        assert s.retry_delay == timedelta(seconds=1)
+        assert s.replica == Replica.MASTER
+        assert s.read_mode_sc == ReadModeSC.LINEARIZE
+        assert s.max_concurrent_nodes == 0
+
+    def test_default_roll_matches_core_defaults(self):
+        s = Behavior.DEFAULT.get_txn_roll_settings()
+        assert s.total_timeout == timedelta(seconds=10)
+        assert s.socket_timeout == timedelta(seconds=3)
+        assert s.max_retries == 5
+        assert s.retry_delay == timedelta(seconds=1)
+        assert s.replica == Replica.MASTER
+        assert s.read_mode_sc is None
+        assert s.max_concurrent_nodes == 0
+
+    def test_derive_overrides_one_phase_only(self):
+        child = Behavior.DEFAULT.derive_with_changes(
+            "txn_patient_verify",
+            system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+        )
+        assert child.get_txn_verify_settings().total_timeout == timedelta(seconds=30)
+        # Unset fields inherit, and the other phase is untouched.
+        assert child.get_txn_verify_settings().socket_timeout == timedelta(seconds=3)
+        assert child.get_txn_roll_settings().total_timeout == timedelta(seconds=10)
+
+    def test_all_scope_layers_under_txn_scope(self):
+        child = Behavior.DEFAULT.derive_with_changes(
+            "txn_compressed",
+            all=Settings(use_compression=True),
+        )
+        s = child.get_txn_verify_settings()
+        assert s.use_compression is True
+        # The parent's txn-scope values survive an ALL patch that does not
+        # name them.
+        assert s.total_timeout == timedelta(seconds=10)
+
+    def test_grandchild_inherits_txn_override(self):
+        child = Behavior.DEFAULT.derive_with_changes(
+            "txn_parent",
+            system_txn_roll=Settings(max_retries=9),
+        )
+        grandchild = child.derive_with_changes("txn_child")
+        assert grandchild.get_txn_roll_settings().max_retries == 9
+
+    def test_explain_lists_txn_cells(self):
+        text = Behavior.DEFAULT.explain()
+        assert "system_txn_verify =>" in text
+        assert "system_txn_roll =>" in text

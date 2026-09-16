@@ -12,8 +12,12 @@
 # Durations take a unit suffix: 250ms, 55s, 5m, 2h.
 #
 # Keys the loader does not recognize are logged and ignored, so a file is never
-# silently misread. Connection-level timeouts and the system-transaction blocks
-# have no counterpart here and are therefore left out rather than set.
+# silently misread. wait_for_connection_to_complete is a connections: key here
+# (connection establishment is pool-scoped, not per-operation); placed in a
+# behavior block instead, it warns with a pointer but does not fail a strict
+# connect. stack_trace_on_exception and simulate_xdr_write are unsupported —
+# Python exceptions always carry a traceback, and the XDR bit is a
+# connector-level policy override, not a behavior.
 
 version: "1.0.0"
 

@@ -138,6 +138,13 @@ class SystemSettings:
             .connect()
         )
 
+    ``wait_for_connection_to_complete`` bounds how long the pool may spend
+    establishing one connection (TCP connect, TLS, authentication). It lives
+    here rather than on a Behavior because the pool does the connecting and
+    the pool is client-scoped: commands never open connections inline, so
+    there is no per-operation moment for a connect bound to govern. Unset, it
+    falls back to the client policy's total timeout.
+
     Connection-pool sizing is the group most worth setting explicitly. Left
     unset, the hard defaults are ``min_connections_per_node=0``,
     ``max_connections_per_node=100``, and ``conn_pools_per_node=1``. The
@@ -155,6 +162,7 @@ class SystemSettings:
     min_connections_per_node: Optional[int] = None
     max_connections_per_node: Optional[int] = None
     conn_pools_per_node: Optional[int] = None
+    wait_for_connection_to_complete: Optional[timedelta] = None
     max_socket_idle_time: Optional[timedelta] = None
     tend_interval: Optional[timedelta] = None
     num_tend_intervals_in_error_window: Optional[int] = None
@@ -174,6 +182,10 @@ class SystemSettings:
             policy.max_conns_per_node = self.max_connections_per_node
         if self.conn_pools_per_node is not None:
             policy.conn_pools_per_node = self.conn_pools_per_node
+        if self.wait_for_connection_to_complete is not None:
+            policy.connect_timeout = int(
+                self.wait_for_connection_to_complete.total_seconds() * 1000
+            )
         if self.max_socket_idle_time is not None:
             policy.idle_timeout = int(self.max_socket_idle_time.total_seconds() * 1000)
         if self.tend_interval is not None:

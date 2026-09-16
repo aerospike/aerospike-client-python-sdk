@@ -254,13 +254,13 @@ class _FakePacClient:
         # status; set this to model that.
         self._commit_raises: BaseException | None = None
 
-    async def commit(self, txn):
+    async def commit(self, txn, *, verify_policy=None, roll_policy=None):
         self.commit_calls.append(txn)
         if self._commit_raises is not None:
             raise self._commit_raises
         return self._commit_ok
 
-    async def abort(self, txn):
+    async def abort(self, txn, *, roll_policy=None):
         self.abort_calls.append(txn)
         return self._abort_ok
 
@@ -404,7 +404,7 @@ async def test_do_in_transaction_retries_commit_failure() -> None:
     pac = session._client._async_client
     calls = 0
 
-    async def commit(txn):
+    async def commit(txn, **kwargs):
         nonlocal calls
         pac.commit_calls.append(txn)
         calls += 1
@@ -426,7 +426,7 @@ async def test_do_in_transaction_commit_failure_surfaces_psdk_type() -> None:
     session = _make_session_for_retry()
     pac = session._client._async_client
 
-    async def commit(txn):
+    async def commit(txn, **kwargs):
         pac.commit_calls.append(txn)
         raise PacCommitFailedError("commit verify failed")
 
@@ -463,7 +463,7 @@ async def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
     session = _make_session_for_retry()
     pac = session._client._async_client
 
-    async def commit(txn):
+    async def commit(txn, **kwargs):
         pac.commit_calls.append(txn)
         err = PacCommitFailedError("roll forward abandoned")
         err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED

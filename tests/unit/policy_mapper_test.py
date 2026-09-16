@@ -38,6 +38,8 @@ from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_read_policy,
     to_query_policy,
+    to_txn_roll_policy,
+    to_txn_verify_policy,
     to_write_policy,
 )
 from aerospike_sdk.policy.behavior import Behavior
@@ -322,3 +324,77 @@ class TestApplyToWritePolicy:
         p.total_timeout = 2000
         result = apply_to_write_policy(s, p)
         assert result.total_timeout == 2000
+
+
+class TestTimeoutDelay:
+    """wait_for_socket_response_after_call_fails maps onto every command
+    policy's timeout_delay, in milliseconds, with 0 (close on timeout)
+    treated as unset on the overlay path."""
+    def test_maps_to_all_policy_shapes(self):
+        s = Settings(timeout_delay=timedelta(seconds=3))
+        assert to_read_policy(s).timeout_delay == 3_000
+        assert to_write_policy(s).timeout_delay == 3_000
+        assert to_query_policy(s).timeout_delay == 3_000
+        assert to_batch_policy(s).timeout_delay == 3_000
+
+    def test_none_leaves_default(self):
+        assert to_read_policy(Settings()).timeout_delay == 0
+
+    def test_overlay_fills_unset_only(self):
+        s = Settings(timeout_delay=timedelta(seconds=3))
+        p = ReadPolicy()
+        assert apply_to_read_policy(s, p).timeout_delay == 3_000
+        explicit = WritePolicy()
+        explicit.timeout_delay = 250
+        assert apply_to_write_policy(s, explicit).timeout_delay == 250
+
+
+class TestToTxnPolicies:
+    """Resolved txn-phase Settings map onto the PAC verify/roll policies."""
+    def test_verify_all_fields(self):
+        s = Settings(
+            total_timeout=timedelta(seconds=30),
+            socket_timeout=timedelta(seconds=5),
+            max_retries=7,
+            retry_delay=timedelta(milliseconds=500),
+            replica=Replica.MASTER,
+            read_mode_sc=ReadModeSC.LINEARIZE,
+        )
+        p = to_txn_verify_policy(s)
+        assert p.total_timeout == 30_000
+        assert p.socket_timeout == 5_000
+        assert p.max_retries == 7
+        assert p.sleep_between_retries == 500
+        assert p.replica == Replica.MASTER
+        assert p.read_mode_sc == ReadModeSC.LINEARIZE
+
+    def test_roll_all_fields(self):
+        s = Settings(
+            total_timeout=timedelta(seconds=20),
+            socket_timeout=timedelta(seconds=4),
+            max_retries=9,
+            retry_delay=timedelta(seconds=2),
+            replica=Replica.SEQUENCE,
+        )
+        p = to_txn_roll_policy(s)
+        assert p.total_timeout == 20_000
+        assert p.socket_timeout == 4_000
+        assert p.max_retries == 9
+        assert p.sleep_between_retries == 2_000
+        assert p.replica == Replica.SEQUENCE
+
+    def test_default_behavior_round_trips_core_defaults(self):
+        # DEFAULT's resolved txn cells must build policies equal to what an
+        # unconfigured commit would use, so wiring them in changes nothing
+        # out of the box.
+        v = to_txn_verify_policy(Behavior.DEFAULT.get_txn_verify_settings())
+        assert v.total_timeout == 10_000
+        assert v.socket_timeout == 3_000
+        assert v.max_retries == 5
+        assert v.sleep_between_retries == 1_000
+        assert v.replica == Replica.MASTER
+        assert v.read_mode_sc == ReadModeSC.LINEARIZE
+        r = to_txn_roll_policy(Behavior.DEFAULT.get_txn_roll_settings())
+        assert r.total_timeout == 10_000
+        assert r.max_retries == 5
+        assert r.replica == Replica.MASTER
