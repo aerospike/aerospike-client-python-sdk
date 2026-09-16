@@ -13,10 +13,8 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Integration tests for the SDK ``QueryBuilder.with_op_projection`` facade.
-
-Mirrors the reference ``TestQueryOperations`` suite via the SDK's high-level
-fluent builder. Covers:
+"""Integration tests for the SDK ``QueryBuilder.with_op_projection`` facade,
+exercised through the high-level fluent builder. Covers:
 
 - Backward-compat: basic ``Operation.get_bin`` projection works on any 8.1.x.
 - 8.1.2+: ``ExpOperation.read`` / CDT reads accepted in ops projection.

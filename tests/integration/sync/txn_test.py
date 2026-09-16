@@ -26,17 +26,17 @@ All tests skip cleanly when the configured namespace is not strong-
 consistency, matching the async suite's gate. Namespace selection follows
 ``integration.sc_namespace_resolve`` (auto-pick the sole SC namespace when env is unset).
 Optional ``AEROSPIKE_HOST_SC`` targets an SC cluster while ``AEROSPIKE_HOST`` may point elsewhere.
-
-Provenance (per repo rules):
-    reference: client/src/test/java/com/aerospike/client/sdk/TxnTest.java
 """
 
 from __future__ import annotations
+
+from datetime import timedelta
 
 import pytest
 
 from aerospike_sdk import Behavior, DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.policy import Settings
 from aerospike_sdk.sync import TransactionalSession
 
 from integration.sc_namespace_resolve import (
@@ -137,10 +137,10 @@ def _reset(session, key) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. txnWrite: write inside a txn is visible after commit.
+# Write inside a txn is visible after commit.
 # ---------------------------------------------------------------------------
 def test_txn_write(session, mrt_set):
-    key = mrt_set.id("syncTxnWrite")
+    key = mrt_set.id("sync_txn_write")
     _reset(session, key)
     session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -152,10 +152,10 @@ def test_txn_write(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 2. txnAbortRollsBack: abort on context exit leaves the original value.
+# Abort on context exit leaves the original value.
 # ---------------------------------------------------------------------------
 def test_txn_abort_rolls_back(session, mrt_set):
-    key = mrt_set.id("syncTxnAbort")
+    key = mrt_set.id("sync_txn_abort")
     _reset(session, key)
     session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -167,10 +167,10 @@ def test_txn_abort_rolls_back(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 3. txnWriteConflict: nested txn writing the same key gets MRT_BLOCKED.
+# Nested txn writing the same key gets MRT_BLOCKED.
 # ---------------------------------------------------------------------------
 def test_txn_write_conflict(session, mrt_set):
-    key = mrt_set.id("syncTxnConflict")
+    key = mrt_set.id("sync_txn_conflict")
     _reset(session, key)
 
     def outer(tx1):
@@ -187,10 +187,10 @@ def test_txn_write_conflict(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 4. txnWriteBlock: outside-txn write while a txn holds the key is blocked.
+# Outside-txn write while a txn holds the key is blocked.
 # ---------------------------------------------------------------------------
 def test_txn_write_block(session, mrt_set):
-    key = mrt_set.id("syncTxnBlock")
+    key = mrt_set.id("sync_txn_block")
     _reset(session, key)
     session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -206,7 +206,7 @@ def test_txn_write_block(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 5. txnBatch: 10-key batch upsert under a txn commits all together.
+# 10-key batch upsert under a txn commits all together.
 # ---------------------------------------------------------------------------
 def test_txn_batch(session, mrt_set):
     keys = [mrt_set.id(100 + i) for i in range(10)]
@@ -245,7 +245,7 @@ def test_cluster_transaction_forwards_behavior(aerospike_host, make_cluster_defi
 
 
 # ---------------------------------------------------------------------------
-# 6. txnBatchAbort: 10-key batch upsert rolled back.
+# 10-key batch upsert rolled back.
 # ---------------------------------------------------------------------------
 def test_txn_batch_abort(session, mrt_set):
     keys = [mrt_set.id(200 + i) for i in range(10)]
@@ -274,7 +274,7 @@ class TestCommitRetrySync:
     """
 
     def test_transient_commit_conflict_is_retried(self, session, mrt_set):
-        key = mrt_set.id("syncCommitRetryTransient")
+        key = mrt_set.id("sync_commit_retry_transient")
         session.upsert(key).put({BIN_NAME: "seed"}).execute()
         attempts = 0
 
@@ -297,7 +297,7 @@ class TestCommitRetrySync:
 
     def test_persistent_commit_conflict_raises_sdk_type(self, session, mrt_set):
         """The failure keeps its stage and its code through the sync driver."""
-        key = mrt_set.id("syncCommitRetryPersistent")
+        key = mrt_set.id("sync_commit_retry_persistent")
         session.upsert(key).put({BIN_NAME: "seed"}).execute()
         attempts = 0
 
@@ -333,7 +333,7 @@ class TestManualTransactionCommitFailureSync:
     """
 
     def test_commit_failure_carries_the_same_detail(self, session, mrt_set):
-        key = mrt_set.id("syncManualCommit")
+        key = mrt_set.id("sync_manual_commit")
         session.upsert(key).put({BIN_NAME: "seed"}).execute()
 
         with pytest.raises(CommitError) as excinfo:
@@ -353,3 +353,46 @@ class TestManualTransactionCommitFailureSync:
         record = stream.first_or_raise().record_or_raise()
         assert record.bins[BIN_NAME] == "raced"
         session.delete(key).execute()
+
+
+# ---------------------------------------------------------------------------
+# Behavior txn-phase policies reach the wire. Commit's verify phase
+# re-reads the transaction's READ set, so the in-transaction reads below
+# are what give the verify policy something to bound (a write-only
+# transaction has nothing to verify): an impossibly tight budget over 500
+# reads fails the commit and rolls the write back, while the identical
+# transaction under a generous budget commits.
+# ---------------------------------------------------------------------------
+def test_txn_verify_policy_reaches_the_wire(cluster_sc, session, mrt_set):
+    keys = [mrt_set.id(f"verify_policy{i}") for i in range(500)]
+    for key in keys:
+        session.upsert(key).put({BIN_NAME: 1}).execute()
+    target = mrt_set.id("verify_policy_target")
+    _reset(session, target)
+
+    impossible = Behavior.DEFAULT.derive_with_changes(
+        name="mrt_sync_verify_impossible",
+        system_txn_verify=Settings(
+            total_timeout=timedelta(milliseconds=1),
+            socket_timeout=timedelta(milliseconds=1),
+            max_retries=0,
+        ),
+    )
+    with pytest.raises(CommitError):
+        with cluster_sc.transaction(impossible) as tx:
+            for key in keys:
+                tx.get(key)
+            tx.upsert(target).put({BIN_NAME: "tight"}).execute()
+    assert _fetch_bin(session, target) is None
+
+    # Control: the same read set under a sane verify budget must commit, so a
+    # pass above cannot come from the transaction failing for another reason.
+    sane = Behavior.DEFAULT.derive_with_changes(
+        name="mrt_sync_verify_sane",
+        system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+    )
+    with cluster_sc.transaction(sane) as tx:
+        for key in keys:
+            tx.get(key)
+        tx.upsert(target).put({BIN_NAME: "sane"}).execute()
+    assert _fetch_bin(session, target) == "sane"

@@ -35,9 +35,6 @@ Every partition must be owned by the node behind the gate, since the gate is
 the client's only route. ``force_single_node`` restricts the node set but does
 not rewrite the partition map, so a multi-node cluster leaves most partitions
 unroutable -- point this at a single-node cluster.
-
-Provenance (per repo rules):
-    reference: client/src/test/java/com/aerospike/client/sdk/TcpGate.java
 """
 
 from __future__ import annotations

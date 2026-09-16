@@ -24,9 +24,6 @@ Every test here needs a strong-consistency namespace. If
 ``AEROSPIKE_SC_NAMESPACE`` is unset and the cluster has exactly one SC namespace,
 that name is used automatically; otherwise set the env var (required when several
 namespaces are SC). When no SC namespace is reachable each test skips with a clear reason.
-
-Provenance (per repo rules):
-    reference: client/src/test/java/com/aerospike/client/sdk/TxnTest.java
 """
 
 from __future__ import annotations
@@ -39,6 +36,7 @@ import pytest_asyncio
 
 from aerospike_sdk import Behavior, DataSet, ResultCode
 from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.policy import Settings
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
 from integration.sc_namespace_resolve import (
@@ -125,10 +123,10 @@ async def _reset(session, key) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. txnWrite: write inside a txn is visible after commit.
+# Write inside a txn is visible after commit.
 # ---------------------------------------------------------------------------
 async def test_txn_write(session, mrt_set):
-    key = mrt_set.id("txnWrite")
+    key = mrt_set.id("txn_write")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -140,10 +138,10 @@ async def test_txn_write(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 2. txnWriteTwice: last write inside a txn wins.
+# Last write inside a txn wins.
 # ---------------------------------------------------------------------------
 async def test_txn_write_twice(session, mrt_set):
-    key = mrt_set.id("txnWriteTwice")
+    key = mrt_set.id("txn_write_twice")
     await _reset(session, key)
 
     async def op(tx):
@@ -155,13 +153,12 @@ async def test_txn_write_twice(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 3. txnWriteConflict: another txn trying to write the same key while a
-#    txn holds it gets MRT_BLOCKED. We use transaction (rather than
-#    do_in_transaction) for the inner txn so its retry loop doesn't mask
-#    the MRT_BLOCKED we're asserting on.
+# Another txn trying to write the same key while a txn holds it gets
+# MRT_BLOCKED. We use transaction (rather than do_in_transaction) for the
+# inner txn so its retry loop doesn't mask the MRT_BLOCKED we're asserting on.
 # ---------------------------------------------------------------------------
 async def test_txn_write_conflict(session, mrt_set):
-    key = mrt_set.id("txnWriteConflict")
+    key = mrt_set.id("txn_write_conflict")
     await _reset(session, key)
 
     async def outer(tx1):
@@ -179,16 +176,15 @@ async def test_txn_write_conflict(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 4. txnReadFailsForAllStatesExceptOpen: issuing any command against a non-
-#    OPEN txn must raise client-side (reference test does the same via
-#    ``txn.setState(...)`` — PAC now exposes an equivalent setter).
+# Issuing any command against a non-OPEN txn must raise client-side;
+# PAC exposes a state setter so each forbidden state can be forced directly.
 # ---------------------------------------------------------------------------
 async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.
     del session
     from aerospike_sdk import Txn, TxnState
 
-    key = mrt_set.id("txnReadFailsForAllStatesExceptOpen")
+    key = mrt_set.id("txn_read_fails_for_all_states_except_open")
 
     # OPEN must not raise on a fresh txn — the query may return zero rows
     # for a missing key, and that's fine; we only care that no forbidden-
@@ -218,7 +214,7 @@ async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mr
             msg = str(exc).lower()
             # Core reports a single generic "forbidden" message for all
             # non-OPEN states; tolerate that and any future state-specific
-            # variants the reference uses.
+            # wording.
             assert (
                 "forbidden" in msg
                 or "commit" in msg
@@ -234,10 +230,10 @@ async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mr
 
 
 # ---------------------------------------------------------------------------
-# 5. txnWriteBlock: outside-txn write is blocked while a txn holds the key.
+# Outside-txn write is blocked while a txn holds the key.
 # ---------------------------------------------------------------------------
 async def test_txn_write_block(session, mrt_set):
-    key = mrt_set.id("txnWriteBlock")
+    key = mrt_set.id("txn_write_block")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -253,10 +249,10 @@ async def test_txn_write_block(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 6. txnWriteRead: outside-txn read sees pre-txn value until commit.
+# Outside-txn read sees pre-txn value until commit.
 # ---------------------------------------------------------------------------
 async def test_txn_write_read(session, mrt_set):
-    key = mrt_set.id("txnWriteRead")
+    key = mrt_set.id("txn_write_read")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -270,10 +266,10 @@ async def test_txn_write_read(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 7. txnWriteAbort: explicit abort rolls back writes.
+# Explicit abort rolls back writes.
 # ---------------------------------------------------------------------------
 async def test_txn_write_abort(session, mrt_set):
-    key = mrt_set.id("txnWriteAbort")
+    key = mrt_set.id("txn_write_abort")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -287,10 +283,10 @@ async def test_txn_write_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 8. txnDelete: delete inside a txn commits.
+# Delete inside a txn commits.
 # ---------------------------------------------------------------------------
 async def test_txn_delete(session, mrt_set):
-    key = mrt_set.id("txnDelete")
+    key = mrt_set.id("txn_delete")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -302,10 +298,10 @@ async def test_txn_delete(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 9. txnDeleteAbort: delete rolled back restores the record.
+# Delete rolled back restores the record.
 # ---------------------------------------------------------------------------
 async def test_txn_delete_abort(session, mrt_set):
-    key = mrt_set.id("txnDeleteAbort")
+    key = mrt_set.id("txn_delete_abort")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -317,11 +313,11 @@ async def test_txn_delete_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 10. txnDeleteTwice: second delete of the same key within one txn is a
-#     no-op (idempotent) rather than raising.
+# Second delete of the same key within one txn is a no-op (idempotent)
+# rather than raising.
 # ---------------------------------------------------------------------------
 async def test_txn_delete_twice(session, mrt_set):
-    key = mrt_set.id("txnDeleteTwice")
+    key = mrt_set.id("txn_delete_twice")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -339,10 +335,10 @@ async def test_txn_delete_twice(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 11. txnTouch: touch under a txn keeps the record and commits.
+# Touch under a txn keeps the record and commits.
 # ---------------------------------------------------------------------------
 async def test_txn_touch(session, mrt_set):
-    key = mrt_set.id("txnTouch")
+    key = mrt_set.id("txn_touch")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -354,10 +350,10 @@ async def test_txn_touch(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 12. txnTouchAbort: touch rolled back leaves record intact.
+# Touch rolled back leaves record intact.
 # ---------------------------------------------------------------------------
 async def test_txn_touch_abort(session, mrt_set):
-    key = mrt_set.id("txnTouchAbort")
+    key = mrt_set.id("txn_touch_abort")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1"}).execute()
 
@@ -369,10 +365,10 @@ async def test_txn_touch_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 13. txnOperateWrite: combined set + read in one operate under txn.
+# Combined set + read in one operate under txn.
 # ---------------------------------------------------------------------------
 async def test_txn_operate_write(session, mrt_set):
-    key = mrt_set.id("txnOperateWrite")
+    key = mrt_set.id("txn_operate_write")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1", "bin2": "bal1"}).execute()
 
@@ -388,10 +384,10 @@ async def test_txn_operate_write(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 14. txnOperateWriteAbort: combined op rolled back.
+# Combined op rolled back.
 # ---------------------------------------------------------------------------
 async def test_txn_operate_write_abort(session, mrt_set):
-    key = mrt_set.id("txnOperateWriteAbort")
+    key = mrt_set.id("txn_operate_write_abort")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val1", "bin2": "bal1"}).execute()
 
@@ -407,7 +403,7 @@ async def test_txn_operate_write_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 15. txnBatch: 10-key batch upsert under a txn commits all together.
+# 10-key batch upsert under a txn commits all together.
 # ---------------------------------------------------------------------------
 async def test_txn_batch(session, mrt_set):
     keys = [mrt_set.id(i) for i in range(0, 10)]
@@ -432,7 +428,7 @@ async def test_txn_batch(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 16. txnBatchAbort: 10-key batch upsert rolled back.
+# 10-key batch upsert rolled back.
 # ---------------------------------------------------------------------------
 async def test_txn_batch_abort(session, mrt_set):
     keys = [mrt_set.id(i) for i in range(10, 20)]
@@ -451,8 +447,7 @@ async def test_txn_batch_abort(session, mrt_set):
 
 
 # ---------------------------------------------------------------------------
-# 17. txnMrtExpiredAfterDeadline: a write issued after the txn deadline must
-#     raise MRT_EXPIRED.
+# A write issued after the txn deadline must raise MRT_EXPIRED.
 # ---------------------------------------------------------------------------
 async def test_txn_mrt_expired_after_deadline(session, mrt_set):
     """Write after the txn deadline must raise MRT_EXPIRED.
@@ -465,7 +460,7 @@ async def test_txn_mrt_expired_after_deadline(session, mrt_set):
     """
     import asyncio
 
-    key = mrt_set.id("txnMrtExpired")
+    key = mrt_set.id("txn_mrt_expired")
     await _reset(session, key)
     await session.upsert(key).put({BIN_NAME: "val0"}).execute()
 
@@ -709,3 +704,46 @@ class TestConcurrentContention:
             await session.delete(key).execute()
         finally:
             await cluster.close()
+
+
+# ---------------------------------------------------------------------------
+# Behavior txn-phase policies reach the wire. Commit's verify phase
+# re-reads the transaction's READ set, so the in-transaction reads below
+# are what give the verify policy something to bound (a write-only
+# transaction has nothing to verify): an impossibly tight budget over 500
+# reads fails the commit and rolls the write back, while the identical
+# transaction under a generous budget commits.
+# ---------------------------------------------------------------------------
+async def test_txn_verify_policy_reaches_the_wire(cluster_sc, session, mrt_set):
+    keys = [mrt_set.id(f"verify_policy{i}") for i in range(500)]
+    for key in keys:
+        await session.upsert(key).put({BIN_NAME: 1}).execute()
+    target = mrt_set.id("verify_policy_target")
+    await _reset(session, target)
+
+    impossible = Behavior.DEFAULT.derive_with_changes(
+        name="mrt_async_verify_impossible",
+        system_txn_verify=Settings(
+            total_timeout=timedelta(milliseconds=1),
+            socket_timeout=timedelta(milliseconds=1),
+            max_retries=0,
+        ),
+    )
+    with pytest.raises(CommitError):
+        async with cluster_sc.transaction(impossible) as tx:
+            for key in keys:
+                await tx.get(key)
+            await tx.upsert(target).put({BIN_NAME: "tight"}).execute()
+    assert await _fetch_bin(session, target) is None
+
+    # Control: the same read set under a sane verify budget must commit, so a
+    # pass above cannot come from the transaction failing for another reason.
+    sane = Behavior.DEFAULT.derive_with_changes(
+        name="mrt_async_verify_sane",
+        system_txn_verify=Settings(total_timeout=timedelta(seconds=30)),
+    )
+    async with cluster_sc.transaction(sane) as tx:
+        for key in keys:
+            await tx.get(key)
+        await tx.upsert(target).put({BIN_NAME: "sane"}).execute()
+    assert await _fetch_bin(session, target) == "sane"

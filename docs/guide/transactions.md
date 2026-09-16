@@ -117,7 +117,8 @@ scopes — from code:
 
 ```python
 from datetime import timedelta
-from aerospike_sdk import Behavior, Settings
+from aerospike_sdk import Behavior
+from aerospike_sdk.policy import Settings
 
 patient = Behavior.DEFAULT.derive_with_changes(
     "patient_commits",

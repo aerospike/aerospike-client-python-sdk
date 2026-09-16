@@ -25,9 +25,6 @@ The two outcomes are not the same severity, and that is the point of the pair:
   success would present invisible writes as committed, so it raises.
 * an **abandoned monitor close** leaves durable writes behind and only the
   server-side cleanup unfinished. That is success.
-
-Provenance (per repo rules):
-    reference: client/src/test/java/com/aerospike/client/sdk/TxnCommitStatusTest.java
 """
 
 from __future__ import annotations

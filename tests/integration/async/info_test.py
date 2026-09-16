@@ -415,7 +415,7 @@ async def test_set_lookup_by_name(session):
 
 
 async def test_sets_without_a_namespace_spans_all_of_them(session):
-    """The bare ``sets`` command answers for every namespace, as the reference does."""
+    """The bare ``sets`` command answers for every namespace."""
     info = session.info()
     namespaces = await info.namespaces()
     if not namespaces:
