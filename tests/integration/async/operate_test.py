@@ -221,7 +221,7 @@ class TestOperatePositionalResults:
         assert result.operation_result(2) == 11
 
         typed = result.typed_operation_result(2)
-        assert typed is not None and typed.get_long() == 11
+        assert typed is not None and typed.get_int() == 11
         write_slot = result.typed_operation_result(1)
         assert write_slot is not None and write_slot.value is None
         assert result.typed_operation_result(99) is None

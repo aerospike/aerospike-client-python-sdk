@@ -17,26 +17,26 @@
 
 These tests verify the wiring between PSDK ``Client(...)`` constructor
 keywords, the underlying :class:`~aerospike_async.ClientPolicy`, and the
-``MaxErrorRate`` exception. They do not contact a server.
+``MaxErrorRateError`` exception. They do not contact a server.
 """
 
 from aerospike_async import ClientPolicy
 from aerospike_sdk.exceptions import PacMaxErrorRate, _convert_pac_exception
 
-from aerospike_sdk import BackoffError, MaxErrorRate
+from aerospike_sdk import BackoffError, MaxErrorRateError
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.sync.client import SyncClient
 
 
 class TestExceptionHierarchy:
-    """``MaxErrorRate`` slots into ``BackoffError`` so existing rate-limit handlers catch it."""
+    """``MaxErrorRateError`` slots into ``BackoffError`` so existing rate-limit handlers catch it."""
 
     def test_max_error_rate_is_backoff_error(self):
-        assert issubclass(MaxErrorRate, BackoffError)
+        assert issubclass(MaxErrorRateError, BackoffError)
 
     def test_max_error_rate_distinct_from_backoff(self):
         # But it is its own type so users can target it specifically.
-        assert MaxErrorRate is not BackoffError
+        assert MaxErrorRateError is not BackoffError
 
 
 class TestClientPlumbing:
@@ -93,10 +93,10 @@ class TestClientPlumbing:
 
 
 class TestExceptionMapping:
-    """``_convert_pac_exception`` translates PAC's ``MaxErrorRate`` to PSDK's ``MaxErrorRate``."""
+    """``_convert_pac_exception`` translates PAC's ``MaxErrorRate`` to PSDK's ``MaxErrorRateError``."""
 
     def test_pac_max_error_rate_maps(self):
         pac_exc = PacMaxErrorRate("node 10.0.0.1:3000 backing off")
         sdk_exc = _convert_pac_exception(pac_exc)
-        assert isinstance(sdk_exc, MaxErrorRate)
+        assert isinstance(sdk_exc, MaxErrorRateError)
         assert "10.0.0.1:3000" in str(sdk_exc)

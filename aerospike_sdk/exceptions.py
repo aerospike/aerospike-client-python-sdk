@@ -583,7 +583,7 @@ class BackoffError(AerospikeError):
     """
 
 
-class MaxErrorRate(BackoffError):
+class MaxErrorRateError(BackoffError):
     """Raised when the client's per-node circuit breaker trips.
 
     The breaker is governed by ``Client(...)``'s ``max_error_rate`` and
@@ -598,7 +598,7 @@ class MaxErrorRate(BackoffError):
 
         try:
             await session.read(key).execute()
-        except MaxErrorRate:
+        except MaxErrorRateError:
             ...  # node is in cooldown; route around it or wait
     """
 
@@ -924,7 +924,7 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         )
 
     if isinstance(exc, PacMaxErrorRate):
-        return MaxErrorRate(
+        return MaxErrorRateError(
             str(exc), in_doubt=getattr(exc, "in_doubt", False),
             **_retry_context_kwargs(exc),
         )

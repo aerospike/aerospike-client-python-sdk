@@ -37,7 +37,7 @@ async def main() -> None:
     print(f"  Equal: {original == from_digest}")
 
     # Use with live server
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 
         key = users.id("example_user")

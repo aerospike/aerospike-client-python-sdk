@@ -18,7 +18,7 @@
 The methods here are the sync-runtime terminals' engine: Tier 1 fast path,
 Tier 1b multi-spec, Tier 2 streaming, batch/background helpers — all against
 PAC ``*_blocking`` entries. Mixed into
-:class:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder` alongside the
+:class:`~aerospike_sdk.sync.operations.query.QueryBuilder` alongside the
 runtime-agnostic :class:`~aerospike_sdk.query_shared._QueryBuilderBase`;
 kept out of the shared base so the base stays runtime-agnostic.
 """

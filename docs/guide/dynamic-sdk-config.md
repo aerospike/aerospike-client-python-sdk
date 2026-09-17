@@ -189,4 +189,4 @@ under strict config while the log says where the knob lives.
 ## Complete example
 
 A complete annotated example ships as
-[`examples/sdk-config-example.yaml`](https://github.com/aerospike/aerospike-client-python-sdk/blob/main/examples/sdk-config-example.yaml).
+{{ sdk_config_example_link }}.

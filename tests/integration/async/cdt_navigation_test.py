@@ -30,7 +30,7 @@ DS = DataSet.of(NS, SET)
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         for i in range(1, 40):
             await session.delete(DS.id(i)).execute()

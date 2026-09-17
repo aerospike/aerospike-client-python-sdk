@@ -38,16 +38,18 @@ class TestNumericAccessors:
         (False, 0),
         (None, 0),
     ])
-    def test_get_long(self, value, expected):
-        assert OperationResult(value).get_long() == expected
+    def test_get_int(self, value, expected):
+        assert OperationResult(value).get_int() == expected
 
-    def test_get_int_alias(self):
-        assert OperationResult(42).get_int() == 42
+    def test_get_int_is_arbitrary_precision(self):
+        # Python ints never narrow, so a value past 64 bits round-trips intact.
+        big = 2 ** 70 + 1
+        assert OperationResult(big).get_int() == big
 
     @pytest.mark.parametrize("bad", ["str", 1.5, [1], {1: 2}, b"x"])
-    def test_get_long_rejects_non_int(self, bad):
+    def test_get_int_rejects_non_int(self, bad):
         with pytest.raises(TypeError, match="not int"):
-            OperationResult(bad).get_long()
+            OperationResult(bad).get_int()
 
     @pytest.mark.parametrize("value,expected", [
         (3.14, 3.14),
@@ -55,16 +57,13 @@ class TestNumericAccessors:
         (True, 1.0),      # bool widens
         (None, 0.0),
     ])
-    def test_get_double(self, value, expected):
-        assert OperationResult(value).get_double() == expected
-
-    def test_get_float_alias(self):
-        assert OperationResult(2.5).get_float() == 2.5
+    def test_get_float(self, value, expected):
+        assert OperationResult(value).get_float() == expected
 
     @pytest.mark.parametrize("bad", ["str", [1], {1: 2}, b"x"])
-    def test_get_double_rejects_non_numeric(self, bad):
+    def test_get_float_rejects_non_numeric(self, bad):
         with pytest.raises(TypeError, match="not float"):
-            OperationResult(bad).get_double()
+            OperationResult(bad).get_float()
 
 
 class TestBooleanAccessor:

@@ -136,7 +136,7 @@ async def part3_export(cluster) -> None:
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         await part1_collect_and_read(cluster)
         await part2_feature_usage(cluster)
         await part3_export(cluster)

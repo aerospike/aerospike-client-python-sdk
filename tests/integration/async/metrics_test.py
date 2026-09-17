@@ -24,7 +24,7 @@ from tests.integration.namespace import general_namespace
 @pytest.fixture(scope="module")
 async def metrics_cluster(aerospike_host, make_cluster_definition):
     """Module-scoped cluster so metrics state isn't shared with other suites."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 
@@ -183,7 +183,7 @@ class TestMetricsSnapshot:
     ):
         # A fresh cluster so the detail slots are created lazily AFTER the
         # ms/7 enable — the exact path the core bug loses.
-        async with await make_cluster_definition(aerospike_host).connect() as c:
+        async with make_cluster_definition(aerospike_host).connect() as c:
             c.enable_metrics()  # default: milliseconds / 7 columns
             await _do_some_ops(c, count=3)
 

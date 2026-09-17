@@ -34,7 +34,7 @@ from aerospike_sdk.implicit_txn import (
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 def _sdk_client(implicit=True):

@@ -210,12 +210,12 @@ def test_and_remove_other_bins(cluster):
     assert record.bins == {"name": "Tim Updated", "age": 26}
 
 
-def test_set_bins_execute(cluster):
-    """Test set_bins with execute method."""
+def test_put_execute(cluster):
+    """Test put with execute method."""
     session = cluster.create_session()
     ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
-    session.upsert(key).set_bins({"name": "Tim", "age": 1, "gender": "male"}).execute()
+    session.upsert(key).put({"name": "Tim", "age": 1, "gender": "male"}).execute()
 
     result = session.query(key).execute().first_or_raise()
     record = result.record

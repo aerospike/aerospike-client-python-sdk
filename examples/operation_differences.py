@@ -630,7 +630,7 @@ def check(test_id: str, passed: bool, description: str) -> None:
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 
         await session.truncate(SET)

@@ -11,7 +11,7 @@ from aerospike_sdk import Behavior, DataSet
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
         key = users.id("user123")
@@ -26,7 +26,7 @@ async def main() -> None:
         print(f"Got record: {first.record.bins}")
 
         # GET with selected bins
-        stream = await session.query(key).bins(["name"]).execute()
+        stream = await session.query(key).bins("name").execute()
         first = await stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
 

@@ -67,7 +67,7 @@ class TestDefaultDisposition:
         k = ds.id("eh_gen_1")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"v": 1}).execute()
+        await session.upsert(k).put({"v": 1}).execute()
 
         with pytest.raises(GenerationError):
             await (
@@ -84,7 +84,7 @@ class TestDefaultDisposition:
         k2 = ds.id("eh_batch_2")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k1).set_bins({"v": 1}).execute()
+        await session.upsert(k1).put({"v": 1}).execute()
 
         rs = await (
             session.query(k1, k2)
@@ -112,7 +112,7 @@ class TestInStreamStrategy:
         k = ds.id("eh_instream_1")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"v": 1}).execute()
+        await session.upsert(k).put({"v": 1}).execute()
 
         stream = await (
             session
@@ -146,7 +146,7 @@ class TestErrorHandler:
         k = ds.id("eh_handler_1")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"v": 1}).execute()
+        await session.upsert(k).put({"v": 1}).execute()
 
         captured = []
 
@@ -175,7 +175,7 @@ class TestErrorHandler:
         k2 = ds.id("eh_handler_b2")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k1).set_bins({"v": 1}).execute()
+        await session.upsert(k1).put({"v": 1}).execute()
 
         errors = []
         rs = await (
@@ -207,8 +207,8 @@ class TestMultiSpecPartialFailure:
         k_fail = ds.id("eh_multi_fail")
         await _cleanup(session, k_good, k_fail)
 
-        await session.upsert(k_good).set_bins({"v": 1}).execute()
-        await session.upsert(k_fail).set_bins({"v": 1}).execute()
+        await session.upsert(k_good).put({"v": 1}).execute()
+        await session.upsert(k_fail).put({"v": 1}).execute()
 
         rs = await (
             session

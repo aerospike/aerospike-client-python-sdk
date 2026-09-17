@@ -34,8 +34,8 @@ from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.background import (
-    SyncBackgroundOperationBuilder,
-    SyncBackgroundUdfBuilder,
+    BackgroundOperationBuilder as SyncBackgroundOperationBuilder,
+    BackgroundUdfBuilder as SyncBackgroundUdfBuilder,
 )
 
 
@@ -44,7 +44,7 @@ def _session_mock() -> MagicMock:
     s.behavior = Behavior.DEFAULT
     fc = MagicMock()
     fc._client = MagicMock()
-    s.client = fc
+    s._client = fc
     s._resolve_namespace_mode = AsyncMock(return_value=Mode.AP)
     return s
 
@@ -68,20 +68,20 @@ def test_update_builder_produces_add_operation():
 
 async def test_delete_auto_adds_delete_op():
     s = _session_mock()
-    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.DELETE).execute()
-    _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s._client._client.query_operate.call_args[0]
     assert len(ops) == 1
     assert ops[0] is not None
 
 
 async def test_touch_auto_adds_touch_op():
     s = _session_mock()
-    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     await BackgroundOperationBuilder(s, ds, _OpType.TOUCH).execute()
-    _stmt, ops = s.client._client.query_operate.call_args[0]
+    _stmt, ops = s._client._client.query_operate.call_args[0]
     assert len(ops) == 1
 
 
@@ -136,12 +136,12 @@ def test_index_filters_mutex_with_where():
 
 async def test_delete_execute_passes_statement_index_filters():
     s = _session_mock()
-    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
     b.index_filters(Filter.range("n", 1, 3))
     await b.execute()
-    stmt, ops = s.client._client.query_operate.call_args[0]
+    stmt, ops = s._client._client.query_operate.call_args[0]
     assert stmt.filters is not None
     assert len(ops) == 1
 
@@ -180,12 +180,12 @@ def test_records_per_second_defaults_to_unthrottled():
 async def test_records_per_second_reaches_the_policy_pac_receives():
     """End of the chain: the value the builder took is on the policy PAC gets."""
     s = _session_mock()
-    s.client._client.query_operate = AsyncMock(return_value=MagicMock())
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
     b.bin("tier").set_to("gold")
     await b.records_per_second(2500).execute()
-    wp = s.client._client.query_operate.call_args.kwargs["write_policy"]
+    wp = s._client._client.query_operate.call_args.kwargs["write_policy"]
     assert wp.records_per_second == 2500
 
 
@@ -329,11 +329,11 @@ class TestSyncDurableDeleteForwarding:
         """The forwarded override survives into the policy the job submits."""
         s = _session_mock()
         s._resolve_namespace_mode_blocking = MagicMock(return_value=Mode.AP)
-        s.client._client.query_operate_blocking = MagicMock(return_value=MagicMock())
+        s._client._client.query_operate_blocking = MagicMock(return_value=MagicMock())
         ds = DataSet.of("test", "bgset")
         b = SyncBackgroundOperationBuilder(
             BackgroundOperationBuilder(s, ds, _OpType.DELETE))
         b.with_durable_delete().execute()
         write_policy = (
-            s.client._client.query_operate_blocking.call_args.kwargs["write_policy"])
+            s._client._client.query_operate_blocking.call_args.kwargs["write_policy"])
         assert write_policy.durable_delete is True

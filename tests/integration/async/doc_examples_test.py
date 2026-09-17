@@ -61,7 +61,7 @@ async def doc_cluster(make_cluster_definition):
     Exposed alongside :func:`session` because the index-readiness helper builds
     its own session from the cluster.
     """
-    async with await make_cluster_definition(SEEDS).connect() as cluster:
+    async with make_cluster_definition(SEEDS).connect() as cluster:
         yield cluster
 
 
@@ -196,7 +196,7 @@ async def test_cluster_definition_connect():
         user = os.environ.get("AEROSPIKE_AUTH_USER", "")
         password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
         cluster_def = cluster_def.with_external_credentials(user, password)
-    async with await cluster_def.connect() as cluster:
+    async with cluster_def.connect() as cluster:
         s = cluster.create_session(Behavior.DEFAULT)
         key = USERS.id("cd_test")
         await s.upsert(key).put({"x": 1}).execute()

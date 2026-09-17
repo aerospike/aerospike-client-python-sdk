@@ -29,9 +29,8 @@ from aerospike_sdk.aio.operations.query import (
     WriteSegmentBuilder,
 )
 from aerospike_sdk.sync.operations.query import (
-    SyncQueryBuilder,
-    SyncWriteBinBuilder,
-    SyncWriteSegmentBuilder,
+    QueryBuilder as SyncQueryBuilder,
+    WriteSegmentBuilder as SyncWriteSegmentBuilder,
 )
 
 
@@ -168,7 +167,7 @@ class TestSyncWriteBinBuilderIndexListOps:
         qb._op_type = "upsert"
         qb._single_key = _make_key()
         sync_seg = SyncWriteSegmentBuilder(qb)
-        return SyncWriteBinBuilder(sync_seg, bin_name), qb
+        return WriteBinBuilder(sync_seg, bin_name), qb
 
     def test_list_insert_appends_operation_to_segment_state(self):
         swb, qb = self._build()

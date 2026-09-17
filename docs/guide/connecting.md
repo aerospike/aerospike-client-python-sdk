@@ -11,7 +11,7 @@ obtain a `Cluster`, then create sessions from that cluster:
 ```python
 from aerospike_sdk import ClusterDefinition
 
-async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+async with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session()
     # ... use session ...
 ```
@@ -87,7 +87,7 @@ cluster_def = (
     .with_ip_map({"10.0.0.1": "3.72.54.187"})
 )
 
-async with await cluster_def.connect() as cluster:
+async with cluster_def.connect() as cluster:
     session = cluster.create_session()
     # ...
 ```
@@ -123,7 +123,7 @@ cluster_def = (
     .using_services_alternate()
 )
 
-async with await cluster_def.connect() as cluster:
+async with cluster_def.connect() as cluster:
     session = cluster.create_session()
     # ... use session ...
 ```
@@ -143,7 +143,7 @@ cluster_def = (
     .using_services_alternate()
 )
 
-async with await cluster_def.connect() as cluster:
+async with cluster_def.connect() as cluster:
     session = cluster.create_session()
     # ... use session ...
 ```
@@ -195,7 +195,7 @@ only when *every* connected node supports it, so you always guard against the
 cluster's least-capable node.
 
 ```python
-async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+async with ClusterDefinition("localhost", 3000).connect() as cluster:
     if await cluster.supports_string_operations():
         await session.upsert(key).bin("s").str_append("!").execute()
     else:

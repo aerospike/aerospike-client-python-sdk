@@ -42,7 +42,7 @@ MODULE = "record_example"
 
 @pytest.fixture(scope="module")
 async def cluster_with_udf(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SERVER_PATH)
@@ -442,7 +442,7 @@ async def test_single_key_validation_raises(cluster_with_udf):
 
 async def test_list_udf(aerospike_host, make_cluster_definition):
     """``list_udf`` reports name/hash/type and reflects register + remove."""
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         path = "psdk_list_udf_probe.lua"
         with open(LUA_FILE, "rb") as f:
@@ -478,7 +478,7 @@ async def test_register_udf_from_resource(aerospike_host, make_cluster_definitio
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         server_path = "psdk_resource_probe.lua"
         try:
@@ -619,7 +619,7 @@ SLEEP_MODULE = "sleep_example"
 
 @pytest.fixture(scope="module")
 async def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
         try:
             rm = await udf_session.remove_udf(SLEEP_SERVER_PATH)

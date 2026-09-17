@@ -13,7 +13,7 @@ from aerospike_sdk import Behavior, DataSet
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         users = DataSet.of("test", "users")
 
         # Default session

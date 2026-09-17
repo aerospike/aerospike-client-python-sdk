@@ -342,7 +342,7 @@ async def shared_cluster(aerospike_host, make_cluster_definition):
     """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
     paid once per file. Per-test data freshness stays in the seeding fixtures,
     which re-seed on every test against this shared cluster."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 
@@ -787,7 +787,7 @@ async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_de
     ``aerospike_host_812_required`` fixture connects to the default
     ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
     """
-    async with await make_cluster_definition(aerospike_host_812_required).connect() as cluster:
+    async with make_cluster_definition(aerospike_host_812_required).connect() as cluster:
         session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
         yield cluster.create_session()
         await _drop_cdt_data(session, ds)
@@ -802,7 +802,7 @@ async def session_with_cdt_data(aerospike_host, make_cluster_definition, wait_fo
     default ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+.
 
     """
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
         yield cluster.create_session()
         await _drop_cdt_data(session, ds)
@@ -2161,7 +2161,7 @@ def _b64_blob_expr(payload: bytes) -> str:
 
 @pytest.fixture(scope="module")
 async def cluster_ael_blob(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         yield cluster
 
 

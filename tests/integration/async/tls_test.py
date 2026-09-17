@@ -97,7 +97,7 @@ class TestTlsClusterDefinition:
         )
         cluster = await cd.connect()
         try:
-            assert cluster.is_connected()
+            assert cluster.is_connected
             session = cluster.create_session(Behavior.DEFAULT)
             assert session is not None
         finally:
@@ -119,7 +119,7 @@ class TestTlsClusterDefinition:
         )
         cluster = await cd.connect()
         try:
-            assert cluster.is_connected()
+            assert cluster.is_connected
         finally:
             await cluster.close()
 
@@ -183,7 +183,7 @@ class TestPkiClusterDefinition:
         )
         cluster = await cd.connect()
         try:
-            assert cluster.is_connected()
+            assert cluster.is_connected
         finally:
             await cluster.close()
 
@@ -220,8 +220,8 @@ class TestTlsEnvDrivenDefinition:
 
         hostname, port = _parse_host_port(_tls_host_env())
         cd = self._definition(ClusterDefinition(hostname, port))
-        async with await cd.connect() as cluster:
-            assert cluster.is_connected()
+        async with cd.connect() as cluster:
+            assert cluster.is_connected
             session = cluster.create_session(Behavior.DEFAULT)
             key = USERS.id("fc_tls")
             await session.upsert(key).bin("v").set_to(1).execute()
@@ -238,7 +238,7 @@ class TestTlsEnvDrivenDefinition:
         hostname, port = _parse_host_port(_tls_host_env())
         cd = self._definition(SyncClusterDefinition(hostname, port))
         with cd.connect() as cluster:
-            assert cluster.is_connected()
+            assert cluster.is_connected
             session = cluster.create_session(Behavior.DEFAULT)
             key = USERS.id("sfc_tls")
             session.upsert(key).bin("v").set_to(2).execute()

@@ -17,7 +17,6 @@
 
 from aerospike_sdk import Key
 
-from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
 
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
@@ -64,13 +63,3 @@ class TestWriteBinBuilderSetToGeoJson:
         )
         assert result is segment
         assert len(qb._operations) == 2
-
-
-class TestSyncWriteBinBuilderSetToGeoJson:
-
-    def test_method_exists_and_returns_segment(self):
-        # SyncWriteBinBuilder wraps the async builder; just verify the
-        # method exists and is callable. Behavior is covered by the
-        # async test above plus the integration test.
-        assert hasattr(SyncWriteBinBuilder, "set_to_geo_json")
-        assert callable(SyncWriteBinBuilder.set_to_geo_json)

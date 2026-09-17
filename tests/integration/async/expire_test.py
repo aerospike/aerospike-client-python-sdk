@@ -32,7 +32,7 @@ EXPIRE_SET = "expire"
 @pytest.fixture(scope="module")
 async def cluster(aerospike_host, make_cluster_definition):
     """Shared connection; each test owns its key, so isolation needs no reconnect."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 

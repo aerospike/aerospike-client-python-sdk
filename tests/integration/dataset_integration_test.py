@@ -23,7 +23,7 @@ async def test_key_value_with_dataset(aerospike_host, make_cluster_definition):
     """Test key_value operation using DataSet."""
     users = DataSet.of(general_namespace(), "users")
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         key = users.id("user1")
         # Put a record using DataSet
@@ -44,7 +44,7 @@ async def test_key_value_with_key_object(aerospike_host, make_cluster_definition
     users = DataSet.of(general_namespace(), "users")
     key = users.id("user2")
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         # Put a record using Key object
         await session.upsert(key).put({"name": "Jane", "age": 25}).execute()
@@ -63,7 +63,7 @@ async def test_query_with_dataset(aerospike_host, make_cluster_definition):
     """Test query operation using DataSet."""
     users = DataSet.of(general_namespace(), "query_test")
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         # Put some test data
         await session.upsert(users.id("q1")).put({"id": "q1", "value": 10}).execute()
@@ -90,7 +90,7 @@ async def test_query_with_single_key(aerospike_host, make_cluster_definition):
     users = DataSet.of(general_namespace(), "users")
     key = users.id("user3")
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         # Put a record
         await session.upsert(key).put({"name": "Bob", "age": 35}).execute()
@@ -114,7 +114,7 @@ async def test_query_with_multiple_keys(aerospike_host, make_cluster_definition)
     users = DataSet.of(general_namespace(), "users")
     keys = users.ids("user4", "user5")
 
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session()
         # Put records
         await session.upsert(keys[0]).put({"name": "Alice", "age": 28}).execute()

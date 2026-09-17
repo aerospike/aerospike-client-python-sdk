@@ -22,6 +22,7 @@ from typing import List
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.aio.tls_builder import TlsBuilder
+from aerospike_sdk.awaitable_context import AwaitableContext
 from aerospike_sdk.cluster_shared import ClusterDefinitionBase, Host
 from aerospike_sdk.policy.sdk_config_loader import load_at_connect
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
@@ -88,7 +89,7 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
             members.append(client)
         return members
 
-    async def connect(self) -> Cluster:
+    def connect(self) -> AwaitableContext[Cluster]:
         """
         Establishes a connection to the Aerospike cluster.
 
@@ -96,11 +97,22 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
         parameters. The returned Cluster should be closed when no longer needed
         to properly release resources.
 
+        The result is awaitable and doubles as an async context manager, so
+        either spelling works:
+
         Example with async context manager::
 
-                async with await ClusterDefinition("localhost", 3100).connect() as cluster:
+                async with ClusterDefinition("localhost", 3100).connect() as cluster:
                     session = cluster.create_session(Behavior.DEFAULT)
                     # Use the session...
+
+        Example with an explicit close::
+
+                cluster = await ClusterDefinition("localhost", 3100).connect()
+                try:
+                    session = cluster.create_session(Behavior.DEFAULT)
+                finally:
+                    await cluster.close()
 
         Returns:
             A connected Cluster instance
@@ -110,6 +122,9 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
             ConnectionError: If ``fail_if_not_connected`` is True (default) and
                 the cluster is unreachable
         """
+        return AwaitableContext(self._connect())
+
+    async def _connect(self) -> Cluster:
         self._validate()
         # SDK config file (AEROSPIKE_SDK_CONFIG_URL): applies the behaviors
         # section, layers system settings over programmatic ones per-field,

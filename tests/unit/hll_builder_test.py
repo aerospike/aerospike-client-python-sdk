@@ -32,7 +32,6 @@ from aerospike_sdk.aio.operations.query import (
     WriteBinBuilder,
     WriteSegmentBuilder,
 )
-from aerospike_sdk.sync.operations.query import SyncWriteBinBuilder
 
 
 HLL_WRITE_METHODS = (
@@ -51,9 +50,7 @@ HLL_READ_METHODS = (
 class TestAllBuildersHaveAllHllMethods:
     """Every builder that exposes HLL ops must expose all 11."""
 
-    @pytest.mark.parametrize("builder_cls", [
-        WriteBinBuilder, SyncWriteBinBuilder,
-    ])
+    @pytest.mark.parametrize("builder_cls", [WriteBinBuilder])
     @pytest.mark.parametrize("method", HLL_WRITE_METHODS + HLL_READ_METHODS)
     def test_write_capable_builder_has_method(self, builder_cls, method):
         assert hasattr(builder_cls, method), f"{builder_cls.__name__} missing {method}"

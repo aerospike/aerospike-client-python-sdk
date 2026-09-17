@@ -103,7 +103,7 @@ async def _wait_for_query_kinds(
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
     """Connect a Cluster and seed test data for query tests."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         ds = DataSet.of(general_namespace(), "query_test")
 
@@ -618,6 +618,24 @@ class TestStreamAcrossBuilders:
         assert all(r.is_ok for r in lazy)
         assert {r.index: r.record.bins["id"] for r in lazy} == \
             {r.index: r.record.bins["id"] for r in buffered}
+
+    async def test_stream_enters_as_a_context_manager_without_awaiting(self, cluster):
+        """``stream()`` is awaitable and an async context manager, so the
+        scoped form needs no second keyword and still closes the stream."""
+        session = cluster.create_session()
+        ds = DataSet.of(general_namespace(), "query_test")
+        keys = ds.ids(0, 1, 2)
+
+        async with session.query(keys).stream() as stream:
+            rows = [r async for r in stream]
+        assert {r.index for r in rows} == {0, 1, 2}
+        # Scope exit closed the stream, so re-iterating ends immediately.
+        assert [r async for r in stream] == []
+
+        # The pre-hybrid spelling keeps working: awaiting first yields the
+        # stream itself, which is its own context manager.
+        async with await session.query(keys).stream() as stream:
+            assert len([r async for r in stream]) == 3
 
     async def test_mixed_write_chain_stream(self, cluster):
         """A query→write→delete chain (terminates on WriteSegmentBuilder)

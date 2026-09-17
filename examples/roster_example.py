@@ -72,7 +72,7 @@ def _parse_roster(raw: str) -> dict[str, str]:
 
 
 async def main() -> None:
-    async with await _env.connect_sc().connect() as cluster:
+    async with _env.connect_sc().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 
         await run_examples(session)

@@ -37,7 +37,7 @@ async def test_session_creation_default_behavior(cluster):
     session = cluster.create_session()
     assert session is not None
     assert session.behavior.name == "DEFAULT"
-    assert session.client is cluster._client
+    assert session._client is cluster._client
 
 
 async def test_session_creation_custom_behavior(cluster):
@@ -52,7 +52,7 @@ async def test_session_creation_custom_behavior(cluster):
     assert session.behavior.name == "custom"
     assert session.behavior.total_timeout == timedelta(seconds=10)
     assert session.behavior.max_retries == 5
-    assert session.client is cluster._client
+    assert session._client is cluster._client
 
 
 
@@ -221,6 +221,15 @@ async def test_session_index_delegation(session):
     assert index_builder is not None
     assert index_builder._namespace == general_namespace()
     assert index_builder._set_name == "users"
+
+
+async def test_session_index_accepts_dataset_positionally(session):
+    """A DataSet in the first slot resolves the same as ``dataset=``."""
+    users = DataSet.of(general_namespace(), "users")
+
+    positional = session.index(users)
+    assert positional._namespace == general_namespace()
+    assert positional._set_name == "users"
 
 
 async def test_session_upsert_error_no_key(session):

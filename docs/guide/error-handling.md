@@ -16,7 +16,7 @@ AerospikeError
 ├── InvalidNamespaceError
 ├── InvalidNodeError
 ├── BackoffError
-│   └── MaxErrorRate
+│   └── MaxErrorRateError
 ├── QuotaError
 ├── QueryError
 │   └── QueryTerminatedError
@@ -375,7 +375,7 @@ stream = await (
     session.update(users.id(1))
     .where("$.balance >= 100")
     .fail_on_filtered_out()
-    .bin("balance").increment_by(-100)
+    .bin("balance").add(-100)
     .execute()
 )
 try:

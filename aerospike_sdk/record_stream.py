@@ -553,7 +553,7 @@ class RecordStream:
         Pairs with :meth:`__aexit__` so the stream is always :meth:`close`\\ d
         on block exit — the recommended way to consume a lazy stream::
 
-            async with await session.query(keys).stream() as stream:
+            async with session.query(keys).stream() as stream:
                 async for row in stream:
                     ...
             # close() runs here, even on early break or exception.

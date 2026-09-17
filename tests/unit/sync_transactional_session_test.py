@@ -28,8 +28,10 @@ from aerospike_sdk import ResultCode
 from aerospike_sdk import (
     AbortStatus,
     CommitStatus,
-    SyncTransactionalSession,
     Txn,
+)
+from aerospike_sdk.sync.transactional_session import (
+    TransactionalSession as SyncTransactionalSession,
 )
 from aerospike_async.exceptions import CommitFailedError
 from aerospike_async import CommitErrorType, ReadModeSC
@@ -38,7 +40,7 @@ from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import TransactionSettings
 from aerospike_sdk.policy.behavior_settings import Mode, Settings
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.session import Session as SyncSession
 
 
 class _FakePacClient:
@@ -204,7 +206,7 @@ def test_ops_after_explicit_commit_run_txn_free(
     # so later builders run transaction-free.
     with sync_tx as tx:
         tx.commit()
-        assert tx.get_current_transaction() is None
+        assert tx.current_transaction is None
 
 
 def test_explicit_abort_returns_status(
@@ -217,16 +219,6 @@ def test_explicit_abort_returns_status(
         assert tx.active is False
     assert len(sync_client._pac.abort_calls) == 1
     assert len(sync_client._pac.commit_calls) == 0
-
-
-def test_rollback_is_alias_for_abort(
-    sync_tx: SyncTransactionalSession,
-    sync_client: _FakeSyncClient,
-) -> None:
-    with sync_tx as tx:
-        status = tx.rollback()
-        assert status == AbortStatus.OK
-    assert len(sync_client._pac.abort_calls) == 1
 
 
 def test_commit_without_active_txn_raises(

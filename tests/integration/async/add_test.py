@@ -77,27 +77,6 @@ class TestAdd:
 
         await session.delete(key).execute()
 
-    async def test_increment_by_alias(self, cluster, test_set: DataSet):
-        """Test that increment_by is an alias for add."""
-        session = cluster.create_session()
-        key = test_set.id("increment_alias")
-        bin_name = "counter"
-
-        try:
-            await session.delete(key).execute()
-        except Exception:
-            pass
-
-        await session.upsert(key).bin(bin_name).increment_by(10).execute()
-        await session.upsert(key).bin(bin_name).increment_by(5).execute()
-
-        result = await session.query(key).execute()
-        first = await result.first_or_raise()
-        assert first.is_ok
-        assert first.record_or_raise().bins[bin_name] == 15
-
-        await session.delete(key).execute()
-
     async def test_add_batch(self, cluster, test_set: DataSet):
         """Test adding to multiple keys via batch operations."""
         session = cluster.create_session()

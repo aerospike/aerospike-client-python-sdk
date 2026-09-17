@@ -37,7 +37,7 @@ an example, keep the contract below.
    (its repr is a full record, not a caption).
 
 6. **Open the connection the standard way.** Every example uses the async context-manager
-   convention `async with await _env.connect().connect() as cluster:` (sync:
+   convention `async with _env.connect().connect() as cluster:` (sync:
    `with _env.sync_connect().connect() as cluster:`), so the cluster always closes cleanly.
 
 7. **Gate on capability, skip cleanly.** Examples that need more than a default AP cluster degrade

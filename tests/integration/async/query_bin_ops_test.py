@@ -45,7 +45,7 @@ SET = "query_bin_ops"
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
     """Connect a Cluster, seed test data, yield it."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         ds = DataSet.of(NS, SET)
 
@@ -369,7 +369,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_bin_get(self, session):
         rs = await (
-            session.query(keys_list=[_key(1), _key(2)]).bin("name").get()
+            session.query(keys=[_key(1), _key(2)]).bin("name").get()
             .execute()
         )
         results = await rs.collect()
@@ -379,7 +379,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_map_read(self, session):
         rs = await (
-            session.query(keys_list=[_key(1), _key(2), _key(3)])
+            session.query(keys=[_key(1), _key(2), _key(3)])
             .bin("settings").on_map_key("theme").get_values()
             .execute()
         )
@@ -391,7 +391,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_list_size(self, session):
         rs = await (
-            session.query(keys_list=[_key(1), _key(2), _key(3)])
+            session.query(keys=[_key(1), _key(2), _key(3)])
             .bin("scores").list_size()
             .execute()
         )
@@ -403,7 +403,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_list_get(self, session):
         rs = await (
-            session.query(keys_list=[_key(1), _key(2), _key(3)])
+            session.query(keys=[_key(1), _key(2), _key(3)])
             .bin("scores").list_get(0)
             .execute()
         )
@@ -489,7 +489,7 @@ class TestQueryStacking:
     async def test_stack_batch_queries(self, session):
         rs = await (
             session
-            .query(keys_list=[_key(1), _key(2)]).bin("name").get()
+            .query(keys=[_key(1), _key(2)]).bin("name").get()
             .query([_key(3)]).bin("age").get()
             .execute()
         )

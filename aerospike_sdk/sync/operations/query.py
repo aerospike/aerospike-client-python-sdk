@@ -29,7 +29,6 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, List, Optional, Sequence, Union
 
-from typing_extensions import deprecated
 
 from aerospike_async import ExecuteTask, Key
 
@@ -37,7 +36,6 @@ from aerospike_async import ResultCode
 
 from aerospike_sdk.query_shared import (
     QueryBinBuilder,
-    WriteBinBuilder,
     _QueryBuilderBase,
 )
 from aerospike_sdk.sync.operations.query_dispatch import _BlockingQueryDispatch
@@ -59,9 +57,6 @@ from aerospike_sdk.metrics import usage
 
 # Bin builders are parent-generic; the same class serves both the async and
 # sync write segments.
-# Aliases preserve the import path callers used during the wrapper era.
-SyncQueryBinBuilder = QueryBinBuilder
-SyncWriteBinBuilder = WriteBinBuilder
 
 __all__ = ["QueryBuilder", "WriteSegmentBuilder"]
 
@@ -273,7 +268,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         and going through :meth:`execute` costs a second call for it. This is
         that pair in one; the stream is closed either way.
 
-        Semantics come from :meth:`SyncRecordStream.first`, not from a second
+        Semantics come from :meth:`RecordStream.first`, not from a second
         set of rules: per-record failures arrive **as data** (``is_ok=False``),
         while cluster-level errors raise.
 
@@ -298,7 +293,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
     def first_or_raise(self, on_error: Optional[OnError] = None) -> "RecordResult":
         """Execute and return the first row, requiring it to exist and be OK.
 
-        Semantics come from :meth:`SyncRecordStream.first_or_raise`.
+        Semantics come from :meth:`RecordStream.first_or_raise`.
 
         Args:
             on_error: Per-operation error handling, as for :meth:`execute`.
@@ -372,16 +367,6 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             return RecordStream._from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
-
-    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
-    def execute_stream(
-        self, on_error: Optional[OnError] = None,
-    ) -> RecordStream:
-        """Deprecated alias for :meth:`stream`.
-
-        :meta private:
-        """
-        return self.stream(on_error)
 
 
 class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
@@ -478,16 +463,6 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         assert isinstance(self._qb, QueryBuilder)
         return self._qb.stream(on_error)
-
-    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
-    def execute_stream(
-        self, on_error: Optional[OnError] = None,
-    ) -> RecordStream:
-        """Deprecated alias for :meth:`stream`.
-
-        :meta private:
-        """
-        return self.stream(on_error)
 
 
 class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
@@ -630,9 +605,3 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             return self._qb.stream(on_error)
         # Still a single-key segment: one record, so buffered == lazy.
         return self.execute(on_error)
-
-
-# Deprecated aliases, kept importable for one release cycle.
-SyncQueryBuilder = QueryBuilder
-SyncWriteSegmentBuilder = WriteSegmentBuilder
-SyncSingleKeyWriteSegment = _SingleKeyWriteSegment

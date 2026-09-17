@@ -53,7 +53,7 @@ async def run_examples(session) -> None:
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 
         await run_examples(session)

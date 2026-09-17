@@ -108,7 +108,7 @@ async def cluster(aerospike_host, make_cluster_definition, wait_for_set_visible)
     ``cluster_812`` instead, which uses the default ``AEROSPIKE_HOST`` and
     skips cleanly unless that cluster is 8.1.2+.
     """
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         await _seed_qopproj_dataset(c, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)
@@ -124,7 +124,7 @@ async def cluster_812(
     default ``AEROSPIKE_HOST`` and skips the dependent test cleanly unless it
     is 8.1.2+.
     """
-    async with await make_cluster_definition(aerospike_host_812_required).connect() as c:
+    async with make_cluster_definition(aerospike_host_812_required).connect() as c:
         await _seed_qopproj_dataset(c, wait_for_set_visible)
         yield c
         await _drop_qopproj_index(c)

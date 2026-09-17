@@ -66,7 +66,7 @@ end
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         reg = await c.register_udf(BG_UDF_LUA, UDF_PATH, UDFLang.LUA)
         await reg.wait_till_complete()

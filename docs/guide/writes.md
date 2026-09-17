@@ -50,7 +50,7 @@ await (
 ```python
 await (
     session.update(users.id(1))
-    .bin("login_count").increment_by(1)
+    .bin("login_count").add(1)
     .execute()
 )
 ```
@@ -299,6 +299,12 @@ await (
 A batch that is *only* UDF applies (no other op types) uses the dedicated
 apply-many path instead — both produce one round-trip.
 
+As with [batch reads](reads.md), a batch write is a single server request. To
+write one payload to a window of keys as *independent* commands submitted
+together, `session.put_many(keys, bins)` fuses them into one client-side
+submission and reports an outcome per key, positionally. It is async-only — see
+[Async window API](#async-window-api).
+
 (execute-vs-stream)=
 ### `execute()` vs `stream()`
 
@@ -337,7 +343,7 @@ result-delivery semantics. **`execute()` is the default;** reach for
 ```python
 # Lazy streaming — process records as they arrive.
 # `async with` releases the stream on every exit path.
-async with await (
+async with (
     session.upsert(key1).bin("v").set_to(1)
     .upsert(key2).bin("v").set_to(2)
     .stream()
@@ -346,7 +352,7 @@ async with await (
         print(result.index, result.is_ok, result.key.value)
 
 # When positional ordering is needed, collect + sort
-async with await (...).stream() as stream:
+async with (...).stream() as stream:
     results = await stream.collect()
 results.sort(key=lambda r: r.index)
 ```

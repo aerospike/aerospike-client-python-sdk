@@ -130,7 +130,3 @@ class IndexBuilder(_IndexBuilderBase):
             )
         except Exception as e:
             raise _convert_pac_exception(e) from e
-
-
-# Deprecated alias, kept importable for one release cycle.
-SyncIndexBuilder = IndexBuilder

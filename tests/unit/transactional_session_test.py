@@ -196,7 +196,7 @@ async def test_ops_after_explicit_commit_run_txn_free(
     # instead of stamping the finalized txn on their policies.
     async with tx_session as tx:
         await tx.commit()
-        assert tx.get_current_transaction() is None
+        assert tx.current_transaction is None
         with pytest.raises(RuntimeError, match="not active"):
             _ = tx.txn
 
@@ -207,7 +207,7 @@ async def test_ops_after_explicit_abort_run_txn_free(
 ) -> None:
     async with tx_session as tx:
         await tx.abort()
-        assert tx.get_current_transaction() is None
+        assert tx.current_transaction is None
         with pytest.raises(RuntimeError, match="not active"):
             _ = tx.txn
 
@@ -222,16 +222,6 @@ async def test_explicit_abort_returns_status(
         assert tx.active is False
     assert len(sdk_client._async_client.abort_calls) == 1
     assert len(sdk_client._async_client.commit_calls) == 0
-
-
-async def test_rollback_is_alias_for_abort(
-    tx_session: TransactionalSession,
-    sdk_client: _FakeSdkClient,
-) -> None:
-    async with tx_session as tx:
-        status = await tx.rollback()
-        assert status == AbortStatus.OK
-    assert len(sdk_client._async_client.abort_calls) == 1
 
 
 async def test_commit_without_active_txn_raises(
@@ -265,19 +255,19 @@ def test_transactional_session_subclasses_session() -> None:
     assert issubclass(TransactionalSession, Session)
 
 
-def test_get_current_transaction_is_none_on_plain_session() -> None:
+def test_current_transaction_is_none_on_plain_session() -> None:
     session = Session.__new__(Session)
     session._txn = None
-    assert session.get_current_transaction() is None
+    assert session.current_transaction is None
 
 
-async def test_get_current_transaction_yields_active_txn(
+async def test_current_transaction_yields_active_txn(
     tx_session: TransactionalSession,
 ) -> None:
-    assert tx_session.get_current_transaction() is None
+    assert tx_session.current_transaction is None
     async with tx_session as tx:
-        assert tx.get_current_transaction() is tx.txn
-    assert tx_session.get_current_transaction() is None
+        assert tx.current_transaction is tx.txn
+    assert tx_session.current_transaction is None
 
 
 async def test_default_behavior_applied(

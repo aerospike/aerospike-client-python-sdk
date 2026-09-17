@@ -24,7 +24,7 @@ def main() -> None:
         print(f"Got record: {first.record.bins}")
 
         # GET with selected bins
-        stream = session.query(key).bins(["name"]).execute()
+        stream = session.query(key).bins("name").execute()
         first = stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
 

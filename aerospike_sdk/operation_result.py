@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any
 
 
+
 class OperationResult:
     """Typed-accessor wrapper around a single value from a write or operate command.
 
@@ -70,13 +71,27 @@ class OperationResult:
 
     # -- Numeric accessors ----------------------------------------------------
 
-    def get_long(self) -> int:
+    def get_int(self) -> int:
         """Return the value as an integer; ``0`` when the value is ``None``.
 
         Booleans are treated as integers per Python semantics (``True`` → 1).
+        The returned value is a full Python ``int`` — arbitrary precision, never
+        truncated to a fixed width.
+
+        Returns:
+            The wrapped integer, or ``0`` when the value is ``None``.
 
         Raises:
             TypeError: When the wrapped value is neither ``int`` nor ``None``.
+
+        Example::
+
+            result = record.typed_operation_result(0)
+            visits = result.get_int()
+
+        See Also:
+            :meth:`get_float`: Floating-point accessor.
+            :meth:`value`: Raw access without coercion.
         """
         v = self._value
         if v is None:
@@ -87,19 +102,27 @@ class OperationResult:
             return v
         raise TypeError(f"OperationResult value is {type(v).__name__}, not int")
 
-    def get_int(self) -> int:
-        """Alias for :meth:`get_long` — Python ``int`` is unbounded so the
-        ``int`` / ``long`` distinction is purely for naming parity."""
-        return self.get_long()
-
-    def get_double(self) -> float:
+    def get_float(self) -> float:
         """Return the value as a float; ``0.0`` when the value is ``None``.
 
         Integers are widened to float for convenience; strings and other
-        types raise.
+        types raise. Python floats are double precision, so no narrowing
+        occurs.
+
+        Returns:
+            The wrapped value as a float, or ``0.0`` when the value is ``None``.
 
         Raises:
             TypeError: When the wrapped value is neither numeric nor ``None``.
+
+        Example::
+
+            result = record.typed_operation_result(0)
+            balance = result.get_float()
+
+        See Also:
+            :meth:`get_int`: Integer accessor.
+            :meth:`value`: Raw access without coercion.
         """
         v = self._value
         if v is None:
@@ -109,10 +132,6 @@ class OperationResult:
         if isinstance(v, (int, float)):
             return float(v)
         raise TypeError(f"OperationResult value is {type(v).__name__}, not float")
-
-    def get_float(self) -> float:
-        """Alias for :meth:`get_double`."""
-        return self.get_double()
 
     def get_bool(self) -> bool:
         """Return the value as a boolean; ``False`` when the value is ``None``.

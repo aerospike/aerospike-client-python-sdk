@@ -328,7 +328,7 @@ wraps the same slot in an {class}`~aerospike_sdk.OperationResult`, whose
 propagating a miscast value:
 
 ```python
-count = row.typed_operation_result(2).get_long()   # 11
+count = row.typed_operation_result(2).get_int()   # 11
 ```
 
 ## See Also

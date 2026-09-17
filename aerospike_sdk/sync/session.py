@@ -45,7 +45,7 @@ from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
 from aerospike_sdk.metrics import usage
-from aerospike_sdk.sync.background import SyncBackgroundTaskSession
+from aerospike_sdk.sync.background import BackgroundTaskSession
 from aerospike_sdk.sync.info import InfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import (
@@ -62,8 +62,8 @@ if TYPE_CHECKING:
 class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Run session-scoped reads and writes without ``async``/``await``.
 
-    Construct via :meth:`SyncClient.create_session
-    <aerospike_sdk.sync.client.SyncClient.create_session>`, not directly.
+    Construct via :meth:`Cluster.create_session
+    <aerospike_sdk.sync.cluster.Cluster.create_session>`, not directly.
 
     See Also:
         :class:`~aerospike_sdk.aio.session.Session`: Async equivalent.
@@ -91,11 +91,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         self._txn: Optional[Txn] = None
 
     # -- State accessors ------------------------------------------------------
-
-    @property
-    def client(self) -> SyncClient:
-        """The owning :class:`SyncClient`."""
-        return self._client
 
     def _resolve_namespace_mode_blocking(self, namespace: str) -> Mode:
         """Resolve AP vs SC for ``namespace`` synchronously (delegates to client)."""
@@ -325,7 +320,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             sdk_client=self._client,
         )
 
-    def background_task(self) -> SyncBackgroundTaskSession:
+    def background_task(self) -> BackgroundTaskSession:
         """Start a background dataset task chain (synchronous)."""
         from aerospike_sdk.aio.background import BackgroundTaskSession as _BTS
 
@@ -333,7 +328,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         # The aio variant accepts our sync session via duck typing; if not,
         # we'd need a thin proxy. The aio constructor only reads state, no IO.
         inner = _BTS(self)  # type: ignore[arg-type]
-        return SyncBackgroundTaskSession(inner)
+        return BackgroundTaskSession(inner)
 
     def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
         """Begin a foreground UDF invocation (synchronous)."""
@@ -350,7 +345,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
     def index(
         self,
-        namespace: Optional[str] = None,
+        namespace: Optional[Union[str, DataSet]] = None,
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
@@ -358,6 +353,9 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
     ) -> IndexBuilder:
         """Synchronous secondary-index builder."""
         _ = behavior
+        if isinstance(namespace, DataSet):
+            dataset = namespace
+            namespace = None
         if dataset is not None:
             namespace = dataset.namespace
             set_name = dataset.set_name
@@ -488,7 +486,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         """Run a callable inside a retrying multi-record transaction (synchronous).
 
         Args:
-            operation: Callable accepting a :class:`SyncTransactionalSession`.
+            operation: Callable accepting a :class:`TransactionalSession`.
             max_attempts: Maximum total attempts (initial + retries). Must be
                 ``>= 1``. Omit to use the cluster's
                 :class:`~aerospike_sdk.policy.system_settings.TransactionSettings`.
@@ -516,7 +514,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             session.do_in_transaction(transfer)
 
         See Also:
-            :meth:`aerospike_sdk.sync.transactional_session.SyncTransactionalSession.do_in_transaction`:
+            :meth:`aerospike_sdk.sync.transactional_session.TransactionalSession.do_in_transaction`:
                 Nested calls join the transaction already in progress.
         """
         attempts, sleep_seconds = resolve_retry_plan(
@@ -614,9 +612,3 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         self._bind_txn(qb)
         qb._op_type = op_type
         return WriteSegmentBuilder(qb)
-
-
-# Path-differentiated bare name is the committed convention (same as the aio
-# class); the ``Sync``-prefixed alias stays importable for one deprecation
-# cycle (removed at GA).
-SyncSession = Session

@@ -124,7 +124,7 @@ async def main() -> None:
     print("=== SDK YAML configuration example ===\n")
     os.environ[_ENV_CONFIG_URL] = str(_CONFIG)
     try:
-        async with await _env.connect().connect() as cluster:
+        async with _env.connect().connect() as cluster:
             print("Successfully connected to cluster!\n")
 
             demonstrate_behavior_loading()

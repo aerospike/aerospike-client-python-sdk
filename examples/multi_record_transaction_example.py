@@ -78,7 +78,7 @@ async def run_transfers(session, accounts) -> None:
 
 async def balance(session, accounts, who: str) -> int:
     result = await (
-        await session.query(accounts.id(who)).bins(["balance"]).execute()
+        await session.query(accounts.id(who)).bins("balance").execute()
     ).first_or_raise()
     return result.record.bins["balance"]
 
@@ -91,7 +91,7 @@ async def report(session, accounts, label: str) -> None:
 async def main() -> None:
     # MRT requires a strong-consistency namespace; connect_sc() uses the
     # AEROSPIKE_HOST_SC seed (+ auth) when configured, else the default seed.
-    async with await _env.connect_sc().connect() as cluster:
+    async with _env.connect_sc().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
         accounts = DataSet.of(_env.sc_namespace(), "txn-demo")
 

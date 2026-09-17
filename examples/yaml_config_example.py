@@ -80,7 +80,7 @@ async def use_with_cluster() -> None:
     # Behaviors register when the client reads the config at connect.
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)
     try:
-        async with await _env.connect().connect() as cluster:
+        async with _env.connect().connect() as cluster:
             behavior = get_behavior_or_default("production")
             has_parent = behavior.parent is not None and behavior.parent is not Behavior.DEFAULT
             parent = behavior.parent.name if has_parent else "(none)"

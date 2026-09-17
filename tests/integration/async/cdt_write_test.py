@@ -80,7 +80,7 @@ def _assert_list_get_relative_batch(raw_bin):
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition, sc_aware_delete):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         for key_id in range(1, 130):
             await sc_aware_delete(session, DS.id(key_id))

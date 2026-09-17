@@ -41,7 +41,6 @@ from aerospike_async import (
 )
 from aerospike_async.exceptions import ResultCode
 
-from typing_extensions import deprecated
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.operations_shared import (
@@ -78,6 +77,7 @@ from aerospike_sdk.exceptions import (
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
+from aerospike_sdk.awaitable_context import AwaitableContext
 from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.metrics import usage
 
@@ -482,9 +482,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return await (await self.execute(on_error)).first_or_raise()
 
 
-    async def stream(
+    def stream(
         self, on_error: OnError | None = None,
-    ) -> RecordStream:
+    ) -> AwaitableContext[RecordStream]:
         """Execute lazily — results stream back as each node responds.
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
@@ -502,12 +502,18 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         leave writes in-flight. For writes-done-on-return semantics use
         :meth:`execute` (buffered).
 
+        The result is awaitable and doubles as an async context manager, so
+        ``async with ....stream() as stream:`` closes the stream on exit.
+
         Args:
             on_error: Same semantics as :meth:`execute`.
 
         Returns:
             A lazy :class:`RecordStream`.
         """
+        return AwaitableContext(self._stream(on_error))
+
+    async def _stream(self, on_error: OnError | None = None) -> RecordStream:
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
         await self._ensure_batch_namespace_modes()
@@ -534,16 +540,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         # The lazy path only honors the callback form of on_error; an
         # ErrorStrategy enum collapses to inline errors (the stream default).
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
-
-    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
-    async def execute_stream(
-        self, on_error: OnError | None = None,
-    ) -> RecordStream:
-        """Deprecated alias for :meth:`stream`.
-
-        :meta private:
-        """
-        return await self.stream(on_error)
 
     async def execute_background_task(self) -> ExecuteTask:
         """Run a background write against all records matching this dataset query.
@@ -1252,21 +1248,11 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
         """
         return await self._qb.execute(on_error)
 
-    async def stream(
+    def stream(
         self, on_error: OnError | None = None,
-    ) -> RecordStream:
+    ) -> AwaitableContext[RecordStream]:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
-        return await self._qb.stream(on_error)
-
-    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
-    async def execute_stream(
-        self, on_error: OnError | None = None,
-    ) -> RecordStream:
-        """Deprecated alias for :meth:`stream`.
-
-        :meta private:
-        """
-        return await self.stream(on_error)
+        return self._qb.stream(on_error)
 
 
 class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
@@ -1357,14 +1343,14 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
     # -- Execution -----------------------------------------------------------
 
 
-    async def stream(  # type: ignore[override]
+    def stream(  # type: ignore[override]
         self, on_error: OnError | None = None,
-    ) -> RecordStream:
+    ) -> AwaitableContext[RecordStream]:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         if self._qb is not None:
-            return await self._qb.stream(on_error)
+            return self._qb.stream(on_error)
         # Still a single-key segment: one record, so buffered == lazy.
-        return await self.execute(on_error)
+        return AwaitableContext(self.execute(on_error))
 
     async def execute(  # type: ignore[override]
         self, on_error: OnError | None = None,

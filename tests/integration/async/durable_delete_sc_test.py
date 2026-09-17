@@ -233,7 +233,7 @@ async def _validate_process_record_outcome(session, ds: DataSet, bin1: str, bin2
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster_sc(aerospike_host_sc, make_cluster_definition):
     """One shared cluster for the module (UDF registration once per module)."""
-    async with await make_cluster_definition(aerospike_host_sc, auth=True).connect() as cluster:
+    async with make_cluster_definition(aerospike_host_sc, auth=True).connect() as cluster:
         reg = await cluster.register_udf_from_file(
             RECORD_EXAMPLE_LUA, RECORD_SERVER_PATH, UDFLang.LUA,
         )
@@ -317,7 +317,7 @@ async def prepare_dd_udf_background(session_sc, ds_sc, enterprise_sc):
     """Create index and seed records for background UDF durable-delete coverage."""
     _skip_if_not_enterprise(enterprise_sc)
     session = session_sc
-    client = session.client
+    client = session._client
 
     try:
         await (
@@ -350,7 +350,7 @@ async def prepare_query_execute(session_sc, ds_sc, enterprise_sc):
     """Create index and seed records for query + background UDF execute coverage."""
     _skip_if_not_enterprise(enterprise_sc)
     session = session_sc
-    client = session.client
+    client = session._client
 
     try:
         await (
@@ -534,7 +534,7 @@ class TestDurableDeleteBatchOperateMultiKey:
         )
         assert batch_sc.durable_delete is False
 
-        session = session_sc.client.create_session(behavior=probe_behavior)
+        session = session_sc._client.create_session(behavior=probe_behavior)
 
         bin_name = "ddOpDdBin"
         first_key = 10320
@@ -613,7 +613,7 @@ class TestDurableDeleteForbiddenBatch:
         )
         assert batch_sc.durable_delete is True
 
-        session = session_sc.client.create_session(behavior=probe_behavior)
+        session = session_sc._client.create_session(behavior=probe_behavior)
 
         bin_name = "ddFbBin"
         first_key = 10460
@@ -655,7 +655,7 @@ class TestDurableDeleteBatchOverride:
         )
         assert batch_sc.durable_delete is False
 
-        session = session_sc.client.create_session(behavior=probe_behavior)
+        session = session_sc._client.create_session(behavior=probe_behavior)
 
         bin_name = "ddOvBin"
         first_key = 10450

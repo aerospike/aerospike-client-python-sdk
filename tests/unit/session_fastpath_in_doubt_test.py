@@ -21,9 +21,12 @@ window submission. All four convert a *raised* client exception at the
 boundary, so ``except AerospikeError`` (and its typed subclasses) works on
 every path; the original client exception is preserved as ``__cause__`` and
 the typed ``in_doubt`` arrives intact. Per-key exception *instances* inside
-window result lists are delivered unconverted — converting them would scan
-every successful window on the happy path. The sync session's ``get``/``put``
-carry the same contract.
+window result lists are currently delivered unconverted — converting them
+unconditionally would scan every successful window on the happy path. That is
+being closed once the window submission reports whether the window held any
+failure, so the scan runs only when there is something to convert; both
+behaviors are pinned below, the target one as ``xfail``. The sync session's
+``get``/``put`` carry the same contract.
 """
 
 from __future__ import annotations
@@ -137,7 +140,11 @@ class TestFastPathRaisesSdkTypes:
 
 
 class TestFastPathWindowSlots:
-    """Per-key window slots stay unconverted (documented; no happy-path scan)."""
+    """Per-key window slots stay unconverted — today's shipped behavior.
+
+    Retired together with the ``xfail`` markers below once slot conversion
+    lands; kept meanwhile so the current contract is not changed silently.
+    """
 
     async def test_put_many_per_key_slots_carry_in_doubt(self):
         err = _pac_timeout("timed out")
@@ -150,6 +157,61 @@ class TestFastPathWindowSlots:
         assert outcomes[0] is None
         assert isinstance(outcomes[1], PacTimeoutError)
         assert outcomes[1].in_doubt is True
+
+
+class TestWindowSlotConversionContract:
+    """Target contract: window slots carry SDK exception types like every other path.
+
+    The mocks return the ``(slots, failure_count)`` shape the window submission
+    grows so the scan can be skipped on failure-free windows. Strict ``xfail``
+    means these report as failures the moment conversion lands, which is the
+    signal to drop the markers and the class above.
+    """
+
+    _PENDING = "slot conversion is gated on the window submission reporting failure presence"
+
+    @pytest.mark.xfail(strict=True, reason=_PENDING)
+    async def test_get_many_slots_are_sdk_typed(self):
+        record = MagicMock(name="record")
+        err = PacServerError(
+            "not found", ResultCode.KEY_NOT_FOUND_ERROR, False, None, None, None,
+        )
+        session = _make_session(PacTimeoutError("unused"))
+        session._pac_client._submit_many_read = AsyncMock(
+            return_value=([record, err], 1))
+
+        slots = await session.get_many(
+            [Key("test", "unit", "k1"), Key("test", "unit", "k2")])
+        assert slots[0] is record, "successful slots must pass through untouched"
+        assert isinstance(slots[1], RecordNotFoundError)
+        assert isinstance(slots[1], AerospikeError)
+
+    @pytest.mark.xfail(strict=True, reason=_PENDING)
+    async def test_put_many_slots_are_sdk_typed(self):
+        err = _pac_timeout("timed out")
+        session = _make_session(PacTimeoutError("unused"))
+        session._pac_client._submit_many_write = AsyncMock(
+            return_value=([None, err], 1))
+
+        outcomes = await session.put_many(
+            [Key("test", "unit", "k1"), Key("test", "unit", "k2")], {"b": 1},
+        )
+        assert outcomes[0] is None
+        assert isinstance(outcomes[1], TimeoutError)
+        assert isinstance(outcomes[1], AerospikeError)
+        assert outcomes[1].in_doubt is True, "in_doubt must survive conversion"
+
+    @pytest.mark.xfail(strict=True, reason=_PENDING)
+    async def test_failure_free_window_is_not_scanned(self):
+        """A zero-failure window must return the submission's list unchanged —
+        this is the whole point of the flag, so pin it, not just the typing."""
+        slots = [MagicMock(name="r1"), MagicMock(name="r2")]
+        session = _make_session(PacTimeoutError("unused"))
+        session._pac_client._submit_many_read = AsyncMock(return_value=(slots, 0))
+
+        returned = await session.get_many(
+            [Key("test", "unit", "k1"), Key("test", "unit", "k2")])
+        assert returned is slots
 
 
 class TestSyncFastPathRaisesSdkTypes:

@@ -27,7 +27,7 @@ from tests.integration.namespace import general_namespace
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         test_ds = DataSet.of(general_namespace(), "test")
         for suffix in ("fluent_1", "fluent_2", "b64_1", "b64_2", "b64_3"):

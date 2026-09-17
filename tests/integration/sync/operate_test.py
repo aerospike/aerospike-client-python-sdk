@@ -129,7 +129,7 @@ def test_scalar_multi_op_results_are_op_aligned(session, ds):
     assert result.operation_result(1) is None
     assert result.operation_result(2) == 11
     typed = result.typed_operation_result(2)
-    assert typed is not None and typed.get_long() == 11
+    assert typed is not None and typed.get_int() == 11
 
     session.delete(key).execute()
 

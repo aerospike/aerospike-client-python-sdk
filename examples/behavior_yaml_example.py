@@ -96,7 +96,7 @@ def format_duration(value: Optional[timedelta]) -> str:
 async def main() -> None:
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)
     try:
-        async with await _env.connect().connect():
+        async with _env.connect().connect():
             show_loaded_behaviors()
             show_profile_detail()
             show_inheritance()

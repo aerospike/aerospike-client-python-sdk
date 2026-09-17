@@ -93,7 +93,7 @@ async def demonstrate_basic_writes_and_errors(session) -> None:
     await (
         session.upsert(SET.id("bob")).bin("A").set_to(2).bin("B").set_to(2.2).execute()
     )
-    stream = await session.query(SET.id("bob")).bins(["A"]).execute()
+    stream = await session.query(SET.id("bob")).bins("A").execute()
     rr = await stream.first()
     print(f"Projected read of id('bob'): {rr.record.bins if rr and rr.is_ok else None}")
 
@@ -358,21 +358,21 @@ async def demonstrate_point_and_header_reads(session) -> None:
     stream.close()
 
     print("Read with select bins, point read")
-    stream = await session.query(SET.ids(6)).bins(["name", "age"]).execute()
+    stream = await session.query(SET.ids(6)).bins("name", "age").execute()
     await _print_stream(stream)
     stream.close()
     print("Read with select bins, batch read")
-    stream = await session.query(SET.ids(6, 7, 8)).bins(["name", "age"]).execute()
+    stream = await session.query(SET.ids(6, 7, 8)).bins("name", "age").execute()
     await _print_stream(stream)
     stream.close()
     print("Read with select bins, set read")
-    stream = await session.query(SET).bins(["name", "age"]).execute()
+    stream = await session.query(SET).bins("name", "age").execute()
     await _print_stream(stream)
     stream.close()
 
     # Requesting specific bins and no bins at once is contradictory and raises.
     try:
-        session.query(SET.ids(6, 7, 8)).bins(["name", "age"]).with_no_bins()
+        session.query(SET.ids(6, 7, 8)).bins("name", "age").with_no_bins()
     except ValueError as ve:
         print(f"Exception caught as expected: {ve}")
 
@@ -554,7 +554,7 @@ async def demonstrate_read_write_expressions(session) -> None:
     print(f"Modified record: {await _first_bins(session, SET.id(223))}")
 
     # A bins projection over the whole set; the rows are not printed here.
-    stream = await session.query(SET).bins(["name", "age"]).execute()
+    stream = await session.query(SET).bins("name", "age").execute()
     async for _ in stream:
         pass
     stream.close()
@@ -564,7 +564,7 @@ async def demonstrate_query_hints(session) -> None:
     print("\n--- Query hints ---")
     # A hint can only name an index that exists, so this section owns one.
     try:
-        task = await session.index(dataset=SET).on_bin("age").named("age_idx").numeric().create()
+        task = await session.index(SET).on_bin("age").named("age_idx").numeric().create()
         await task.wait_till_complete()
     except IndexAlreadyExistsError:
         pass  # An earlier run already created it with the same definition.
@@ -593,7 +593,7 @@ async def demonstrate_query_hints(session) -> None:
             label, session.query(SET).where("$.age > 30").with_hint(hint)
         )
 
-    task = await session.index(dataset=SET).named("age_idx").drop()
+    task = await session.index(SET).named("age_idx").drop()
     await task.wait_till_complete()
 
 
@@ -994,7 +994,7 @@ async def demonstrate_heterogeneous_batch(session) -> None:
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         # A behavior deriving a longer query timeout from the default.
         # Set-wide queries below filter on bins with no secondary index. That is
         # rejected by default so a full scan is never entered by accident, so

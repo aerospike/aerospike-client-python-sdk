@@ -67,7 +67,7 @@ from aerospike_async import (
     Version,
 )
 
-from aerospike_sdk.aio import AsyncPool, Session, TransactionalSession, ClusterDefinition, Host
+from aerospike_sdk.aio import AsyncPool, Cluster, Session, TransactionalSession, ClusterDefinition, Host
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import (
@@ -94,7 +94,7 @@ from aerospike_sdk.exceptions import (
     InvalidNamespaceError,
     InvalidNodeError,
     KeyBusyError,
-    MaxErrorRate,
+    MaxErrorRateError,
     QueryError,
     QueryTerminatedError,
     QuotaError,
@@ -130,9 +130,6 @@ from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
-from aerospike_sdk.sync import SyncTransactionalSession
-from aerospike_sdk.sync.record_stream import SyncRecordStream
-from aerospike_sdk.sync.session import SyncSession
 
 try:
     from importlib.metadata import version as _meta_version
@@ -162,6 +159,7 @@ __all__ = [
     "Behavior",
     "CdtOperation",
     "CapacityError",
+    "Cluster",
     "ClusterDefinition",
     "CollectionIndexType",
     "CommandType",
@@ -206,7 +204,7 @@ __all__ = [
     "MapOrder",
     "MapReturnType",
     "MapWriteFlags",
-    "MaxErrorRate",
+    "MaxErrorRateError",
     "MetricsPolicy",
     "MetricsSnapshot",
     "ModifyFlags",
@@ -245,9 +243,6 @@ __all__ = [
     "StringRegexFlags",
     "StringWriteFlags",
     "SubCode",
-    "SyncRecordStream",
-    "SyncSession",
-    "SyncTransactionalSession",
     "TimeoutError",
     "TransactionError",
     "UdfError",

@@ -32,8 +32,8 @@ from aerospike_async import ClientPolicy
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
+from aerospike_sdk.sync.session import Session as SyncSession
 
 
 def _make_offline_sync_client() -> SyncClient:

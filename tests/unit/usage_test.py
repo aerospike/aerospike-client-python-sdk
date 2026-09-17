@@ -28,7 +28,7 @@ from aerospike_async import (
 
 from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 class _Recorder:

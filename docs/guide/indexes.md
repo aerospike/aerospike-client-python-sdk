@@ -12,7 +12,7 @@ users = DataSet.of("test", "users")
 # Numeric index. create() returns an IndexTask: the server builds the index
 # asynchronously, so wait on it before querying through the index.
 task = await (
-    session.index(dataset=users)
+    session.index(users)
     .on_bin("age")
     .named("users_age_idx")
     .numeric()
@@ -25,7 +25,7 @@ await task.wait_till_complete()
 
 # String index
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_bin("city")
     .named("users_city_idx")
     .string()
@@ -37,7 +37,7 @@ await (
 from aerospike_sdk import CollectionIndexType
 
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_bin("tags")
     .named("users_tags_idx")
     .string()
@@ -48,7 +48,7 @@ await (
 # GEO2DSPHERE index (for GeoJSON bins)
 places = DataSet.of("test", "places")
 await (
-    session.index(dataset=places)
+    session.index(places)
     .on_bin("loc")
     .named("places_loc_idx")
     .geo2dsphere()
@@ -57,7 +57,7 @@ await (
 
 # Blob index (for bytes bins; server 7.0+)
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_bin("avatar_hash")
     .named("users_avatar_hash_idx")
     .blob()
@@ -79,7 +79,7 @@ from aerospike_sdk import Exp, Filter
 expr = Exp.int_bin("age")
 
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_expression(expr)
     .named("users_age_exp_idx")
     .numeric()
@@ -110,7 +110,7 @@ from aerospike_sdk import Exp
 ael = "$.age + 1"
 
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_expression(ael)
     .named("users_age_ael_idx")
     .numeric()
@@ -144,7 +144,7 @@ ael = (
 )
 
 await (
-    session.index(dataset=users)
+    session.index(users)
     .on_expression(ael)
     .named("users_adult_age_idx")
     .numeric()
@@ -164,7 +164,7 @@ in the background. Querying through an index that is still building can miss
 records that are already written, so wait on the returned task first:
 
 ```python
-task = await session.index(dataset=users).on_bin("age").named("users_age_idx").numeric().create()
+task = await session.index(users).on_bin("age").named("users_age_idx").numeric().create()
 await task.wait_till_complete()          # raises TimeoutError past the budget
 await task.wait_till_complete(timeout=None)   # or wait indefinitely
 ```
@@ -177,7 +177,7 @@ then — pass `timeout=None` to wait as long as it takes.
 ## Dropping Indexes
 
 ```python
-task = await session.index(dataset=users).named("users_age_idx").drop()
+task = await session.index(users).named("users_age_idx").drop()
 await task.wait_till_complete()
 ```
 

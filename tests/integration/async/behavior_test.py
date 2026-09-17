@@ -55,7 +55,7 @@ async def test_custom_behavior_put_get(cluster, dataset, cleanup):
     key = dataset.id("bhv_custom_1")
     cleanup.append(key)
 
-    await session.upsert(key).set_bins({"name": "Alice", "score": 100}).execute()
+    await session.upsert(key).put({"name": "Alice", "score": 100}).execute()
 
     stream = await session.query(key).execute()
     async for result in stream:
@@ -69,7 +69,7 @@ async def test_predefined_read_fast(cluster, dataset, cleanup):
     key = dataset.id("bhv_readfast_1")
     cleanup.append(key)
 
-    await session.upsert(key).set_bins({"x": 42}).execute()
+    await session.upsert(key).put({"x": 42}).execute()
 
     stream = await session.query(key).execute()
     result = await stream.first_or_raise()
@@ -96,7 +96,7 @@ async def test_behavior_inheritance_chain(cluster, dataset, cleanup):
     key = dataset.id("bhv_inherit_1")
     cleanup.append(key)
 
-    await s.upsert(key).set_bins({"level": "grandchild"}).execute()
+    await s.upsert(key).put({"level": "grandchild"}).execute()
 
     stream = await s.query(key).execute()
     async for result in stream:
@@ -128,8 +128,8 @@ async def test_different_sessions_independent(cluster, dataset, cleanup):
     key_safe = dataset.id("bhv_safe_1")
     cleanup.extend([key_fast, key_safe])
 
-    await fast_session.upsert(key_fast).set_bins({"src": "fast"}).execute()
-    await safe_session.upsert(key_safe).set_bins({"src": "safe"}).execute()
+    await fast_session.upsert(key_fast).put({"src": "fast"}).execute()
+    await safe_session.upsert(key_safe).put({"src": "safe"}).execute()
 
     stream_fast = await fast_session.query(key_fast).execute()
     stream_safe = await safe_session.query(key_safe).execute()
@@ -155,7 +155,7 @@ async def test_batch_with_custom_behavior(cluster, dataset, cleanup):
     cleanup.extend(keys)
 
     for i, key in enumerate(keys):
-        await session.upsert(key).set_bins({"idx": i}).execute()
+        await session.upsert(key).put({"idx": i}).execute()
 
     stream = await session.query(*keys).execute()
     count = 0

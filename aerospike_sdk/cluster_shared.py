@@ -732,14 +732,18 @@ class ClusterBase(Generic[_S, _TS]):
         """
         return self._sdk_client.transaction(behavior)
 
+    @property
     def is_connected(self) -> bool:
-        """Return whether the cluster connection is currently active.
+        """Whether the cluster connection is currently active.
 
         Returns:
             ``True`` if the underlying client reports a live connection.
 
         Example::
 
-            assert cluster.is_connected()
+            assert cluster.is_connected
+
+        See Also:
+            :meth:`close`: Release the connection.
         """
         return self._sdk_client.is_connected
