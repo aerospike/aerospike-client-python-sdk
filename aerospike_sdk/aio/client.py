@@ -59,32 +59,18 @@ log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class Client(RoutingCapabilitiesMixin):
-    """Low-level async connection primitive.
+    """Internal async connection primitive — not part of the public API.
 
-    Most applications should connect via
-    :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`
-    (``ClusterDefinition(...).connect()`` returns a
-    :class:`~aerospike_sdk.aio.cluster.Cluster`) rather than instantiating
-    ``Client`` directly. ``Client`` remains the building block behind
-    :class:`~aerospike_sdk.aio.pool.AsyncPool`. All reads and writes go
-    through a :class:`~aerospike_sdk.aio.session.Session` obtained from
-    :meth:`create_session`.
-
-    Example::
-
-        async with Client("127.0.0.1:3000") as client:
-            session = client.create_session()
-            stream = await session.query(
-                namespace="test",
-                set_name="users",
-            ).execute()
-            async for row in stream:
-                if row.record is not None:
-                    print(row.record.bins)
+    Held by :class:`~aerospike_sdk.aio.cluster.Cluster` and
+    :class:`~aerospike_sdk.aio.pool.AsyncPool` as the object that actually owns
+    the connection. It is not exported, not documented, and nothing public hands
+    one out; construct a cluster with
+    :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition` and read or
+    write through a :class:`~aerospike_sdk.aio.session.Session` instead.
 
     See Also:
         :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`:
-            Recommended entry point.
+            The entry point to use.
     """
 
     def __init__(
@@ -105,7 +91,7 @@ class Client(RoutingCapabilitiesMixin):
             max_error_rate: Per-node circuit-breaker threshold. When a node's
                 error count crosses this value within ``error_rate_window``
                 tend iterations, subsequent commands routed to that node fail
-                fast with :class:`~aerospike_sdk.MaxErrorRate` until the
+                fast with :class:`~aerospike_sdk.MaxErrorRateError` until the
                 window resets. ``0`` disables the breaker. Defaults to the
                 underlying :class:`ClientPolicy` default (``100``).
             error_rate_window: Number of cluster tend iterations after which
@@ -412,7 +398,7 @@ class Client(RoutingCapabilitiesMixin):
               keys = users.ids("user1", "user2", "user3")
               recordset = await session.query(keys).execute()
               # or
-              recordset = await session.query(keys_list=keys).execute()
+              recordset = await session.query(keys=keys).execute()
 
         4. Explicit namespace/set (original style)::
 
@@ -534,6 +520,17 @@ class Client(RoutingCapabilitiesMixin):
     @overload
     def index(
         self,
+        dataset: DataSet,
+        /,
+        *,
+        behavior: Optional[Behavior] = None,
+    ) -> IndexBuilder:
+        """Create an index builder from a DataSet."""
+        ...
+
+    @overload
+    def index(
+        self,
         *,
         dataset: DataSet,
         behavior: Optional[Behavior] = None,
@@ -554,7 +551,7 @@ class Client(RoutingCapabilitiesMixin):
 
     def index(
         self,
-        namespace: Optional[str] = None,
+        namespace: Optional[Union[str, DataSet]] = None,
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
@@ -565,12 +562,12 @@ class Client(RoutingCapabilitiesMixin):
 
         Supports multiple calling styles:
 
-        1. Using a DataSet::
+        1. Using a DataSet, positionally or by keyword::
 
               users = DataSet.of("test", "users")
-              await client.index(dataset=users).on_bin("age").named("age_idx").numeric().create()
+              await client.index(users).on_bin("age").named("age_idx").numeric().create()
 
-        2. Explicit namespace/set (original style)::
+        2. Explicit namespace/set::
 
               await client.index(
                   namespace="test",
@@ -578,9 +575,10 @@ class Client(RoutingCapabilitiesMixin):
               ).on_bin("age").named("age_idx").numeric().create()
 
         Args:
-            namespace: The namespace name (if not using DataSet).
-            set_name: The set name (if not using DataSet).
-            dataset: Optional DataSet to use for namespace/set.
+            namespace: A dataset, or the namespace name when passing
+                ``set_name`` too.
+            set_name: The set name when ``namespace`` is a namespace string.
+            dataset: Keyword DataSet to use for namespace/set.
             behavior: Reserved for symmetry with :meth:`query`; not applied to
                 index operations yet.
 
@@ -588,6 +586,9 @@ class Client(RoutingCapabilitiesMixin):
             An IndexBuilder for chaining index operations.
         """
         _ = behavior
+        if isinstance(namespace, DataSet):
+            dataset = namespace
+            namespace = None
         # Handle DataSet
         if dataset is not None:
             namespace = dataset.namespace

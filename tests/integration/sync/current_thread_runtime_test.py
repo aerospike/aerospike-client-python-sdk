@@ -18,7 +18,7 @@
 This mode swaps the shared client for a thread-local proxy that builds a
 separate underlying client per calling OS thread, so it is a genuinely
 distinct code path that no other sync test touches — and it had no coverage
-at all. It is reachable only through the deprecated ``SyncClient`` and is
+at all. It is reachable only through the internal ``SyncClient`` and is
 deliberately *not* exposed on ``ClusterDefinition``, because the per-thread
 client implements only part of the operation surface.
 
@@ -34,8 +34,6 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from aerospike_sdk import Behavior, DataSet
-# Imported from the defining module rather than the package namespace, whose
-# deprecation shim would fire on import and add noise unrelated to this file.
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
 from tests.integration.namespace import general_namespace

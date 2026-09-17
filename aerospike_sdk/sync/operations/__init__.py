@@ -15,16 +15,12 @@
 
 """Sync operations for the Aerospike SDK API."""
 
-from aerospike_sdk.sync.operations.index import IndexBuilder, SyncIndexBuilder
-from aerospike_sdk.sync.operations.query import QueryBuilder, SyncQueryBuilder
+from aerospike_sdk.sync.operations.index import IndexBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder
 
-# The bare builder names are the committed convention (path-differentiated
-# from the aio classes of the same name); the Sync*-prefixed aliases stay
-# importable for one release cycle.
+# Names match their aio counterparts and are differentiated by import path.
 __all__ = [
     "IndexBuilder",
     "QueryBuilder",
-    "SyncIndexBuilder",
-    "SyncQueryBuilder",
 ]
 

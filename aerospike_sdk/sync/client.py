@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, overload
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union, overload
 
 from aerospike_async import (
     AdminPolicy,
@@ -60,28 +60,17 @@ log = logging.getLogger(SdkLoggers.LIFECYCLE)
 
 
 class SyncClient(RoutingCapabilitiesMixin):
-    """Low-level synchronous connection primitive (no ``async``/``await``).
+    """Internal synchronous connection primitive — not part of the public API.
 
-    Most applications should connect via
-    :class:`~aerospike_sdk.sync.cluster_definition.ClusterDefinition`
-    (``ClusterDefinition(...).connect()``) rather than instantiating
-    ``SyncClient`` directly. Reads and writes go through a
-    :class:`~aerospike_sdk.sync.session.Session` from :meth:`create_session`.
-
-    Example::
-
-            with SyncClient("localhost:3000") as client:
-                session = client.create_session()
-                for row in session.query(
-                    namespace="test",
-                    set_name="users"
-                ).execute():
-                    if row.record:
-                        print(row.record.bins)
+    Held by :class:`~aerospike_sdk.sync.cluster.Cluster` as the object that
+    actually owns the connection. It is not exported, not documented, and
+    nothing public hands one out; construct a cluster with
+    :class:`~aerospike_sdk.sync.cluster_definition.ClusterDefinition` and read
+    or write through a :class:`~aerospike_sdk.sync.session.Session` instead.
 
     See Also:
-        :class:`~aerospike_sdk.aio.client.Client`: Async equivalent.
-        :meth:`create_session`: Session-scoped :class:`~aerospike_sdk.policy.behavior.Behavior`.
+        :class:`~aerospike_sdk.sync.cluster_definition.ClusterDefinition`:
+            The entry point to use.
     """
 
     def __init__(
@@ -102,7 +91,7 @@ class SyncClient(RoutingCapabilitiesMixin):
                 explicit ``ClientPolicy`` to override any client-level
                 setting.
             max_error_rate: Per-node circuit-breaker threshold (see
-                :class:`aerospike_sdk.aio.client.Client`).
+                ``Client``).
             error_rate_window: Tend iterations until each node's error
                 counter resets.
             current_thread_runtime: **Experimental — opt-in, subject to
@@ -280,7 +269,7 @@ class SyncClient(RoutingCapabilitiesMixin):
     @property
     def _async_client(self) -> AsyncClient:
         """Alias of :attr:`underlying_client` for parity with
-        :class:`~aerospike_sdk.aio.client.Client`."""
+        ``Client``."""
         return self.underlying_client
 
     def _ensure_connected(self) -> SyncClient:
@@ -314,6 +303,10 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     @overload
     def index(
+        self, dataset: DataSet, /, *, behavior: Optional[Behavior] = None,
+    ) -> IndexBuilder: ...
+    @overload
+    def index(
         self, *, dataset: DataSet, behavior: Optional[Behavior] = None,
     ) -> IndexBuilder: ...
     @overload
@@ -323,7 +316,7 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     def index(
         self,
-        namespace: Optional[str] = None,
+        namespace: Optional[Union[str, DataSet]] = None,
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
@@ -333,6 +326,9 @@ class SyncClient(RoutingCapabilitiesMixin):
         from aerospike_sdk.sync.operations.index import IndexBuilder
 
         self._ensure_connected()
+        if isinstance(namespace, DataSet):
+            dataset = namespace
+            namespace = None
         if dataset is not None:
             namespace = dataset.namespace
             set_name = dataset.set_name

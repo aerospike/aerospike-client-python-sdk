@@ -130,7 +130,3 @@ UdfBuilder._udf_function_builder_cls = UdfFunctionBuilder
 # Chain transition hook: lets sync query/write chains open a UDF segment
 # (`QueryBuilder.execute_udf`) and get the sync builder back.
 QueryBuilder._udf_function_builder_cls = UdfFunctionBuilder
-
-# Deprecated aliases, kept importable for one release cycle.
-SyncUdfFunctionBuilder = UdfFunctionBuilder
-SyncUdfBuilder = UdfBuilder

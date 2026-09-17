@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from aerospike_sdk import Exp
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 def _query_builder(**kwargs):

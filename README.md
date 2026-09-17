@@ -167,7 +167,7 @@ from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 
 async def main():
-    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    async with ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
@@ -214,7 +214,7 @@ make examples                         # every example, in sequence
 ```
 
 Every example opens its connection through the async context-manager convention
-shown in [Quick start](#quick-start) — `async with await _env.connect().connect()
+shown in [Quick start](#quick-start) — `async with _env.connect().connect()
 as cluster:` (sync examples use `with _env.sync_connect().connect() as cluster:`) —
 so the cluster is always closed cleanly on exit.
 

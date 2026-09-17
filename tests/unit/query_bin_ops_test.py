@@ -37,7 +37,7 @@ from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
 )
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +572,21 @@ class TestSyncQueryBuilderDelegation:
         sb = self._sync_builder()
         sb.bins(["a", "b"])
         assert sb._bins == ["a", "b"]
+
+    def test_bins_accepts_varargs(self):
+        sb = self._sync_builder()
+        sb.bins("a", "b")
+        assert sb._bins == ["a", "b"]
+
+    def test_bins_accepts_a_tuple(self):
+        sb = self._sync_builder()
+        sb.bins(("a", "b"))
+        assert sb._bins == ["a", "b"]
+
+    def test_bins_rejects_a_sequence_mixed_with_names(self):
+        sb = self._sync_builder()
+        with pytest.raises(TypeError, match="not both"):
+            sb.bins(["a"], "b")
 
     def test_with_no_bins_mutates_state(self):
         sb = self._sync_builder()

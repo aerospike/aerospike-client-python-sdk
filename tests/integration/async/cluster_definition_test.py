@@ -40,7 +40,7 @@ async def cluster(aerospike_host):
 
 async def test_cluster_definition_basic_connection(cluster):
     """Test basic ClusterDefinition connection."""
-    assert cluster.is_connected()
+    assert cluster.is_connected
 
     # Create a session
     session = cluster.create_session(Behavior.DEFAULT)
@@ -62,7 +62,7 @@ async def test_cluster_definition_with_hosts(aerospike_host):
     cluster = await cluster_def.connect()
 
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
         session = cluster.create_session()
         assert session is not None
     finally:
@@ -86,7 +86,7 @@ async def test_cluster_definition_with_credentials(aerospike_host):
     cluster = await cluster_def.connect()
 
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
     finally:
         await cluster.close()
 
@@ -104,7 +104,7 @@ async def test_cluster_definition_services_alternate(aerospike_host):
     cluster = await cluster_def.connect()
 
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
     finally:
         await cluster.close()
 
@@ -128,7 +128,7 @@ async def test_cluster_definition_with_ip_map(aerospike_host):
     cluster = await cluster_def.connect()
 
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
     finally:
         await cluster.close()
 
@@ -149,7 +149,7 @@ async def test_cluster_definition_preferring_racks(aerospike_host, enterprise):
     cluster = await cluster_def.connect()
 
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
     finally:
         await cluster.close()
 
@@ -164,8 +164,8 @@ async def test_cluster_definition_context_manager(aerospike_host):
         port = 3000
 
     cluster_def = apply_general_auth(ClusterDefinition(hostname, port))
-    async with await cluster_def.connect() as cluster:
-        assert cluster.is_connected()
+    async with cluster_def.connect() as cluster:
+        assert cluster.is_connected
         session = cluster.create_session()
         assert session is not None
 
@@ -235,7 +235,7 @@ async def test_fail_if_not_connected_explicit_true(aerospike_host):
     cd = apply_general_auth(ClusterDefinition(hostname, port)).fail_if_not_connected(True)
     cluster = await cd.connect()
     try:
-        assert cluster.is_connected()
+        assert cluster.is_connected
     finally:
         await cluster.close()
 

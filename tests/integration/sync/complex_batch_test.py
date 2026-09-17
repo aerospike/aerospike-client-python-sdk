@@ -84,7 +84,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_2")
         _cleanup(session, k1, k2)
 
-        session.upsert(key=k1).set_bins({"name": "Alice", "age": 21}).execute()
+        session.upsert(key=k1).put({"name": "Alice", "age": 21}).execute()
 
         results = (
             session
@@ -109,7 +109,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_4")
         _cleanup(session, k1, k2)
 
-        session.upsert(k2).set_bins({"x": 10, "y": 20}).execute()
+        session.upsert(k2).put({"x": 10, "y": 20}).execute()
 
         results = (
             session
@@ -133,7 +133,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_6")
         _cleanup(session, k1, k2)
 
-        session.upsert(k1).set_bins({"score": 50}).execute()
+        session.upsert(k1).put({"score": 50}).execute()
 
         results = (
             session
@@ -161,7 +161,7 @@ class TestMixedOpTypes:
         k_replace = ds.id("cb_op_3")
         _cleanup(session, k_upsert, k_insert, k_replace)
 
-        session.upsert(k_replace).set_bins({"original": True}).execute()
+        session.upsert(k_replace).put({"original": True}).execute()
 
         results = (
             session
@@ -186,7 +186,7 @@ class TestMixedOpTypes:
         k = ds.id("cb_op_4")
         _cleanup(session, k)
 
-        session.upsert(k).set_bins({"x": 1}).execute()
+        session.upsert(k).put({"x": 1}).execute()
 
         results = (
             session
@@ -213,7 +213,7 @@ class TestWriteWithExpressions:
         k = ds.id("cb_exp_1")
         _cleanup(session, k)
 
-        session.upsert(k).set_bins({"value": 6}).execute()
+        session.upsert(k).put({"value": 6}).execute()
 
         (
             session
@@ -231,7 +231,7 @@ class TestWriteWithExpressions:
         k = ds.id("cb_exp_2")
         _cleanup(session, k)
 
-        session.upsert(k).set_bins({"base": 10}).execute()
+        session.upsert(k).put({"base": 10}).execute()
 
         (
             session
@@ -257,7 +257,7 @@ class TestDeleteInChain:
         k2 = ds.id("cb_del_2")
         _cleanup(session, k1, k2)
 
-        session.upsert(k2).set_bins({"temp": "remove_me"}).execute()
+        session.upsert(k2).put({"temp": "remove_me"}).execute()
 
         results = (
             session
@@ -279,8 +279,8 @@ class TestDeleteInChain:
         k3 = ds.id("cb_del_5")
         _cleanup(session, k1, k2, k3)
 
-        session.upsert(k1).set_bins({"name": "Alice"}).execute()
-        session.upsert(k3).set_bins({"tmp": True}).execute()
+        session.upsert(k1).put({"name": "Alice"}).execute()
+        session.upsert(k3).put({"tmp": True}).execute()
 
         results = (
             session
@@ -327,7 +327,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_1")
         _cleanup(session, k)
 
-        session.upsert(k).set_bins({"v": 1}).execute()
+        session.upsert(k).put({"v": 1}).execute()
         gen = session.query(k).execute().first_or_raise().record.generation
 
         results = (
@@ -352,7 +352,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_2")
         _cleanup(session, k)
 
-        session.upsert(key=k).set_bins({"v": 1}).execute()
+        session.upsert(key=k).put({"v": 1}).execute()
 
         results = (
             session
@@ -432,8 +432,8 @@ class TestBatchTouch:
         k2 = ds.id("cb_touch_2")
         _cleanup(session, k1, k2)
         try:
-            session.upsert(k1).set_bins({"a": 1}).execute()
-            session.upsert(k2).set_bins({"a": 2}).execute()
+            session.upsert(k1).put({"a": 1}).execute()
+            session.upsert(k2).put({"a": 2}).execute()
 
             results = (
                 session
@@ -455,7 +455,7 @@ class TestBatchTouch:
         k2 = ds.id("cb_touch_u2")
         _cleanup(session, k1, k2)
         try:
-            session.upsert(k1).set_bins({"a": 1}).execute()
+            session.upsert(k1).put({"a": 1}).execute()
 
             results = (
                 session
@@ -475,7 +475,7 @@ class TestBatchTouch:
         k_missing = ds.id("cb_touch_nf2")
         _cleanup(session, k_exists, k_missing)
         try:
-            session.upsert(k_exists).set_bins({"a": 1}).execute()
+            session.upsert(k_exists).put({"a": 1}).execute()
 
             results = (
                 session
@@ -501,8 +501,8 @@ class TestChainedExists:
         k2 = ds.id("cb_ex_2")
         _cleanup(session, k1, k2)
         try:
-            session.upsert(k1).set_bins({"a": 1}).execute()
-            session.upsert(k2).set_bins({"a": 2}).execute()
+            session.upsert(k1).put({"a": 1}).execute()
+            session.upsert(k2).put({"a": 2}).execute()
 
             results = (
                 session
@@ -524,7 +524,7 @@ class TestChainedExists:
         k_missing = ds.id("cb_ex_nf2")
         _cleanup(session, k_exists, k_missing)
         try:
-            session.upsert(k_exists).set_bins({"a": 10}).execute()
+            session.upsert(k_exists).put({"a": 10}).execute()
 
             results = (
                 session
@@ -547,8 +547,8 @@ class TestChainedExists:
         k3 = ds.id("cb_ex_mix3")
         _cleanup(session, k1, k2, k3)
         try:
-            session.upsert(k1).set_bins({"a": 1}).execute()
-            session.upsert(k2).set_bins({"a": 2}).execute()
+            session.upsert(k1).put({"a": 1}).execute()
+            session.upsert(k2).put({"a": 2}).execute()
 
             results = (
                 session

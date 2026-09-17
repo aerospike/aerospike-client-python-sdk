@@ -57,7 +57,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Synchronous cluster handle from ``sync.cluster_definition.ClusterDefinition.connect``.
 
     Mirrors :class:`~aerospike_sdk.aio.cluster.Cluster` but uses
-    :class:`~aerospike_sdk.sync.client.SyncClient` and
+    ``SyncClient`` and
     :class:`~aerospike_sdk.sync.session.Session`. The
     :meth:`create_session` / :meth:`transaction` / :meth:`is_connected`
     factories are inherited from

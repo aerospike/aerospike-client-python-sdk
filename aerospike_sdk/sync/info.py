@@ -240,9 +240,3 @@ class InfoCommands(InfoCommandsBase):
     def info_on_all_nodes(self, command: str) -> Dict[str, Dict[str, str]]:
         """Raw info command against every node."""
         return self._pac.info_on_all_nodes_blocking(command)
-
-
-# Path-differentiated bare name is the committed convention (same as the aio
-# class); the ``Sync``-prefixed alias stays importable for one deprecation
-# cycle (removed at GA).
-SyncInfoCommands = InfoCommands

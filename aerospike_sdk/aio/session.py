@@ -81,7 +81,7 @@ _COALESCE_WRITES = _COALESCE and os.environ.get("PSDK_COALESCE_WRITES", "1") != 
 class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
     """Perform reads and writes against Aerospike with a fixed :class:`~aerospike_sdk.policy.behavior.Behavior`.
 
-    A session binds a connected :class:`Client` to policy defaults (timeouts,
+    A session binds a connected ``Client`` to policy defaults (timeouts,
     retries, replica preferences) for every operation started from it. Create
     sessions with :meth:`Client.create_session`; do not construct
     ``Session`` directly.
@@ -105,7 +105,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         """Attach a client and behavior; prefer :meth:`Client.create_session`.
 
         Args:
-            client: Connected (or not yet connected) :class:`Client`.
+            client: Connected (or not yet connected) ``Client``.
             behavior: Policy bundle for operations from this session.
 
         Note:
@@ -522,15 +522,6 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         except (PacServerError, PacAerospikeError) as e:
             raise _convert_pac_exception(e) from e
 
-    @property
-    def client(self) -> Client:
-        """SDK client that owns the connection used by this session.
-
-        Returns:
-            The parent :class:`Client`.
-        """
-        return self._client
-
     # Delegate all Client operations to maintain same API
 
     def background_task(self) -> "BackgroundTaskSession":
@@ -783,6 +774,17 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
     @typing.overload
     def index(
         self,
+        dataset: DataSet,
+        /,
+        *,
+        behavior: Optional[Behavior] = None,
+    ) -> IndexBuilder:
+        """Create an index builder from a DataSet."""
+        ...
+
+    @typing.overload
+    def index(
+        self,
         *,
         dataset: DataSet,
         behavior: Optional[Behavior] = None,
@@ -803,7 +805,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
     def index(
         self,
-        namespace: Optional[str] = None,
+        namespace: Optional[Union[str, DataSet]] = None,
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
@@ -812,10 +814,14 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         """
         Create a secondary index builder for a namespace and set.
 
+        Takes a :class:`~aerospike_sdk.dataset.DataSet` positionally or by
+        keyword, matching :meth:`query` and the write verbs.
+
         Args:
-            namespace: Namespace name when not using ``dataset``.
-            set_name: Set name when not using ``dataset``.
-            dataset: Optional :class:`~aerospike_sdk.dataset.DataSet` that
+            namespace: A dataset, or the namespace name when passing
+                ``set_name`` too.
+            set_name: Set name when ``namespace`` is a namespace string.
+            dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet` that
                 supplies namespace and set.
             behavior: Reserved for symmetry with :meth:`query`; forwarded to
                 :meth:`Client.index` but not used by index operations yet.
@@ -825,17 +831,20 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
                 chaining index definition and creation.
 
         Raises:
-            ValueError: If ``dataset`` is not given and ``namespace`` or
+            ValueError: If no dataset is given and ``namespace`` or
                 ``set_name`` is missing.
 
         Example::
 
             users = DataSet.of("test", "users")
-            await session.index(dataset=users).on_bin("age").named("age_idx").numeric().create()
+            await session.index(users).on_bin("age").named("age_idx").numeric().create()
 
         See Also:
             :meth:`Client.index`
         """
+        if isinstance(namespace, DataSet):
+            dataset = namespace
+            namespace = None
         if dataset is not None:
             return self._client.index(dataset=dataset, behavior=behavior)
         elif namespace is not None and set_name is not None:

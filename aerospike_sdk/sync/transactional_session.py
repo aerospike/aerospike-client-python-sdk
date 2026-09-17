@@ -22,6 +22,7 @@ import typing
 import types
 from typing import Any, Optional, TYPE_CHECKING
 
+
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
 from aerospike_sdk.exceptions import _convert_pac_exception
@@ -42,8 +43,8 @@ class TransactionalSession(TransactionalSessionBase, Session):
     is threaded onto every policy the builders hand to the PAC.
 
     On clean exit the transaction commits; if an exception propagates out
-    the transaction aborts. Explicit :meth:`commit`, :meth:`abort`, and
-    :meth:`rollback` (alias for ``abort``) are available for manual control.
+    the transaction aborts. Explicit :meth:`commit` and :meth:`abort` are
+    available for manual control.
 
     Example::
 
@@ -64,7 +65,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
 
     def do_in_transaction(
         self,
-        operation: "typing.Callable[[SyncTransactionalSession], typing.Any]",
+        operation: "typing.Callable[[TransactionalSession], typing.Any]",
         *,
         max_attempts: Optional[int] = None,
         sleep_between_retries: Optional[float] = None,
@@ -102,7 +103,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             session.do_in_transaction(transfer)
 
         See Also:
-            :meth:`aerospike_sdk.sync.session.SyncSession.do_in_transaction`:
+            :meth:`aerospike_sdk.sync.session.Session.do_in_transaction`:
                 The outermost entry point, which does open a transaction.
         """
         if self._txn is None or self._finalized:
@@ -163,10 +164,6 @@ class TransactionalSession(TransactionalSessionBase, Session):
         self._txn = None
         return status
 
-    def rollback(self) -> AbortStatus:
-        """Alias for :meth:`abort`."""
-        return self.abort()
-
     def __enter__(self) -> TransactionalSession:
         if self._txn is not None:
             raise RuntimeError("TransactionalSession is already active.")
@@ -190,9 +187,3 @@ class TransactionalSession(TransactionalSessionBase, Session):
         finally:
             self._finalized = True
             self._txn = None
-
-
-# Path-differentiated bare name is the committed convention (same as the aio
-# class); the ``Sync``-prefixed alias stays importable for one deprecation
-# cycle (removed at GA).
-SyncTransactionalSession = TransactionalSession

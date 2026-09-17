@@ -36,7 +36,7 @@ async def demonstrate_dynamic_reloading() -> None:
     print("=== Behavior hierarchical example with dynamic reloading ===\n")
     print(f"Watching config file: {_CONFIG}")
 
-    async with await _env.connect().connect():
+    async with _env.connect().connect():
         print(f"\n{timestamp()} === Initial configuration ===")
         display_current_settings()
 

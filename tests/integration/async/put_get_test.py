@@ -30,7 +30,7 @@ async def shared_cluster(aerospike_host, make_cluster_definition):
     """Module-scoped connection: the auth handshake (~1s/node on the SC leg) is
     paid once per file. Per-test data freshness stays in the seeding fixtures,
     which re-seed on every test against this shared cluster."""
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         yield c
 
 
@@ -436,8 +436,8 @@ async def test_and_remove_other_bins(cluster):
     assert first.record_or_raise().bins == {"name": "Tim Updated", "age": 26}
 
 
-async def test_set_bins_execute(cluster):
-    """Test set_bins with execute method."""
+async def test_put_execute(cluster):
+    """Test put with execute method."""
     session = cluster.create_session()
     k = DataSet.of(general_namespace(), "test").id(1)
 

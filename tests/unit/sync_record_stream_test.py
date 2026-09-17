@@ -28,7 +28,7 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.record_result import RecordResult
-from aerospike_sdk.sync.record_stream import SyncRecordStream
+from aerospike_sdk.sync.record_stream import RecordStream as SyncRecordStream
 
 
 def _key(val: int = 1) -> Key:

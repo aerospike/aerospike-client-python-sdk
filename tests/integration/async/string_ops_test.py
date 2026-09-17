@@ -50,7 +50,7 @@ async def cluster(aerospike_host, supports_string_operations, make_cluster_defin
             "string operations require server >= 8.2.0; point AEROSPIKE_HOST "
             "at an 8.2.0+ build to run these"
         )
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         await asyncio.sleep(2)
         sess = c.create_session()
         for suffix in (

@@ -42,9 +42,9 @@ PEOPLE = (
 async def run_examples(session) -> None:
     # --- 1) Scalar indexes: numeric and string ---
     print("--- 1) Scalar indexes: numeric and string ---")
-    task = await session.index(dataset=SET).on_bin("age").named(AGE_INDEX).numeric().create()
+    task = await session.index(SET).on_bin("age").named(AGE_INDEX).numeric().create()
     await task.wait_till_complete()
-    task = await session.index(dataset=SET).on_bin("city").named(CITY_INDEX).string().create()
+    task = await session.index(SET).on_bin("city").named(CITY_INDEX).string().create()
     await task.wait_till_complete()
 
     over_30 = await count(session, "$.age > 30")
@@ -55,7 +55,7 @@ async def run_examples(session) -> None:
     # --- 2) Collection index: LIST indexes each element of a list bin ---
     print("--- 2) Collection index: LIST indexes each element of a list bin ---")
     task = await (
-        session.index(dataset=SET)
+        session.index(SET)
         .on_bin("tags").named(TAGS_INDEX).string()
         .collection(CollectionIndexType.LIST)
         .create()
@@ -67,7 +67,7 @@ async def run_examples(session) -> None:
     # --- 3) Collection index: MAP_VALUES indexes each value of a map bin ---
     print("--- 3) Collection index: MAP_VALUES indexes each value of a map bin ---")
     task = await (
-        session.index(dataset=SET)
+        session.index(SET)
         .on_bin("scores").named(SCORE_INDEX).numeric()
         .collection(CollectionIndexType.MAP_VALUES)
         .create()
@@ -78,7 +78,7 @@ async def run_examples(session) -> None:
     # --- 4) Index a nested element with a CTX path ---
     print("--- 4) Index a nested element with a CTX path ---")
     task = await (
-        session.index(dataset=SET)
+        session.index(SET)
         .on_bin("address").named(NESTED_INDEX).string()
         .context([CTX.map_key("zip")])
         .create()
@@ -93,7 +93,7 @@ async def run_examples(session) -> None:
     # Reusing the name for a different definition is the case that fails.
     try:
         task = await (
-            session.index(dataset=SET)
+            session.index(SET)
             .on_bin("city").named(AGE_INDEX).string()
             .create()
         )
@@ -104,7 +104,7 @@ async def run_examples(session) -> None:
 
     # --- 6) Drop an index ---
     print("--- 6) Drop an index ---")
-    task = await session.index(dataset=SET).named(SCORE_INDEX).drop()
+    task = await session.index(SET).named(SCORE_INDEX).drop()
     await task.wait_till_complete()
     print(f"dropped {SCORE_INDEX}")
 
@@ -139,14 +139,14 @@ async def drop_all(session) -> None:
     """Drop every index this example creates, ignoring ones that aren't there."""
     for name in INDEX_NAMES:
         try:
-            task = await session.index(dataset=SET).named(name).drop()
+            task = await session.index(SET).named(name).drop()
             await task.wait_till_complete()
         except AerospikeError:
             pass
 
 
 async def main() -> None:
-    async with await _env.connect().connect() as cluster:
+    async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 
         await session.truncate(SET)

@@ -35,7 +35,7 @@ _DS = DataSet.of(general_namespace(), "coalesced_get")
 
 @pytest.fixture(scope="module")
 async def session(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as cluster:
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
         yield cluster.create_session()
 
 

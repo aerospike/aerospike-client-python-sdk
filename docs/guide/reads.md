@@ -46,6 +46,13 @@ Draining a stream fully releases it automatically; the `async with` above also
 guarantees release if you leave the loop early. See
 [Closing a Stream](#closing-streams).
 
+A batch read is a single server request. When what you have instead is a window
+of keys you want read *independently* but submitted together, `session.get_many`
+sends them as separate single-record commands fused into one client-side
+submission and returns a result per key, positionally. It is async-only and
+reaches the highest single-loop read throughput — see
+[Async window API](#async-window-api).
+
 ## Buffered vs. Lazy Delivery
 
 Every query-path builder exposes two terminals with different result-delivery
@@ -78,7 +85,7 @@ when a large result set makes buffering expensive.
 
 ```python
 # Bounded-memory scan — process records as they arrive
-async with await session.query(users).stream() as stream:
+async with session.query(users).stream() as stream:
     async for result in stream:
         handle(result.record)
 ```
@@ -113,7 +120,7 @@ path — normal completion, early `break`, or exception:
 
 ```python
 # async — `async with`
-async with await session.query(*users.ids(1, 2, 3)).stream() as stream:
+async with session.query(*users.ids(1, 2, 3)).stream() as stream:
     async for result in stream:
         if done(result):
             break            # close() still runs on the way out
@@ -190,7 +197,7 @@ Sync builders and streams expose the same methods; call them without `await`.
 Return only specific bins to reduce network transfer:
 
 ```python
-stream = await session.query(users).bins(["name", "age"]).execute()
+stream = await session.query(users).bins("name", "age").execute()
 ```
 
 Or exclude all bins (metadata only):

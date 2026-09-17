@@ -381,17 +381,12 @@ class AsyncPool:
         # them without blocking the caller's event loop (sequential
         # `.result()` would freeze the caller's loop for up to
         # N × connect_timeout seconds).  On the definition path each Client
-        # is connected, validated, and wrapped into a Cluster on its own
-        # loop; the deprecated factory path connects the bare Client as
-        # before.
+        # is connected, validated, and wrapped into a Cluster on its own loop.
         afuts: List[asyncio.Future[object]] = []
         for i in range(self._n):
             loop = self._loops[i]
             assert loop is not None
-            if self._definition is not None:
-                coro: Coroutine[object, object, object] = Cluster._connect_and_wrap(clients[i])
-            else:
-                coro = clients[i].connect()
+            coro: Coroutine[object, object, object] = Cluster._connect_and_wrap(clients[i])
             cfut = asyncio.run_coroutine_threadsafe(coro, loop)
             afuts.append(asyncio.wrap_future(cfut))
 
@@ -425,13 +420,8 @@ class AsyncPool:
                 t.join(timeout=5.0)
             raise errors[0]
 
-        if self._definition is not None:
-            self._members = cast(List[Cluster], list(results))
-            self._clients = [m._client for m in self._members]
-        else:
-            # Deprecated factory path: callbacks receive the raw Clients.
-            self._members = cast(List[Cluster], clients)
-            self._clients = clients
+        self._members = cast(List[Cluster], list(results))
+        self._clients = [m._client for m in self._members]
 
         # The shared monitor is now a daemon-thread poller (no loop affinity).
         # It starts lazily on the first AEL ``where()`` query through any of

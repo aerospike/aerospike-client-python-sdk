@@ -33,7 +33,7 @@ On older clusters, use the programmatic [`Exp`](../api/exp.md) builder instead o
 AEL. Check capability at runtime:
 
 ```python
-async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+async with ClusterDefinition("localhost", 3000).connect() as cluster:
     if await cluster.supports_ael():
         stream = await session.query(users).where("$.age > 18").execute()
     else:

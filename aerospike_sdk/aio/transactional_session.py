@@ -21,6 +21,7 @@ import typing
 
 from typing import Any, Optional, TYPE_CHECKING
 
+
 from aerospike_async import AbortStatus, CommitStatus, Txn
 
 from aerospike_sdk.exceptions import _convert_pac_exception
@@ -40,14 +41,13 @@ class TransactionalSession(TransactionalSessionBase, Session):
     API (``query``, ``upsert``, ``insert``, ``batch``, ...) works unchanged
     inside ``async with``; builders capture the active
     :class:`~aerospike_async.Txn` via
-    :meth:`~aerospike_sdk.aio.session.Session.get_current_transaction` and
+    :attr:`~aerospike_sdk.aio.session.Session.current_transaction` and
     thread it onto every policy they hand to the PAC — the user never
     touches a policy.
 
     On clean exit the transaction is committed; if an exception propagates
-    out of the block the transaction is aborted. Explicit :meth:`commit`,
-    :meth:`abort`, and :meth:`rollback` (alias for ``abort``) are also
-    available for manual control.
+    out of the block the transaction is aborted. Explicit :meth:`commit` and
+    :meth:`abort` are also available for manual control.
 
     Example::
 
@@ -58,7 +58,6 @@ class TransactionalSession(TransactionalSessionBase, Session):
 
     See Also:
         :meth:`aerospike_sdk.aio.session.Session.transaction`
-        :meth:`aerospike_sdk.aio.client.Client.transaction`
     """
 
     def __init__(
@@ -69,7 +68,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
         """Create a transactional session; prefer :meth:`Session.transaction`.
 
         Args:
-            client: Connected :class:`~aerospike_sdk.aio.client.Client`.
+            client: Connected ``Client``.
             behavior: Policy bundle for operations started from this
                 session. Defaults to :attr:`Behavior.DEFAULT` when omitted.
 
@@ -187,7 +186,6 @@ class TransactionalSession(TransactionalSessionBase, Session):
 
         See Also:
             :meth:`commit`: Persist the transaction instead of aborting.
-            :meth:`rollback`: Alias for this method.
         """
         if self._txn is None or self._finalized:
             raise RuntimeError("No active transaction to abort.")
@@ -203,14 +201,6 @@ class TransactionalSession(TransactionalSessionBase, Session):
         self._finalized = True
         self._txn = None
         return status
-
-    async def rollback(self) -> AbortStatus:
-        """Alias for :meth:`abort`.
-
-        Returns:
-            :class:`~aerospike_async.AbortStatus` reported by the server.
-        """
-        return await self.abort()
 
     async def __aenter__(self) -> "TransactionalSession":
         if self._txn is not None:

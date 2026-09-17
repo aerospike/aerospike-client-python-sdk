@@ -280,20 +280,14 @@ class TestBuilderFlagWiring:
         wsb.fail_on_filtered_out()
         assert qb._fail_on_filtered_out is True
 
-    def test_respond_all_keys_sets_flag(self):
-        wsb, qb = self._make_wsb()
-        assert qb._respond_all_keys is False
-        wsb.respond_all_keys()
-        assert qb._respond_all_keys is True
-
-    def test_query_builder_include_missing_keys_aliases_respond_all_keys(self):
+    def test_query_builder_include_missing_keys_sets_flag(self):
         _, qb = self._make_wsb()
         assert qb._respond_all_keys is False
         result = qb.include_missing_keys()
         assert qb._respond_all_keys is True
         assert result is qb
 
-    def test_write_segment_include_missing_keys_aliases_respond_all_keys(self):
+    def test_write_segment_include_missing_keys_sets_flag(self):
         wsb, qb = self._make_wsb()
         assert qb._respond_all_keys is False
         result = wsb.include_missing_keys()
@@ -343,7 +337,7 @@ class TestBuilderFlagWiring:
         wsb, _ = self._make_wsb()
         result = wsb.fail_on_filtered_out()
         assert result is wsb
-        result = wsb.respond_all_keys()
+        result = wsb.include_missing_keys()
         assert result is wsb
         result = wsb.with_durable_delete()
         assert result is wsb

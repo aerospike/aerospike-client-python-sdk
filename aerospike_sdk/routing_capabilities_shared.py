@@ -17,8 +17,8 @@
 
 Field ``43`` (server-compiled AEL) and field ``44`` (query selection) gates are
 derived from the node list and cached on the client for builder hot paths. Mixed
-into :class:`~aerospike_sdk.aio.client.Client` and
-:class:`~aerospike_sdk.sync.client.SyncClient`.
+into ``Client`` and
+``SyncClient``.
 
 The cache is warmed at connect and re-derived once a tend interval has elapsed,
 so a node joining with an older version closes the gates and the client reports

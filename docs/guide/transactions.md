@@ -22,7 +22,7 @@ exception it aborts.
 ```python
 from aerospike_sdk import ClusterDefinition, Behavior, DataSet
 
-async with await ClusterDefinition("localhost", 3100).connect() as cluster:
+async with ClusterDefinition("localhost", 3100).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
     accounts = DataSet.of("test_sc", "accounts")
 

@@ -14,7 +14,7 @@ import asyncio
 from aerospike_sdk import ClusterDefinition, DataSet, Behavior
 
 async def main():
-    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    async with ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
         users = DataSet.of("test", "users")
 
@@ -22,7 +22,7 @@ async def main():
         # .where() query no index can satisfy is rejected rather than run
         # as a full-set scan.
         await (
-            session.index(dataset=users)
+            session.index(users)
             .on_bin("age")
             .named("users_age_idx")
             .numeric()
@@ -66,7 +66,7 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 
     # One-time setup: index the bin the filter below queries on. A .where()
     # query no index can satisfy is rejected rather than run as a full-set scan.
-    session.index(dataset=users).on_bin("age").named("users_age_idx").numeric().create()
+    session.index(users).on_bin("age").named("users_age_idx").numeric().create()
 
     # Write
     session.upsert(users.id(1)).put({"name": "Alice", "age": 30}).execute()

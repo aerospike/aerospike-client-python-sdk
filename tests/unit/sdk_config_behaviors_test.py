@@ -25,7 +25,7 @@ from aerospike_sdk.policy import behavior_registry
 from aerospike_sdk.policy import sdk_config_loader as loader
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Scope
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.session import Session as SyncSession
 
 _FULL = """
 behaviors:

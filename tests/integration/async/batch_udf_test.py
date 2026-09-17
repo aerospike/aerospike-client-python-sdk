@@ -35,7 +35,7 @@ MODULE = "record_example"
 
 @pytest.fixture(scope="module")
 async def cluster_with_udf(aerospike_host, make_cluster_definition):
-    async with await make_cluster_definition(aerospike_host).connect() as c:
+    async with make_cluster_definition(aerospike_host).connect() as c:
         udf_session = c.create_session()
         reg = await udf_session.register_udf_from_file(LUA_FILE, SERVER_PATH, UDFLang.LUA)
         assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)

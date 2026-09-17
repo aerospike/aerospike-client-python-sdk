@@ -78,7 +78,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_2")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(key=k1).set_bins({"name": "Alice", "age": 21}).execute()
+        await session.upsert(key=k1).put({"name": "Alice", "age": 21}).execute()
 
         rs = await (
             session
@@ -103,7 +103,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_4")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k2).set_bins({"x": 10, "y": 20}).execute()
+        await session.upsert(k2).put({"x": 10, "y": 20}).execute()
 
         rs = await (
             session
@@ -128,7 +128,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_6")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k1).set_bins({"score": 50}).execute()
+        await session.upsert(k1).put({"score": 50}).execute()
 
         rs = await (
             session
@@ -160,7 +160,7 @@ class TestMixedOpTypes:
         k_replace = ds.id("cb_op_3")
         await _cleanup(session, k_upsert, k_insert, k_replace)
 
-        await session.upsert(k_replace).set_bins({"original": True}).execute()
+        await session.upsert(k_replace).put({"original": True}).execute()
 
         rs = await (
             session
@@ -193,7 +193,7 @@ class TestMixedOpTypes:
         k = ds.id("cb_op_4")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"x": 1}).execute()
+        await session.upsert(k).put({"x": 1}).execute()
 
         rs = await (
             session
@@ -223,7 +223,7 @@ class TestWriteWithExpressions:
         k = ds.id("cb_exp_1")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"value": 6}).execute()
+        await session.upsert(k).put({"value": 6}).execute()
 
         rs = await (
             session
@@ -248,7 +248,7 @@ class TestWriteWithExpressions:
         k = ds.id("cb_exp_2")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"base": 10}).execute()
+        await session.upsert(k).put({"base": 10}).execute()
 
         rs = await (
             session
@@ -276,7 +276,7 @@ class TestDeleteInChain:
         k2 = ds.id("cb_del_2")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k2).set_bins({"temp": "remove_me"}).execute()
+        await session.upsert(k2).put({"temp": "remove_me"}).execute()
 
         rs = await (
             session
@@ -304,8 +304,8 @@ class TestDeleteInChain:
         k3 = ds.id("cb_del_5")
         await _cleanup(session, k1, k2, k3)
 
-        await session.upsert(k1).set_bins({"name": "Alice"}).execute()
-        await session.upsert(k3).set_bins({"tmp": True}).execute()
+        await session.upsert(k1).put({"name": "Alice"}).execute()
+        await session.upsert(k3).put({"tmp": True}).execute()
 
         rs = await (
             session
@@ -360,7 +360,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_1")
         await _cleanup(session, k)
 
-        await session.upsert(k).set_bins({"v": 1}).execute()
+        await session.upsert(k).put({"v": 1}).execute()
 
         rec_result = await (await session.query(k).execute()).first_or_raise()
         rec = rec_result.record
@@ -391,7 +391,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_2")
         await _cleanup(session, k)
 
-        await session.upsert(key=k).set_bins({"v": 1}).execute()
+        await session.upsert(key=k).put({"v": 1}).execute()
 
         rs = await (
             session
@@ -493,10 +493,10 @@ async def seed_data(session, ds):
 
     for i, k in enumerate(keys, start=1):
         val = i if i == 6 else f"{VALUE_PREFIX}{i}"
-        await session.upsert(k).set_bins({BIN_NAME: val}).execute()
+        await session.upsert(k).put({BIN_NAME: val}).execute()
 
     for i, k in enumerate(del_keys, start=10000):
-        await session.upsert(k).set_bins({BIN_NAME: i}).execute()
+        await session.upsert(k).put({BIN_NAME: i}).execute()
 
     yield {"keys": keys, "del_keys": del_keys}
 
@@ -800,8 +800,8 @@ class TestMultiKeyBatchWrite:
         k2 = ds.id("cb_mk_5")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(k1).set_bins({"x": 1}).execute()
-        await session.upsert(k2).set_bins({"x": 2}).execute()
+        await session.upsert(k1).put({"x": 1}).execute()
+        await session.upsert(k2).put({"x": 2}).execute()
 
         rs = await (
             session
@@ -911,8 +911,8 @@ class TestBatchTouch:
         k2 = ds.id("cb_touch_2")
         await _cleanup(session, k1, k2)
         try:
-            await session.upsert(k1).set_bins({"a": 1}).execute()
-            await session.upsert(k2).set_bins({"a": 2}).execute()
+            await session.upsert(k1).put({"a": 1}).execute()
+            await session.upsert(k2).put({"a": 2}).execute()
 
             rs = await (
                 session
@@ -935,7 +935,7 @@ class TestBatchTouch:
         k2 = ds.id("cb_touch_u2")
         await _cleanup(session, k1, k2)
         try:
-            await session.upsert(k1).set_bins({"a": 1}).execute()
+            await session.upsert(k1).put({"a": 1}).execute()
 
             rs = await (
                 session
@@ -958,7 +958,7 @@ class TestBatchTouch:
         k_missing = ds.id("cb_touch_nf2")
         await _cleanup(session, k_exists, k_missing)
         try:
-            await session.upsert(k_exists).set_bins({"a": 1}).execute()
+            await session.upsert(k_exists).put({"a": 1}).execute()
 
             rs = await (
                 session
@@ -985,8 +985,8 @@ class TestChainedExists:
         k2 = ds.id("cb_ex_2")
         await _cleanup(session, k1, k2)
         try:
-            await session.upsert(k1).set_bins({"a": 1}).execute()
-            await session.upsert(k2).set_bins({"a": 2}).execute()
+            await session.upsert(k1).put({"a": 1}).execute()
+            await session.upsert(k2).put({"a": 2}).execute()
 
             rs = await (
                 session
@@ -1009,7 +1009,7 @@ class TestChainedExists:
         k_missing = ds.id("cb_ex_nf2")
         await _cleanup(session, k_exists, k_missing)
         try:
-            await session.upsert(k_exists).set_bins({"a": 10}).execute()
+            await session.upsert(k_exists).put({"a": 10}).execute()
 
             rs = await (
                 session
@@ -1033,8 +1033,8 @@ class TestChainedExists:
         k3 = ds.id("cb_ex_mix3")
         await _cleanup(session, k1, k2, k3)
         try:
-            await session.upsert(k1).set_bins({"a": 1}).execute()
-            await session.upsert(k2).set_bins({"a": 2}).execute()
+            await session.upsert(k1).put({"a": 1}).execute()
+            await session.upsert(k2).put({"a": 2}).execute()
 
             rs = await (
                 session

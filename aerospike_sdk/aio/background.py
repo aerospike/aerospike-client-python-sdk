@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
+
 from aerospike_async import (
     Client,
     ExecuteTask,
@@ -202,7 +203,7 @@ class _BackgroundOperationBuilderBase:
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
         self._supports_server_compiled_ael = bool(
-            session.client.supports_server_compiled_ael,
+            session._client.supports_server_compiled_ael,
         )
 
     def default_with_durable_delete(self) -> BackgroundOperationBuilder:
@@ -347,12 +348,8 @@ class _BackgroundOperationBuilderBase:
         """Unsupported for background tasks (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def respond_all_keys(self) -> BackgroundOperationBuilder:
-        """Alias for :meth:`include_missing_keys`; unsupported for background (raises ``TypeError``)."""
-        return self.include_missing_keys()
-
     def _pac_client(self) -> Client:
-        fc = self._session.client
+        fc = self._session._client
         if fc._client is None:
             raise RuntimeError("Client is not connected")
         return fc._client
@@ -568,7 +565,7 @@ class _BackgroundUdfBuilderBase:
         self._durable_delete_command_default: Optional[bool] = None
         self._durable_delete_override: Optional[bool] = None
         self._supports_server_compiled_ael = bool(
-            session.client.supports_server_compiled_ael,
+            session._client.supports_server_compiled_ael,
         )
 
     def default_with_durable_delete(self) -> BackgroundUdfBuilder:
@@ -650,12 +647,8 @@ class _BackgroundUdfBuilderBase:
         """Unsupported (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def respond_all_keys(self) -> BackgroundUdfBuilder:
-        """Alias for :meth:`include_missing_keys`; unsupported for background (raises ``TypeError``)."""
-        return self.include_missing_keys()
-
     def _pac_client(self) -> Client:
-        fc = self._session.client
+        fc = self._session._client
         if fc._client is None:
             raise RuntimeError("Client is not connected")
         return fc._client

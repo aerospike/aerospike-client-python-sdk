@@ -57,15 +57,15 @@ if typing.TYPE_CHECKING:
 class Cluster(ClusterBase["Session", "TransactionalSession"]):
     """Live connection to a cluster, obtained from :meth:`ClusterDefinition.connect`.
 
-    Owns a connected :class:`~aerospike_sdk.aio.client.Client` and exposes
+    Owns a connected ``Client`` and exposes
     :meth:`create_session` / :meth:`transaction` (both inherited from
     :class:`~aerospike_sdk.cluster_shared.ClusterBase`). Prefer
-    ``async with await ClusterDefinition(...).connect() as cluster`` so
+    ``async with ClusterDefinition(...).connect() as cluster`` so
     :meth:`close` runs on exit.
 
     Example::
 
-            async with await ClusterDefinition("localhost", 3100).connect() as cluster:
+            async with ClusterDefinition("localhost", 3100).connect() as cluster:
                 session = cluster.create_session(Behavior.DEFAULT)
 
     See Also:

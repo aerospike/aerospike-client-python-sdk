@@ -26,7 +26,7 @@ import pytest
 from aerospike_sdk import Txn
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.loggers import SdkLoggers
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 _EXPECTED_WARNING = (
     "Query executed inside a transaction will not take part in it. The server "

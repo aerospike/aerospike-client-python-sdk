@@ -31,7 +31,7 @@ shared-base consolidation:
    or a rename applied to only one side, both surface here).
 2. **Signature skew** — for every shared public method, the parameter shape
    (names, kinds, and which are required) must match across the pair, so a
-   drifted keyword (``keys_list=`` vs ``keys=``) or arity is caught even when
+   keyword renamed on one side only, or a drifted arity, is caught even when
    both sides still expose the same method name. Annotations are ignored on
    purpose: return types and per-tree parameter types legitimately differ
    (``Client`` vs ``SyncClient`` on the ``client`` property, for instance).
@@ -75,11 +75,11 @@ from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.query_shared import _QueryBuilderBase
 from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.sync.background import (
-    SyncBackgroundOperationBuilder,
-    SyncBackgroundTaskSession,
-    SyncBackgroundUdfBuilder,
-    SyncBackgroundUdfFunctionBuilder,
-    SyncBackgroundWriteBinBuilder,
+    BackgroundOperationBuilder,
+    BackgroundTaskSession,
+    BackgroundUdfBuilder,
+    BackgroundUdfFunctionBuilder,
+    BackgroundWriteBinBuilder,
 )
 from aerospike_sdk.sync.cluster import Cluster as SyncCluster
 from aerospike_sdk.sync.cluster_definition import (
@@ -139,23 +139,23 @@ _PAIRS = [
     # the four durable-delete verbs existed only on the async tree until these
     # pairs were guarded.
     (
-        AsyncBackgroundTaskSession, SyncBackgroundTaskSession,
+        AsyncBackgroundTaskSession, BackgroundTaskSession,
         "BackgroundTaskSession", set(),
     ),
     (
-        AsyncBackgroundOperationBuilder, SyncBackgroundOperationBuilder,
+        AsyncBackgroundOperationBuilder, BackgroundOperationBuilder,
         "BackgroundOperationBuilder", set(),
     ),
     (
-        AsyncBackgroundUdfFunctionBuilder, SyncBackgroundUdfFunctionBuilder,
+        AsyncBackgroundUdfFunctionBuilder, BackgroundUdfFunctionBuilder,
         "BackgroundUdfFunctionBuilder", set(),
     ),
     (
-        AsyncBackgroundUdfBuilder, SyncBackgroundUdfBuilder,
+        AsyncBackgroundUdfBuilder, BackgroundUdfBuilder,
         "BackgroundUdfBuilder", set(),
     ),
     (
-        AsyncBackgroundWriteBinBuilder, SyncBackgroundWriteBinBuilder,
+        AsyncBackgroundWriteBinBuilder, BackgroundWriteBinBuilder,
         "BackgroundWriteBinBuilder", set(),
     ),
 ]

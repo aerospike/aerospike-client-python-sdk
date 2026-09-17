@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Union, overload
 
+
 from aerospike_async import ExecuteTask, FilterExpression
 
 from aerospike_sdk.aio.background import (
@@ -32,7 +33,7 @@ from aerospike_sdk.aio.background import (
 from aerospike_sdk.dataset import DataSet
 
 
-class SyncBackgroundWriteBinBuilder:
+class BackgroundWriteBinBuilder:
     """Per-bin scalar write inside a background operation (sync).
 
     See Also:
@@ -44,18 +45,18 @@ class SyncBackgroundWriteBinBuilder:
     def __init__(self, inner: AsyncBackgroundWriteBinBuilder) -> None:
         self._inner = inner
 
-    def set_to(self, value: Any) -> SyncBackgroundOperationBuilder:
+    def set_to(self, value: Any) -> BackgroundOperationBuilder:
         """Set the bin to *value* (sync wrapper)."""
         self._inner.set_to(value)
-        return SyncBackgroundOperationBuilder(self._inner._parent)
+        return BackgroundOperationBuilder(self._inner._parent)
 
-    def add(self, value: Any) -> SyncBackgroundOperationBuilder:
+    def add(self, value: Any) -> BackgroundOperationBuilder:
         """Numeric increment (sync wrapper)."""
         self._inner.add(value)
-        return SyncBackgroundOperationBuilder(self._inner._parent)
+        return BackgroundOperationBuilder(self._inner._parent)
 
 
-class SyncBackgroundOperationBuilder:
+class BackgroundOperationBuilder:
     """Configure a background update/delete/touch job (sync).
 
     See Also:
@@ -67,60 +68,60 @@ class SyncBackgroundOperationBuilder:
     def __init__(self, inner: AsyncBackgroundOperationBuilder) -> None:
         self._inner = inner
 
-    def default_with_durable_delete(self) -> SyncBackgroundOperationBuilder:
+    def default_with_durable_delete(self) -> BackgroundOperationBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
         self._inner.default_with_durable_delete()
         return self
 
-    def default_without_durable_delete(self) -> SyncBackgroundOperationBuilder:
+    def default_without_durable_delete(self) -> BackgroundOperationBuilder:
         """Prefer non-durable deletes when resolving policy defaults."""
         self._inner.default_without_durable_delete()
         return self
 
-    def with_durable_delete(self) -> SyncBackgroundOperationBuilder:
+    def with_durable_delete(self) -> BackgroundOperationBuilder:
         """Force durable delete on this background job."""
         self._inner.with_durable_delete()
         return self
 
-    def without_durable_delete(self) -> SyncBackgroundOperationBuilder:
+    def without_durable_delete(self) -> BackgroundOperationBuilder:
         """Force non-durable deletes (may be rejected on SC)."""
         self._inner.without_durable_delete()
         return self
 
     @overload
-    def where(self, expression: str, *params: Any) -> SyncBackgroundOperationBuilder: ...
+    def where(self, expression: str, *params: Any) -> BackgroundOperationBuilder: ...
 
     @overload
-    def where(self, expression: FilterExpression) -> SyncBackgroundOperationBuilder: ...
+    def where(self, expression: FilterExpression) -> BackgroundOperationBuilder: ...
 
     def where(
         self,
         expression: Union[str, FilterExpression],
         *params: Any,
-    ) -> SyncBackgroundOperationBuilder:
+    ) -> BackgroundOperationBuilder:
         """Restrict the scan with an AEL or filter predicate."""
         self._inner.where(expression, *params)
         return self
 
-    def index_filters(self, *filters: Any) -> SyncBackgroundOperationBuilder:
+    def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
         """Restrict the job using secondary-index ``Filter`` objects (sync)."""
         self._inner.index_filters(*filters)
         return self
 
-    def bin(self, name: str) -> SyncBackgroundWriteBinBuilder:
-        return SyncBackgroundWriteBinBuilder(self._inner.bin(name))
+    def bin(self, name: str) -> BackgroundWriteBinBuilder:
+        return BackgroundWriteBinBuilder(self._inner.bin(name))
 
-    def expire_record_after_seconds(self, seconds: int) -> SyncBackgroundOperationBuilder:
+    def expire_record_after_seconds(self, seconds: int) -> BackgroundOperationBuilder:
         """Set record TTL for the background job."""
         self._inner.expire_record_after_seconds(seconds)
         return self
 
-    def expire_record_after(self, duration: timedelta) -> SyncBackgroundOperationBuilder:
+    def expire_record_after(self, duration: timedelta) -> BackgroundOperationBuilder:
         """Set record TTL using a :class:`datetime.timedelta` (-1/-2/0 select sentinels)."""
         self._inner.expire_record_after(duration)
         return self
 
-    def expire_record_at(self, when: datetime) -> SyncBackgroundOperationBuilder:
+    def expire_record_at(self, when: datetime) -> BackgroundOperationBuilder:
         """Set record TTL so records expire at an absolute point in time.
 
         A naive ``when`` is interpreted in local time; pass a timezone-aware
@@ -130,7 +131,7 @@ class SyncBackgroundOperationBuilder:
         self._inner.expire_record_at(when)
         return self
 
-    def records_per_second(self, rps: int) -> SyncBackgroundOperationBuilder:
+    def records_per_second(self, rps: int) -> BackgroundOperationBuilder:
         """Throttle the background job to *rps* records per second.
 
         Args:
@@ -147,18 +148,14 @@ class SyncBackgroundOperationBuilder:
         self._inner.records_per_second(rps)
         return self
 
-    def fail_on_filtered_out(self) -> SyncBackgroundOperationBuilder:
+    def fail_on_filtered_out(self) -> BackgroundOperationBuilder:
         self._inner.fail_on_filtered_out()
         return self
 
-    def include_missing_keys(self) -> SyncBackgroundOperationBuilder:
+    def include_missing_keys(self) -> BackgroundOperationBuilder:
         """Unsupported for background tasks (raises ``TypeError``)."""
         self._inner.include_missing_keys()
         return self
-
-    def respond_all_keys(self) -> SyncBackgroundOperationBuilder:
-        """Alias for :meth:`include_missing_keys`; unsupported for background."""
-        return self.include_missing_keys()
 
     def execute(self) -> ExecuteTask:
         """Submit the job and return a task handle (blocks until accepted).
@@ -169,7 +166,7 @@ class SyncBackgroundOperationBuilder:
         return self._inner._execute_blocking()
 
 
-class SyncBackgroundUdfFunctionBuilder:
+class BackgroundUdfFunctionBuilder:
     """Select UDF package/function for a background dataset run (sync).
 
     See Also:
@@ -185,13 +182,13 @@ class SyncBackgroundUdfFunctionBuilder:
         self,
         package_name: str,
         function_name: str,
-    ) -> SyncBackgroundUdfBuilder:
+    ) -> BackgroundUdfBuilder:
         """Select the UDF package and Lua function."""
         async_udf_builder = self._inner.function(package_name, function_name)
-        return SyncBackgroundUdfBuilder(async_udf_builder)
+        return BackgroundUdfBuilder(async_udf_builder)
 
 
-class SyncBackgroundUdfBuilder:
+class BackgroundUdfBuilder:
     """Arguments, filters, and throttle for background UDF execution (sync).
 
     See Also:
@@ -203,62 +200,58 @@ class SyncBackgroundUdfBuilder:
     def __init__(self, inner: AsyncBackgroundUdfBuilder) -> None:
         self._inner = inner
 
-    def default_with_durable_delete(self) -> SyncBackgroundUdfBuilder:
+    def default_with_durable_delete(self) -> BackgroundUdfBuilder:
         """Prefer durable deletes when resolving policy defaults (SC namespaces)."""
         self._inner.default_with_durable_delete()
         return self
 
-    def default_without_durable_delete(self) -> SyncBackgroundUdfBuilder:
+    def default_without_durable_delete(self) -> BackgroundUdfBuilder:
         """Prefer non-durable deletes when resolving policy defaults."""
         self._inner.default_without_durable_delete()
         return self
 
-    def with_durable_delete(self) -> SyncBackgroundUdfBuilder:
+    def with_durable_delete(self) -> BackgroundUdfBuilder:
         """Force durable delete on this background job."""
         self._inner.with_durable_delete()
         return self
 
-    def without_durable_delete(self) -> SyncBackgroundUdfBuilder:
+    def without_durable_delete(self) -> BackgroundUdfBuilder:
         """Force non-durable deletes (may be rejected on SC)."""
         self._inner.without_durable_delete()
         return self
 
-    def passing(self, *args: Any) -> SyncBackgroundUdfBuilder:
+    def passing(self, *args: Any) -> BackgroundUdfBuilder:
         self._inner.passing(*args)
         return self
 
     @overload
-    def where(self, expression: str, *params: Any) -> SyncBackgroundUdfBuilder: ...
+    def where(self, expression: str, *params: Any) -> BackgroundUdfBuilder: ...
 
     @overload
-    def where(self, expression: FilterExpression) -> SyncBackgroundUdfBuilder: ...
+    def where(self, expression: FilterExpression) -> BackgroundUdfBuilder: ...
 
     def where(
         self,
         expression: Union[str, FilterExpression],
         *params: Any,
-    ) -> SyncBackgroundUdfBuilder:
+    ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""
         self._inner.where(expression, *params)
         return self
 
-    def records_per_second(self, rps: int) -> SyncBackgroundUdfBuilder:
+    def records_per_second(self, rps: int) -> BackgroundUdfBuilder:
         self._inner.records_per_second(rps)
         return self
 
-    def fail_on_filtered_out(self) -> SyncBackgroundUdfBuilder:
+    def fail_on_filtered_out(self) -> BackgroundUdfBuilder:
         """Unsupported for background tasks."""
         self._inner.fail_on_filtered_out()
         return self
 
-    def include_missing_keys(self) -> SyncBackgroundUdfBuilder:
+    def include_missing_keys(self) -> BackgroundUdfBuilder:
         """Unsupported for background tasks (raises ``TypeError``)."""
         self._inner.include_missing_keys()
         return self
-
-    def respond_all_keys(self) -> SyncBackgroundUdfBuilder:
-        """Alias for :meth:`include_missing_keys`; unsupported for background."""
-        return self.include_missing_keys()
 
     def execute(self) -> ExecuteTask:
         """Submit the background UDF job (blocks until accepted).
@@ -269,7 +262,7 @@ class SyncBackgroundUdfBuilder:
         return self._inner._execute_blocking()
 
 
-class SyncBackgroundTaskSession:
+class BackgroundTaskSession:
     """Sync entry for server-side dataset background operations.
 
     Obtained from :meth:`~aerospike_sdk.sync.session.Session.background_task`.
@@ -289,21 +282,21 @@ class SyncBackgroundTaskSession:
     def __init__(self, inner: AsyncBackgroundTaskSession) -> None:
         self._inner = inner
 
-    def update(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
+    def update(self, dataset: DataSet) -> BackgroundOperationBuilder:
         async_op_builder = self._inner.update(dataset)
-        return SyncBackgroundOperationBuilder(async_op_builder)
+        return BackgroundOperationBuilder(async_op_builder)
 
-    def delete(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
+    def delete(self, dataset: DataSet) -> BackgroundOperationBuilder:
         """Start a background delete over *dataset*."""
         async_op_builder = self._inner.delete(dataset)
-        return SyncBackgroundOperationBuilder(async_op_builder)
+        return BackgroundOperationBuilder(async_op_builder)
 
-    def touch(self, dataset: DataSet) -> SyncBackgroundOperationBuilder:
+    def touch(self, dataset: DataSet) -> BackgroundOperationBuilder:
         """Start a background touch (TTL refresh) over *dataset*."""
         async_op_builder = self._inner.touch(dataset)
-        return SyncBackgroundOperationBuilder(async_op_builder)
+        return BackgroundOperationBuilder(async_op_builder)
 
-    def execute_udf(self, dataset: DataSet) -> SyncBackgroundUdfFunctionBuilder:
+    def execute_udf(self, dataset: DataSet) -> BackgroundUdfFunctionBuilder:
         """Start a background UDF over *dataset*."""
         async_udf_function_builder = self._inner.execute_udf(dataset)
-        return SyncBackgroundUdfFunctionBuilder(async_udf_function_builder)
+        return BackgroundUdfFunctionBuilder(async_udf_function_builder)

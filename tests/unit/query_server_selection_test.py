@@ -25,7 +25,7 @@ from aerospike_async import FilterExpression, QueryPolicy, QueryWhereFlags
 from aerospike_sdk import Filter, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
-from aerospike_sdk.sync.operations.query import SyncQueryBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 class _ClientSupportsSelection:

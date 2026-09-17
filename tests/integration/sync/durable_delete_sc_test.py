@@ -214,7 +214,7 @@ class TestDurableDeleteBatchOperateMultiKey:
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, Mode.SC,
         ).durable_delete is False
 
-        session = session_sc.client.create_session(behavior=probe_behavior)
+        session = session_sc._client.create_session(behavior=probe_behavior)
 
         bin_name = "ddOpDdBin"
         first_key = 10320

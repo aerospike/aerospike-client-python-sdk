@@ -36,7 +36,7 @@ pytestmark = pytest.mark.asyncio
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def cluster_mm(aerospike_host_sc, make_cluster_definition):
     """One shared connection to the SC seed (the dual-namespace cluster)."""
-    async with await make_cluster_definition(aerospike_host_sc, auth=True).connect() as cluster:
+    async with make_cluster_definition(aerospike_host_sc, auth=True).connect() as cluster:
         yield cluster
 
 

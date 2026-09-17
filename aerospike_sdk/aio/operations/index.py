@@ -59,7 +59,7 @@ class IndexBuilder(_IndexBuilderBase):
             )
 
     See Also:
-        :meth:`~aerospike_sdk.aio.client.Client.index`
+        :meth:`~aerospike_sdk.aio.session.Session.index`
     """
 
     def __init__(

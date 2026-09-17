@@ -72,6 +72,13 @@ KEYS="${KEYS:-100000}"
 DURATION="${DURATION:-15}"
 WARMUP="${WARMUP:-3}"
 
+# Connection cap. Do NOT inherit aerospike-core's default: it changed 256 -> 100
+# on 2026-07-14, which silently moves the pool-bound ceiling and makes cells
+# non-comparable across that date. Sizing rule is ~tasks/nodes connections per
+# node, so a high-concurrency cell inheriting 100 is pool-bound long before the
+# cluster is. Pinning keeps cells cluster-bound and the axis explicit.
+MAX_CONNS_PER_NODE="${MAX_CONNS_PER_NODE:-512}"
+
 mkdir -p "$OUT"
 rm -f "$OUT"/*.txt
 
@@ -248,7 +255,7 @@ if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
       tag="rust_${mode}_t${tasks}"
       echo "[run] $tag"
       MODE=$mode TASKS=$tasks DURATION="$DURATION" WARMUP="$WARMUP" \
-        KEYS="$KEYS" READ_PCT=50 \
+        KEYS="$KEYS" READ_PCT=50 MAX_CONNS_PER_NODE="$MAX_CONNS_PER_NODE" \
         AEROSPIKE_HOST="$HOST" NAMESPACE="$NS" SET="$SET" \
         AEROSPIKE_USE_SERVICES_ALTERNATE=false \
         benchmarks/rust-core/target/release/rust-core \
@@ -281,7 +288,7 @@ if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
     tag="rust_async_t${z}"
     echo "[run] $tag"
     MODE=async TASKS=$z DURATION="$DURATION" WARMUP="$WARMUP" \
-      KEYS="$KEYS" READ_PCT=50 \
+      KEYS="$KEYS" READ_PCT=50 MAX_CONNS_PER_NODE="$MAX_CONNS_PER_NODE" \
       AEROSPIKE_HOST="$HOST" NAMESPACE="$NS" SET="$SET" \
       AEROSPIKE_USE_SERVICES_ALTERNATE=false \
       benchmarks/rust-core/target/release/rust-core \

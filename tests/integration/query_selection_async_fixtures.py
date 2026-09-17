@@ -36,7 +36,7 @@ async def query_selection_cluster(
     pre-8.2.0 clusters do not run truncate/index setup (blob sindex, etc.).
     """
     cluster_def = make_cluster_definition(aerospike_host)
-    async with await cluster_def.connect() as cluster:
+    async with cluster_def.connect() as cluster:
         client = cluster._sdk_client
         skip_if_lacks_query_selection(client)
         session = cluster.create_session()

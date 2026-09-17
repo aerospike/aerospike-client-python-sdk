@@ -122,18 +122,9 @@ class TestWriteSegmentBuilder:
         qb._op_type = "upsert"
         wsb = WriteSegmentBuilder(qb)
 
-        wsb.put({"name": "Alice", "age": 25})
-        assert len(qb._operations) == 2
-
-    def test_set_bins_alias(self):
-        qb = _make_builder()
-        qb._single_key = _make_key()
-        qb._op_type = "upsert"
-        wsb = WriteSegmentBuilder(qb)
-
-        result = wsb.set_bins({"x": 1})
+        result = wsb.put({"name": "Alice", "age": 25})
         assert result is wsb
-        assert len(qb._operations) == 1
+        assert len(qb._operations) == 2
 
     def test_transition_to_query(self):
         qb = _make_builder()

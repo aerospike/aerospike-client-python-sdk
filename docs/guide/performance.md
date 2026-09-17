@@ -65,7 +65,7 @@ import asyncio
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet
 
 async def main():
-    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    async with ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
         k = DataSet.of("test", "users").id("alice")
         await session.put(k, {"name": "Alice", "age": 28})
@@ -97,7 +97,7 @@ import asyncio
 from aerospike_sdk import ClusterDefinition, DataSet
 
 async def main():
-    async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+    async with ClusterDefinition("localhost", 3000).connect() as cluster:
         session = cluster.create_session()
         users = DataSet.of("test", "users")
         keys = [users.id(i) for i in range(64)]
@@ -126,7 +126,7 @@ So the window API is a *client-overhead* win, not a *network-efficiency* win. On
 
 Rule of thumb: **window API** when you're async, on a fast network, and want per-op independence (each key its own op, policy, and failure) at low latency; **server batch** when you're on a constrained/high-RTT link, moving very large key sets, want server-batch semantics, or you're on sync.
 
-**Throughput.** A single async loop is *submission-bound*: a raw single-op fast path caps around **~139K TPS**. Two things lift it. First, the transparent coalescer (on by default) fuses same-tick ops, so the plain fast path *does* scale with in-flight — to ~172K at 128 tasks, ~184K at 512. Second, and further, the window API amortizes submission across an explicit window: at 50/50 read/write on a 3-node cluster it reaches **~376K TPS at a 16-key window** — the sweet spot — **~2.7×** the single-op path at equal (512) in-flight. A window of 8 gives ~332K at the lowest tail (p99 ~1.4ms); 32+ trade throughput for tail latency (p99 ~12ms). A single loop running the window API (~376K) already out-throughputs the `AsyncPool` *fast-path* at its ~317K peak; running the window API *across* the pool's loops goes higher still and is the highest-throughput async mode. Throughput and tail latency both track total in-flight (`loops × tasks × window`), so pick a point on the frontier: **~426K @ p99 2.6ms** balanced (4 loops × z16 × k8), **~343K @ p99 0.9ms** for sub-millisecond tails, up to a ~442K peak whose ~6ms tail buys only a few percent more. Four loops beats eight (eight over-saturates); at a fixed in-flight budget, larger windows with fewer tasks win. It is **async-only by design**: the sync path has no event loop and already pays minimal per-op overhead, so there is no `get_many`/`put_many` on `SyncSession`.
+**Throughput.** A single async loop is *submission-bound*: a raw single-op fast path caps around **~139K TPS**. Two things lift it. First, the transparent coalescer (on by default) fuses same-tick ops, so the plain fast path *does* scale with in-flight — to ~172K at 128 tasks, ~184K at 512. Second, and further, the window API amortizes submission across an explicit window: at 50/50 read/write on a 3-node cluster it reaches **~376K TPS at a 16-key window** — the sweet spot — **~2.7×** the single-op path at equal (512) in-flight. A window of 8 gives ~332K at the lowest tail (p99 ~1.4ms); 32+ trade throughput for tail latency (p99 ~12ms). A single loop running the window API (~376K) already out-throughputs the `AsyncPool` *fast-path* at its ~317K peak; running the window API *across* the pool's loops goes higher still and is the highest-throughput async mode. Throughput and tail latency both track total in-flight (`loops × tasks × window`), so pick a point on the frontier: **~426K @ p99 2.6ms** balanced (4 loops × z16 × k8), **~343K @ p99 0.9ms** for sub-millisecond tails, up to a ~442K peak whose ~6ms tail buys only a few percent more. Four loops beats eight (eight over-saturates); at a fixed in-flight budget, larger windows with fewer tasks win. It is **async-only by design**: the sync path has no event loop and already pays minimal per-op overhead, so there is no `get_many`/`put_many` on the sync `Session`.
 
 **When to reach for it:** you have a set of keys in hand and want maximum async throughput. If keys instead arrive one at a time on the event loop, plain `session.get()` / `session.put()` already fuse them transparently (see *Async operation coalescing* above) — the window API is for when you can hand over the whole set at once.
 
@@ -138,7 +138,7 @@ The full-featured chainable API that mirrors the Aerospike SDK shape across lang
 ```python
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet, ErrorStrategy
 
-async with await ClusterDefinition("localhost", 3000).connect() as cluster:
+async with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
 
@@ -282,7 +282,7 @@ Operational costs on top of that:
 - **N× connection pools.** Each thread maintains its own, so total per-node connections scale with thread count. Set `conn_pools_per_node = 1` to keep the total in the same range as a shared client's.
 - **Thread-lifetime coupling.** A thread's client lives until the thread exits, so this suits a long-lived pool and penalizes short-lived threads.
 
-Because the gaps above make it unsafe as a general-purpose setting, the mode is reachable only through the deprecated `SyncClient` and is intentionally not exposed on the `ClusterDefinition` builder. Treat the numbers above as a benchmark data point rather than a tuning recommendation; the default sync path (one shared multi-threaded runtime and one shared connection pool) is the supported production setup.
+Because the gaps above make it unsafe as a general-purpose setting, the mode is reachable only by constructing the internal sync client directly and is intentionally not exposed on the `ClusterDefinition` builder. Treat the numbers above as a benchmark data point rather than a tuning recommendation; the default sync path (one shared multi-threaded runtime and one shared connection pool) is the supported production setup.
 :::
 
 ### With batching (`--batch-size > 1`, free-threaded)

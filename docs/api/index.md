@@ -22,7 +22,6 @@ The primary API. All operations are `async`/`await`.
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
 | [`InfoCommands`](info.md) | Aerospike info protocol commands |
 | [`TransactionalSession`](transactional-session.md) | Multi-record transactions |
-| [`Client`](client.md) | Low-level connection primitive (deprecated — use `ClusterDefinition`) |
 
 ## Sync API
 
@@ -36,12 +35,11 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`QueryBuilder`](sync/query.md) | Sync query builder |
 | [`WriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
 | [`IndexBuilder`](sync/index-builder.md) | Sync secondary index builder |
-| [`SyncBackgroundTaskSession`](sync/background.md) | Sync server-side background jobs |
+| [`BackgroundTaskSession`](sync/background.md) | Sync server-side background jobs |
 | [`UdfFunctionBuilder`](sync/udf.md) | Sync foreground UDF execution |
 | [`InfoCommands`](sync/info.md) | Sync info protocol commands |
 | [`TransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
 | [`RecordStream`](sync/record-stream.md) | Sync iterator over query results |
-| [`SyncClient`](sync/client.md) | Low-level connection primitive (deprecated — use `ClusterDefinition`) |
 | [`TlsBuilder`](sync/tls-builder.md) | Sync TLS configuration builder |
 
 ## Core
@@ -80,7 +78,6 @@ supports it — see the [AEL guide](../guide/expression-ael.md).
 :hidden:
 :maxdepth: 1
 
-client
 async-pool
 cluster
 session
@@ -94,7 +91,6 @@ background
 udf
 info
 transactional-session
-sync/client
 sync/cluster
 sync/session
 sync/query

@@ -29,6 +29,7 @@ myst_enable_extensions = [
     "colon_fence",
     "deflist",
     "fieldlist",
+    "substitution",
 ]
 source_suffix = {
     ".rst": "restructuredtext",
@@ -72,6 +73,17 @@ html_theme_options = {
     "source_repository": "https://github.com/aerospike/aerospike-client-python-sdk",
     "source_branch": _source_branch,
     "source_directory": "docs/",
+}
+# Hand-written links into the repo resolve against the same ref the theme uses,
+# so a published tag or `main` build does not send readers to the dev branch.
+# Substituting the whole link (rather than just the ref inside the URL) keeps
+# MyST parsing it as a link instead of emitting literal bracket text.
+_repo_blob = f"https://github.com/aerospike/aerospike-client-python-sdk/blob/{_source_branch}"
+myst_substitutions = {
+    "source_branch": _source_branch,
+    "sdk_config_example_link": (
+        f"[`examples/sdk-config-example.yaml`]({_repo_blob}/examples/sdk-config-example.yaml)"
+    ),
 }
 html_title = "Aerospike Python SDK"
 

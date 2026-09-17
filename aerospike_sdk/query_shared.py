@@ -47,8 +47,6 @@ from typing import (
 
 from typing import Self
 
-from typing_extensions import deprecated
-
 from aerospike_async import (
     BasePolicy,
     BatchDeleteOp,
@@ -388,7 +386,7 @@ class _QueryBuilderBase:
     Subclasses:
         - :class:`QueryBuilder` (this file): async ``execute()`` returning
           an awaitable :class:`~aerospike_sdk.record_stream.RecordStream`.
-        - :class:`~aerospike_sdk.sync.operations.query.SyncQueryBuilder`:
+        - :class:`~aerospike_sdk.sync.operations.query.QueryBuilder`:
           sync ``execute()`` dispatching through the inherited blocking
           methods and returning
           :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
@@ -750,7 +748,7 @@ class _QueryBuilderBase:
                 await tx.upsert(k2).with_txn(None).bin("v").set_to(2).execute()
 
         See Also:
-            :meth:`aerospike_sdk.aio.session.Session.get_current_transaction`
+            :attr:`aerospike_sdk.aio.session.Session.current_transaction`
         """
         self._txn = txn
         self._txn_opted_out = txn is None
@@ -761,26 +759,31 @@ class _QueryBuilderBase:
         self._base_write_policy = None
         return self
 
-    def bins(self, bin_names: List[str]) -> Self:
+    def bins(self, *bin_names: Union[str, Sequence[str]]) -> Self:
         """Restrict the read to a non-empty set of bin names.
+
+        Accepts the names as varargs or as a single sequence, matching
+        :meth:`with_op_projection` and the other varargs builders.
 
         Mutually exclusive with :meth:`with_no_bins`.
 
         Args:
-            bin_names: Non-empty list of bin names to return.
+            *bin_names: Bin names to return, either as separate arguments or
+                as one sequence of names.
 
         Returns:
             This builder for method chaining.
 
         Raises:
-            ValueError: If ``bin_names`` is empty or :meth:`with_no_bins` was
+            TypeError: If a sequence is mixed with further positional names.
+            ValueError: If no bin names are given or :meth:`with_no_bins` was
                 already called.
 
         Example::
 
             Restrict a query or key read to specific bins::
 
-                stream = await session.query(users.id(1)).bins(["name", "email"]).execute()
+                stream = await session.query(users.id(1)).bins("name", "email").execute()
 
         See Also:
             :meth:`with_no_bins`: Metadata-only reads without bin payloads.
@@ -788,9 +791,15 @@ class _QueryBuilderBase:
         """
         if self._with_no_bins:
             raise ValueError("Cannot specify both 'with_no_bins' and provide a list of bin names")
-        if not bin_names:
+        if bin_names and not isinstance(bin_names[0], str):
+            if len(bin_names) > 1:
+                raise TypeError("bins() takes either a single sequence of names or separate names, not both")
+            names = list(bin_names[0])
+        else:
+            names = list(bin_names)  # type: ignore[arg-type]
+        if not names:
             raise ValueError("bin_names must not be empty; use with_no_bins() for metadata-only reads")
-        self._bins = bin_names
+        self._bins = names
         self._with_no_bins = False
         return self
 
@@ -1266,24 +1275,9 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
-            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._respond_all_keys = True
         return self
-
-    def respond_all_keys(self) -> Self:
-        """Alias for :meth:`include_missing_keys` (the underlying client's ``respondAllKeys`` name).
-
-        Retained for callers familiar with the low-level client's policy name;
-        :meth:`include_missing_keys` is the preferred name and identical in behavior.
-
-        Returns:
-            This builder for chaining.
-
-        See Also:
-            :meth:`include_missing_keys`: Preferred name for this behavior.
-        """
-        return self.include_missing_keys()
 
     @overload
     def default_where(self, expression: str, *params: Any) -> QueryBuilder: ...
@@ -2653,10 +2647,6 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     def add(self, value: Any) -> WriteSegmentBuilder:
         """Add a numeric *value* to the bin (``Operation.add``)."""
         return self._segment.add(self._bin, value)
-
-    def increment_by(self, value: Any) -> WriteSegmentBuilder:
-        """Alias of :meth:`add`."""
-        return self.add(value)
 
     def append(self, value: str) -> WriteSegmentBuilder:
         """String append (``Operation.append``)."""
@@ -5119,16 +5109,6 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     ) -> RecordStream:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
         return await self._segment.stream(on_error)
-
-    @deprecated("Renamed to stream(); execute_stream() will be removed at GA.")
-    async def execute_stream(
-        self, on_error: OnError | None = None,
-    ) -> RecordStream:
-        """Deprecated alias for :meth:`stream`.
-
-        :meta private:
-        """
-        return await self.stream(on_error)
 
 
 # Bind the bin-builder factory hook now that WriteBinBuilder is defined.

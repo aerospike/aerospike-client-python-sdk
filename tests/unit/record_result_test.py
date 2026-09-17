@@ -408,7 +408,7 @@ class TestPositionalOperationResults:
     def test_typed_wraps_slot_value(self):
         wrapped = self._rr([1, None, 11]).typed_operation_result(2)
         assert isinstance(wrapped, OperationResult)
-        assert wrapped.get_long() == 11
+        assert wrapped.get_int() == 11
 
     def test_typed_write_only_slot_wraps_none(self):
         # In-range slot with no value: a wrapper around None, so the typed
@@ -416,7 +416,7 @@ class TestPositionalOperationResults:
         wrapped = self._rr([1, None, 11]).typed_operation_result(1)
         assert isinstance(wrapped, OperationResult)
         assert wrapped.value is None
-        assert wrapped.get_long() == 0
+        assert wrapped.get_int() == 0
 
     def test_typed_out_of_range_returns_none(self):
         assert self._rr([1]).typed_operation_result(5) is None

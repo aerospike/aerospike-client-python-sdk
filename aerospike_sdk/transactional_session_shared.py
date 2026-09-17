@@ -28,10 +28,9 @@ class TransactionalSessionBase:
     Mixed in *before* each tree's ``Session`` leaf, so a transactional session
     is still a full session (writes, queries, batches, ...) while the
     transaction-lifecycle *view* — :attr:`txn` and :attr:`active` — is defined
-    exactly once. The lifecycle *terminals* (``commit`` / ``abort`` /
-    ``rollback`` and the context-manager protocol) stay per-leaf because they
-    differ by runtime (async ``await`` vs blocking) and by the PAC entry they
-    call.
+    exactly once. The lifecycle *terminals* (``commit`` / ``abort`` and the
+    context-manager protocol) stay per-leaf because they differ by runtime
+    (async ``await`` vs blocking) and by the PAC entry they call.
     """
 
     # Set by the leaf ``Session.__init__`` (``_txn``, initially ``None``) and by

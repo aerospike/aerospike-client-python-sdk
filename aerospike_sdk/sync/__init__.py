@@ -17,20 +17,18 @@
 
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
-from aerospike_sdk.sync.info import InfoCommands, SyncInfoCommands
-from aerospike_sdk.sync.operations.index import IndexBuilder, SyncIndexBuilder
-from aerospike_sdk.sync.operations.query import QueryBuilder, SyncQueryBuilder
-from aerospike_sdk.sync.session import Session, SyncSession
+from aerospike_sdk.sync.info import InfoCommands
+from aerospike_sdk.sync.operations.index import IndexBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder
+from aerospike_sdk.sync.record_stream import RecordStream
+from aerospike_sdk.sync.session import Session
 from aerospike_sdk.sync.tls_builder import TlsBuilder
-from aerospike_sdk.sync.transactional_session import (
-    SyncTransactionalSession,
-    TransactionalSession,
-)
+from aerospike_sdk.sync.transactional_session import TransactionalSession
 
-# The bare names are the committed convention (path-differentiated from the
-# aio classes of the same name — e.g. ``aerospike_sdk.sync.Session`` vs
-# ``aerospike_sdk.aio.Session``); the Sync*-prefixed aliases stay importable
-# for one deprecation cycle (removed at GA).
+# Names match their aio counterparts and are differentiated by import path —
+# ``aerospike_sdk.sync.Session`` vs ``aerospike_sdk.aio.Session``. Import the
+# module (``from aerospike_sdk import sync``) or alias at the import site when
+# a single module needs both surfaces.
 __all__ = [
     "Cluster",
     "ClusterDefinition",
@@ -38,12 +36,8 @@ __all__ = [
     "IndexBuilder",
     "InfoCommands",
     "QueryBuilder",
+    "RecordStream",
     "Session",
-    "SyncInfoCommands",
-    "SyncIndexBuilder",
-    "SyncQueryBuilder",
-    "SyncSession",
-    "SyncTransactionalSession",
     "TlsBuilder",
     "TransactionalSession",
 ]

@@ -193,7 +193,7 @@ async def admin_cluster(aerospike_host_sec, admin_pac):
         user=os.environ.get("AEROSPIKE_AUTH_USER", "admin"),
         password=os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin"),
     )
-    async with await cluster_def.connect() as c:
+    async with cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 
@@ -244,7 +244,7 @@ def _psdk_definition(seed: str, *, user: str, password: str) -> ClusterDefinitio
 async def reader_cluster(aerospike_host_sec, masking_setup):
     """PSDK Cluster authenticated as ``psdk_strops_reader`` ([read-write, read-masked])."""
     cluster_def = _psdk_definition(aerospike_host_sec, user=_USER_READER, password=_USER_PASSWORD)
-    async with await cluster_def.connect() as c:
+    async with cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 
@@ -253,7 +253,7 @@ async def reader_cluster(aerospike_host_sec, masking_setup):
 async def basic_cluster(aerospike_host_sec, masking_setup):
     """PSDK Cluster authenticated as ``psdk_strops_user`` ([read-write] only)."""
     cluster_def = _psdk_definition(aerospike_host_sec, user=_USER_BASIC, password=_USER_PASSWORD)
-    async with await cluster_def.connect() as c:
+    async with cluster_def.connect() as c:
         await asyncio.sleep(2)
         yield c
 

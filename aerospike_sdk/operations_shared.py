@@ -42,6 +42,7 @@ from typing import (
 
 from typing import Self
 
+
 from aerospike_async import (
     Client,
     ExpOperation,
@@ -575,10 +576,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
         self._qb._respond_all_keys = True
         return self
 
-    def respond_all_keys(self) -> Self:
-        """Alias for :meth:`include_missing_keys` (underlying client's name); identical behavior."""
-        return self.include_missing_keys()
-
     def fail_on_filtered_out(self) -> Self:
         """Mark filtered-out records with ``FILTERED_OUT`` result code."""
         self._qb._fail_on_filtered_out = True
@@ -634,10 +631,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
             self._qb._operations.append(Operation.put(bin_name, value))
         return self
 
-    def set_bins(self, bins: dict) -> Self:
-        """Alias for :meth:`put`."""
-        return self.put(bins)
-
     def _add_op(self, op: Any) -> Self:
         self._qb._operations.append(op)
         return self
@@ -654,10 +647,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
     def add(self, bin_name: str, value: Any) -> Self:
         """Add a numeric *value* to a bin."""
         return self._add_op(Operation.add(bin_name, value))
-
-    def increment_by(self, bin_name: str, value: Any) -> Self:
-        """Alias for :meth:`add`."""
-        return self.add(bin_name, value)
 
     def get(self, bin_name: str) -> Self:
         """Read a bin value back within a write operate."""
@@ -1039,10 +1028,6 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     def include_missing_keys(self):
         self._promote()
         return super().include_missing_keys()
-
-    def respond_all_keys(self):
-        self._promote()
-        return super().respond_all_keys()
 
     def fail_on_filtered_out(self):
         self._promote()

@@ -29,6 +29,7 @@ from typing import Any, ClassVar, Generic, List, TYPE_CHECKING, TypeVar, Union, 
 
 from typing import Self
 
+
 from aerospike_async import FilterExpression, Key
 
 from aerospike_sdk.operations_shared import _ExpirationVerbs
@@ -211,14 +212,9 @@ class _UdfBuilderBase(_ExpirationVerbs[_QB]):
 
         See Also:
             :meth:`QueryBuilder.include_missing_keys`: Same flag for reads.
-            :meth:`respond_all_keys`: Alias using the underlying client's name.
         """
         self._qb._respond_all_keys = True
         return self
-
-    def respond_all_keys(self) -> Self:
-        """Alias for :meth:`include_missing_keys` (underlying client's ``respondAllKeys`` name)."""
-        return self.include_missing_keys()
 
     def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
         """Finalize this UDF operation and start another on *keys*.

@@ -34,7 +34,6 @@ from typing import (
     Union,
 )
 
-from typing_extensions import deprecated
 
 from aerospike_async import Key
 
@@ -172,15 +171,16 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
             assert session.behavior is Behavior.DEFAULT
 
         See Also:
-            :meth:`get_current_transaction`: The session's active transaction, if any.
+            :attr:`current_transaction`: The session's active transaction, if any.
         """
         return self._behavior
 
-    def get_current_transaction(self) -> "Optional[Txn]":
-        """Return the active transaction for this session, or ``None``.
+    @property
+    def current_transaction(self) -> "Optional[Txn]":
+        """The active transaction for this session, or ``None``.
 
-        Regular sessions always return ``None``; only a transactional session
-        inside its active block returns a live :class:`~aerospike_async.Txn`.
+        Regular sessions always hold ``None``; only a transactional session
+        inside its active block exposes a live :class:`~aerospike_async.Txn`.
         Builders spawned from the session read this and thread the result
         through every policy they hand to the PAC, so operations started inside
         a transaction auto-participate.
@@ -192,7 +192,7 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         Example::
 
             session = client.create_session()
-            assert session.get_current_transaction() is None
+            assert session.current_transaction is None
 
         See Also:
             :attr:`behavior`: The session's policy bundle.
@@ -233,17 +233,9 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
                 await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
 
         See Also:
-            :meth:`get_current_transaction`: The active transaction, if any.
+            :attr:`current_transaction`: The active transaction, if any.
         """
         return self._txn_session_cls()(self._client, self._behavior)
-
-    @deprecated("Renamed to transaction(); begin_transaction() will be removed after preview.")
-    def begin_transaction(self) -> _TS:
-        """Deprecated alias for :meth:`transaction` (preview back-compat).
-
-        :meta private:
-        """
-        return self.transaction()
 
     # -- Per-leaf hooks (overridden by each session leaf) ---------------------
     # These construct the tree-appropriate builder. They live on the leaves
@@ -658,12 +650,14 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         self,
         arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
         arg2: Optional[Union[str, Key]] = None,
-        *keys: Key,
+        # Named ``more_keys`` only so the ``keys`` name stays free for the
+        # keyword form below; varargs names are never visible to callers.
+        *more_keys: Key,
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         dataset: Optional[DataSet] = None,
         key: Optional[Key] = None,
-        keys_list: Optional[List[Key]] = None,
+        keys: Optional[List[Key]] = None,
         behavior: Optional["Behavior"] = None,
     ) -> _QB:
         """Start a read or secondary-index query for keys or a whole set.
@@ -681,12 +675,12 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
                 (when paired with ``arg2`` as set name).
             arg2: When ``arg1`` is a namespace, the set name; otherwise may be a
                 second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional argument is a key.
+            *more_keys: Additional keys when the first positional argument is a key.
             namespace: Keyword namespace (with ``set_name``) when not using a dataset.
             set_name: Keyword set name (with ``namespace``).
             dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet`.
             key: Keyword single key.
-            keys_list: Keyword list of keys when not using ``arg1`` or varargs.
+            keys: Keyword list of keys when not using ``arg1`` or varargs.
             behavior: Optional override for this query; defaults to the session's
                 behavior.
 
@@ -715,12 +709,12 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         if (
             arg1.__class__ is Key
             and arg2 is None
-            and not keys
+            and not more_keys
             and namespace is None
             and set_name is None
             and dataset is None
             and key is None
-            and keys_list is None
+            and keys is None
             and behavior is None
         ):
             return self._fast_query_builder(arg1, self._behavior)  # type: ignore[arg-type]
@@ -734,13 +728,13 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
                 all_keys = [arg1]
                 if isinstance(arg2, Key):
                     all_keys.append(arg2)
-                    all_keys.extend(keys)
-                elif keys:
-                    all_keys.extend(keys)
+                    all_keys.extend(more_keys)
+                elif more_keys:
+                    all_keys.extend(more_keys)
                 if len(all_keys) == 1:
                     key = arg1
                 else:
-                    keys_list = all_keys
+                    keys = all_keys
             elif isinstance(arg1, list):
                 if not arg1:
                     raise ValueError("keys list cannot be empty")
@@ -748,18 +742,18 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
                     raise TypeError(
                         f"Expected List[Key], got first element {type(arg1[0])}",
                     )
-                keys_list = arg1
+                keys = arg1
             elif isinstance(arg1, str) and arg2 is not None and isinstance(arg2, str):
                 namespace = arg1
                 set_name = arg2
             else:
                 raise TypeError(f"Unsupported arg1 type: {type(arg1)}")
 
-        if key is not None and keys_list is None and dataset is None and namespace is None:
+        if key is not None and keys is None and dataset is None and namespace is None:
             builder = self._fast_query_builder(key, b)
         else:
             builder = self._build_query_builder(
-                dataset=dataset, key=key, keys=keys_list,
+                dataset=dataset, key=key, keys=keys,
                 namespace=namespace, set_name=set_name, behavior=b,
             )
         return self._bind_txn(builder)

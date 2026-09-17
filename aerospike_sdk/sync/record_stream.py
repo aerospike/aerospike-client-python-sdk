@@ -428,9 +428,3 @@ def _chunked_iter(
         yield RecordResult(
             key=key, record=record, result_code=ResultCode.OK,
         )
-
-
-# Path-differentiated bare name is the committed convention (same as the aio
-# class); the ``Sync``-prefixed alias stays importable for one deprecation
-# cycle (removed at GA).
-SyncRecordStream = RecordStream

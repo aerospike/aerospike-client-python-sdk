@@ -259,7 +259,7 @@ async def main() -> None:
 
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)
     try:
-        async with await _env.connect().connect() as cluster:
+        async with _env.connect().connect() as cluster:
             display_all_behaviors()
             demonstrate_behavior_inheritance()
             await perform_cluster_operations(cluster)
