@@ -534,6 +534,50 @@ class TestResultCodeGuidance:
         exc = _result_code_to_exception(ResultCode.UNSUPPORTED_FEATURE, "boom")
         assert "strong-consistency" in exc.hint
 
+    def test_bare_parameter_error_names_the_verbosity_setting(self):
+        # The server validated the argument and has the reason; a bare code
+        # means the request never asked for it, so the hint says how to.
+        exc = _result_code_to_exception(ResultCode.PARAMETER_ERROR, "Code: ParameterError")
+        assert "error_detail_verbosity" in exc.hint
+        assert "MESSAGE" in exc.hint
+        assert str(exc).startswith("Code: ParameterError\n")
+        assert "error_detail_verbosity" in str(exc)
+
+    def test_parameter_error_with_server_detail_carries_no_hint(self):
+        # The server's own sentence is the explanation; pointing at the
+        # setting that is already on would be noise.
+        exc = _result_code_to_exception(
+            ResultCode.PARAMETER_ERROR, "boom", sub_code=6,
+            server_message="string_insert: CREATE_ONLY and UPDATE_ONLY flags are mutually exclusive",
+        )
+        assert exc.hint is None
+        assert str(exc) == "boom"
+
+    def test_parameter_error_with_detail_requested_but_empty_carries_no_hint(self):
+        # SUBCODE verbosity returns sub_code 0 / '' when the server has nothing
+        # to add; the setting is on, so there is nothing to suggest.
+        exc = _result_code_to_exception(
+            ResultCode.PARAMETER_ERROR, "boom", sub_code=0, server_message="",
+        )
+        assert exc.hint is None
+
+    def test_parameter_error_explicit_hint_wins(self):
+        exc = _result_code_to_exception(
+            ResultCode.PARAMETER_ERROR, "boom", hint="bin 'x' is the problem",
+        )
+        assert exc.hint == "bin 'x' is the problem"
+        assert "error_detail_verbosity" not in str(exc)
+
+    def test_bare_parameter_error_hint_survives_the_pac_boundary(self):
+        pac = PacServerError(
+            "Code: ParameterError, In Doubt: false, Node: 10.0.0.4:3000",
+            ResultCode.PARAMETER_ERROR, False, None, None, None,
+            "BB9020011AC4202", 1, None, None,
+        )
+        exc = _convert_pac_exception(pac)
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert "error_detail_verbosity" in exc.hint
+
     def test_codes_without_guidance_carry_no_hint(self):
         # Guidance that restates the code name is noise; most codes get none.
         exc = _result_code_to_exception(ResultCode.KEY_NOT_FOUND_ERROR, "missing")

@@ -379,13 +379,17 @@ async def test_str_create_only_and_update_only_flags(cluster):
     rs = await sess.query(k).execute()
     assert "absent" not in (await rs.first_or_raise()).record_or_raise().bins
 
-    # The two flags together are rejected by the server.
+    # The two flags together are rejected by the server. The default session
+    # does not ask for the server's reason, so the error says how to get it.
     with pytest.raises(AerospikeError) as exc_info:
         await (sess.upsert(k)
             .bin("s").str_insert(
                 0, "x", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.UPDATE_ONLY)
             .execute())
-    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    err = exc_info.value
+    assert err.result_code == ResultCode.PARAMETER_ERROR
+    assert err.sub_code is None and err.server_message is None
+    assert "error_detail_verbosity" in err.hint
 
 
 async def test_str_update_only_gates_on_bin_presence(cluster):

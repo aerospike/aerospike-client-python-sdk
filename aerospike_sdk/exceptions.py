@@ -822,6 +822,16 @@ _RC_GUIDANCE: dict[ResultCode, str] = {
     ),
 }
 
+# The server validates arguments and holds the reason for rejecting one, but
+# only sends it when the request asked. A ParameterError with neither subcode
+# nor message is one that never asked, so the guidance is how to.
+_PARAMETER_ERROR_DETAIL_HINT = (
+    "The server rejected an argument of this operation and knows why, but the "
+    "reason was not requested. Set error_detail_verbosity to "
+    "ErrorDetailVerbosity.MESSAGE on the session's Behavior to have the "
+    "server's explanation returned with this error."
+)
+
 
 def _result_code_to_exception(
     result_code: ResultCode,
@@ -854,6 +864,12 @@ def _result_code_to_exception(
             _SUBCODE_GUIDANCE.get((result_code, sub_code))
             or _RC_GUIDANCE.get(result_code)
         )
+    elif (
+        result_code == ResultCode.PARAMETER_ERROR
+        and sub_code is None
+        and server_message is None
+    ):
+        guidance = _PARAMETER_ERROR_DETAIL_HINT
     else:
         guidance = _RC_GUIDANCE.get(result_code)
     if guidance:

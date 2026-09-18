@@ -167,6 +167,14 @@ Bin name 'a_very_long_bin_name' exceeds the server's 15-character limit.
 from `server_message`, which is the server's own text. Most codes carry no hint:
 guidance that only restates the code name would be noise.
 
+`ParameterError` is the exception. The server validates arguments — string
+write flags, expression text, CDT bounds — and holds the reason it rejected one,
+but sends it only when asked (see Extended Server Error Detail above).
+A `ParameterError` that arrives with neither `sub_code` nor `server_message`
+therefore carries a hint naming `error_detail_verbosity`, so the first time the
+mistake is hit the message says how to see the server's explanation. Once detail
+is requested the hint is gone and the server's sentence stands alone.
+
 ### Precedence
 
 Guidance resolves narrowest-first:
