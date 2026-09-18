@@ -56,7 +56,8 @@ async def cluster(aerospike_host, supports_string_operations, make_cluster_defin
         for suffix in (
             "reads", "modify", "snip", "append_ops", "exp_query",
             "transform_noop_missing", "create_from_missing",
-            "concat_flag", "list_ctx", "map_ctx",
+            "concat_flag", "list_ctx", "map_ctx", "nofail_ctx", "write_flags_ctx", "update_only", "regex_wflags",
+            "fluent_nested", "two_hop", "nav_write_reads",
             "norm_replace", "norm_affix", "result_cap",
             "exp_read_sweep", "exp_modify_sweep", "exp_trim_sweep",
             "exp_regex_replace", "exp_convert_sweep",
@@ -387,11 +388,84 @@ async def test_str_create_only_and_update_only_flags(cluster):
     assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
 
+async def test_str_update_only_gates_on_bin_presence(cluster):
+    """``UPDATE_ONLY`` applies to a live bin, on both create-capable and
+    transform-only ops; ``CREATE_ONLY`` on a transform-only op is a
+    ``PARAMETER_ERROR`` because that op can never create."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_update_only")
+    await sess.delete(k).execute()
+    await sess.upsert(k).bin("s").set_to("hello").execute()
+
+    await (sess.upsert(k)
+        .bin("s").str_append(" world", flags=StringWriteFlags.UPDATE_ONLY)
+        .bin("s").str_upper(flags=StringWriteFlags.UPDATE_ONLY)
+        .execute())
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "HELLO WORLD"
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_lower(flags=StringWriteFlags.CREATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    rs = await sess.query(k).bin("s").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["s"] == "HELLO WORLD"
+
+
+async def test_str_regex_replace_write_flags(cluster):
+    """``str_regex_replace`` carries write flags separately from the regex flags:
+    ``UPDATE_ONLY`` skips a missing bin and applies to a live one, on the flat
+    and the navigated builder alike; ``CREATE_ONLY`` is a ``PARAMETER_ERROR``."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_regex_wflags")
+    await sess.delete(k).execute()
+    await sess.upsert(k).bin("lst").set_to(["a1 b2", "c3"]).execute()
+
+    await (sess.upsert(k)
+        .bin("s").str_regex_replace(r"\d", "X", write_flags=StringWriteFlags.UPDATE_ONLY)
+        .execute())
+    rs = await sess.query(k).execute()
+    assert "s" not in (await rs.first_or_raise()).record_or_raise().bins
+
+    await sess.upsert(k).bin("s").set_to("a1 b2 c3").execute()
+    await (sess.upsert(k)
+        .bin("s").str_regex_replace(
+            r"\d", "X", StringRegexFlags.GLOBAL, write_flags=StringWriteFlags.UPDATE_ONLY)
+        .bin("lst").on_list_index(0).str_regex_replace(
+            r"\d", "X", StringRegexFlags.GLOBAL, write_flags=StringWriteFlags.UPDATE_ONLY)
+        .execute())
+    rs = await sess.query(k).execute()
+    bins = (await rs.first_or_raise()).record_or_raise().bins
+    assert bins["s"] == "aX bX cX"
+    assert bins["lst"] == ["aX bX", "c3"]
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("s").str_regex_replace("X", "1", write_flags=StringWriteFlags.CREATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+
 async def test_str_create_only_rejected_with_ctx(cluster):
-    """``CREATE_ONLY`` never combines with a CTX path — server ``PARAMETER_ERROR``."""
+    """``CREATE_ONLY`` never combines with a CTX path — server ``PARAMETER_ERROR``
+    whether or not ``NO_FAIL`` is set, on both the fluent and low-level paths."""
     sess = cluster.create_session()
     k = _TEST_DS.id("strop_write_flags_ctx")
-    await sess.upsert(k).bin("lst").set_to(["a", "b"]).execute()
+    await sess.upsert(k).bin("lst").set_to(["alpha", "beta"]).execute()
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("lst").on_list_index(1).str_append("!", flags=StringWriteFlags.CREATE_ONLY)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+
+    with pytest.raises(AerospikeError) as exc_info:
+        await (sess.upsert(k)
+            .bin("lst").on_list_index(1).str_append(
+                "!", flags=StringWriteFlags.CREATE_ONLY | StringWriteFlags.NO_FAIL)
+            .execute())
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
     with pytest.raises(AerospikeError) as exc_info:
         await (sess.upsert(k)
@@ -402,6 +476,9 @@ async def test_str_create_only_rejected_with_ctx(cluster):
             .execute())
     assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
+    rs = await sess.query(k).bin("lst").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta"]
+
 
 async def test_str_no_fail_decides_outcome_on_unreachable_ctx_path(cluster):
     """An out-of-range CTX path is an in-op execution failure, so ``NO_FAIL``
@@ -411,50 +488,102 @@ async def test_str_no_fail_decides_outcome_on_unreachable_ctx_path(cluster):
     await sess.upsert(k).bin("lst").set_to(["alpha", "beta"]).execute()
 
     await (sess.upsert(k)
-        .add_operation(StringOperation.append(
-            "lst", "!",
-            flags=int(StringWriteFlags.NO_FAIL),
-            ctx=[CTX.list_index(99)]))
+        .bin("lst").on_list_index(99).str_append("!", flags=StringWriteFlags.NO_FAIL)
+        .bin("lst").on_list_index(1).str_append("!", flags=StringWriteFlags.NO_FAIL)
         .execute())
     rs = await sess.query(k).bin("lst").get().execute()
-    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta"]
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta!"]
 
     with pytest.raises(AerospikeError) as exc_info:
         await (sess.upsert(k)
-            .add_operation(StringOperation.append("lst", "!", ctx=[CTX.list_index(99)]))
+            .bin("lst").on_list_index(99).str_append("!")
             .execute())
     assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
 
 
 # ---------------------------------------------------------------------------
-# Spot tests — CTX paths (chainable on_list_index / on_map_key not yet added;
-# users drop to low-level StringOperation with ctx=[...] for nested ops)
+# CTX paths — string ops on a navigated CDT leaf
+#
+# The navigation builders (``on_list_index`` / ``on_map_key`` / …) carry the
+# ``str_*`` family, so a string nested in a list or map is reached without
+# dropping to ``StringOperation.<op>(bin, ctx=[...])``.
 # ---------------------------------------------------------------------------
 
 async def test_str_upper_with_list_ctx(cluster):
-    """``StringOperation.upper`` with a ``ctx=[CTX.list_index(...)]`` upper-cases one list element."""
+    """``on_list_index(...).str_upper()`` upper-cases one list element."""
     sess = cluster.create_session()
     k = _TEST_DS.id("strop_list_ctx")
     await sess.upsert(k).bin("lst").set_to(["one", "two", "three"]).execute()
 
-    await sess.upsert(k) \
-        .add_operation(StringOperation.upper("lst", ctx=[CTX.list_index(1)])) \
-        .execute()
+    await sess.upsert(k).bin("lst").on_list_index(1).str_upper().execute()
 
     rs = await sess.query(k).bin("lst").get().execute()
     assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["one", "TWO", "three"]
 
 
 async def test_str_strlen_with_map_ctx(cluster):
-    """``StringOperation.strlen`` with ``ctx=[CTX.map_key(...)]`` measures one map value."""
+    """``on_map_key(...).str_strlen()`` measures one map value on a query builder."""
     sess = cluster.create_session()
     k = _TEST_DS.id("strop_map_ctx")
     await sess.upsert(k).bin("m").set_to({"k1": "abcd", "k2": "xyz"}).execute()
 
-    rs = await sess.upsert(k) \
-        .add_operation(StringOperation.strlen("m", ctx=[CTX.map_key("k1")])) \
-        .execute()
+    rs = await sess.query(k).bin("m").on_map_key("k1").str_strlen().execute()
     assert (await rs.first_or_raise()).record_or_raise().bins["m"] == 4
+
+
+async def test_fluent_string_ops_on_string_nested_in_list(cluster):
+    """Modify then read a list element through the navigation builders."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_fluent_nested")
+    await sess.upsert(k).bin("lst").set_to(["alpha", "beta", "gamma"]).execute()
+
+    await sess.upsert(k).bin("lst").on_list_index(1).str_append("!").execute()
+
+    rs = await sess.query(k).bin("lst").on_list_index(1).str_strlen().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == 5
+
+    rs = await sess.query(k).bin("lst").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["lst"] == ["alpha", "beta!", "gamma"]
+
+
+async def test_string_ops_on_two_hop_ctx_path(cluster):
+    """A map-key then list-index path reaches the leaf; a stale single-hop ctx would
+    miss it and fail on the intermediate list."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_two_hop")
+    await sess.upsert(k).bin("doc").set_to({"names": ["ada", "grace"], "n": 1}).execute()
+
+    await (sess.upsert(k)
+        .bin("doc").on_map_key("names").on_list_index(0).str_upper()
+        .bin("doc").on_map_key("names").on_list_index(1).str_pad_end(7, ".")
+        .execute())
+
+    rs = await (sess.query(k)
+        .bin("doc").on_map_key("names").on_list_index(0).str_strlen()
+        .bin("doc").on_map_key("names").on_list_index(1).str_ends_with("..")
+        .execute())
+    assert (await rs.first_or_raise()).record_or_raise().bins["doc"] == [3, True]
+
+    rs = await sess.query(k).bin("doc").get().execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["doc"] == {
+        "names": ["ADA", "grace.."], "n": 1,
+    }
+
+
+async def test_string_reads_on_navigated_write_builder(cluster):
+    """The write builder carries the string reads too, so a modify and its
+    verification share one operate call."""
+    sess = cluster.create_session()
+    k = _TEST_DS.id("strop_nav_write_reads")
+    await sess.upsert(k).bin("m").set_to({"k": "  Hello  "}).execute()
+
+    rs = await (sess.upsert(k)
+        .bin("m").on_map_key("k").str_trim()
+        .bin("m").on_map_key("k").str_lower()
+        .bin("m").on_map_key("k").str_split("l")
+        .bin("m").on_map_key("k").str_regex_compare("^H", StringRegexFlags.CASE_INSENSITIVE)
+        .execute())
+    assert (await rs.first_or_raise()).record_or_raise().bins["m"] == [["he", "", "o"], True]
 
 
 # ---------------------------------------------------------------------------

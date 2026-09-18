@@ -17,7 +17,8 @@
 
 Two builder classes provide terminal read methods on a CDT path:
 
-- ``CdtReadBuilder``  -- non-invertable terminals (get_values, count, …)
+- ``CdtReadBuilder``  -- non-invertable terminals (get_values, count, …),
+  string reads on a navigated string leaf (``str_strlen``, ``str_substr``, …)
   plus singular CDT navigation for deeper nesting.
 - ``CdtReadInvertableBuilder`` -- adds inverted "all others" terminals.
   Singular value selectors may support further navigation when ``to_ctx``
@@ -47,6 +48,9 @@ from aerospike_async import (
     MapOperation,
     MapOrder,
     MapReturnType,
+    StringNumericType,
+    StringOperation,
+    StringRegexFlags,
 )
 
 T = TypeVar("T")
@@ -619,6 +623,221 @@ class CdtReadBuilder(Generic[T]):
             ).set_context(ctx)
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
+
+    # -- String reads on a navigated string leaf (server 8.2.0+) --------------
+    #
+    # Mirrors the ``str_*`` read family on the flat bin builders; the CDT
+    # path accumulated by the navigation methods becomes the operation's
+    # ``ctx``. Only read ops live here — the modify half sits on the write
+    # builder so a query path cannot mutate.
+
+    def _emit_op(self, op: Any) -> T:
+        self._parent.add_operation(op)  # type: ignore[union-attr]
+        return self._parent
+
+    def str_strlen(self) -> T:
+        """Return the Unicode codepoint count of the string at this CDT path.
+
+        Example::
+
+            stream = await (
+                session.query(key)
+                    .bin("tags").on_list_index(1).str_strlen()
+                    .execute()
+            )
+
+        Returns:
+            The parent builder for chaining.
+
+        See Also:
+            :meth:`str_byte_length`: UTF-8 byte length instead.
+        """
+        return self._emit_op(StringOperation.strlen(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_substr(self, start: int, end: Optional[int] = None) -> T:
+        """Return the codepoint range ``[start, end)`` of the string at this CDT path.
+
+        ``end`` omitted runs to the end of the string; negative ``start``
+        counts from the end. Out-of-bounds indexes clamp.
+
+        Args:
+            start: Codepoint index to start at.
+            end: End-exclusive codepoint index. ``None`` means run to end.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.substr(
+            self._bin_name, start, end, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_char_at(self, index: int) -> T:
+        """Return the codepoint at ``index`` as a one-codepoint string.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.char_at(
+            self._bin_name, index, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_find(self, needle: str, occurrence: Optional[int] = None) -> T:
+        """Return the codepoint index of ``needle`` (``-1`` when absent).
+
+        Args:
+            needle: Substring to locate.
+            occurrence: 1-based match index; ``-1`` selects the last match.
+                ``None`` means first occurrence.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.find(
+            self._bin_name, needle, occurrence, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_contains(self, needle: str) -> T:
+        """Return ``True`` iff the string at this CDT path contains ``needle``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.contains(
+            self._bin_name, needle, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_starts_with(self, prefix: str) -> T:
+        """Return ``True`` iff the string at this CDT path starts with ``prefix``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.starts_with(
+            self._bin_name, prefix, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_ends_with(self, suffix: str) -> T:
+        """Return ``True`` iff the string at this CDT path ends with ``suffix``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.ends_with(
+            self._bin_name, suffix, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_to_integer(self) -> T:
+        """Parse the string at this CDT path as ``int64`` (``PARAMETER_ERROR`` if not numeric).
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.to_integer(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_to_double(self) -> T:
+        """Parse the string at this CDT path as ``float64`` (``PARAMETER_ERROR`` if not numeric).
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.to_double(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_byte_length(self) -> T:
+        """Return the UTF-8 byte count of the string at this CDT path.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.byte_length(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> T:
+        """Return ``True`` iff the string at this CDT path parses as a number.
+
+        Args:
+            numeric_type: Restrict to :attr:`~aerospike_sdk.StringNumericType.INT`
+                or :attr:`~aerospike_sdk.StringNumericType.FLOAT`. ``None`` = either.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.is_numeric(
+            self._bin_name, numeric_type, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_is_upper(self) -> T:
+        """Return ``True`` iff every cased codepoint at this CDT path is uppercase.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.is_upper(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_is_lower(self) -> T:
+        """Return ``True`` iff every cased codepoint at this CDT path is lowercase.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.is_lower(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_to_blob(self) -> T:
+        """Return the UTF-8 bytes of the string at this CDT path as a blob.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.to_blob(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_split(self, separator: Optional[str] = None) -> T:
+        """Split the string at this CDT path into a list.
+
+        Args:
+            separator: Substring to split on. ``None`` splits per codepoint.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.split(
+            self._bin_name, separator, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_b64_decode(self) -> T:
+        """Base64-decode the string at this CDT path, returning bytes.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.b64_decode(
+            self._bin_name, ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_regex_compare(self, pattern: str, flags: int | StringRegexFlags = 0) -> T:
+        """Return ``True`` iff the ICU regex ``pattern`` matches the string at this CDT path.
+
+        Args:
+            pattern: ICU regex pattern.
+            flags: OR-combined :class:`~aerospike_sdk.StringRegexFlags` bitmask.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.regex_compare(
+            self._bin_name, pattern, int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
 
 
 class CdtReadInvertableBuilder(CdtReadBuilder[T]):

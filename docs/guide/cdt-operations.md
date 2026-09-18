@@ -108,6 +108,22 @@ stream = await (
 )
 ```
 
+### String Operations on a Nested Leaf
+
+When a navigated path lands on a string, the `str_*` family is available on
+the navigation builder itself: reads such as `str_strlen` and `str_contains`
+on either verb, modifies such as `str_append` and `str_upper` on write verbs.
+See the nested-strings section of [String Operations](string-ops.md).
+
+```python
+# Uppercase one nickname in place
+await (
+    session.upsert(users.id(1))
+    .bin("profile").on_map_key("nicknames").on_list_index(0).str_upper()
+    .execute()
+)
+```
+
 ## Writing CDT Data
 
 ### Set a Value

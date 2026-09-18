@@ -20,6 +20,7 @@ Extends the read-only builders from ``cdt_read`` with:
 - ``remove()`` / ``remove_all_others()`` terminals
 - ``set_to(value)`` / ``add(value)`` write terminals (map key navigation)
 - Collection-level map/list terminals (``map_clear``, ``map_upsert_items``, …)
+- String modifies on a navigated string leaf (``str_append``, ``str_upper``, …)
 - Nested navigation that preserves write capability through the chain
 """
 
@@ -40,6 +41,9 @@ from aerospike_async import (
     MapPolicy,
     MapReturnType,
     MapWriteFlags,
+    StringOperation,
+    StringRegexFlags,
+    StringWriteFlags,
 )
 
 from aerospike_sdk.aio.operations.cdt_read import (
@@ -942,6 +946,272 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         op = ListOperation.trim(self._bin_name, index, count).set_context(ctx)
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
+
+    # -- String modifies on a navigated string leaf (server 8.2.0+) -----------
+    #
+    # The read half is inherited from ``CdtReadBuilder``; the modify ops live
+    # here so a query path cannot mutate. ``flags`` is a
+    # ``StringWriteFlags`` bitmask, except on ``str_regex_replace`` where it
+    # holds ``StringRegexFlags`` and the write flags move to ``write_flags``.
+
+    def str_insert(self, index: int, value: str, *, flags: int | StringWriteFlags = 0) -> T:
+        """Splice ``value`` into the string at this CDT path at codepoint ``index``.
+
+        Example::
+
+            await (
+                session.upsert(key)
+                    .bin("tags").on_list_index(1).str_insert(0, "#")
+                    .execute()
+            )
+
+        Args:
+            index: Codepoint index to splice at; negative counts from the end.
+            value: String to insert.
+            flags: OR-combined :class:`~aerospike_sdk.StringWriteFlags` bitmask.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.insert(
+            self._bin_name, index, value, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_overwrite(self, index: int, value: str, *, flags: int | StringWriteFlags = 0) -> T:
+        """Overwrite codepoints starting at ``index`` with ``value``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.overwrite(
+            self._bin_name, index, value, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_concat(
+        self, value: str | Sequence[str], *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Append ``value`` (one string or a list of strings, in order).
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.concat(
+            self._bin_name, value, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_append(self, value: str, *, flags: int | StringWriteFlags = 0) -> T:
+        """Append ``value`` to the end of the string at this CDT path.
+
+        Example::
+
+            await (
+                session.upsert(key)
+                    .bin("names").on_map_key("first").str_append("!")
+                    .execute()
+            )
+
+        Args:
+            value: String to append.
+            flags: OR-combined :class:`~aerospike_sdk.StringWriteFlags` bitmask.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.append(
+            self._bin_name, value, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_prepend(self, value: str, *, flags: int | StringWriteFlags = 0) -> T:
+        """Prepend ``value`` to the start of the string at this CDT path.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.prepend(
+            self._bin_name, value, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_snip(
+        self, start: int, end: Optional[int] = None, *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Remove the codepoint range ``[start, end)``; ``end`` omitted truncates to the end.
+
+        Args:
+            start: Codepoint index where the removed range starts.
+            end: Exclusive end of the removed range, or ``None`` to remove
+                through the end of the string. ``flags`` require an explicit
+                ``end``.
+            flags: OR-combined :class:`~aerospike_sdk.StringWriteFlags` bitmask.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.snip(
+            self._bin_name, start, end, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_replace(
+        self, needle: str, replacement: str, *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Replace the first occurrence of ``needle`` with ``replacement``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.replace(
+            self._bin_name, needle, replacement, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_replace_all(
+        self, needle: str, replacement: str, *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Replace every occurrence of ``needle`` with ``replacement``.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.replace_all(
+            self._bin_name, needle, replacement, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_regex_replace(
+        self, pattern: str, replacement: str, flags: int | StringRegexFlags = 0,
+        *, write_flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Replace the first match of the ICU regex ``pattern``.
+
+        Set :attr:`~aerospike_sdk.StringRegexFlags.GLOBAL` in ``flags`` to
+        replace every match.
+
+        Args:
+            pattern: ICU regex pattern.
+            replacement: Replacement text.
+            flags: OR-combined :class:`~aerospike_sdk.StringRegexFlags` bitmask.
+            write_flags: OR-combined :class:`~aerospike_sdk.StringWriteFlags`
+                bitmask (``UPDATE_ONLY`` / ``NO_FAIL``).
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.regex_replace(
+            self._bin_name, pattern, replacement, int(flags), write_flags=int(write_flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_upper(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Uppercase the string at this CDT path in place.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.upper(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_lower(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Lowercase the string at this CDT path in place.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.lower(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_case_fold(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Case-fold the string at this CDT path (locale-independent lowercase).
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.case_fold(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_normalize_nfc(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Normalize the string at this CDT path to Unicode NFC in place.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.normalize_nfc(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_trim_start(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Strip leading whitespace from the string at this CDT path.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.trim_start(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_trim_end(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Strip trailing whitespace from the string at this CDT path.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.trim_end(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_trim(self, *, flags: int | StringWriteFlags = 0) -> T:
+        """Strip whitespace from both ends of the string at this CDT path.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.trim(
+            self._bin_name, flags=int(flags), ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_pad_start(
+        self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Left-pad with ``pad_string`` to ``target_length`` codepoints.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.pad_start(
+            self._bin_name, target_length, pad_string, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_pad_end(
+        self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags = 0,
+    ) -> T:
+        """Right-pad with ``pad_string`` to ``target_length`` codepoints.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.pad_end(
+            self._bin_name, target_length, pad_string, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
+
+    def str_repeat(self, count: int, *, flags: int | StringWriteFlags = 0) -> T:
+        """Repeat the string at this CDT path ``count`` times.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        return self._emit_op(StringOperation.repeat(
+            self._bin_name, count, flags=int(flags),
+            ctx=self._context_list_for_nested_ops(),
+        ))
 
 
 class CdtWriteInvertableBuilder(CdtWriteBuilder[T], CdtReadInvertableBuilder[T]):

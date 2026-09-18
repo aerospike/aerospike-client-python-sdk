@@ -157,6 +157,18 @@ await (session.upsert(key)
 # → "aX bX cX"
 ```
 
+Here `flags` carries the regex flags; the write flags described below go in
+the separate `write_flags` keyword:
+
+```python
+from aerospike_sdk import StringWriteFlags
+
+await (session.upsert(key)
+       .bin("text").str_regex_replace(r"\d", "X", StringRegexFlags.GLOBAL,
+                                      write_flags=StringWriteFlags.UPDATE_ONLY)
+       .execute())
+```
+
 ## Filter Expressions
 
 Use ``Exp.string_*`` to compose filter expressions for queries or
@@ -193,18 +205,15 @@ assert rec.bins["name_length"] == 17
 ## Operating on Nested Strings (CTX)
 
 String operations apply to any string-typed value reachable via a CDT
-path. Use the low-level :class:`~aerospike_sdk.StringOperation` with
-``ctx=[...]`` and ``add_operation`` for nested targets:
+path. Navigate to the leaf with the CDT builders (`on_list_index`,
+`on_map_key`, `on_map_rank`, …) and call the same `str_*` family there:
+the accumulated path becomes the operation's context.
 
 ```python
-from aerospike_sdk import StringOperation, CTX
-
 await session.upsert(key).put({"tags": ["alpha", "beta", "gamma"]}).execute()
 
 # Uppercase the element at list index 1
-await (session.upsert(key)
-       .add_operation(StringOperation.upper("tags", ctx=[CTX.list_index(1)]))
-       .execute())
+await session.upsert(key).bin("tags").on_list_index(1).str_upper().execute()
 
 stream = await session.query(key).bin("tags").get().execute()
 assert (await stream.first_or_raise()).record_or_raise().bins["tags"] == [
@@ -212,24 +221,46 @@ assert (await stream.first_or_raise()).record_or_raise().bins["tags"] == [
 ]
 ```
 
-Map keys work the same way:
+Reads work on the query builder as well as the write builder, and paths
+nest to any depth:
 
 ```python
-await session.upsert(key).put({"attrs": {"k1": "abcd", "k2": "xyz"}}).execute()
+await session.upsert(key).put({"doc": {"names": ["ada", "grace"]}}).execute()
 
-stream = await (session.upsert(key)
-                .add_operation(StringOperation.strlen("attrs", ctx=[CTX.map_key("k1")]))
+stream = await (session.query(key)
+                .bin("doc").on_map_key("names").on_list_index(0).str_strlen()
+                .bin("doc").on_map_key("names").on_list_index(1).str_ends_with("ce")
                 .execute())
-assert (await stream.first_or_raise()).record_or_raise().bins["attrs"] == 4
+assert (await stream.first_or_raise()).record_or_raise().bins["doc"] == [3, True]
 ```
 
-The ``to_string`` op is the one exception — it has no CTX overload because
+Modify ops (`str_append`, `str_trim`, `str_replace_all`, …) are available
+after a navigation on a write verb; read ops are available on both verbs.
+The `flags` keyword carries the same {class}`~aerospike_sdk.StringWriteFlags`
+bitmask as the flat builder, so `NO_FAIL` turns an unreachable path into a
+silent no-op instead of `OP_NOT_APPLICABLE`.
+
+The low-level {class}`~aerospike_sdk.StringOperation` factories accept the
+same path as an explicit `ctx=[CTX...]` list when you build operations by
+hand:
+
+```python
+from aerospike_sdk import StringOperation, CTX
+
+await (session.upsert(key)
+       .add_operation(StringOperation.strlen("doc", ctx=[CTX.map_key("names"), CTX.list_index(0)]))
+       .execute())
+```
+
+The `to_string` op is the one exception — it has no CTX overload because
 its wire format carries no payload to hold the wrapper.
 
 ## Write Flags
 
 Modify operations accept a ``flags`` keyword argument carrying a
-:class:`~aerospike_sdk.StringWriteFlags` bitmask (OR-combine values):
+:class:`~aerospike_sdk.StringWriteFlags` bitmask (OR-combine values);
+``str_regex_replace`` takes the same bitmask as ``write_flags`` because its
+``flags`` slot holds the regex flags:
 
 - ``CREATE_ONLY`` — apply only if the bin does not already exist; a live
   bin raises ``BIN_EXISTS_ERROR``. Valid only on the additive ops

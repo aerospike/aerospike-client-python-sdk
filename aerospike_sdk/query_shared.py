@@ -4099,10 +4099,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     # the bin in place. Use :class:`StringWriteFlags`, :class:`StringRegexFlags`,
     # and :class:`StringNumericType` for the bitmask / enum arguments.
     #
-    # CTX navigation on string ops (operating on a string nested inside a
-    # list or map bin) is not exposed on this chainable surface — drop to the
-    # lower-level ``StringOperation.<name>(bin, ctx=[...])`` factory plus
-    # ``append_operations(op)`` for that case.
+    # For a string nested inside a list or map bin, navigate first
+    # (``on_list_index`` / ``on_map_key`` / …) and call the same ``str_*``
+    # family on the returned CDT builder; the path becomes the op's ctx.
 
     # ---- String reads -------------------------------------------------------
 
@@ -4467,7 +4466,8 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         )
 
     def str_regex_replace(
-        self, pattern: str, replacement: str, flags: int | StringWriteFlags | StringRegexFlags = 0,
+        self, pattern: str, replacement: str, flags: int | StringRegexFlags = 0,
+        *, write_flags: int | StringWriteFlags = 0,
     ) -> WriteSegmentBuilder:
         """Register a regex-replace modify.
 
@@ -4476,21 +4476,35 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         replace every match.
 
         Note:
-            ``flags`` here is :class:`StringRegexFlags` (regex behavior),
-            NOT :class:`StringWriteFlags`. The server's regex-replace op has
-            no slot for write flags on the wire; ``str_regex_replace`` does
-            not accept a ``write_flags=`` kwarg for that reason.
+            ``flags`` is :class:`StringRegexFlags` (regex behavior); the
+            :class:`StringWriteFlags` bitmask travels in ``write_flags``.
+            ``CREATE_ONLY`` is a ``PARAMETER_ERROR`` here because a regex
+            replace cannot create a bin.
+
+        Example::
+
+            await (
+                session.upsert(key)
+                    .bin("text").str_regex_replace(
+                        r"\d", "X", StringRegexFlags.GLOBAL,
+                        write_flags=StringWriteFlags.UPDATE_ONLY)
+                    .execute()
+            )
 
         Args:
             pattern: ICU regex pattern.
             replacement: Replacement text.
             flags: OR-combined :class:`StringRegexFlags` bitmask.
+            write_flags: OR-combined :class:`StringWriteFlags` bitmask
+                (``UPDATE_ONLY`` / ``NO_FAIL``).
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
         """
         return self._segment._add_op(
-            StringOperation.regex_replace(self._bin, pattern, replacement, int(flags)),
+            StringOperation.regex_replace(
+                self._bin, pattern, replacement, int(flags), write_flags=int(write_flags),
+            ),
         )
 
     def str_upper(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:

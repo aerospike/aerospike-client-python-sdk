@@ -26,9 +26,23 @@ Covers:
 
 import pytest
 
-from aerospike_sdk import Key, ListOrderType, ListReturnType, ListSortFlags, MapOrder, MapReturnType, MapWriteFlags
+from aerospike_sdk import (
+    CTX,
+    Key,
+    ListOrderType,
+    ListReturnType,
+    ListSortFlags,
+    MapOrder,
+    MapReturnType,
+    MapWriteFlags,
+    StringNumericType,
+    StringRegexFlags,
+    StringWriteFlags,
+)
 from aerospike_async import ListOperation, MapOperation, MapPolicy
 
+import aerospike_sdk.aio.operations.cdt_read as cdt_read_module
+import aerospike_sdk.aio.operations.cdt_write as cdt_write_module
 from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
     CdtReadInvertableBuilder,
@@ -1098,3 +1112,176 @@ class TestNestedWriteVerbs:
         result = inner.list_trim(0, 2)
         assert result is segment
         assert isinstance(self._sole_op(segment), ListOperation)
+
+
+# ===================================================================
+# String operations on navigated CDT builders
+# ===================================================================
+
+class TestStringOpsOnNavigatedBuilders:
+    """String ops emit ``StringOperation`` with the navigated CTX path applied.
+
+    The op object is opaque, so the ``StringOperation`` factory is swapped for
+    a recorder inside the builder modules to observe the ``ctx`` handed over.
+    """
+
+    class _Recorder:
+        """Stand-in for ``StringOperation`` that records every factory call."""
+
+        def __init__(self):
+            self.calls: list[tuple[str, tuple, dict]] = []
+
+        def __getattr__(self, name):
+            def factory(*args, **kwargs):
+                self.calls.append((name, args, kwargs))
+                return ("string-op", name)
+            return factory
+
+    @pytest.fixture
+    def recorder(self, monkeypatch):
+        rec = self._Recorder()
+        monkeypatch.setattr(cdt_read_module, "StringOperation", rec)
+        monkeypatch.setattr(cdt_write_module, "StringOperation", rec)
+        return rec
+
+    def _write_builder(self, bin_name: str = "doc"):
+        qb = _make_qb()
+        qb._single_key = _make_key()
+        segment = WriteSegmentBuilder(qb)
+        return WriteBinBuilder(segment, bin_name), segment
+
+    def _read_builder(self, bin_name: str = "doc"):
+        parent = _OpCollector()
+        return QueryBinBuilder(parent, bin_name), parent
+
+    def test_read_op_on_first_hop_carries_single_ctx(self, recorder):
+        qbb, parent = self._read_builder()
+        result = qbb.on_list_index(1).str_strlen()
+        assert result is parent
+        assert parent.operations == [("string-op", "strlen")]
+        name, args, kwargs = recorder.calls[0]
+        assert args == ("doc",)
+        assert [type(c) for c in kwargs["ctx"]] == [CTX]
+
+    def test_read_op_on_nested_path_accumulates_ctx(self, recorder):
+        qbb, parent = self._read_builder()
+        qbb.on_map_key("outer").on_list_index(2).str_substr(1, 3)
+        name, args, kwargs = recorder.calls[0]
+        assert name == "substr"
+        assert args == ("doc", 1, 3)
+        assert len(kwargs["ctx"]) == 2
+
+    def test_read_ops_pass_arguments_through(self, recorder):
+        qbb, parent = self._read_builder()
+
+        def nav():
+            return qbb.on_map_key("k")
+
+        nav().str_char_at(2)
+        nav().str_find("x", 2)
+        nav().str_contains("x")
+        nav().str_starts_with("p")
+        nav().str_ends_with("s")
+        nav().str_to_integer()
+        nav().str_to_double()
+        nav().str_byte_length()
+        nav().str_is_numeric(StringNumericType.INT)
+        nav().str_is_upper()
+        nav().str_is_lower()
+        nav().str_to_blob()
+        nav().str_split(",")
+        nav().str_b64_decode()
+        nav().str_regex_compare("^a", StringRegexFlags.CASE_INSENSITIVE)
+        names = [c[0] for c in recorder.calls]
+        assert names == [
+            "char_at", "find", "contains", "starts_with", "ends_with",
+            "to_integer", "to_double", "byte_length", "is_numeric", "is_upper",
+            "is_lower", "to_blob", "split", "b64_decode", "regex_compare",
+        ]
+        by_name = {c[0]: c for c in recorder.calls}
+        assert by_name["find"][1] == ("doc", "x", 2)
+        assert by_name["is_numeric"][1] == ("doc", StringNumericType.INT)
+        assert by_name["regex_compare"][1] == (
+            "doc", "^a", int(StringRegexFlags.CASE_INSENSITIVE),
+        )
+        assert all(len(c[2]["ctx"]) == 1 for c in recorder.calls)
+        assert len(parent.operations) == len(names)
+
+    def test_modify_op_on_write_builder_carries_ctx_and_flags(self, recorder):
+        wbb, segment = self._write_builder()
+        result = wbb.on_list_index(1).str_append("!", flags=StringWriteFlags.NO_FAIL)
+        assert result is segment
+        assert segment._qb._operations == [("string-op", "append")]
+        name, args, kwargs = recorder.calls[0]
+        assert args == ("doc", "!")
+        assert kwargs["flags"] == int(StringWriteFlags.NO_FAIL)
+        assert [type(c) for c in kwargs["ctx"]] == [CTX]
+
+    def test_modify_op_on_nested_write_path_accumulates_ctx(self, recorder):
+        wbb, segment = self._write_builder()
+        wbb.on_map_key("outer").on_map_key("inner").str_upper()
+        name, args, kwargs = recorder.calls[0]
+        assert name == "upper"
+        assert args == ("doc",)
+        assert kwargs["flags"] == 0
+        assert len(kwargs["ctx"]) == 2
+
+    def test_modify_ops_pass_arguments_through(self, recorder):
+        wbb, segment = self._write_builder()
+
+        def nav():
+            return wbb.on_map_key("k")
+
+        nav().str_insert(0, "x")
+        nav().str_overwrite(1, "y")
+        nav().str_concat(["a", "b"])
+        nav().str_prepend("p")
+        nav().str_snip(1, 3)
+        nav().str_snip(5)
+        nav().str_replace("a", "b")
+        nav().str_replace_all("a", "b")
+        nav().str_regex_replace("a+", "b", StringRegexFlags.GLOBAL,
+                                write_flags=StringWriteFlags.UPDATE_ONLY)
+        nav().str_lower()
+        nav().str_case_fold()
+        nav().str_normalize_nfc()
+        nav().str_trim_start()
+        nav().str_trim_end()
+        nav().str_trim()
+        nav().str_pad_start(8, ".")
+        nav().str_pad_end(8, ".")
+        nav().str_repeat(3)
+        names = [c[0] for c in recorder.calls]
+        assert names == [
+            "insert", "overwrite", "concat", "prepend", "snip", "snip",
+            "replace", "replace_all", "regex_replace", "lower", "case_fold",
+            "normalize_nfc", "trim_start", "trim_end", "trim", "pad_start",
+            "pad_end", "repeat",
+        ]
+        by_name = {c[0]: c for c in recorder.calls}
+        assert by_name["insert"][1] == ("doc", 0, "x")
+        assert by_name["concat"][1] == ("doc", ["a", "b"])
+        assert by_name["snip"][1] == ("doc", 5, None)
+        assert by_name["regex_replace"][1] == ("doc", "a+", "b", int(StringRegexFlags.GLOBAL))
+        assert by_name["regex_replace"][2]["write_flags"] == int(StringWriteFlags.UPDATE_ONLY)
+        assert all(len(c[2]["ctx"]) == 1 for c in recorder.calls)
+        assert len(segment._qb._operations) == len(names)
+
+    def test_write_builder_also_exposes_string_reads(self, recorder):
+        wbb, segment = self._write_builder()
+        wbb.on_list_index(0).str_strlen()
+        assert recorder.calls[0][0] == "strlen"
+
+    def test_read_builder_has_no_string_modifies(self):
+        qbb, _ = self._read_builder()
+        nav = qbb.on_list_index(0)
+        assert isinstance(nav, CdtReadBuilder)
+        assert not hasattr(nav, "str_upper")
+        assert not hasattr(nav, "str_append")
+
+    def test_invertable_builders_inherit_string_ops(self, recorder):
+        qbb, _ = self._read_builder()
+        qbb.on_list_value("x").str_strlen()
+        wbb, _ = self._write_builder()
+        wbb.on_map_value("x").str_upper()
+        assert [c[0] for c in recorder.calls] == ["strlen", "upper"]
