@@ -232,13 +232,13 @@ The direct point-operation shortcuts — `session.get`, `session.put`,
 `session.get_many`, and `session.put_many` — raise the same SDK exception
 types as every other path: a failure that propagates out of them is
 converted at the boundary, so `except AerospikeError` (or a typed subclass
-like `TimeoutError`) works uniformly, `in_doubt` included. The one remaining
-distinction is the `_many` variants' **per-key result slots**: an exception
-instance delivered *in the result list* (not raised) is the underlying
-client's type from `aerospike_async.exceptions`, left unconverted so
-successful windows never pay a conversion scan. Those instances carry the
-same `in_doubt` attribute; check slots with `isinstance(slot, Exception)`
-rather than an SDK-typed `except`.
+like `TimeoutError`) works uniformly, `in_doubt` included. The `_many`
+variants also deliver **per-key result slots**: an exception instance
+returned *in the result list* (not raised) is the same SDK type the
+single-key call would have raised, `in_doubt` included, so
+`isinstance(slot, RecordNotFoundError)` and `slot.result_code` work on a
+slot exactly as they do in an `except` clause. Failure-free windows return
+without a conversion pass.
 
 ## Client vs Server Timeouts
 

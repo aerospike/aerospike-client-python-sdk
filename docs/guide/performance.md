@@ -94,7 +94,7 @@ When you already have a *window* of independent keys to read or write together �
 
 ```python
 import asyncio
-from aerospike_sdk import ClusterDefinition, DataSet
+from aerospike_sdk import AerospikeError, ClusterDefinition, DataSet
 
 async def main():
     async with ClusterDefinition("localhost", 3000).connect() as cluster:
@@ -108,14 +108,14 @@ async def main():
 
         # Read the window back — a single await, results positional (one slot per key).
         records = await session.get_many(keys)
-        active = [r.bins["active"] for r in records if not isinstance(r, Exception)]
+        active = [r.bins["active"] for r in records if not isinstance(r, AerospikeError)]
 
         print(f"{len(active)} users read; {len(write_errors)} write errors")
 
 asyncio.run(main())
 ```
 
-Each returned list is the same length as `keys` and positional: a slot holds that key's `Record` (`get_many`) or `None` on success (`put_many`), **or the exception instance for that key** — returned, never raised, so one missing or failed key never fails its window-mates. Check with `isinstance(slot, Exception)`. `get_many` accepts an optional `bins=` projection shared by the window.
+Each returned list is the same length as `keys` and positional: a slot holds that key's `Record` (`get_many`) or `None` on success (`put_many`), **or the `AerospikeError` instance for that key** — returned, never raised, so one missing or failed key never fails its window-mates. Check with `isinstance(slot, AerospikeError)`. `get_many` accepts an optional `bins=` projection shared by the window.
 
 **Window API vs. server batch — pick by where your bottleneck is.** This is *not* a server batch (the builder's batch path — `session.query(...)` over a key list), and the difference is what to optimize for:
 

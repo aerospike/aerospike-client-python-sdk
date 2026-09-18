@@ -29,7 +29,13 @@ import pytest
 from aerospike_sdk import ErrorDetailVerbosity
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
-from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    GenerationError,
+    RecordNotFoundError,
+    RecordTooBigError,
+    ResultCode,
+)
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
@@ -979,3 +985,41 @@ class TestBinNameTooLongDiagnostic:
         # Guards the boundary the diagnostic reports: 15 is legal.
         await session.upsert(ds.id("binname-2")).put({"a" * 15: 1}).execute()
         await _cleanup(session, ds.id("binname-2"))
+
+
+class TestWindowSlotTypes:
+    """Per-key slots from ``get_many`` / ``put_many`` carry SDK exception types.
+
+    The contract is the one the guide states for every path: an error is an
+    ``AerospikeError`` subclass whether it is raised or handed back in a slot.
+    """
+
+    async def test_get_many_missing_key_slot_is_record_not_found(self, session, ds):
+        present = ds.id("window_slot_present")
+        missing = ds.id("window_slot_missing")
+        await _cleanup(session, present, missing)
+        await session.upsert(present).put({"v": 1}).execute()
+
+        slots = await session.get_many([present, missing])
+
+        assert slots[0].bins == {"v": 1}
+        assert isinstance(slots[1], RecordNotFoundError)
+        assert isinstance(slots[1], AerospikeError)
+        assert slots[1].result_code == ResultCode.KEY_NOT_FOUND_ERROR
+        await _cleanup(session, present)
+
+    async def test_put_many_oversized_slot_is_record_too_big(self, session, ds):
+        ok = ds.id("window_slot_ok")
+        too_big = ds.id("window_slot_too_big")
+        await _cleanup(session, ok, too_big)
+
+        outcomes = await session.put_many([ok], {"v": 1})
+        assert outcomes == [None]
+
+        # Well past any configured write-block-size, so the server rejects it.
+        outcomes = await session.put_many([too_big], {"blob": b"x" * (16 * 1024 * 1024)})
+
+        assert isinstance(outcomes[0], RecordTooBigError)
+        assert isinstance(outcomes[0], AerospikeError)
+        assert outcomes[0].result_code == ResultCode.RECORD_TOO_BIG
+        await _cleanup(session, ok)

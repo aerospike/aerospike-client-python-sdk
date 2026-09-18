@@ -52,6 +52,7 @@ from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
+    AerospikeError,
     PacAerospikeError,
     PacServerError,
     _convert_pac_exception,
@@ -76,6 +77,16 @@ from aerospike_sdk.session_shared import (
 # a buffered write also copies its payload — so their break-even fan-in differs.
 _COALESCE = os.environ.get("PSDK_COALESCE", "1") != "0"
 _COALESCE_WRITES = _COALESCE and os.environ.get("PSDK_COALESCE_WRITES", "1") != "0"
+
+
+def _convert_window_slots(slots: List[Any]) -> List[Any]:
+    # Only reached when the window submission reported at least one failed
+    # slot, so failure-free windows never pay this scan.
+    return [
+        _convert_pac_exception(slot)
+        if isinstance(slot, (PacServerError, PacAerospikeError)) else slot
+        for slot in slots
+    ]
 
 
 class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
@@ -417,7 +428,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
     async def get_many(
         self, keys: List[Key], bins: Optional[List[str]] = None,
-    ) -> List[Any]:
+    ) -> List[Union[Record, AerospikeError]]:
         """Direct point reads for a window of keys — one await, one result list.
 
         Client-side fusion of independent single-record reads: one call
@@ -433,13 +444,17 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Returns:
             A list the same length as ``keys``. Each slot is the
-            :class:`~aerospike_async.Record` for that key, or the exception
-            instance (not raised) for that key — check with
-            ``isinstance(slot, Exception)``. One failed key never fails its
-            window-mates. Slot instances carry the underlying client's
-            exception types (converting every slot would cost a scan of
-            each successful window); a failure that aborts the whole window
-            is raised as the SDK exception type.
+            :class:`~aerospike_async.Record` for that key, or the
+            :class:`~aerospike_sdk.exceptions.AerospikeError` instance (not
+            raised) for that key — check with
+            ``isinstance(slot, AerospikeError)``. One failed key never fails
+            its window-mates.
+
+            Records are handed back raw rather than wrapped in
+            :class:`~aerospike_sdk.record_result.RecordResult`: a wrapper per
+            slot would cost one allocation per key, which is the per-op cost
+            this API exists to amortize. The asymmetry with the builder
+            surface is deliberate.
 
         Raises:
             AerospikeError: When the whole-window submission fails (for
@@ -450,7 +465,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
             users = DataSet.of("test", "users")
             records = await session.get_many([users.id(i) for i in range(16)])
-            found = [r for r in records if not isinstance(r, Exception)]
+            found = [r for r in records if not isinstance(r, AerospikeError)]
 
         See Also:
             :meth:`get`: Single-key point read.
@@ -458,22 +473,26 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         """
         try:
             if self._txn is None:
-                return await self._pac_client._submit_many_read(
+                slots, failures = await self._pac_client._submit_many_read(
                     keys, bins,
                     policy=self._cached_read_policy,
                     policy_sc=self._cached_read_policy_sc,
                 )
-            policy = to_read_policy(
-                self._behavior.get_settings(OpKind.READ, OpShape.POINT))
-            policy.txn = self._txn
-            return await self._pac_client._submit_many_read(
-                keys, bins, policy=policy)
+            else:
+                policy = to_read_policy(
+                    self._behavior.get_settings(OpKind.READ, OpShape.POINT))
+                policy.txn = self._txn
+                slots, failures = await self._pac_client._submit_many_read(
+                    keys, bins, policy=policy)
         except (PacServerError, PacAerospikeError) as e:
             raise _convert_pac_exception(e) from e
+        if failures:
+            return _convert_window_slots(slots)
+        return slots
 
     async def put_many(
         self, keys: List[Key], bins: Dict[str, Any],
-    ) -> List[Any]:
+    ) -> List[Optional[AerospikeError]]:
         """Direct upserts of one payload to a window of keys — one await.
 
         Write counterpart of :meth:`get_many`: the ``bins`` payload is
@@ -486,10 +505,10 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
         Returns:
             A list the same length as ``keys``: ``None`` for each success,
-            or the exception instance (not raised) for that key. Slot
-            instances carry the underlying client's exception types; a
-            failure that aborts the whole window is raised as the SDK
-            exception type.
+            or the :class:`~aerospike_sdk.exceptions.AerospikeError`
+            instance (not raised) for that key. Slots are bare rather than
+            :class:`~aerospike_sdk.record_result.RecordResult` for the same
+            allocation reason as :meth:`get_many`.
 
         Raises:
             AerospikeError: When the whole-window submission fails; per-key
@@ -508,19 +527,23 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         """
         try:
             if self._txn is None:
-                return await self._pac_client._submit_many_write(
+                slots, failures = await self._pac_client._submit_many_write(
                     keys, bins,
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
                 )
-            policy = to_write_policy(
-                self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
-            policy.txn = self._txn
-            return await self._pac_client._submit_many_write(
-                keys, bins, policy=policy)
+            else:
+                policy = to_write_policy(
+                    self._behavior.get_settings(
+                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+                policy.txn = self._txn
+                slots, failures = await self._pac_client._submit_many_write(
+                    keys, bins, policy=policy)
         except (PacServerError, PacAerospikeError) as e:
             raise _convert_pac_exception(e) from e
+        if failures:
+            return _convert_window_slots(slots)
+        return slots
 
     # Delegate all Client operations to maintain same API
 
