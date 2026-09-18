@@ -55,7 +55,7 @@ await (
     .create()
 )
 
-# Blob index (for bytes bins; server 7.0+)
+# Blob index (for bytes bins)
 await (
     session.index(users)
     .on_bin("avatar_hash")

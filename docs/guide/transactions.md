@@ -6,8 +6,8 @@ together on abort.
 
 ## Server Requirements
 
-Transactions require **Aerospike Server 8.0+** with the target namespace
-configured for **strong consistency**. On an AP namespace the transaction
+Transactions require the target namespace to be configured for
+**strong consistency**. On an AP namespace the transaction
 APIs raise immediately; on an SC namespace the server allocates a
 transaction monitor record and tracks the write set.
 
@@ -158,7 +158,6 @@ batch executes exactly as before:
   `replace`/`delete`/`touch`/UDF, or a chain whose segments span
   multiple keys with write verbs) and targets more than a single key,
 - every key's namespace is strong-consistency,
-- the whole cluster supports transactions (server 8.0+ on every node),
 - no explicit transaction is active and the operation was not opted out
   with `with_txn(None)`,
 - `implicit_batch_write_transactions` is enabled (the default).

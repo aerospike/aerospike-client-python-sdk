@@ -241,7 +241,7 @@ class _IndexBuilderBase:
         """Set the secondary index type to blob (for bytes bin values).
 
         Call this before :meth:`create` to index a bin containing raw ``bytes``
-        values for exact-match query. Requires server 7.0 or newer.
+        values for exact-match query.
 
         Returns:
             ``self`` for method chaining.

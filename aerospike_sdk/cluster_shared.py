@@ -304,8 +304,7 @@ class ClusterDefinitionBase(Generic[_TB]):
         """Configure certificate-based (PKI) authentication.
 
         Uses client certificates instead of username/password credentials.
-        Automatically enables TLS if not already configured. Requires server
-        version 5.7.0+.
+        Automatically enables TLS if not already configured.
 
         Returns:
             This ClusterDefinition for method chaining.
