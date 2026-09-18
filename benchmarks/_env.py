@@ -189,7 +189,7 @@ def maybe_enable_metrics(client, cfg) -> None:
     mode = getattr(cfg, "metrics_mode", "off")
     if mode == "off":
         return
-    from aerospike_sdk import MetricsPolicy, Sampler
+    from aerospike_sdk.metrics import MetricsPolicy, Sampler
 
     if mode == "usage":
         policy = MetricsPolicy(usage_enabled=True)

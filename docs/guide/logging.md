@@ -94,7 +94,7 @@ To change Rust-side levels **while connected**, call
 
 ```python
 import logging
-from aerospike_sdk import refresh_log_levels
+from aerospike_sdk.loggers import refresh_log_levels
 
 logging.getLogger("aerospike_core.cluster").setLevel(logging.DEBUG)
 refresh_log_levels()

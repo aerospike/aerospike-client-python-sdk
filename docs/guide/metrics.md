@@ -32,7 +32,7 @@ Metrics are cluster-scoped: enable them on the
 interval.
 
 ```python
-from aerospike_sdk import LatencyType
+from aerospike_sdk.metrics import LatencyType
 
 cluster.enable_metrics()
 
@@ -50,11 +50,11 @@ an interval (for example every 30 seconds), not per operation.
 
 ## Configuring collection
 
-{class}`~aerospike_sdk.MetricsPolicy` controls the histogram shape and how
+{class}`~aerospike_sdk.metrics.MetricsPolicy` controls the histogram shape and how
 much is recorded:
 
 ```python
-from aerospike_sdk import LatencyUnit, MetricsPolicy, Sampler
+from aerospike_sdk.metrics import LatencyUnit, MetricsPolicy, Sampler
 
 # Millisecond view (the default): 7 buckets covering
 # <1, >=1, >=2, >=4, >=8, >=16, >=32 ms.
@@ -91,7 +91,7 @@ The canonical detail is per-node and per-command-type. Each node snapshot
 command category, ~20 lifecycle counters, and per-namespace detail:
 
 ```python
-from aerospike_sdk import CommandType
+from aerospike_sdk.metrics import CommandType
 
 agg = snapshot.cluster_aggregated
 
@@ -105,9 +105,9 @@ if detail is not None:
     print(detail.latency.count, detail.bytes_received.count)
 ```
 
-{meth}`~aerospike_sdk.MetricsSnapshot.latency` derives the classic five-way
+{meth}`~aerospike_sdk.metrics.MetricsSnapshot.latency` derives the classic five-way
 grouping (`conn`/`read`/`write`/`batch`/`query`) from those categories, and
-{meth}`~aerospike_sdk.MetricsSnapshot.to_dict` renders the whole snapshot
+{meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_dict` renders the whole snapshot
 with the cross-client-stable serialized names for logging or shipping to an
 external system.
 
@@ -124,7 +124,7 @@ Reach it through `cluster_aggregated` for the whole cluster, or through any
 entry of `nodes` for one node; both expose the same methods:
 
 ```python
-from aerospike_sdk import CommandType
+from aerospike_sdk.metrics import CommandType
 
 snapshot = await cluster.metrics()
 
@@ -174,7 +174,7 @@ This tier is specific to this SDK and the client core beneath it. The
 cross-SDK specification defines the canonical document, not this, so anything
 built on `detailed_metric` is not portable to the other Aerospike clients and
 may change shape as the core evolves. Prefer
-{meth}`~aerospike_sdk.MetricsSnapshot.to_canonical_dict` unless you need
+{meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` unless you need
 detail it does not carry.
 
 (feature-usage-counters)=
@@ -250,7 +250,7 @@ Implement `MetricsExporter` (plain `def`) for the sync client and
 `AsyncMetricsExporter` (`async def`) for the async one. `on_node_close` fires
 once for a node that has left the cluster, carrying its final snapshot.
 
-{meth}`~aerospike_sdk.MetricsSnapshot.to_canonical_dict` is the payload an
+{meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` is the payload an
 exporter should serialize: a stable `snake_case` document independent of how
 the underlying client names its own fields.
 
@@ -293,7 +293,7 @@ and neither are the cluster-level `exceeded_max_retries` /
 read by tools such as `asloglatency`, so adding fields to it would make the
 file non-interoperable with the other Aerospike clients that read and write
 it. Anything outside that field list reaches a consumer through the canonical
-snapshot — {meth}`~aerospike_sdk.MetricsSnapshot.to_canonical_dict` carries
+snapshot — {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` carries
 all of it — via a custom exporter or a `cluster.metrics()` poll.
 
 ```{warning}

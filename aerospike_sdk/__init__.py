@@ -17,7 +17,6 @@
 
 from aerospike_async import (
     AbortStatus,
-    AdminPolicy,
     AuthMode,
     BitPolicy,
     BitwiseOverflowActions,
@@ -25,18 +24,14 @@ from aerospike_async import (
     BitWriteFlags,
     CdtOperation,
     CollectionIndexType,
-    CommandType,
     CommitStatus,
     CTX,
     ErrorDetailVerbosity,
-    DropIndexTask,
-    ExecuteTask,
     ExpressionTrace,
     ExpType,
     Filter,
     HLLWriteFlags,
     Key,
-    LatencyUnit,
     ListOrderType,
     ListReturnType,
     ListSortFlags,
@@ -49,10 +44,7 @@ from aerospike_async import (
     ModifyFlags,
     QueryDuration,
     RegexFlag,
-    IndexTask,
-    RegisterTask,
     ResultCode,
-    Sampler,
     SelectFlags,
     SpecialValue,
     StringNumericType,
@@ -63,7 +55,6 @@ from aerospike_async import (
     Txn,
     TxnState,
     UDFLang,
-    UdfRemoveTask,
     Version,
 )
 
@@ -108,24 +99,9 @@ from aerospike_sdk.exceptions import (
     TransactionError,
     UdfError,
 )
-from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy, OnError
-from aerospike_sdk.info_types import (
-    NamespaceDetail,
-    SetDetail,
-    Sindex,
-    SindexDetail,
-    StorageEngine,
-    StorageFileDetail,
-)
+from aerospike_sdk.error_strategy import ErrorHandler, ErrorStrategy
 from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
-from aerospike_sdk.metrics import (
-    DerivedHistogram,
-    LatencyType,
-    MetricsPolicy,
-    MetricsSnapshot,
-)
-from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
@@ -139,7 +115,6 @@ except Exception:
 
 __all__ = [
     "AbortStatus",
-    "AdminPolicy",
     "AerospikeError",
     "AsyncPool",
     "AuthenticationError",
@@ -162,14 +137,11 @@ __all__ = [
     "Cluster",
     "ClusterDefinition",
     "CollectionIndexType",
-    "CommandType",
     "CommitError",
     "CommitStatus",
     "ConnectionError",
     "CTX",
     "DataSet",
-    "NamespaceDetail",
-    "DerivedHistogram",
     "ElementError",
     "ElementExistsError",
     "ElementNotFoundError",
@@ -178,8 +150,6 @@ __all__ = [
     "ErrorHandler",
     "ErrorDetailVerbosity",
     "ErrorStrategy",
-    "DropIndexTask",
-    "ExecuteTask",
     "Exp",
     "ExpressionTrace",
     "ExpType",
@@ -194,8 +164,6 @@ __all__ = [
     "InvalidNodeError",
     "Key",
     "KeyBusyError",
-    "LatencyType",
-    "LatencyUnit",
     "ListOrderType",
     "ListReturnType",
     "ListSortFlags",
@@ -205,10 +173,7 @@ __all__ = [
     "MapReturnType",
     "MapWriteFlags",
     "MaxErrorRateError",
-    "MetricsPolicy",
-    "MetricsSnapshot",
     "ModifyFlags",
-    "OnError",
     "OperationResult",
     "QueryDuration",
     "QueryHint",
@@ -218,19 +183,10 @@ __all__ = [
     "RecordExistsError",
     "RecordNotFoundError",
     "RecordResult",
-    "SetDetail",
-    "Sindex",
-    "SindexDetail",
-    "StorageEngine",
-    "StorageFileDetail",
     "RecordStream",
     "RecordTooBigError",
     "RegexFlag",
-    "IndexTask",
-    "RegisterTask",
     "ResultCode",
-    "Sampler",
-    "SdkLoggers",
     "SecondaryIndexError",
     "SecurityError",
     "SelectFlags",
@@ -250,11 +206,9 @@ __all__ = [
     "Txn",
     "TxnState",
     "UDFLang",
-    "UdfRemoveTask",
     "Version",
     "map_keys",
     "map_values",
-    "refresh_log_levels",
     "val",
 ]
 

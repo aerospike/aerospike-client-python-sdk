@@ -17,7 +17,7 @@ filter technologies, and API styles it uses — rather than how fast commands
 run. They are counter-only: an increment per feature per call, never a timer,
 and never sampled.
 
-Collection is off unless :attr:`~aerospike_sdk.MetricsPolicy.usage_enabled`
+Collection is off unless :attr:`~aerospike_sdk.metrics.MetricsPolicy.usage_enabled`
 was set when metrics were enabled. Call sites gate on a cached flag before
 assembling anything, so the disabled path costs one attribute load and a
 branch.

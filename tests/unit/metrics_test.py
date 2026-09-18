@@ -17,7 +17,7 @@ from typing import List
 
 import pytest
 
-from aerospike_sdk import (
+from aerospike_sdk.metrics import (
     CommandType,
     LatencyType,
     LatencyUnit,

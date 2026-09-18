@@ -380,7 +380,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
 
         Args:
             policy: Collection configuration. Defaults to
-                :class:`~aerospike_sdk.MetricsPolicy`'s milliseconds/7-column
+                :class:`~aerospike_sdk.metrics.MetricsPolicy`'s milliseconds/7-column
                 scheme with every command recorded.
 
         Example::
@@ -417,7 +417,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         state, so poll at an export interval rather than per operation.
 
         Returns:
-            A :class:`~aerospike_sdk.MetricsSnapshot`; empty (zeroed) if
+            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; empty (zeroed) if
             metrics were never enabled.
 
         Example::

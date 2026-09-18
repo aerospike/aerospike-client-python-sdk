@@ -104,7 +104,7 @@ class MetricsPolicy:
 
     Example::
 
-        from aerospike_sdk import LatencyUnit, MetricsPolicy, Sampler
+        from aerospike_sdk.metrics import LatencyUnit, MetricsPolicy, Sampler
 
         # Classic milliseconds view, sampling 10% of calls.
         policy = MetricsPolicy(sampler=Sampler.probability(0.1))

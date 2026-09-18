@@ -621,7 +621,7 @@ system:
         assert "metrics.extended" in caplog.text
 
     def test_policy_round_trip(self):
-        from aerospike_sdk import LatencyUnit
+        from aerospike_sdk.metrics import LatencyUnit
         from aerospike_sdk.metrics import policy_from_settings
         policy = policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
         assert policy.latency_unit == LatencyUnit.MICROSECONDS

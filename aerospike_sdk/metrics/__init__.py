@@ -17,7 +17,7 @@ stays the import path and the split into :mod:`.policy`, :mod:`.snapshot` and
 :mod:`.export` is internal. :mod:`.usage` is not re-exported: its counter names
 and recording helpers are called by the SDK itself, not by applications, which
 only read the counts back through
-:attr:`~aerospike_sdk.MetricsSnapshot.usage`.
+:attr:`~aerospike_sdk.metrics.MetricsSnapshot.usage`.
 """
 
 from aerospike_sdk.metrics.policy import (

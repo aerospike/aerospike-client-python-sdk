@@ -52,7 +52,7 @@ def refresh_log_levels() -> None:
         Raise cluster-tend verbosity on a live client during an incident::
 
             import logging
-            from aerospike_sdk import refresh_log_levels
+            from aerospike_sdk.loggers import refresh_log_levels
 
             logging.getLogger("aerospike_core.cluster").setLevel(logging.DEBUG)
             refresh_log_levels()

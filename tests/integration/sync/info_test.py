@@ -132,7 +132,7 @@ def test_sets(session):
     test_namespace = list(namespaces)[0]
     sets = info.sets(test_namespace)
 
-    from aerospike_sdk import SetDetail
+    from aerospike_sdk.info_types import SetDetail
 
     assert isinstance(sets, list)
     assert all(isinstance(s, SetDetail) for s in sets)
@@ -150,7 +150,7 @@ def test_sets(session):
 
 def test_sets_returns_detail(session):
     """Sync twin: per-set detail, typed."""
-    from aerospike_sdk import SetDetail
+    from aerospike_sdk.info_types import SetDetail
 
     info = session.info()
     namespaces = info.namespaces()
@@ -217,7 +217,7 @@ def test_secondary_index_details(session):
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:
-        from aerospike_sdk import SindexDetail
+        from aerospike_sdk.info_types import SindexDetail
 
         assert isinstance(details, SindexDetail)
         # Parsed counters, not the raw {command: body} envelope.
@@ -344,7 +344,7 @@ def test_info_on_all_nodes_statistics(session):
 
 def test_per_node_views(session):
     """Sync twin: per-node variants answer per node."""
-    from aerospike_sdk import NamespaceDetail, SetDetail, Sindex
+    from aerospike_sdk.info_types import NamespaceDetail, SetDetail, Sindex
 
     info = session.info()
     namespaces = info.namespaces()

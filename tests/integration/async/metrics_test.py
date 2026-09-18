@@ -14,7 +14,7 @@
 
 import pytest
 
-from aerospike_sdk import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
+from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.metrics.export import AsyncMetricsExportTimer
 

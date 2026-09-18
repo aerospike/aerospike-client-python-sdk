@@ -171,7 +171,7 @@ transactions. All three knobs live in
 next operation) or `with_system_settings(...)`:
 
 ```python
-from aerospike_sdk import SystemSettings, TransactionSettings
+from aerospike_sdk.policy import SystemSettings, TransactionSettings
 
 settings = SystemSettings(
     transactions=TransactionSettings(

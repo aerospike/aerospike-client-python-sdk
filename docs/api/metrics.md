@@ -1,16 +1,16 @@
 # Metrics
 
 ```{eval-rst}
-.. autoclass:: aerospike_sdk.MetricsPolicy
+.. autoclass:: aerospike_sdk.metrics.MetricsPolicy
    :members:
 
-.. autoclass:: aerospike_sdk.MetricsSnapshot
+.. autoclass:: aerospike_sdk.metrics.MetricsSnapshot
    :members:
 
-.. autoclass:: aerospike_sdk.LatencyType
+.. autoclass:: aerospike_sdk.metrics.LatencyType
    :members:
 
-.. autoclass:: aerospike_sdk.DerivedHistogram
+.. autoclass:: aerospike_sdk.metrics.DerivedHistogram
    :members:
 
 .. autoclass:: aerospike_sdk.metrics.MetricsExporter

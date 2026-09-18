@@ -17,14 +17,8 @@ you act on the numbers; see the "Known limitations" section of
 import asyncio
 
 import _env
-from aerospike_sdk import (
-    CommandType,
-    DataSet,
-    LatencyType,
-    LatencyUnit,
-    MetricsPolicy,
-    Sampler,
-)
+from aerospike_sdk import DataSet
+from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
 
 
 async def _traffic(cluster, count: int) -> None:

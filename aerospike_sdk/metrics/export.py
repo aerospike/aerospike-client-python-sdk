@@ -350,7 +350,7 @@ class LearnMetricsFileExporter:
     field list does not include them; inventing a segment would make the file
     non-interoperable with the other clients reading and writing it. Usage
     counters reach a consumer through the canonical snapshot instead --
-    :meth:`~aerospike_sdk.MetricsSnapshot.to_canonical_dict` carries them under
+    :meth:`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` carries them under
     ``usage`` -- which is the route the cross-SDK specification defines for
     anything outside the legacy field list.
 
