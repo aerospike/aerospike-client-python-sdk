@@ -490,3 +490,41 @@ class TestNestedCdtReads:
             .execute().first_or_raise()
         )
         assert result.record.bins["nested"] == 4
+
+
+# ===================================================================
+# Dataset queries carry bin-level ops as an ops projection
+# ===================================================================
+
+class TestDatasetQueryBinOps:
+    def test_select_from_projects_over_dataset(self, cluster):
+        """``.bin().select_from()`` on a dataset query returns the virtual bin
+        for every record, not the stored bins."""
+        session = cluster.create_session()
+        from aerospike_sdk import Exp
+        stream = (
+            session.query(DataSet.of(NS, SET))
+            .bin("age_next").select_from(
+                Exp.num_add([Exp.int_bin("age"), Exp.int_val(1)]))
+            .execute()
+        )
+        records = [r.record_or_raise() for r in stream]
+        assert len(records) == 3
+        assert sorted(r.bins["age_next"] for r in records) == [22, 23, 24]
+        assert all("name" not in r.bins for r in records)
+
+    def test_get_and_cdt_read_over_dataset_with_where(self, cluster):
+        """Plain ``.get()`` and a CDT read both ride the projection, and the
+        ``where`` filter still narrows the dataset."""
+        session = cluster.create_session()
+        from aerospike_sdk import Exp
+        stream = (
+            session.query(DataSet.of(NS, SET))
+            .where(Exp.ge(Exp.int_bin("age"), Exp.int_val(22)))
+            .bin("name").get()
+            .bin("settings").on_map_key("volume").get_values()
+            .execute()
+        )
+        records = [r.record_or_raise() for r in stream]
+        assert sorted(r.bins["name"] for r in records) == ["user2", "user3"]
+        assert sorted(r.bins["settings"] for r in records) == [20, 30]

@@ -82,6 +82,23 @@ class TestWithOpProjection:
         )
         qb._build_statement()
 
+    def test_dataset_read_statement_merges_bin_ops(self):
+        qb = _make_qb()
+        qb.with_op_projection(Operation.get_bin("name"))
+        qb.bin("age").get()
+        # Bin-level ops join the explicit projection; PAC's set_operations
+        # would reject anything that isn't an operation.
+        qb._build_dataset_read_statement()
+        assert len(qb._operations) == 1
+
+    def test_background_statement_leaves_bin_ops_out(self):
+        qb = _make_qb()
+        qb.bin("age").get()
+        # Background tasks hand their ops to PAC beside the statement, so the
+        # plain statement builder must not fold them in.
+        qb._build_statement()
+        assert qb._op_projection is None
+
 
 class TestWithOpProjectionReturnsBuilder:
     def test_returns_self_for_chaining(self):

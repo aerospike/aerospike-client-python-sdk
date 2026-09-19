@@ -2327,6 +2327,20 @@ class _QueryBuilderBase:
             statement.set_operations(self._op_projection)
         return statement
 
+    def _build_dataset_read_statement(self) -> Statement:
+        """Statement for a foreground dataset query.
+
+        Bin-level read ops queued through ``.bin(...)`` join any explicit
+        :meth:`with_op_projection` ops as the server-side ops projection.
+        Background tasks keep :meth:`_build_statement`, whose write ops travel
+        beside the statement rather than inside it.
+        """
+        statement = self._build_statement()
+        if self._operations:
+            projection = list(self._op_projection) if self._op_projection else []
+            statement.set_operations(projection + list(self._operations))
+        return statement
+
     @staticmethod
     def _reject_unsupported_background_write_ops(
         operations: Sequence[Any],
@@ -4469,7 +4483,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         self, pattern: str, replacement: str, flags: int | StringRegexFlags = 0,
         *, write_flags: int | StringWriteFlags = 0,
     ) -> WriteSegmentBuilder:
-        """Register a regex-replace modify.
+        r"""Register a regex-replace modify.
 
         Replaces the first match of ``pattern`` with ``replacement``. Set
         the ``GLOBAL`` bit in ``flags`` (``StringRegexFlags.GLOBAL``) to

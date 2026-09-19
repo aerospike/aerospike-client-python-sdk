@@ -72,7 +72,6 @@ from aerospike_sdk.implicit_txn import (
     stamp_txn,
 )
 from aerospike_sdk.exceptions import (
-    AerospikeError,
     _convert_pac_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
@@ -413,12 +412,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 batch_records, disp, handler, row_op_types=row_op_types)
 
         # Dataset query path (no keys were specified)
-        if self._operations:
-            raise AerospikeError(
-                "Bin-level read operations are not supported on dataset/index "
-                "queries (requires Advanced Bin Projection, not yet available)",
-                result_code=ResultCode.OP_NOT_APPLICABLE,
-            )
         return await self._execute_dataset_query()
 
     async def first(self, on_error: OnError | None = None) -> "RecordResult | None":
@@ -1170,7 +1163,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        statement = self._build_statement()
+        statement = self._build_dataset_read_statement()
 
         try:
             recordset, plan = await self._run_dataset_query_async(

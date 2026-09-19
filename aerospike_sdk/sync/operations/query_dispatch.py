@@ -849,7 +849,7 @@ class _BlockingQueryDispatch:
 
         partition_filter = self._partition_filter or PartitionFilter.all()
 
-        statement = self._build_statement()
+        statement = self._build_dataset_read_statement()
 
         try:
             recordset, plan = self._run_dataset_query_blocking(

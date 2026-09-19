@@ -21,7 +21,7 @@ Coverage:
   - CDT list reads (index, rank)
   - Batch key queries with bin ops (map and list CDT reads)
   - CDT read edge cases (long range, missing record)
-  - Dataset query with bin ops -> OP_NOT_APPLICABLE
+  - Dataset query with bin ops (ops projection)
   - Query stacking
 """
 
@@ -441,26 +441,40 @@ class TestCdtReadEdgeCases:
 
 
 # ===================================================================
-# Dataset query with bin ops -> OP_NOT_APPLICABLE
+# Dataset queries carry bin-level ops as an ops projection
 # ===================================================================
 
-class TestDatasetQueryGuard:
+class TestDatasetQueryBinOps:
 
-    async def test_dataset_query_with_bin_ops_raises(self, session):
-        with pytest.raises(AerospikeError) as exc_info:
-            await (
-                session.query(NS, SET).bin("settings").on_map_key("theme").get_values()
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+    async def test_select_from_projects_over_dataset(self, session):
+        """``.bin().select_from()`` on a dataset query returns the virtual bin
+        for every record, not the stored bins."""
+        from aerospike_sdk import Exp
+        stream = await (
+            session.query(NS, SET)
+            .bin("age_next").select_from(
+                Exp.num_add([Exp.int_bin("age"), Exp.int_val(1)]))
+            .execute()
+        )
+        records = [r.record_or_raise() async for r in stream]
+        assert len(records) == 3
+        assert sorted(r.bins["age_next"] for r in records) == [22, 23, 24]
+        assert all("name" not in r.bins for r in records)
 
-    async def test_dataset_query_with_get_raises(self, session):
-        with pytest.raises(AerospikeError) as exc_info:
-            await (
-                session.query(NS, SET).bin("name").get()
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+    async def test_get_and_cdt_read_over_dataset_with_where(self, session):
+        """Plain ``.get()`` and a CDT read both ride the projection, and the
+        ``where`` filter still narrows the dataset."""
+        from aerospike_sdk import Exp
+        stream = await (
+            session.query(NS, SET)
+            .where(Exp.ge(Exp.int_bin("age"), Exp.int_val(22)))
+            .bin("name").get()
+            .bin("settings").on_map_key("volume").get_values()
+            .execute()
+        )
+        records = [r.record_or_raise() async for r in stream]
+        assert sorted(r.bins["name"] for r in records) == ["user2", "user3"]
+        assert sorted(r.bins["settings"] for r in records) == [20, 30]
 
 
 # ===================================================================

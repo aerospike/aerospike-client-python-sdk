@@ -25,9 +25,8 @@ Covers:
 import pytest
 from unittest.mock import MagicMock, call, patch
 
-from aerospike_sdk import Key
+from aerospike_sdk import Exp, Key
 from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -193,24 +192,24 @@ class TestQueryBinBuilderSelectFrom:
 
 
 # ===================================================================
-# Dataset query guard
+# Dataset query projection
 # ===================================================================
 
-class TestDatasetQueryGuard:
+class TestDatasetQueryProjection:
 
-    @patch("aerospike_sdk.operations_shared.filter_expression_from_ael_string")
-    async def test_select_from_on_dataset_query_raises(self, mock_filter):
-        mock_filter.return_value = MagicMock()
+    def test_select_from_on_dataset_query_joins_the_projection(self):
         qb = QueryBuilder(
             client=MagicMock(),
             namespace="test",
             set_name="s",
             supports_server_compiled_ael=True,
         )
-        qb.bin("ev").select_from("$.A + 4")
-        with pytest.raises(AerospikeError) as exc_info:
-            await qb.execute()
-        assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+        qb.bin("ev").select_from(Exp.num_add([Exp.int_bin("A"), Exp.int_val(4)]))
+        # A dataset query carries bin-level reads as its ops projection
+        # instead of rejecting them; PAC's set_operations would reject a
+        # non-operation, so building the statement is the check.
+        qb._build_dataset_read_statement()
+        assert len(qb._operations) == 1
 
 
 # ===================================================================
