@@ -206,6 +206,31 @@ Or exclude all bins (metadata only):
 stream = await session.query(users).with_no_bins().execute()
 ```
 
+### Projecting with Bin-Level Reads
+
+The same `.bin(...)` read operations that work on a key read (`get()`,
+`select_from()`, CDT and string reads) also apply to a dataset query. The
+server evaluates them against every matching record and returns their
+results in place of the stored bins, so a projection can compute values the
+record never held:
+
+```python
+stream = await (
+    session.query(users)
+    .where("$.age >= %s", 21)
+    .bin("name").get()
+    .bin("age_next").select_from(Exp.num_add([Exp.int_bin("age"), Exp.int_val(1)]))
+    .execute()
+)
+async for result in stream:
+    rec = result.record_or_raise()
+    print(rec.bins["name"], rec.bins["age_next"])
+```
+
+When both are present, the read operations take precedence over `.bins(...)`.
+Write, touch, and delete operations are rejected on a read query; use
+{meth}`~aerospike_sdk.aio.session.Session.background_task` for those.
+
 ## Filtering with AEL
 
 Use the [Aerospike Expression Language](expression-ael.md) to filter records server-side:

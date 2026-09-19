@@ -18,7 +18,7 @@
 Covers:
 - _build_exp_write_flags bitmask construction
 - QueryBinBuilder.select_from
-- OP_NOT_APPLICABLE guard on dataset queries with expression ops
+- Dataset queries carry expression ops as their projection
 - WriteBinBuilder expression methods
 """
 

@@ -22,7 +22,7 @@ Coverage:
   - Eval failure handling (ignore_eval_failure)
   - Combined read + write expression ops
   - Mixed expression + regular ops
-  - Dataset query guard
+  - Dataset query + select_from
   - Batch key query + select_from
   - Multiple select_from in same execute
 """
@@ -32,7 +32,7 @@ import asyncio
 import pytest
 
 from aerospike_sdk import Key
-from aerospike_sdk.exceptions import ResultCode, ServerError
+from aerospike_sdk.exceptions import ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.pac_compat import requires_server_compiled_ael
@@ -344,20 +344,22 @@ class TestMixedOps:
 
 
 # ===================================================================
-# Guard tests
+# select_from across query shapes
 # ===================================================================
 
-class TestGuards:
+class TestSelectFromShapes:
 
-    async def test_dataset_query_select_from_raises(self, cluster):
-        """select_from on dataset query raises OP_NOT_APPLICABLE."""
-        session = cluster.create_session()
-        with pytest.raises(AerospikeError) as exc_info:
-            await (
-                session.query(namespace=NS, set_name=SET).bin("ev").select_from("$.A + 4")
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+    async def test_dataset_query_select_from_projects(self, session):
+        """select_from on a dataset query projects the virtual bin for every record."""
+        rs = await (
+            session.query(namespace=NS, set_name=SET).bin("ev").select_from("$.D * 3")
+            .execute()
+        )
+        results = await rs.collect()
+        assert len(results) == 2
+        for r in results:
+            assert r.record.bins["ev"] == 6
+            assert "D" not in r.record.bins
 
     async def test_batch_key_query_select_from_works(self, session):
         """select_from on batch key query works (no guard)."""
