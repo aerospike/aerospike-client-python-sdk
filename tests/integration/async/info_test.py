@@ -25,6 +25,44 @@ async def session(cluster):
     return cluster.create_session(Behavior.DEFAULT)
 
 
+@pytest.fixture
+async def secondary_index(session):
+    """Guarantee one secondary index exists, and name it.
+
+    The introspection tests below read whatever indexes the cluster happens to
+    carry, so against a freshly created cluster they found none and skipped --
+    they were passing on residue left by earlier tests. Creating one here makes
+    them independent of collection order and of prior state.
+
+    Yields:
+        The ``(namespace, index_name)`` of an index guaranteed to exist.
+    """
+    info = session.info()
+    namespaces = await info.namespaces()
+    if not namespaces:
+        pytest.skip("cluster reports no namespaces")
+    namespace = list(namespaces)[0]
+    set_name, index_name = "info_test_sindex", "info_test_idx"
+
+    try:
+        task = await (
+            session.index(namespace, set_name)
+            .on_bin("idx_bin").named(index_name).numeric().create()
+        )
+    except Exception:
+        # Left behind by an interrupted run: its build is done, no task to await.
+        task = None
+    if task is not None:
+        await task.wait_till_complete()
+
+    yield namespace, index_name
+
+    try:
+        await session.index(namespace, set_name).named(index_name).drop()
+    except Exception:
+        pass
+
+
 async def test_info_creation(session):
     """Test creating an InfoCommands instance."""
     info = session.info()
@@ -176,18 +214,15 @@ async def test_secondary_indexes_with_namespace_filter(session):
         assert idx["namespace"] == test_namespace
 
 
-async def test_secondary_index_details(session):
+async def test_secondary_index_details(session, secondary_index):
     """Test getting details for a specific secondary index."""
     info = session.info()
+    namespace, index_name = secondary_index
 
-    # First get the list of indexes
     indexes = await info.secondary_indexes()
-    if not indexes:
-        pytest.skip("No secondary indexes found to test")
+    assert any(idx["name"] == index_name for idx in indexes)
 
-    # Test getting details for the first index
-    test_index = indexes[0]
-    details = await info.secondary_index_details(test_index["namespace"], test_index["name"])
+    details = await info.secondary_index_details(namespace, index_name)
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:
@@ -196,7 +231,7 @@ async def test_secondary_index_details(session):
         assert isinstance(details, SindexDetail)
         # Parsed counters, not the raw {command: body} envelope -- the envelope
         # also satisfies isinstance(dict), which is how that shape survived.
-        assert f"sindex/{test_index['namespace']}" not in details
+        assert f"sindex/{namespace}" not in details
         assert isinstance(details.entries, int)
         assert isinstance(details.used_bytes, int)
         assert 0 <= details.load_pct <= 100
@@ -356,21 +391,17 @@ async def test_per_node_views_agree_with_the_merged_ones(session):
     assert merged == from_nodes
 
 
-async def test_secondary_index_details_per_node(session):
+async def test_secondary_index_details_per_node(session, secondary_index):
     """Build progress is per node, so this is the view that shows it."""
     from aerospike_sdk.info_types import SindexDetail
 
     info = session.info()
-    indexes = await info.secondary_indexes()
-    if not indexes:
-        pytest.skip("No secondary indexes found to test")
+    namespace, index_name = secondary_index
 
-    index = indexes[0]
-    per_node = await info.secondary_index_details_per_node(
-        index.namespace, index.name
-    )
-    if not per_node:
-        pytest.skip("no node reported details for the index")
+    per_node = await info.secondary_index_details_per_node(namespace, index_name)
+    # The fixture created the index and waited for its build, so every node
+    # that serves the namespace must report it.
+    assert per_node
     assert all(isinstance(d, SindexDetail) for d in per_node.values())
     assert all(d.load_pct <= 100 for d in per_node.values())
 

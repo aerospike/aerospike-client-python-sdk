@@ -8,6 +8,8 @@ for variables not already in os.environ (override=False).
 import asyncio
 import logging
 import os
+import shutil
+import subprocess
 import time
 
 import pytest
@@ -44,6 +46,82 @@ def load_env_file(env_file_path, *, override: bool = True) -> None:
                     os.environ[key] = value
 
 
+# Max tolerable host-vs-VM clock skew, in seconds. Absolute-expiry assertions
+# compute a void_time from the host clock and read the remaining TTL back from
+# the server, so any skew lands in the result directly; a couple of seconds is
+# noise, minutes are not.
+_MAX_CLOCK_SKEW_SECONDS = 5
+
+
+_clock_skew_seconds = None  # set by _warn_on_podman_clock_skew, reused in the summary
+
+
+def _clock_skew_message(skew):
+    """The one place the drifted-clock explanation is worded."""
+    behind_or_ahead = "behind" if skew > 0 else "ahead of"
+    return (
+        f"podman VM clock is {abs(skew)}s {behind_or_ahead} the host.\n"
+        "Records written with an expiry read back with a collapsed TTL (1 instead\n"
+        "of the value set) once the skew exceeds the TTL, so expire_test.py and the\n"
+        "batch_apply TTL tests fail as `assert 290 <= 1` -- that is a ttl of 1, not\n"
+        "of 290. Below that threshold the TTL is merely short by the skew.\n"
+        'Fix: podman machine ssh "sudo date -s \'@$(date +%s)\'"'
+    )
+
+
+def _warn_on_podman_clock_skew():
+    """Report a drifted podman VM clock before it shows up as a TTL failure.
+
+    The VM's clock stops while the host sleeps, so it silently falls behind. A
+    test that sets an absolute expiry then asserts the remaining TTL is <= 1
+    instead sees the whole skew (``assert 290 <= 1``), which reads like a TTL
+    bug rather than a laptop that was closed. Checking once per session turns a
+    diagnosis into a one-line fix.
+
+    Silent and harmless where podman is not the server host -- CI, a remote
+    cluster, or no podman on PATH.
+    """
+    if not shutil.which("podman"):
+        return
+    try:
+        completed = subprocess.run(
+            ["podman", "machine", "ssh", "date +%s"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    if completed.returncode != 0:
+        return  # no machine running (Linux podman, or it is stopped)
+    try:
+        vm_epoch = int(completed.stdout.strip())
+    except ValueError:
+        return
+
+    skew = int(time.time()) - vm_epoch
+    if abs(skew) <= _MAX_CLOCK_SKEW_SECONDS:
+        return
+    global _clock_skew_seconds
+    _clock_skew_seconds = skew
+    body = "\n".join(
+        "         " + line for line in _clock_skew_message(skew).splitlines()
+    )
+    print(f"\nWARNING: {body.lstrip()}\n")
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Repeat the clock warning next to the failure list.
+
+    pytest_configure runs before the first test, so on a full suite the warning
+    is thousands of lines above the failures it explains. This is where someone
+    reading a red run is actually looking.
+    """
+    if _clock_skew_seconds is None:
+        return
+    terminalreporter.write_sep("=", "podman VM clock drift", red=True, bold=True)
+    for line in _clock_skew_message(_clock_skew_seconds).splitlines():
+        terminalreporter.write_line(line)
+
+
 def pytest_configure(config):
     """Called after command line options have been parsed and all plugins and initial conftest files been loaded."""
     root = Path(__file__).parent
@@ -62,6 +140,8 @@ def pytest_configure(config):
         load_env_file(env_example, override=False)
         print(f"Loaded default environment variables from {env_example} (no {env_local.name})\n")
     
+    _warn_on_podman_clock_skew()
+
     # Configure logging from AEROSPIKE_LOG_LEVEL / AEROSPIKE_LOG_FILE
     log_level = os.environ.get("AEROSPIKE_LOG_LEVEL", "").upper()
     # pyproject defaults log_cli_level to WARNING; allow SDK DEBUG lines through.
