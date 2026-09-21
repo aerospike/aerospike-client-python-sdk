@@ -566,6 +566,50 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
         self._qb._durable_delete_command_default = False
         return self
 
+    # -- Chain-level defaults -------------------------------------------------
+    # Defined on the query builder, which every multi-key segment wraps, so
+    # these forward rather than reimplement: the derivations (timedelta and
+    # datetime to seconds, the TTL sentinels, AEL binding) stay in one place.
+    # `_SingleKeyWriteSegmentBase` overrides them -- it has no builder until
+    # `_promote()`.
+
+    def default_where(
+        self, expression: Union[str, FilterExpression], *params: Any,
+    ) -> Self:
+        """Filter applied to chained operations that do not call ``where``."""
+        self._qb.default_where(expression, *params)
+        return self
+
+    def default_expire_record_after_seconds(self, seconds: int) -> Self:
+        """Default TTL, in seconds, for chained operations without their own."""
+        self._qb.default_expire_record_after_seconds(seconds)
+        return self
+
+    def default_expire_record_after(self, duration: timedelta) -> Self:
+        """Default TTL from a :class:`datetime.timedelta`."""
+        self._qb.default_expire_record_after(duration)
+        return self
+
+    def default_expire_record_at(self, when: datetime) -> Self:
+        """Default TTL expressed as an absolute expiry instant."""
+        self._qb.default_expire_record_at(when)
+        return self
+
+    def default_never_expire(self) -> Self:
+        """Default chained operations to never expire."""
+        self._qb.default_never_expire()
+        return self
+
+    def default_with_no_change_in_expiration(self) -> Self:
+        """Default chained operations to leave the existing TTL untouched."""
+        self._qb.default_with_no_change_in_expiration()
+        return self
+
+    def default_expiry_from_server_default(self) -> Self:
+        """Default chained operations to the namespace's configured TTL."""
+        self._qb.default_expiry_from_server_default()
+        return self
+
     def without_durable_delete(self) -> Self:
         """Force a non-durable delete for this segment (may be rejected on SC)."""
         self._qb._durable_delete = False
@@ -865,6 +909,49 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     _dd_command_default: Optional[bool] = None
     _dd_override: Optional[bool] = None
     _record_delete_in_fast_ops: bool = False
+
+    # Chain-level defaults promote first, then delegate -- the same shape the
+    # per-op TTL verbs use (`expire_record_after*` below). A chain default only
+    # means anything once the chain carries more than the fast path can hold,
+    # so promoting is the honest cost, and it keeps every derivation on the
+    # builder instead of duplicating it here.
+
+    def default_where(
+        self, expression: Union[str, FilterExpression], *params: Any,
+    ) -> Self:
+        """Filter applied to chained operations that do not call ``where``."""
+        self._promote()
+        return super().default_where(expression, *params)
+
+    def default_expire_record_after_seconds(self, seconds: int) -> Self:
+        """Default TTL, in seconds, for chained operations without their own."""
+        self._promote()
+        return super().default_expire_record_after_seconds(seconds)
+
+    def default_expire_record_after(self, duration: timedelta) -> Self:
+        """Default TTL from a :class:`datetime.timedelta`."""
+        self._promote()
+        return super().default_expire_record_after(duration)
+
+    def default_expire_record_at(self, when: datetime) -> Self:
+        """Default TTL expressed as an absolute expiry instant."""
+        self._promote()
+        return super().default_expire_record_at(when)
+
+    def default_never_expire(self) -> Self:
+        """Default chained operations to never expire."""
+        self._promote()
+        return super().default_never_expire()
+
+    def default_with_no_change_in_expiration(self) -> Self:
+        """Default chained operations to leave the existing TTL untouched."""
+        self._promote()
+        return super().default_with_no_change_in_expiration()
+
+    def default_expiry_from_server_default(self) -> Self:
+        """Default chained operations to the namespace's configured TTL."""
+        self._promote()
+        return super().default_expiry_from_server_default()
 
     def _promote(self) -> None:
         """Lift the fast-path state into a full builder. Subclasses override.

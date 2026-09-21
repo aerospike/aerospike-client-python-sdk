@@ -262,6 +262,59 @@ So `expire_record_after_seconds(-1)` is equivalent to `never_expire()`. Only a
 value the client cannot represent — a negative other than the sentinels, or one
 outside the 32-bit range — is rejected, and only when the write is built.
 
+### Chain-wide defaults
+
+Each verb above has a `default_` counterpart that applies to every operation in
+the chain that does not set its own TTL — `default_expire_record_after`,
+`default_expire_record_after_seconds`, `default_expire_record_at`,
+`default_never_expire`, `default_with_no_change_in_expiration`, and
+`default_expiry_from_server_default`. `default_where` does the same for filters.
+
+They are available from any segment, so a chain opened with a write verb can set
+them directly:
+
+```python
+await (
+    session.upsert(users.id(1))
+    .default_expire_record_after(timedelta(minutes=10))
+    .bin("session_token").set_to("abc123")
+    .execute()
+)
+```
+
+A default is only a default: an operation that sets its own TTL keeps it.
+
+```python
+await (
+    session.upsert(users.id(1))
+    .default_expire_record_after(timedelta(minutes=10))
+    .expire_record_after_seconds(120)      # this operation expires in 2 minutes
+    .bin("session_token").set_to("abc123")
+    .execute()
+)
+```
+
+The scope is the chain, and it ends at `execute()` — a default never carries over
+to the next chain, even from the same session. Within the chain it applies to
+every operation regardless of where you set it (before or after the operations
+it covers), and to every key of a multi-key segment:
+
+```python
+await (
+    session.upsert(*users.ids(1, 2, 3))
+    .default_expire_record_after(timedelta(minutes=10))
+    .bin("status").set_to("migrated")
+    .execute()
+)                                          # all three records expire in 10 minutes
+
+await session.upsert(users.id(4)).bin("status").set_to("migrated").execute()
+                                           # new chain: no TTL
+```
+
+For a TTL on every write an application makes, set it on the
+[`Behavior`](connecting.md) the session carries instead — that is session-scoped.
+A chain default is for one unit of work.
+
 ## Batch Writes
 
 Multiple keys with the same operation:

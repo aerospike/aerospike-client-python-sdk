@@ -175,3 +175,65 @@ async def test_expire_record_at_rejects_past_datetime(cluster):
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
     with pytest.raises(ValueError, match="must be in the future"):
         session.upsert(k).expire_record_at(past)
+
+
+async def test_chain_default_ttl_applies_from_a_write_led_chain(cluster):
+    """A chain default set from a write verb reaches the write.
+
+    ``default_expire_record_after`` is defined on the query builder, so it was
+    reachable from ``session.query(...)`` but not from ``session.upsert(...)``,
+    which yields a write segment. The write segment now forwards it, and the
+    single-key fast path promotes so the default is not silently dropped.
+    """
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("chainDefaultWriteLed")
+    await session.delete(k).execute()
+
+    await (
+        session.upsert(k)
+        .default_expire_record_after(timedelta(minutes=10))
+        .bin(BIN_NAME).set_to("chain_default")
+        .execute()
+    )
+
+    result = await session.query(k).with_no_bins().execute()
+    rec = (await result.first_or_raise()).record_or_raise()
+    assert rec.ttl is not None
+    assert 590 <= rec.ttl <= 605
+
+
+async def test_chain_default_ttl_applies_when_set_after_the_bin_op(cluster):
+    """The other entry order: the segment is already built when the default lands."""
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("chainDefaultAfterBin")
+    await session.delete(k).execute()
+
+    await (
+        session.upsert(k)
+        .bin(BIN_NAME).set_to("chain_default")
+        .default_expire_record_after(timedelta(minutes=10))
+        .execute()
+    )
+
+    result = await session.query(k).with_no_bins().execute()
+    rec = (await result.first_or_raise()).record_or_raise()
+    assert 590 <= rec.ttl <= 605
+
+
+async def test_per_op_ttl_wins_over_the_chain_default(cluster):
+    """A default is only a default -- an operation's own TTL still takes it."""
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), EXPIRE_SET).id("chainDefaultOverridden")
+    await session.delete(k).execute()
+
+    await (
+        session.upsert(k)
+        .default_expire_record_after(timedelta(minutes=10))
+        .expire_record_after_seconds(120)
+        .bin(BIN_NAME).set_to("explicit_wins")
+        .execute()
+    )
+
+    result = await session.query(k).with_no_bins().execute()
+    rec = (await result.first_or_raise()).record_or_raise()
+    assert 110 <= rec.ttl <= 125, "the operation's own TTL must beat the chain default"
