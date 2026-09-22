@@ -41,6 +41,7 @@ from aerospike_sdk.background_shared import (
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
@@ -370,6 +371,16 @@ class _BackgroundOperationBuilderBase:
                 )
         return ops
 
+    def _record_background_usage(self) -> None:
+        extra = []
+        if self._index_filters:
+            extra.append(usage.FILTER_SECONDARY_INDEX)
+        if self._durable_delete_override or self._durable_delete_command_default:
+            extra.append(usage.WRITE_DURABLE_DELETE)
+        usage.record_background(
+            self._session._client, usage.BACKGROUND_OPERATE, extra,
+        )
+
     def _record_exists_action(self) -> Optional[RecordExistsAction]:
         if self._op_type is _OpType.UPDATE:
             return RecordExistsAction.UPDATE_ONLY
@@ -386,6 +397,7 @@ class _BackgroundOperationBuilderBase:
         """
         ops = self._final_operations()
         reject_unsupported_background_write_ops(ops)
+        self._record_background_usage()
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
@@ -472,6 +484,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
         """
         ops = self._final_operations()
         reject_unsupported_background_write_ops(ops)
+        self._record_background_usage()
         log.debug(
             "background %s: %s.%s ops=%d",
             self._op_type.name if self._op_type else "WRITE",
@@ -653,6 +666,14 @@ class _BackgroundUdfBuilderBase:
             raise RuntimeError("Client is not connected")
         return fc._client
 
+    def _record_background_usage(self) -> None:
+        extra = []
+        if self._durable_delete_override or self._durable_delete_command_default:
+            extra.append(usage.WRITE_DURABLE_DELETE)
+        usage.record_background(
+            self._session._client, usage.BACKGROUND_UDF, extra,
+        )
+
     def _execute_blocking(self) -> ExecuteTask:
         """Blocking counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``.
 
@@ -660,6 +681,7 @@ class _BackgroundUdfBuilderBase:
         this class, and this is the terminal it drives. Async callers use
         :meth:`execute`.
         """
+        self._record_background_usage()
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         wp = make_background_write_policy(
             self._session.behavior,
@@ -737,6 +759,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             await task.wait_till_complete()
 
         """
+        self._record_background_usage()
         log.debug(
             "background UDF: %s.%s %s.%s",
             self._dataset.namespace, self._dataset.set_name,

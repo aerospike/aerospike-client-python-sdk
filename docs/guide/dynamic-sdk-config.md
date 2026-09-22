@@ -38,8 +38,13 @@ system:
 
 The `system:` section holds named profiles. `DEFAULT` applies to every
 cluster; a profile whose name matches the cluster name declared via
-`validate_cluster_name_is(...)` layers on top of `DEFAULT`. Effective
-settings resolve per field, highest layer first:
+`validate_cluster_name_is(...)` layers on top of `DEFAULT`. Selection uses
+only the *declared* name — nothing reads the name back from the server to
+pick a profile. Because a named block that never matches is well-formed YAML,
+it would otherwise fail silently; instead, when no name was declared, the
+connect asks the server its cluster name and logs a warning if a block would
+have matched it, naming the `validate_cluster_name_is(...)` call that selects
+it. Effective settings resolve per field, highest layer first:
 
 1. file cluster-name profile (`system.<cluster-name>`)
 2. file `DEFAULT` profile

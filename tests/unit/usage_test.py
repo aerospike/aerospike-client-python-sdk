@@ -37,10 +37,14 @@ class _Recorder:
     supports_server_compiled_ael = False
     supports_query_selection = False
 
-    def __init__(self, usage_on=True):
+    def __init__(self, usage_on=True, cmd_count_on=False):
         self._usage_on = usage_on
+        self._cmd_count_on = cmd_count_on
+        self._record_on = usage_on or cmd_count_on
         self.calls = []
+        self.command_calls = []
         self._usage_counters = _CapturingCounters(self.calls)
+        self._command_counts = _CapturingCounters(self.command_calls)
 
 
 class _CapturingCounters:
@@ -106,8 +110,8 @@ class TestRecording:
 class TestBuilderAccumulation:
     """The builder folds each segment's features in, then flushes once."""
 
-    def _builder(self, usage_on=True):
-        client = _Recorder(usage_on=usage_on)
+    def _builder(self, usage_on=True, cmd_count_on=False):
+        client = _Recorder(usage_on=usage_on, cmd_count_on=cmd_count_on)
         qb = SyncQueryBuilder(
             client=SimpleNamespace(),
             namespace="test",
@@ -120,7 +124,7 @@ class TestBuilderAccumulation:
     def test_transaction_participation_is_counted(self):
         qb, client = self._builder()
         qb._txn = Txn()
-        qb._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
         assert client.calls == [[
             usage.API_BLOCKING, usage.SHAPE_POINT, usage.TRANSACTION,
         ]]
@@ -129,7 +133,7 @@ class TestBuilderAccumulation:
         qb, client = self._builder()
         qb._durable_delete = True
         qb._collect_segment_usage()
-        qb._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
         assert client.calls == [[
             usage.WRITE_DURABLE_DELETE, usage.API_BLOCKING, usage.SHAPE_POINT,
         ]]
@@ -143,14 +147,14 @@ class TestBuilderAccumulation:
         qb._durable_delete = None
         qb._where_ael = "$.age > 21"
         qb._collect_segment_usage()
-        qb._flush_usage(usage.API_DEFERRED, usage.SHAPE_BATCH)
+        qb._record_call(usage.API_DEFERRED, usage.SHAPE_BATCH)
         assert client.calls[0].count(usage.WRITE_DURABLE_DELETE) == 1
         assert usage.FILTER_AEL in client.calls[0]
 
     def test_one_flush_sends_one_call(self):
         qb, client = self._builder()
         qb._collect_segment_usage()
-        qb._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
         assert len(client.calls) == 1
 
     def test_flushing_clears_the_pending_set(self):
@@ -158,8 +162,8 @@ class TestBuilderAccumulation:
         qb, client = self._builder()
         qb._where_ael = "$.age > 21"
         qb._collect_segment_usage()
-        qb._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
-        qb._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
         assert usage.FILTER_AEL in client.calls[0]
         assert usage.FILTER_AEL not in client.calls[1]
 
@@ -176,6 +180,48 @@ class TestBuilderAccumulation:
     def test_the_gate_is_off_unless_the_client_opted_in(self):
         qb, client = self._builder(usage_on=False)
         assert qb._usage_on is False
+        assert qb._record_on is False
+        assert client.calls == []
+
+
+class TestCommandCount:
+    """The per-call command count shares the usage boundary, not its gate."""
+
+    def _builder(self, usage_on, cmd_count_on):
+        client = _Recorder(usage_on=usage_on, cmd_count_on=cmd_count_on)
+        qb = SyncQueryBuilder(
+            client=SimpleNamespace(),
+            namespace="test",
+            set_name="people",
+            behavior=Behavior.DEFAULT,
+            sdk_client=client,
+        )
+        return qb, client
+
+    def test_counts_without_usage_enabled(self):
+        qb, client = self._builder(usage_on=False, cmd_count_on=True)
+        assert qb._record_on is True
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
+        assert client.command_calls == [[usage.COMMAND_COUNT]]
+        assert client.calls == []
+
+    def test_counts_alongside_usage(self):
+        qb, client = self._builder(usage_on=True, cmd_count_on=True)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
+        assert len(client.command_calls) == 2
+        assert len(client.calls) == 2
+
+    def test_usage_alone_does_not_count_commands(self):
+        qb, client = self._builder(usage_on=True, cmd_count_on=False)
+        qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
+        assert client.command_calls == []
+        assert len(client.calls) == 1
+
+    def test_fast_path_twin_counts_the_same_way(self):
+        client = _Recorder(usage_on=False, cmd_count_on=True)
+        usage.record_call_point(client, usage.API_DEFERRED)
+        assert client.command_calls == [[usage.COMMAND_COUNT]]
         assert client.calls == []
 
 
@@ -193,12 +239,16 @@ class TestIdentifiers:
         assert usage.OPERATE_EXP != usage.FILTER_EXP
 
     def test_every_identifier_is_namespaced_under_feature(self):
+        # COMMAND_COUNT is deliberately not a feature counter: it is the
+        # cluster command count riding the same machinery, never exposed
+        # through the usage mapping.
         names = [
             v for k, v in vars(usage).items()
-            if k.isupper() and isinstance(v, str)
+            if k.isupper() and isinstance(v, str) and k != "COMMAND_COUNT"
         ]
         assert names
         assert all(n.startswith("feature.") for n in names)
+        assert usage.COMMAND_COUNT == "command.count"
 
 
 class TestUsageCounters:

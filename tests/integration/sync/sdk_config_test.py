@@ -192,3 +192,33 @@ def test_hot_reload_broken_file_keeps_last_good(aerospike_host, tmp_path):
             # Give the poller time to see the broken file; settings must hold.
             time.sleep(2.5)
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
+
+
+def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path, caplog):
+    """The sync connect path also warns when a named block would have matched."""
+    import logging
+
+    host, port = _host_port(aerospike_host)
+    with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
+        by_node = probe._sdk_client.underlying_client.info_blocking("cluster-name")
+    names = {v for v in by_node.values() if v and v != "null"}
+
+    profile = next(iter(names)) if names else "some-other-cluster"
+    yaml_text = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    transactions:\n"
+        "      implicit_batch_write_transactions: true\n"
+        f"  {profile}:\n"
+        "    transactions:\n"
+        "      implicit_batch_write_transactions: false\n"
+    )
+    with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
+        with caplog.at_level(logging.WARNING):
+            with apply_general_auth(ClusterDefinition(host, port)).connect():
+                pass
+    if names:
+        assert f"system.{profile}" in caplog.text
+        assert "was not applied" in caplog.text
+    else:
+        assert "was not applied" not in caplog.text

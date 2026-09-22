@@ -15,10 +15,12 @@
 
 """Metrics export: where a snapshot goes once the client has taken it.
 
-The client *pushes* a snapshot to one registered exporter every export
-interval. An exporter decides what to do with it -- append to a file,
-translate to OTEL, batch, drop. To reach several destinations, register one
-:class:`MultipleMetricsExporter` rather than several exporters.
+The client *pushes* a snapshot to every registered exporter each export
+interval. An exporter implements one method -- ``export(snapshot)`` -- and
+decides what to do with what it receives: append to a file, translate to
+OTEL, batch, drop. It never sees the cluster, nodes, or collection lifecycle;
+opening and closing whatever it writes to belongs to the exporter and the
+application that constructed it.
 
 There are two exporter protocols because there are two clients. The async
 client awaits :class:`AsyncMetricsExporter` on its loop; the sync client calls
@@ -27,6 +29,11 @@ post -- and an export interval is long enough that running it on the async
 client's event loop would stall every in-flight operation behind it. Writing
 an async exporter for the async client keeps that IO off the critical path
 without the SDK moving user code onto a thread behind their back.
+
+An exporter that keeps failing is suspended rather than allowed to fail every
+interval forever: after three consecutive failures it is skipped, then retried
+every tenth interval, and a success puts it back on the normal cadence. Other
+exporters and collection itself are unaffected throughout.
 """
 
 from __future__ import annotations
@@ -47,20 +54,22 @@ log = logging.getLogger(SdkLoggers.BEHAVIOR)
 # How often a snapshot is pushed when the configuration does not say.
 DEFAULT_EXPORT_INTERVAL_SECONDS = 30.0
 
+# An exporter failing this many exports in a row is suspended...
+SUSPEND_AFTER_CONSECUTIVE_FAILURES = 3
+# ...and retried once every this many intervals until it succeeds again.
+SUSPENDED_RETRY_EVERY_INTERVALS = 10
+
 __all__ = [
     "DEFAULT_EXPORT_INTERVAL_SECONDS",
+    "SUSPEND_AFTER_CONSECUTIVE_FAILURES",
+    "SUSPENDED_RETRY_EVERY_INTERVALS",
     "AsyncMetricsExportTimer",
     "AsyncMetricsExporter",
-    "AsyncMultipleMetricsExporter",
-    "AsyncNoOpMetricsExporter",
     "LearnMetricsFileExporter",
     "MetricsExporter",
-    "MultipleMetricsExporter",
-    "NoOpMetricsExporter",
     "SyncMetricsExportTimer",
     "built_in_exporter",
     "check_exporter",
-    "dispatch_disable",
 ]
 
 
@@ -69,8 +78,13 @@ class MetricsExporter(Protocol):
     """Receives metrics snapshots from a synchronous cluster.
 
     Implement this for :class:`~aerospike_sdk.sync.cluster.SyncCluster`. The
-    callbacks run on the export thread, so a slow one delays the next export
+    call runs on the export thread, so a slow exporter delays the next export
     but never a request.
+
+    The snapshot argument is an owned copy: keeping a reference past the call
+    is safe. Resources the exporter writes to are its own to manage -- open
+    them in the constructor or on first call, and close them from application
+    code when done.
 
     Example::
 
@@ -78,40 +92,25 @@ class MetricsExporter(Protocol):
             def __init__(self, path):
                 self._file = open(path, "a")
 
-            def on_enable(self, cluster, settings):
-                pass
-
-            def on_snapshot(self, snapshot):
+            def export(self, snapshot):
                 self._file.write(json.dumps(snapshot.to_canonical_dict()) + "\\n")
                 self._file.flush()
 
-            def on_node_close(self, host, snapshot):
-                pass
-
-            def on_disable(self, cluster):
+            def close(self):
                 self._file.close()
 
-        cluster.metrics_exporter = JsonLinesExporter("/var/log/aerospike/metrics.jsonl")
+        exporter = JsonLinesExporter("/var/log/aerospike/metrics.jsonl")
+        cluster.add_exporter(exporter)
+        ...
+        exporter.close()   # the application closes it, never the client
 
     See Also:
         :class:`AsyncMetricsExporter`: The same contract for the async client.
-        :class:`MultipleMetricsExporter`: Fan out to several exporters.
+        :meth:`~aerospike_sdk.sync.cluster.SyncCluster.add_exporter`
     """
 
-    def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Metrics collection was turned on for *cluster*."""
-        ...
-
-    def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
+    def export(self, snapshot: MetricsSnapshot) -> None:
         """A snapshot was taken, once per export interval."""
-        ...
-
-    def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """*host* left the cluster; this is its final snapshot."""
-        ...
-
-    def on_disable(self, cluster: Any) -> None:
-        """Metrics collection was turned off; flush and release."""
         ...
 
 
@@ -119,7 +118,7 @@ class MetricsExporter(Protocol):
 class AsyncMetricsExporter(Protocol):
     """Receives metrics snapshots from an asynchronous cluster.
 
-    The same contract as :class:`MetricsExporter` with awaitable callbacks, so
+    The same contract as :class:`MetricsExporter` with an awaitable method, so
     an exporter can use an async HTTP client without blocking the event loop
     the cluster's own operations run on.
 
@@ -129,197 +128,36 @@ class AsyncMetricsExporter(Protocol):
             def __init__(self, client):
                 self._client = client
 
-            async def on_enable(self, cluster, settings):
-                pass
-
-            async def on_snapshot(self, snapshot):
+            async def export(self, snapshot):
                 await self._client.post("/v1/metrics", json=snapshot.to_canonical_dict())
 
-            async def on_node_close(self, host, snapshot):
-                pass
-
-            async def on_disable(self, cluster):
-                await self._client.aclose()
-
-        cluster.metrics_exporter = OtelExporter(httpx.AsyncClient())
+        cluster.add_exporter(OtelExporter(httpx.AsyncClient()))
 
     See Also:
         :class:`MetricsExporter`: The same contract for the sync client.
+        :meth:`~aerospike_sdk.aio.cluster.Cluster.add_exporter`
     """
 
-    async def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Metrics collection was turned on for *cluster*."""
-        ...
-
-    async def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
+    async def export(self, snapshot: MetricsSnapshot) -> None:
         """A snapshot was taken, once per export interval."""
         ...
-
-    async def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """*host* left the cluster; this is its final snapshot."""
-        ...
-
-    async def on_disable(self, cluster: Any) -> None:
-        """Metrics collection was turned off; flush and release."""
-        ...
-
-
-class NoOpMetricsExporter:
-    """Accepts snapshots and discards them.
-
-    What ``exporter: none`` installs, and what the built-in file exporter
-    degrades to when no ``report_dir`` is configured. Satisfies both protocols
-    so either cluster can hold it.
-    """
-
-    def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Ignore the enable."""
-
-    def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Ignore the snapshot."""
-
-    def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Ignore the node close."""
-
-    def on_disable(self, cluster: Any) -> None:
-        """Ignore the disable."""
-
-
-class AsyncNoOpMetricsExporter:
-    """Accepts snapshots and discards them, for the async client."""
-
-    async def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Ignore the enable."""
-
-    async def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Ignore the snapshot."""
-
-    async def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Ignore the node close."""
-
-    async def on_disable(self, cluster: Any) -> None:
-        """Ignore the disable."""
-
-
-class MultipleMetricsExporter:
-    """Fans one snapshot out to several exporters, in order.
-
-    A cluster holds exactly one exporter, so this is how a snapshot reaches
-    more than one destination. An exporter that raises is logged and skipped;
-    the ones after it still run, because one broken destination should not
-    silence the rest.
-
-    Delegates are called in the order given. Sync and async delegates cannot
-    be mixed in one composite -- use the kind that matches the cluster.
-
-    Args:
-        *exporters: The delegates, invoked in order.
-
-    Example::
-
-        cluster.metrics_exporter = MultipleMetricsExporter(
-            LearnMetricsFileExporter("/var/log/aerospike"),
-            my_otel_exporter,
-        )
-
-    See Also:
-        :class:`MetricsExporter`, :class:`AsyncMetricsExporter`
-    """
-
-    def __init__(self, *exporters: Any) -> None:
-        self._exporters: Sequence[Any] = exporters
-
-    @property
-    def exporters(self) -> Sequence[Any]:
-        """The delegates, in call order."""
-        return self._exporters
-
-    def _each(self, method: str, *args: Any) -> None:
-        for exporter in self._exporters:
-            try:
-                getattr(exporter, method)(*args)
-            except Exception:
-                log.warning(
-                    "Metrics exporter %r raised in %s; continuing",
-                    type(exporter).__name__, method, exc_info=True,
-                )
-
-    def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Forward the enable to every delegate."""
-        self._each("on_enable", cluster, settings)
-
-    def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Forward the snapshot to every delegate."""
-        self._each("on_snapshot", snapshot)
-
-    def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Forward the node close to every delegate."""
-        self._each("on_node_close", host, snapshot)
-
-    def on_disable(self, cluster: Any) -> None:
-        """Forward the disable to every delegate."""
-        self._each("on_disable", cluster)
-
-
-class AsyncMultipleMetricsExporter:
-    """Fans one snapshot out to several async exporters, in order.
-
-    The :class:`MultipleMetricsExporter` contract for the async client. Each
-    delegate is awaited in turn; one that raises is logged and skipped so a
-    single broken destination does not silence the others.
-
-    Args:
-        *exporters: The delegates, awaited in order.
-
-    Example::
-
-        cluster.metrics_exporter = AsyncMultipleMetricsExporter(
-            my_otel_exporter, my_audit_exporter,
-        )
-
-    See Also:
-        :class:`AsyncMetricsExporter`, :class:`MultipleMetricsExporter`
-    """
-
-    def __init__(self, *exporters: Any) -> None:
-        self._exporters: Sequence[Any] = exporters
-
-    @property
-    def exporters(self) -> Sequence[Any]:
-        """The delegates, in call order."""
-        return self._exporters
-
-    async def _each(self, method: str, *args: Any) -> None:
-        for exporter in self._exporters:
-            try:
-                await getattr(exporter, method)(*args)
-            except Exception:
-                log.warning(
-                    "Metrics exporter %r raised in %s; continuing",
-                    type(exporter).__name__, method, exc_info=True,
-                )
-
-    async def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Forward the enable to every delegate."""
-        await self._each("on_enable", cluster, settings)
-
-    async def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Forward the snapshot to every delegate."""
-        await self._each("on_snapshot", snapshot)
-
-    async def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Forward the node close to every delegate."""
-        await self._each("on_node_close", host, snapshot)
-
-    async def on_disable(self, cluster: Any) -> None:
-        """Forward the disable to every delegate."""
-        await self._each("on_disable", cluster)
 
 
 # Fields the legacy line format carries that this client cannot measure. Named
 # in the header so whoever owns the log shipper learns it from the file rather
 # than from a parse failure downstream.
-_UNAVAILABLE_FIELDS = ("inUse", "inPool", "recoverQueueSize", "commandCount", "retryCount")
+_UNAVAILABLE_FIELDS = ("cpu", "mem", "inUse", "inPool", "recoverQueueSize", "invalidNodeCount")
+
+# Usage counters on the cluster line, in the order and under the names the
+# format defines. Values come from the canonical snapshot's ``usage``.
+_USAGE_FILE_COLUMNS = (
+    ("singleCount", "feature.shape.point"),
+    ("batchCount", "feature.shape.batch"),
+    ("queryCount", "feature.shape.query"),
+    ("blockingCount", "feature.api.blocking"),
+    ("deferredCount", "feature.api.deferred"),
+    ("backgroundCount", "feature.api.background"),
+)
 
 # Latency segment order, as the legacy format writes it.
 _LATENCY_ORDER = (
@@ -334,25 +172,32 @@ _LATENCY_ORDER = (
 class LearnMetricsFileExporter:
     """Writes the legacy line-oriented metrics log under a report directory.
 
-    The default exporter, kept so existing log shippers keep working. Field
-    names inside the segments stay camelCase for exactly that reason -- it is
-    the one place this SDK does not use snake_case, and it is a compatibility
-    exception rather than a style choice.
+    Kept so existing log shippers keep working. Data lines are positional;
+    the header line declares the schema with the format's legacy camelCase
+    field names (``keyBusy``, ``bytesIn``) because that is what its existing
+    consumers parse -- a compatibility requirement, not a style choice.
 
-    Five fields the format defines cannot be filled: ``inUse`` and ``inPool``
-    (the client keeps a single open-connection gauge, not the split),
-    ``recoverQueueSize``, and cluster-level ``commandCount`` / ``retryCount``.
-    They are omitted rather than written as zero, and the header line names
-    them so a downstream parser sees why.
+    An ordinary exporter, not a client lifecycle: the first :meth:`export`
+    creates the directory, opens ``metrics-<timestamp>.log`` and writes the
+    header; each later one appends a cluster line, plus a final node line for
+    every entry the snapshot reports departed. The application calls
+    :meth:`close` when done -- the client never closes it. IO errors propagate
+    to the export timer, which logs them and suspends the exporter after
+    repeated failures.
 
-    Feature usage counters are deliberately **not** written here. This is an
-    externally defined format with consumers this SDK does not control, and its
-    field list does not include them; inventing a segment would make the file
-    non-interoperable with the other clients reading and writing it. Usage
-    counters reach a consumer through the canonical snapshot instead --
-    :meth:`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` carries them under
-    ``usage`` -- which is the route the cross-SDK specification defines for
-    anything outside the legacy field list.
+    Six fields the format defines cannot be filled: ``cpu`` and ``mem`` (process
+    statistics this client does not sample), ``inUse`` and ``inPool`` (the
+    client keeps a single open-connection gauge, not the split),
+    ``recoverQueueSize`` and ``invalidNodeCount``. They are omitted rather than
+    written as zero, and the header line names them so a downstream parser sees
+    why.
+
+    The six feature-usage columns (``singleCount`` through ``backgroundCount``)
+    carry the counters of the same name from the canonical snapshot's ``usage``
+    mapping, and ``retryCount`` carries its ``cluster.command_retries``. The
+    format has no field for the per-call ``command_count``; read that off
+    :meth:`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` instead,
+    under ``cluster.command_count``.
 
     The ``latency(columns,shift)`` pair is written whatever the latency unit
     is. The format has no field for the unit -- it predates microsecond
@@ -371,7 +216,10 @@ class LearnMetricsFileExporter:
 
     Example::
 
-        cluster.metrics_exporter = LearnMetricsFileExporter("/var/log/aerospike")
+        exporter = LearnMetricsFileExporter("/var/log/aerospike")
+        cluster.add_exporter(exporter)
+        ...
+        exporter.close()
 
     See Also:
         :class:`MetricsExporter`: The protocol this implements.
@@ -387,35 +235,22 @@ class LearnMetricsFileExporter:
         self._columns: Any = ""
         self._shift: Any = ""
 
-    # -- lifecycle ----------------------------------------------------------
+    # -- exporter contract ----------------------------------------------------
 
-    def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Open a new log file and write its header."""
+    def export(self, snapshot: MetricsSnapshot) -> None:
+        """Append one cluster line, and a final line per departed node."""
         if not self._dir:
             return
-        # Enabling twice reuses this instance, so the previous handle has to go
-        # or it is orphaned open for the life of the process.
-        self.on_disable(cluster)
-        try:
+        if self._file is None:
             os.makedirs(self._dir, exist_ok=True)
             self._open()
-        except OSError:
-            log.warning("Metrics: cannot open report_dir %r; not exporting",
-                        self._dir, exc_info=True)
-            self._file = None
+        doc = snapshot.to_canonical_dict()
+        self._write(self._cluster_line(doc))
+        for node in doc.get("nodes_departed", []):
+            self._write(f"node[{self._node_segment(node)}]")
 
-    def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Append one cluster line for this snapshot."""
-        self._write(self._cluster_line(snapshot))
-
-    def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Append a final line for a node that left the cluster."""
-        for node in snapshot.to_canonical_dict().get("nodes", []):
-            if f"{node.get('address')}:{node.get('port')}" == host:
-                self._write(f"node[{self._node_segment(node)}]")
-
-    def on_disable(self, cluster: Any) -> None:
-        """Close the log file."""
+    def close(self) -> None:
+        """Close the log file. Exporting again afterwards opens a new one."""
         if self._file is not None:
             try:
                 self._file.close()
@@ -437,11 +272,15 @@ class LearnMetricsFileExporter:
             sequence += 1
         self._file = open(path, "a", encoding="utf-8")
         self._written = 0
+        usage_names = ",".join(name for name, _ in _USAGE_FILE_COLUMNS)
         header = (
-            "header(1) cluster[name,clientType,clientVersion,appId,label[],node[]] "
-            "node[name,address,port,conns[opened,closed,open],namespace[]] "
+            "header(3) cluster[name,clientType,clientVersion,appId,label[],"
+            f"{usage_names},retryCount,node[]] "
+            "label[name,value] "
+            "node[name,address,port,conn,namespace[]] "
+            "conn[opened,closed,open] "
             "namespace[name,errors,timeouts,keyBusy,bytesIn,bytesOut,latency[]] "
-            "latency(columns,shift)[type[buckets]] "
+            "latency(unit,columns,shift)[type[buckets]] "
             f"unavailable[{','.join(_UNAVAILABLE_FIELDS)}]"
         )
         # Not through _write: the header must never trip rotation, or a limit
@@ -452,37 +291,34 @@ class LearnMetricsFileExporter:
         """Write one line, without considering rotation."""
         if self._file is None:
             return
-        try:
-            self._file.write(line + "\n")
-            self._file.flush()
-            self._written += len(line) + 1
-        except OSError:
-            log.warning("Metrics: write to the report file failed", exc_info=True)
+        self._file.write(line + "\n")
+        self._file.flush()
+        self._written += len(line) + 1
 
     def _write(self, line: str) -> None:
         if self._file is None:
             return
         self._append(line)
         if self._limit and self._written >= self._limit:
-            self.on_disable(None)
-            try:
-                self._open()
-            except OSError:
-                log.warning("Metrics: rotation failed", exc_info=True)
+            self.close()
+            self._open()
 
     # -- formatting ---------------------------------------------------------
 
-    def _cluster_line(self, snapshot: MetricsSnapshot) -> str:
-        doc = snapshot.to_canonical_dict()
+    def _cluster_line(self, doc: Dict[str, Any]) -> str:
         # Recorded before the node segments are built: they print the shape.
         self._columns = doc.get("latency_columns", "")
         self._shift = doc.get("latency_shift", "")
         labels = ",".join(f"{k}={v}" for k, v in sorted(doc.get("labels", {}).items()))
+        usage = doc.get("usage") or {}
+        counts = ",".join(str(int(usage.get(key, 0))) for _, key in _USAGE_FILE_COLUMNS)
+        # The line format's own name for the canonical `command_retries`.
+        retry_count = int((doc.get("cluster") or {}).get("command_retries", 0) or 0)
         nodes = ",".join(self._node_segment(n) for n in doc.get("nodes", []))
         return (
             f"cluster[{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
             f"{doc.get('client_version', '')},{doc.get('app_id', '')},"
-            f"label[{labels}],node[{nodes}]]"
+            f"label[{labels}],{counts},{retry_count},node[{nodes}]]"
         )
 
     def _node_segment(self, node: Dict[str, Any]) -> str:
@@ -492,7 +328,7 @@ class LearnMetricsFileExporter:
         )
         return (
             f"{node.get('name', '')},{node.get('address', '')},{node.get('port', '')},"
-            f"conns[{conns.get('opened', 0)},{conns.get('closed', 0)},"
+            f"conn[{conns.get('opened', 0)},{conns.get('closed', 0)},"
             f"{conns.get('open', 0)}],namespace[{namespaces}]"
         )
 
@@ -518,56 +354,120 @@ class _NodeCloseTracker:
     per-host metrics and never drops a host from the map once seen, so
     comparing successive snapshots reports a departure exactly never. The live
     node list is the only thing that shrinks, so membership is judged by
-    joining against it. Each host fires once.
+    joining against it. Each host is reported once.
     """
 
     def __init__(self) -> None:
         self._closed: set = set()
 
     def departed(self, snapshot_hosts: Sequence[str], live_hosts: Sequence[str]) -> List[str]:
-        """Hosts present in the snapshot, absent from the cluster, not yet fired."""
+        """Hosts present in the snapshot, absent from the cluster, not yet reported."""
         live = set(live_hosts)
         gone = [h for h in snapshot_hosts if h not in live and h not in self._closed]
         self._closed.update(gone)
         return gone
 
 
+class _ExporterHealth:
+    """Suspension state for one registered exporter."""
+
+    __slots__ = ("failures", "suspended", "skipped")
+
+    def __init__(self) -> None:
+        self.failures = 0
+        self.suspended = False
+        self.skipped = 0
+
+    def should_attempt(self) -> bool:
+        """Whether this cycle calls the exporter, advancing the retry countdown."""
+        if not self.suspended:
+            return True
+        self.skipped += 1
+        if self.skipped >= SUSPENDED_RETRY_EVERY_INTERVALS:
+            self.skipped = 0
+            return True
+        return False
+
+
 class _MetricsExportTimer:
     """Shared state for the two export timers.
 
-    Holds the exporter and the close tracker; the async and sync timers differ only
-    in how they wait and how they invoke.
+    Holds the departure tracker and per-exporter health; the async and sync
+    timers differ only in how they wait and how they invoke. The exporter list
+    is read from the cluster on every cycle, so registrations made after the
+    timer started still take effect.
     """
 
-    def __init__(
-        self, cluster: Any, exporter: Any, interval_seconds: float, settings: Any = None
-    ) -> None:
+    def __init__(self, cluster: Any, interval_seconds: float, settings: Any = None) -> None:
         self.cluster = cluster
-        self.exporter = exporter
         self.interval = interval_seconds
         self.settings = settings
         self.tracker = _NodeCloseTracker()
+        self._health: Dict[int, _ExporterHealth] = {}
 
-    @staticmethod
-    def hosts_of(snapshot: MetricsSnapshot) -> List[str]:
-        """Host keys the snapshot reports, in ``address:port`` form."""
+    def exporters_to_run(self) -> List[Any]:
+        """The exporters this cycle calls, honoring suspensions."""
+        current = list(self.cluster._exporters)
+        ids = {id(e) for e in current}
+        # Health for a removed exporter would pin its id forever, and a new
+        # exporter can land on a recycled id; prune to the live list.
+        self._health = {k: v for k, v in self._health.items() if k in ids}
         return [
-            f"{n.get('address')}:{n.get('port')}"
-            for n in snapshot.to_canonical_dict().get("nodes", [])
+            exporter for exporter in current
+            if self._health.setdefault(id(exporter), _ExporterHealth()).should_attempt()
         ]
+
+    def record_success(self, exporter: Any) -> None:
+        health = self._health.get(id(exporter))
+        if health is None:
+            return
+        if health.suspended:
+            log.info(
+                "Metrics exporter %r recovered; resuming its normal export cadence",
+                type(exporter).__name__,
+            )
+        health.failures = 0
+        health.suspended = False
+        health.skipped = 0
+
+    def record_failure(self, exporter: Any) -> None:
+        """Log the failure; suspend after enough of them in a row.
+
+        Called from an ``except`` block so the log line carries the traceback.
+        """
+        health = self._health.setdefault(id(exporter), _ExporterHealth())
+        health.failures += 1
+        if health.suspended:
+            log.warning(
+                "Metrics exporter %r failed its retry; staying suspended",
+                type(exporter).__name__, exc_info=True,
+            )
+            return
+        if health.failures >= SUSPEND_AFTER_CONSECUTIVE_FAILURES:
+            health.suspended = True
+            health.skipped = 0
+            log.warning(
+                "Metrics exporter %r failed %d consecutive exports; suspending it "
+                "and retrying every %d intervals",
+                type(exporter).__name__, health.failures,
+                SUSPENDED_RETRY_EVERY_INTERVALS, exc_info=True,
+            )
+        else:
+            log.warning(
+                "Metrics exporter %r raised; continuing with the others",
+                type(exporter).__name__, exc_info=True,
+            )
 
 
 class AsyncMetricsExportTimer:
-    """Pushes snapshots to an async exporter on the cluster's event loop.
+    """Pushes snapshots to the cluster's exporters on its event loop.
 
     Runs as an ``asyncio.Task``. Snapshotting and exporting are both cold-path
     work; nothing here touches a request.
     """
 
-    def __init__(
-        self, cluster: Any, exporter: Any, interval_seconds: float, settings: Any = None
-    ) -> None:
-        self._state = _MetricsExportTimer(cluster, exporter, interval_seconds, settings)
+    def __init__(self, cluster: Any, interval_seconds: float, settings: Any = None) -> None:
+        self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
         self._task: Optional[Any] = None
 
     def start(self) -> None:
@@ -577,12 +477,6 @@ class AsyncMetricsExportTimer:
 
     async def _run(self) -> None:
         state = self._state
-        # Announced from inside the task so the callback can be awaited; the
-        # method that starts the timer is synchronous.
-        try:
-            await state.exporter.on_enable(state.cluster, state.settings)
-        except Exception:
-            log.warning("Metrics exporter raised in on_enable", exc_info=True)
         while True:
             await asyncio.sleep(state.interval)
             try:
@@ -592,12 +486,20 @@ class AsyncMetricsExportTimer:
 
     async def _export_once(self) -> None:
         state = self._state
+        runnable = state.exporters_to_run()
+        if not runnable:
+            # Taking a snapshot drains and aggregates per-node state in the
+            # client core; skip that work when nothing would consume it.
+            return
         snapshot = await state.cluster.metrics()
-        await state.exporter.on_snapshot(snapshot)
-        live = await state.cluster._sdk_client.underlying_client.nodes()
-        live_hosts = [f"{n.host[0]}:{n.host[1]}" for n in live if n.host is not None]
-        for host in state.tracker.departed(state.hosts_of(snapshot), live_hosts):
-            await state.exporter.on_node_close(host, snapshot)
+        snapshot._mark_departed(state.tracker)
+        for exporter in runnable:
+            try:
+                await exporter.export(snapshot)
+            except Exception:
+                state.record_failure(exporter)
+            else:
+                state.record_success(exporter)
 
     def request_stop(self) -> None:
         """Cancel the export task without awaiting it.
@@ -621,12 +523,10 @@ class AsyncMetricsExportTimer:
 
 
 class SyncMetricsExportTimer:
-    """Pushes snapshots to an exporter from a daemon thread."""
+    """Pushes snapshots to the cluster's exporters from a daemon thread."""
 
-    def __init__(
-        self, cluster: Any, exporter: Any, interval_seconds: float, settings: Any = None
-    ) -> None:
-        self._state = _MetricsExportTimer(cluster, exporter, interval_seconds, settings)
+    def __init__(self, cluster: Any, interval_seconds: float, settings: Any = None) -> None:
+        self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
         self._stop: Optional[threading.Event] = None
         self._thread: Optional[Any] = None
 
@@ -643,10 +543,6 @@ class SyncMetricsExportTimer:
         state = self._state
         stop = self._stop
         assert stop is not None  # set by start() before the thread begins
-        try:
-            state.exporter.on_enable(state.cluster, state.settings)
-        except Exception:
-            log.warning("Metrics exporter raised in on_enable", exc_info=True)
         while not stop.wait(state.interval):
             try:
                 self._export_once()
@@ -655,12 +551,18 @@ class SyncMetricsExportTimer:
 
     def _export_once(self) -> None:
         state = self._state
+        runnable = state.exporters_to_run()
+        if not runnable:
+            return
         snapshot = state.cluster.metrics()
-        state.exporter.on_snapshot(snapshot)
-        live = state.cluster._sdk_client.underlying_client.nodes_blocking()
-        live_hosts = [f"{n.host[0]}:{n.host[1]}" for n in live if n.host is not None]
-        for host in state.tracker.departed(state.hosts_of(snapshot), live_hosts):
-            state.exporter.on_node_close(host, snapshot)
+        snapshot._mark_departed(state.tracker)
+        for exporter in runnable:
+            try:
+                exporter.export(snapshot)
+            except Exception:
+                state.record_failure(exporter)
+            else:
+                state.record_success(exporter)
 
     def stop(self) -> None:
         """Signal the export thread to exit and join it briefly."""
@@ -671,44 +573,46 @@ class SyncMetricsExportTimer:
 
 
 def built_in_exporter(metrics: Any, *, awaitable: bool = False) -> Optional[Any]:
-    """Pick the built-in exporter the configuration asks for.
+    """Build the exporter the configuration asks for, if it asks for one.
 
-    Returns ``None`` when the configuration names no exporter, leaving
-    whatever the caller already had in place.
+    Only consulted when the application registered no exporter of its own:
+    a configured exporter is a convenience install, never a replacement for
+    what application code set up.
 
     Args:
         metrics: The resolved ``metrics`` settings group, or ``None``.
         awaitable: Wrap the result for the async client, whose exporters are
-            awaited. The built-in writes files, so its callbacks run off-loop.
+            awaited. The built-in writes files, so its call runs off-loop.
 
     Returns:
-        A :class:`LearnMetricsFileExporter`, a :class:`NoOpMetricsExporter`,
-        or ``None`` to leave the current exporter alone.
+        A :class:`LearnMetricsFileExporter` when ``exporter`` names it (the
+        default) and ``report_dir`` is set; otherwise ``None`` -- nothing to
+        install.
     """
     if metrics is None:
         return None
     name = (metrics.exporter or "").strip().lower()
     if name == "none":
-        return AsyncNoOpMetricsExporter() if awaitable else NoOpMetricsExporter()
+        return None
     if name in ("", "learn_metrics_file"):
         report_dir = metrics.report_dir or ""
         if not report_dir:
-            # The documented default with nowhere to write is a no-op, not an error.
+            # The documented default with nowhere to write installs nothing.
             return None
         exporter = LearnMetricsFileExporter(report_dir, metrics.report_size_limit or 0)
         return _AsyncExporterAdapter(exporter) if awaitable else exporter
-    log.warning("Metrics: unknown exporter %r; leaving the current exporter in place", name)
+    log.warning("Metrics: unknown exporter %r; not installing a built-in exporter", name)
     return None
 
 
 class _AsyncExporterAdapter:
     """Presents a synchronous exporter to the async client.
 
-    Only used for the built-in file exporter, whose callbacks are blocking
-    file writes: those run on a worker thread so they never sit on the event
-    loop. A user's own exporter is never adapted -- the async client expects
-    an :class:`AsyncMetricsExporter` and awaits it directly, so nobody's code
-    is moved onto a thread without them choosing it.
+    Only used for the built-in file exporter, whose call is a blocking file
+    write: it runs on a worker thread so it never sits on the event loop. A
+    user's own exporter is never adapted -- the async client expects an
+    :class:`AsyncMetricsExporter` and awaits it directly, so nobody's code is
+    moved onto a thread without them choosing it.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -719,82 +623,45 @@ class _AsyncExporterAdapter:
         """The wrapped synchronous exporter."""
         return self._inner
 
-    async def on_enable(self, cluster: Any, settings: Any) -> None:
-        """Await the wrapped enable off-loop."""
-        await asyncio.to_thread(self._inner.on_enable, cluster, settings)
+    async def export(self, snapshot: MetricsSnapshot) -> None:
+        """Await the wrapped export off-loop."""
+        await asyncio.to_thread(self._inner.export, snapshot)
 
-    async def on_snapshot(self, snapshot: MetricsSnapshot) -> None:
-        """Await the wrapped snapshot write off-loop."""
-        await asyncio.to_thread(self._inner.on_snapshot, snapshot)
-
-    async def on_node_close(self, host: str, snapshot: MetricsSnapshot) -> None:
-        """Await the wrapped node close off-loop."""
-        await asyncio.to_thread(self._inner.on_node_close, host, snapshot)
-
-    async def on_disable(self, cluster: Any) -> None:
-        """Await the wrapped disable off-loop."""
-        await asyncio.to_thread(self._inner.on_disable, cluster)
-
-
-# Fire-and-forget disable tasks, held so the loop does not collect them mid-flight.
-_PENDING_DISABLES: set = set()
-
-
-def dispatch_disable(exporter: Any, cluster: Any) -> None:
-    """Run an exporter's disable callback, whichever protocol it implements.
-
-    ``disable_metrics`` is a plain method on both clusters, so an async
-    exporter's coroutine cannot be awaited there. Scheduling it keeps the
-    final flush from being dropped on the floor, which is what calling a
-    coroutine and discarding it would do.
-    """
-    try:
-        result = exporter.on_disable(cluster)
-    except Exception:
-        log.warning("Metrics exporter raised in on_disable", exc_info=True)
-        return
-    if inspect.isawaitable(result):
-        try:
-            task = asyncio.ensure_future(result)
-        except RuntimeError:
-            # No running loop: nothing can await the flush, and a warning here
-            # would fire on every interpreter shutdown.
-            return
-        _PENDING_DISABLES.add(task)
-        task.add_done_callback(_PENDING_DISABLES.discard)
+    def close(self) -> None:
+        """Close the wrapped exporter."""
+        self._inner.close()
 
 
 def check_exporter(exporter: Any, *, awaitable: bool) -> None:
     """Reject an exporter written against the other client's protocol.
 
-    ``runtime_checkable`` only proves the four method names exist -- it cannot
-    tell a coroutine from a plain function, and both protocols declare the same
-    names. So the check is whether ``on_snapshot`` is a coroutine function,
-    which is the thing that actually differs and the thing that breaks at
-    export time if it is wrong.
+    ``runtime_checkable`` only proves the method name exists -- it cannot tell
+    a coroutine from a plain function, and both protocols declare the same
+    name. So the check is whether ``export`` is a coroutine function, which is
+    the thing that actually differs and the thing that breaks at export time
+    if it is wrong.
 
     Args:
         exporter: The candidate exporter.
-        awaitable: Whether this cluster awaits its exporter.
+        awaitable: Whether this cluster awaits its exporters.
 
     Raises:
-        TypeError: If the exporter is missing a callback, or implements the
+        TypeError: If the exporter has no ``export`` method, or implements the
             opposite protocol.
     """
-    for name in ("on_enable", "on_snapshot", "on_node_close", "on_disable"):
-        if not callable(getattr(exporter, name, None)):
-            raise TypeError(
-                f"{type(exporter).__name__} is not a metrics exporter: "
-                f"missing {name}()"
-            )
-    is_async = inspect.iscoroutinefunction(exporter.on_snapshot)
+    method = getattr(exporter, "export", None)
+    if not callable(method):
+        raise TypeError(
+            f"{type(exporter).__name__} is not a metrics exporter: missing export()"
+        )
+    is_async = inspect.iscoroutinefunction(method)
     if awaitable and not is_async:
         raise TypeError(
-            f"{type(exporter).__name__} defines synchronous callbacks; the "
-            f"async cluster needs an AsyncMetricsExporter (async def)"
+            f"{type(exporter).__name__} defines a synchronous export(); the "
+            f"async cluster needs an AsyncMetricsExporter (async def export)"
         )
     if not awaitable and is_async:
         raise TypeError(
-            f"{type(exporter).__name__} defines async callbacks; the sync "
-            f"cluster needs a MetricsExporter (plain def)"
+            f"{type(exporter).__name__} defines an async export(); the sync "
+            f"cluster needs a MetricsExporter (plain def export)"
         )

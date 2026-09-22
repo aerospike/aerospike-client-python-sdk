@@ -111,6 +111,28 @@ grouping (`conn`/`read`/`write`/`batch`/`query`) from those categories, and
 with the cross-client-stable serialized names for logging or shipping to an
 external system.
 
+### Attributing a snapshot
+
+Every snapshot names the application it came from, so a dashboard can group
+client-side latency and errors the same way the server groups its own. The
+`app_id` field is whichever of these applies first:
+
+1. the identifier passed to {meth}`~aerospike_sdk.sync.cluster_definition.ClusterDefinition.app_id`,
+2. the authenticated user, when the connection has one,
+3. `not-set`.
+
+It is never an empty string, so a consumer never needs a missing-value case.
+
+The server's own user-agent record uses the same field, but only the first two
+of those steps agree with it: it carries an identifier you set, otherwise
+`not-set`. The authenticated-user fallback is metrics-only, so a connection
+that authenticates as `reporting_svc` without naming an application appears as
+`reporting_svc` in snapshots and `not-set` in the server's user-agent list. Set
+`app_id` explicitly to make the two read alike.
+
+Give distinct workloads distinct identifiers: `app_id` is the supported way to
+separate them, since snapshots are not broken down by set.
+
 (raw-per-command-tier)=
 ## The raw per-command tier
 
@@ -226,9 +248,11 @@ rather than an oversight.
 
 ## Exporting snapshots
 
-Rather than polling, register an exporter and the client pushes a snapshot to
-it on an interval. A cluster holds exactly one exporter; use a composite to
-reach several destinations.
+Rather than polling, register exporters and the client pushes each snapshot to
+every one of them on an interval. An exporter implements a single method,
+`export(snapshot)`; it never sees the cluster or its lifecycle, and whatever
+it writes to — a file, an HTTP client — it opens itself and the application
+closes when done. The client never closes an exporter it did not create.
 
 The async and sync clients take different protocols, because an exporter does
 I/O and the async client must not block its event loop on it:
@@ -237,18 +261,25 @@ I/O and the async client must not block its event loop on it:
 from aerospike_sdk.metrics import AsyncMetricsExporter
 
 class JsonExporter:
-    async def on_enable(self, cluster, settings): ...
-    async def on_snapshot(self, snapshot):
+    async def export(self, snapshot):
         await self._post(snapshot.to_canonical_dict())
-    async def on_node_close(self, host, snapshot): ...
-    async def on_disable(self, cluster): ...
 
-cluster.metrics_exporter = JsonExporter()
+cluster.add_exporter(JsonExporter())
 ```
 
-Implement `MetricsExporter` (plain `def`) for the sync client and
-`AsyncMetricsExporter` (`async def`) for the async one. `on_node_close` fires
-once for a node that has left the cluster, carrying its final snapshot.
+Implement `MetricsExporter` (plain `def export`) for the sync client and
+`AsyncMetricsExporter` (`async def export`) for the async one. Exporters are
+called in registration order with the same snapshot, which is an owned copy —
+keeping it past the call is safe. One exporter raising never silences the
+others: the error is logged and the rest still run. An exporter that fails
+three exports in a row is suspended, then retried every tenth interval until
+it succeeds, at which point its normal cadence resumes.
+
+A node that has left the cluster appears once under the snapshot's
+`nodes_departed`, same shape as `nodes` with its final counters, so an
+exporter can flush that node's series. Only the export push tracks
+departures — a snapshot from `cluster.metrics()` always carries an empty
+`nodes_departed`.
 
 {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` is the payload an
 exporter should serialize: a stable `snake_case` document independent of how
@@ -266,8 +297,22 @@ other_errors = namespace["errors"] - namespace["timeouts"] - namespace["key_busy
 
 ### Writing metrics to files
 
-The built-in exporter writes the line-oriented metrics log format, for
-existing log shippers:
+The built-in {class}`~aerospike_sdk.metrics.LearnMetricsFileExporter` writes
+the line-oriented metrics log format, for existing log shippers. Construct it
+and register it like any exporter — its first `export` opens the file and
+writes the header, and the application closes it:
+
+```python
+from aerospike_sdk.metrics import LearnMetricsFileExporter
+
+exporter = LearnMetricsFileExporter("/var/log/aerospike/metrics")
+cluster.add_exporter(exporter)
+...
+exporter.close()
+```
+
+The configuration file can install it as a convenience when the application
+registered no exporter of its own:
 
 ```yaml
 system:
@@ -280,10 +325,12 @@ system:
       report_size_limit: 10mb
 ```
 
-It is active only when `report_dir` is set; with no directory it does
-nothing. `exporter: none` installs a no-op. Field names *inside* that file
-stay camelCase for compatibility with existing parsers — the one place this
-SDK does not use `snake_case`.
+The configured install is active only when `report_dir` is set; with no
+directory it installs nothing, and so does `exporter: none`. The file's data
+lines are positional — they carry values, not field names. The one header
+line that declares the schema spells its field names in the format's legacy
+camelCase (`keyBusy`, `bytesIn`), because that is what the format's existing
+consumers parse; nothing else this SDK writes uses camelCase.
 
 This file carries the legacy field list and nothing more: cluster identity,
 per-node connections, per-namespace counters, and the latency histograms.
@@ -364,16 +411,22 @@ current behavior, not bugs in configuration:
 | **TLS handshake counters** | Not collected. The connection counters that are reported do not distinguish TLS or authentication phases. |
 | **Connection detail** | Only a single open-connection gauge is available; in-use versus idle-in-pool is not broken out. |
 | **Recover queue** | Depth of the timeout-recovery queue is not collected. |
-| **Cluster command and retry totals** | Cluster-wide command and retry counts are not collected. Per-node retry counts and the cumulative "exceeded retries/timeout" counters are. |
-| **Log file carries the legacy fields only** | Usage counters and the cluster-level `exceeded_max_retries` / `exceeded_total_timeout` have no field in the legacy line format and are not written to it. The format is defined outside this SDK, so it is not extended. All of it is present in the canonical snapshot. |
-| **Latency unit in the log file** | The legacy line format has no unit field, so `latency(columns,shift)` is read as milliseconds by `asloglatency` and similar tools. Microsecond buckets are written unchanged and will be misread by those consumers. The canonical snapshot is unaffected — it carries `latency_unit`. |
-| **Bytes received** | `bytes_in` is always zero: the underlying histogram records a count but never accumulates the byte total. `bytes_out` is correct. |
+| **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call whenever metrics are on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
+| **Log file omits the per-call count** | The line format has no field for `command_count`, nor for the cluster-level `exceeded_max_retries` / `exceeded_total_timeout`. The format is defined outside this SDK, so it is not extended. All of it is present in the canonical snapshot. |
+| **Latency unit in the log file** | Older consumers of the line format read `latency(...)` as milliseconds regardless of what the unit field says. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 
-The line-oriented log format additionally defines `inUse`, `inPool`,
-`recoverQueueSize`, `commandCount` and `retryCount`. None can be filled from
+The line-oriented log format additionally defines `cpu`, `mem`, `inUse`,
+`inPool`, `recoverQueueSize` and `invalidNodeCount`. None can be filled from
 what is collected, so they are omitted from the output rather than written as
-zero, and the file's header line names them.
+zero, and the file's header line names them under `unavailable[...]`.
+
+What the file does carry, beyond the per-node and per-namespace segments: the
+six feature-usage counters as the `singleCount` … `backgroundCount` columns,
+and `retryCount` for the summed per-node retries described above. Its field
+names are the format's own camelCase (`keyBusy`, `bytesIn`) because that is
+what its existing consumers parse — a compatibility requirement, not a style
+choice. The canonical snapshot uses snake_case throughout.
 
 ## What the latencies represent
 

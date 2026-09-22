@@ -178,8 +178,9 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
 
     def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
         """Truncate a set, synchronously (PAC ``truncate_blocking``)."""
-        if self._client._usage_on:
-            usage.record(self._client, [usage.ADMIN_TRUNCATE])
+        client = self._client
+        if client._record_on:
+            usage.record_call(client, (usage.ADMIN_TRUNCATE,))
         self._pac_client.truncate_blocking(
             dataset.namespace, dataset.set_name, before_nanos,
         )

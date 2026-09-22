@@ -28,6 +28,7 @@ from aerospike_async import DropIndexTask, IndexTask
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
+from aerospike_sdk.metrics import usage
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
@@ -111,6 +112,9 @@ class IndexBuilder(_IndexBuilderBase):
         See Also:
             :meth:`drop`
         """
+        client = self._client
+        if client._record_on:
+            usage.record_call(client, (usage.ADMIN_INDEX,))
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._client,
@@ -174,6 +178,9 @@ class IndexBuilder(_IndexBuilderBase):
         if not self._index_name:
             raise ValueError("index_name is required. Call named() first.")
 
+        client = self._client
+        if client._record_on:
+            usage.record_call(client, (usage.ADMIN_INDEX,))
         try:
             return await self._client._async_client.drop_index(
                 self._namespace, self._set_name, self._index_name)

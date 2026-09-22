@@ -234,34 +234,33 @@ class TestMetricsSnapshot:
 class TestMetricsExport:
     """Snapshots reaching an exporter, against a live cluster."""
 
-    async def test_exporter_receives_pushed_snapshots(self, metrics_cluster):
-        """The timer pushes without anyone calling metrics()."""
-        received = []
+    async def test_exporters_receive_pushed_snapshots(self, metrics_cluster):
+        """The timer pushes to every registered exporter without anyone calling metrics()."""
+        first, second = [], []
 
         class Recording:
-            async def on_enable(self, cluster, settings):
-                pass
+            def __init__(self, into):
+                self._into = into
 
-            async def on_snapshot(self, snapshot):
-                received.append(snapshot)
+            async def export(self, snapshot):
+                self._into.append(snapshot)
 
-            async def on_node_close(self, host, snapshot):
-                pass
-
-            async def on_disable(self, cluster):
-                pass
-
-        metrics_cluster.metrics_exporter = Recording()
+        a, b = Recording(first), Recording(second)
+        metrics_cluster.add_exporter(a)
+        metrics_cluster.add_exporter(b)
         try:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             # The configured interval is 30s; drive one push directly rather
             # than waiting for it.
             await metrics_cluster._export_timer._export_once()
-            assert len(received) == 1
-            assert received[0].to_canonical_dict()["client_type"] == "python"
+            assert len(first) == 1 and len(second) == 1
+            doc = first[0].to_canonical_dict()
+            assert doc["client_type"] == "python"
+            assert doc["nodes_departed"] == []
         finally:
             metrics_cluster.disable_metrics()
-            metrics_cluster.metrics_exporter = None
+            metrics_cluster.remove_exporter(a)
+            metrics_cluster.remove_exporter(b)
 
     async def test_raw_tier_exposes_parsing_and_connection_acquisition(
         self, metrics_cluster
@@ -357,45 +356,30 @@ class TestMetricsExport:
         )
 
         # Cluster totals agree with the per-node rows they summarize.
-        assert document["cluster"]["total_nodes"] == len(nodes)
-        assert document["cluster"]["open_connections"] == sum(
-            n["connections"]["open"] for n in nodes
-        )
+        assert document["cluster"]["nodes"]["active"] == len(nodes)
+        cluster_conns = document["cluster"]["connections"]
+        assert cluster_conns["open"] == sum(n["connections"]["open"] for n in nodes)
+        assert cluster_conns["opened"] == sum(n["connections"]["opened"] for n in nodes)
+        assert cluster_conns["closed"] == sum(n["connections"]["closed"] for n in nodes)
         metrics_cluster.disable_metrics()
 
-    async def test_node_departure_reaches_the_exporter(self, metrics_cluster):
-        """A host the cluster no longer lists fires ``on_node_close`` once.
+    async def test_node_departure_reaches_nodes_departed(self, metrics_cluster):
+        """A host the cluster no longer lists appears in ``nodes_departed`` once.
 
         Departure is judged by joining the snapshot's hosts against the live
         node list, because a snapshot keeps every host it ever saw. Stopping a
         real node mid-suite would be destructive and racy, so the live list is
         narrowed instead -- everything downstream of it (the export tick, the
-        tracker, the exporter call, the snapshot handed over) is the real path.
+        tracker, the departed section, the exporter call) is the real path.
         """
+        from aerospike_sdk.metrics import MetricsSnapshot
+
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         session = metrics_cluster.create_session()
         ds = DataSet.of(general_namespace(), "node_close")
         for i in range(5):
             await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-        class Recorder:
-            def __init__(self):
-                self.closed = []
-                self.snapshots = 0
-
-            async def on_enable(self, cluster, settings):
-                pass
-
-            async def on_snapshot(self, snapshot):
-                self.snapshots += 1
-
-            async def on_node_close(self, host, snapshot):
-                self.closed.append((host, snapshot))
-
-            async def on_disable(self, cluster):
-                pass
-
-        recorder = Recorder()
         snapshot = await metrics_cluster.metrics()
         hosts = [
             f"{n['address']}:{n['port']}"
@@ -403,50 +387,51 @@ class TestMetricsExport:
         ]
         assert hosts, "snapshot reported no nodes; cannot test departure"
 
-        # The underlying client is a compiled extension type with read-only
-        # attributes, so the live-node source is replaced at the cluster seam
-        # the timer reads it through. metrics() still returns the real
-        # snapshot.
-        class _NoLiveNodes:
-            async def nodes(self):
-                return []
+        received = []
 
+        class Recorder:
+            async def export(self, snapshot):
+                received.append(snapshot.to_canonical_dict())
+
+        recorder = Recorder()
+
+        # The live-node list rides on the snapshot itself, so the seam is the
+        # cluster's metrics(): rebuild the real snapshot with an emptied node
+        # list and let the real timer do everything downstream.
         class _EmptiedCluster:
             def __init__(self, real):
                 self._real = real
-                self._sdk_client = type(
-                    "_Stub", (), {"underlying_client": _NoLiveNodes()}
-                )()
+                self._exporters = [recorder]
 
             async def metrics(self):
-                return await self._real.metrics()
+                real = await self._real.metrics()
+                return MetricsSnapshot(real._pac, policy=real._policy, nodes=[])
 
-        timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), recorder, 3600.0)
+        timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 
         await timer._export_once()
-        assert recorder.snapshots == 1
-        assert sorted(h for h, _ in recorder.closed) == sorted(hosts)
-        # The snapshot handed over is the real one, so a file exporter can
-        # write that node's final line from it.
-        _, handed = recorder.closed[0]
-        assert handed.to_canonical_dict()["nodes"]
+        assert len(received) == 1
+        departed = [f"{n['address']}:{n['port']}" for n in received[0]["nodes_departed"]]
+        assert sorted(departed) == sorted(hosts)
+        # A departed node is no longer claimed as a member.
+        assert received[0]["nodes"] == []
+        # The final counters ride along, so a file exporter can write the
+        # node's last line from them.
+        assert received[0]["nodes_departed"][0]["connections"]["opened"] >= 0
 
-        # Fires once per host, not once per export tick.
+        # Reported once per host, not once per export tick.
         await timer._export_once()
-        assert sorted(h for h, _ in recorder.closed) == sorted(hosts)
+        assert received[1]["nodes_departed"] == []
         metrics_cluster.disable_metrics()
 
     async def test_mismatched_exporter_protocol_is_rejected(self, metrics_cluster):
-        """A sync exporter on the async cluster fails at assignment, not later."""
+        """A sync exporter on the async cluster fails at registration, not later."""
 
         class SyncShaped:
-            def on_enable(self, cluster, settings): ...
-            def on_snapshot(self, snapshot): ...
-            def on_node_close(self, host, snapshot): ...
-            def on_disable(self, cluster): ...
+            def export(self, snapshot): ...
 
         with pytest.raises(TypeError, match="AsyncMetricsExporter"):
-            metrics_cluster.metrics_exporter = SyncShaped()
+            metrics_cluster.add_exporter(SyncShaped())
 
     async def test_learn_metrics_file_is_written_and_parses(
         self, metrics_cluster, tmp_path
@@ -455,19 +440,18 @@ class TestMetricsExport:
         from aerospike_sdk.metrics.export import LearnMetricsFileExporter
 
         exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.on_enable(None, None)
         try:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             await _do_some_ops(metrics_cluster, count=3)
-            exporter.on_snapshot(await metrics_cluster.metrics())
+            exporter.export(await metrics_cluster.metrics())
         finally:
-            exporter.on_disable(None)
+            exporter.close()
             metrics_cluster.disable_metrics()
 
         files = list(tmp_path.glob("metrics-*.log"))
         assert len(files) == 1
         lines = files[0].read_text().splitlines()
-        assert lines[0].startswith("header(1)")
+        assert lines[0].startswith("header(3)")
         cluster_line = lines[1]
         # Every segment the header advertises is present and closed.
         for segment in ("cluster[", "node[", "namespace[", "latency("):
@@ -475,3 +459,43 @@ class TestMetricsExport:
         assert cluster_line.count("[") == cluster_line.count("]")
         assert "python" in cluster_line
 
+
+
+class TestCommandCount:
+    """The SDK-counted cluster command total: one per data-path API call."""
+
+    async def test_counts_once_per_user_call(self, metrics_cluster):
+        metrics_cluster.enable_metrics(_SHAPE_SAFE)
+        session = metrics_cluster.create_session()
+        ds = DataSet.of(general_namespace(), "cmd_count")
+        base = (await metrics_cluster.metrics()).command_count
+
+        for i in range(3):
+            await session.upsert(ds.id(i)).put({"n": i}).execute()
+        single = await session.query(ds.id(0)).execute()
+        assert (await single.first_or_raise()).is_ok
+        batch = await session.query(ds.id(0), ds.id(1), ds.id(2)).execute()
+        assert len(await batch.collect()) == 3
+
+        after = (await metrics_cluster.metrics()).command_count
+        # Three writes, one point read, one batch read: the batch is one
+        # call however many keys it carries.
+        assert after - base == 5
+
+        doc = (await metrics_cluster.metrics()).to_canonical_dict()
+        assert doc["cluster"]["command_count"] == after
+        # Derived from the per-node counters the client core keeps.
+        assert doc["cluster"]["command_retries"] >= 0
+        assert "closed_idle" in doc["nodes"][0]["connections"]
+        metrics_cluster.disable_metrics()
+
+    async def test_disabled_metrics_freeze_the_count(self, metrics_cluster):
+        metrics_cluster.enable_metrics(_SHAPE_SAFE)
+        session = metrics_cluster.create_session()
+        ds = DataSet.of(general_namespace(), "cmd_count_off")
+        await session.upsert(ds.id(1)).put({"n": 1}).execute()
+        metrics_cluster.disable_metrics()
+
+        frozen = (await metrics_cluster.metrics()).command_count
+        await session.upsert(ds.id(2)).put({"n": 2}).execute()
+        assert (await metrics_cluster.metrics()).command_count == frozen

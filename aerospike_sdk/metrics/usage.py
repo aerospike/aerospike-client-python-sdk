@@ -96,6 +96,13 @@ ADMIN_INDEX = "feature.admin.index"
 #: Truncate a set or namespace.
 ADMIN_TRUNCATE = "feature.admin.truncate"
 
+# The cluster-level command count is not a feature counter, but it rides the
+# same per-thread machinery: one increment per user API call, kept in its own
+# counter store so it never appears among the usage counters. Held as a tuple
+# because it is handed to :meth:`UsageCounters.add` on every call.
+COMMAND_COUNT = "command.count"
+COMMAND_COUNT_KEY = (COMMAND_COUNT,)
+
 
 # Collection-data-type operations, for the CDT counter. String operations are
 # excluded: they act on a scalar bin, not a collection.
@@ -227,4 +234,58 @@ def record_point(sdk_client, execution_mode: str, txn=None, operations=()) -> No
         features.append(TRANSACTION)
     if has_cdt(operations):
         features.append(CDT)
+    record(sdk_client, features)
+
+
+def record_call_point(sdk_client, execution_mode: str, txn=None, operations=()) -> None:
+    """Record a fast-path call: the command count, and usage when on.
+
+    The fast-path twin of the builder's ``_record_call`` — reached behind the
+    client's ``_record_on`` gate, once per user API call.
+    """
+    if sdk_client._cmd_count_on:
+        sdk_client._command_counts.add(COMMAND_COUNT_KEY)
+    if sdk_client._usage_on:
+        record_point(sdk_client, execution_mode, txn, operations)
+
+
+def record_call(sdk_client, features=()) -> None:
+    """Record a user API call made outside the builders.
+
+    The admin surfaces (index, truncate) and any other terminal that does not
+    run through a query builder. Reached behind the client's ``_record_on``
+    gate, once per user API call.
+
+    Args:
+        sdk_client: The owning SDK client.
+        features: Counter identifiers for this call, recorded only when the
+            usage group is on.
+    """
+    if sdk_client._cmd_count_on:
+        sdk_client._command_counts.add(COMMAND_COUNT_KEY)
+    if features and sdk_client._usage_on:
+        record(sdk_client, features)
+
+
+def record_background(sdk_client, kind: str, extra=()) -> None:
+    """Record a background job registration.
+
+    Counts the call whenever recording is on. Increments
+    :data:`API_BACKGROUND`, :data:`SHAPE_QUERY`, and ``kind``, plus any
+    extra identifiers the call site collected, when usage is on too.
+
+    Args:
+        sdk_client: The owning SDK client, or ``None`` to stay silent.
+        kind: :data:`BACKGROUND_OPERATE` or :data:`BACKGROUND_UDF`.
+        extra: Additional counter identifiers for this call.
+    """
+    if sdk_client is None or getattr(sdk_client, "_record_on", False) is not True:
+        return
+    if sdk_client._cmd_count_on:
+        sdk_client._command_counts.add(COMMAND_COUNT_KEY)
+    if not sdk_client._usage_on:
+        return
+    features = [API_BACKGROUND, SHAPE_QUERY, kind]
+    if extra:
+        features.extend(extra)
     record(sdk_client, features)

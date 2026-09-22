@@ -12,6 +12,7 @@
 
 """Unit tests for the metrics policy mapping and derived histogram math."""
 
+import copy
 from dataclasses import dataclass
 from typing import List
 
@@ -261,6 +262,27 @@ class TestCanonicalSnapshot:
         assert doc["app_id"] == "billing"
         assert doc["timestamp"].endswith("+00:00")
 
+    def _no_app_id_snapshot(self, app_id=None):
+        """A snapshot whose underlying client reports no application identity."""
+        raw = copy.deepcopy(_RAW)
+        labels = raw["cluster-aggregated-metrics"]["labels"][0]
+        del labels["app-id"]
+        return MetricsSnapshot(_FakePacSnapshot(raw), app_id=app_id)
+
+    def test_app_id_falls_back_to_the_authenticated_user(self):
+        """Unnamed applications still group by the identity the server knows."""
+        doc = self._no_app_id_snapshot(app_id="analytics_svc").to_canonical_dict()
+        assert doc["app_id"] == "analytics_svc"
+
+    def test_app_id_is_never_empty(self):
+        """No application name and no authentication: a placeholder, not ``""``."""
+        doc = self._no_app_id_snapshot().to_canonical_dict()
+        assert doc["app_id"] == "not-set"
+
+    def test_declared_app_id_wins_over_the_fallback(self):
+        doc = self._snapshot().to_canonical_dict()
+        assert doc["app_id"] == "billing"
+
     def test_reserved_labels_are_promoted_not_duplicated(self):
         """Identity labels become their own fields and leave the user map alone."""
         doc = self._snapshot().to_canonical_dict()
@@ -286,8 +308,78 @@ class TestCanonicalSnapshot:
 
     def test_connections_omit_the_unavailable_split(self):
         conns = self._snapshot().to_canonical_dict()["nodes"][0]["connections"]
-        assert conns == {"opened": 7, "closed": 2, "open": 3}
+        assert conns == {"opened": 7, "closed": 2, "open": 3,
+                         "open_failure": 0, "closed_idle": 0}
         assert "in_use" not in conns and "in_pool" not in conns
+        # The failure rollup is undifferentiated; the TLS/auth split is not
+        # measured and stays absent rather than zeroed.
+        assert "tls_handshake_failure" not in conns and "auth_failure" not in conns
+
+    def test_connection_open_failures_are_reported(self):
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections-failed": 4})}
+        snapshot = MetricsSnapshot(_FakePacSnapshot(raw))
+        conns = snapshot.to_canonical_dict()["nodes"][0]["connections"]
+        assert conns["open_failure"] == 4
+
+    def test_command_count_reaches_the_cluster_section(self):
+        snapshot = MetricsSnapshot(_FakePacSnapshot(_RAW), command_count=42)
+        doc = snapshot.to_canonical_dict()
+        assert doc["cluster"]["command_count"] == 42
+        assert snapshot.command_count == 42
+
+    def test_command_count_is_omitted_when_nobody_counted(self):
+        doc = self._snapshot().to_canonical_dict()
+        assert "command_count" not in doc["cluster"]
+
+    def test_retry_count_sums_the_per_node_counters(self):
+        raw = dict(_RAW)
+        raw["cluster-aggregated-metrics"] = dict(
+            _RAW["cluster-aggregated-metrics"], **{"transaction-retry-count": 9}
+        )
+        doc = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()
+        assert doc["cluster"]["command_retries"] == 9
+
+    def test_retry_count_defaults_to_zero(self):
+        doc = self._snapshot().to_canonical_dict()
+        assert doc["cluster"]["command_retries"] == 0
+        assert self._snapshot().command_retries == 0
+
+    def test_idle_close_reason_is_reported(self):
+        raw = {**_RAW, "127.0.0.1:3010": dict(
+            _RAW["127.0.0.1:3010"], **{"connections-idle-dropped": 5}
+        )}
+        conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
+        assert conns["closed_idle"] == 5
+        # The remaining close reasons are not measured distinctly and stay
+        # absent rather than zeroed.
+        assert "closed_error" not in conns and "closed_node_removed" not in conns
+
+    def test_nodes_departed_is_empty_on_a_plain_pull(self):
+        """Departure is tracked by the export timer, not by pulls."""
+        doc = self._snapshot().to_canonical_dict()
+        assert doc["nodes_departed"] == []
+
+    def test_a_departed_node_moves_to_nodes_departed(self):
+        from aerospike_sdk.metrics.export import _NodeCloseTracker
+
+        # An empty live-node list: the one measured host has left the cluster.
+        snapshot = self._snapshot(nodes=[])
+        snapshot._mark_departed(_NodeCloseTracker())
+        doc = snapshot.to_canonical_dict()
+        assert doc["nodes"] == []
+        assert [n["address"] for n in doc["nodes_departed"]] == ["127.0.0.1"]
+
+    def test_an_already_reported_departure_is_listed_nowhere(self):
+        """The tracker reports each host once; afterwards it is neither live nor departed."""
+        from aerospike_sdk.metrics.export import _NodeCloseTracker
+
+        tracker = _NodeCloseTracker()
+        first = self._snapshot(nodes=[])
+        first._mark_departed(tracker)
+        second = self._snapshot(nodes=[])
+        second._mark_departed(tracker)
+        doc = second.to_canonical_dict()
+        assert doc["nodes"] == [] and doc["nodes_departed"] == []
 
     def test_namespace_counters(self):
         ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]

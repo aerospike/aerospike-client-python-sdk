@@ -179,8 +179,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._base_read_policy is not None
             and self._read_policy is None
         ):
-            if self._usage_on:
-                self._flush_usage(usage.API_BLOCKING, usage.SHAPE_POINT)
+            if self._record_on:
+                self._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client.get_blocking(
@@ -221,11 +221,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
-        if self._usage_on:
+        if self._record_on:
             # The dispatchers finalize internally; doing it here first makes
             # the shape readable and leaves their own call a no-op.
             self._finalize_current_spec()
-            self._flush_usage(usage.API_BLOCKING, self._usage_shape())
+            self._record_call(usage.API_BLOCKING, self._usage_shape())
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self._execute_blocking_fast_path(on_error)
         if fast is not None:
@@ -547,8 +547,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             # Read the flag off the client rather than slotting it here: this
             # segment counts its per-op attribute stores.
             sdk_fast = self._sdk_client_fast
-            if sdk_fast is not None and sdk_fast._usage_on:
-                usage.record_point(sdk_fast, usage.API_BLOCKING, self._txn, self._ops)
+            if sdk_fast is not None and sdk_fast._record_on:
+                usage.record_call_point(sdk_fast, usage.API_BLOCKING, self._txn, self._ops)
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client_fast.operate_blocking(

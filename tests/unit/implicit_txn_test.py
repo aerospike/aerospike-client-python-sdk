@@ -46,6 +46,8 @@ def _sdk_client(implicit=True):
         supports_server_compiled_ael=False,
         supports_query_selection=False,
         _usage_on=False,
+        _record_on=False,
+        _cmd_count_on=False,
     )
 
 

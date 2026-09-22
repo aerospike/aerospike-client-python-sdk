@@ -179,6 +179,14 @@ cluster = await (
 )
 ```
 
+Metrics snapshots carry the same identifier, so client-side latency and errors
+join to the server's view of the same application. Leave it unset and the
+user-agent reports `not-set`, while the snapshot reports the authenticated user
+if there is one, falling back to `not-set` as well — the snapshot's field is
+never empty. The authenticated-user fallback applies to metrics only; it is not
+repeated in the user-agent, where the server already knows the connection's
+user. See {doc}`metrics`.
+
 ### SDK Configuration File
 
 Connection pool sizing, circuit-breaker thresholds, tend interval, and named

@@ -120,7 +120,9 @@ class MetricsSnapshot:
             print(host, node.connections_attempts, node.open_connections)
     """
 
-    __slots__ = ("_pac", "_policy", "_nodes", "_usage")
+    __slots__ = (
+        "_pac", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id",
+    )
 
     def __init__(
         self,
@@ -129,6 +131,8 @@ class MetricsSnapshot:
         policy: Optional[MetricsPolicy] = None,
         nodes: Optional[List[Any]] = None,
         usage: Optional[Dict[str, int]] = None,
+        command_count: Optional[int] = None,
+        app_id: Optional[str] = None,
     ) -> None:
         """Wrap a raw PAC snapshot.
 
@@ -139,11 +143,40 @@ class MetricsSnapshot:
             nodes: Live cluster nodes, joined by host to name the nodes in
                 :meth:`to_canonical_dict`.
             usage: Feature-usage counters recorded by this SDK.
+            command_count: User API calls counted by this SDK, or ``None``
+                when the caller has no count to report.
+            app_id: Application identity to report when the underlying client
+                carries none, normally the authenticated user. ``None`` falls
+                back to ``"not-set"``.
         """
         self._pac = pac_metrics
         self._policy = policy
         self._nodes = nodes
         self._usage = usage or {}
+        self._command_count = command_count
+        self._departed: tuple = ()
+        self._app_id = app_id
+
+    def _mark_departed(self, tracker: Any) -> None:
+        """Record which hosts left the cluster, for ``nodes_departed``.
+
+        Called by the export timer, which owns the departure state: the
+        underlying client retains every host it ever measured, so departure is
+        judged by joining the snapshot's hosts against the live node list, and
+        the tracker remembers what was already reported. A snapshot pulled
+        outside the export cycle carries an empty ``nodes_departed``.
+        """
+        raw = self._pac.to_dict()
+        snapshot_hosts = [
+            host for host, value in raw.items()
+            if isinstance(value, Mapping) and ":" in host
+        ]
+        live_hosts = [
+            f"{host[0]}:{host[1]}"
+            for node in (self._nodes or [])
+            if (host := getattr(node, "host", None)) is not None
+        ]
+        self._departed = tuple(tracker.departed(snapshot_hosts, live_hosts))
 
     @property
     def nodes(self) -> Dict[str, NodeMetricsSnapshot]:
@@ -174,6 +207,26 @@ class MetricsSnapshot:
     def exceeded_total_timeout(self) -> int:
         """Commands that failed on total timeout (cumulative)."""
         return self._pac.exceeded_total_timeout
+
+    @property
+    def command_retries(self) -> int:
+        """Wire retries across the cluster, cumulative since metrics enable.
+
+        The per-node retry counters summed: every retry increments on the node
+        it was sent to, and the aggregate retains departed hosts, so the total
+        survives node churn. Retries happen inside the client core, so unlike
+        :attr:`command_count` this covers all traffic on the client, however
+        it was issued.
+
+        Example::
+
+            snapshot = await cluster.metrics()
+            retries_per_call = snapshot.command_retries / max(snapshot.command_count, 1)
+        """
+        aggregated = self._pac.cluster_aggregated
+        if aggregated is None:
+            return 0
+        return aggregated.transaction_retry_count
 
     def latency(
         self, latency_type: LatencyType, node: Optional[str] = None
@@ -232,6 +285,23 @@ class MetricsSnapshot:
         """
         return dict(self._usage)
 
+    @property
+    def command_count(self) -> int:
+        """User API calls counted while metrics were enabled, cumulative.
+
+        Counted by this SDK — one increment per data-path call (point, batch,
+        query, UDF) made through this API, whatever the sampler decides —
+        so it is an exact total, and traffic issued through the underlying
+        client directly is not represented. ``0`` when metrics were never
+        enabled.
+
+        Example::
+
+            snapshot = await cluster.metrics()
+            errors_per_call = errors / max(snapshot.command_count, 1)
+        """
+        return self._command_count or 0
+
     def to_dict(self) -> Dict[str, Any]:
         """The raw snapshot as the underlying client serializes it.
 
@@ -251,13 +321,27 @@ class MetricsSnapshot:
 
         Fields the underlying client does not measure are **omitted rather
         than zeroed**, so a consumer can tell "not collected" from "zero":
-        per-node ``in_use`` / ``in_pool`` connection splits, recover-queue
-        depth, and cluster-level command and retry counts.
+        per-node ``in_use`` / ``in_pool`` connection splits and recover-queue
+        depth. The cluster ``command_retries`` is the per-node retry counters
+        summed; ``command_count`` is present when this SDK counted calls —
+        see :attr:`command_count` for its scope.
+
+        ``app_id`` is always populated, so a consumer can group by application
+        without a missing-field case: the identity the application set on the
+        cluster definition, else the authenticated user, else ``"not-set"``.
+
+        ``nodes`` lists the nodes still in the cluster. A node that left since
+        the previous export appears once under ``nodes_departed`` -- same
+        shape, final counters -- so an exporter can flush its series without a
+        callback. Departure is tracked by the export timer; a snapshot pulled
+        directly through ``metrics()`` always carries an empty
+        ``nodes_departed``.
 
         Returns:
             The structured snapshot: ``timestamp``, ``client_type``,
             ``client_version``, ``cluster_name``, ``app_id``, ``labels``,
-            the histogram shape, ``cluster``, and ``nodes`` as a list.
+            the histogram shape, ``cluster``, ``nodes`` as a list, and
+            ``nodes_departed``.
 
         Example::
 
@@ -278,8 +362,20 @@ class MetricsSnapshot:
                 nodes_by_host[f"{host[0]}:{host[1]}"] = node
 
         nodes: List[Dict[str, Any]] = []
+        departed: List[Dict[str, Any]] = []
+        departed_hosts = set(self._departed)
         for host, node_raw in raw.items():
             if not isinstance(node_raw, Mapping) or ":" not in host:
+                continue
+            if host in departed_hosts:
+                departed.append(self._canonical_node(host, node_raw, None))
+                continue
+            if self._nodes is not None and host not in nodes_by_host:
+                # Retained by the underlying client but no longer in the
+                # cluster, and not newly departed this cycle: it was already
+                # reported (or the snapshot was pulled outside the export
+                # cycle). Listing it under ``nodes`` would claim membership
+                # it no longer has.
                 continue
             nodes.append(self._canonical_node(host, node_raw, nodes_by_host.get(host)))
 
@@ -295,16 +391,33 @@ class MetricsSnapshot:
             "client_type": "python",
             "client_version": _client_version(),
             "cluster_name": labels.reserved.get("cluster", ""),
-            "app_id": labels.reserved.get("app-id", ""),
+            "app_id": labels.reserved.get("app-id") or self._app_id or _APP_ID_UNSET,
             "labels": labels.user,
             "latency_unit": _canonical_unit(aggregated.get("latency-unit")),
             "cluster": {
-                "total_nodes": self.total_nodes,
-                "open_connections": self.open_connections,
+                # Cluster rollups summed across nodes by the aggregate, which
+                # retains departed hosts, so the totals survive node churn.
+                # `in_use` / `in_pool` are absent: the underlying client keeps
+                # the single `open` gauge, not the pool-walk split.
+                "connections": {
+                    "opened": aggregated.get("connections-successful", 0),
+                    "closed": aggregated.get("closed-connections", 0),
+                    "open": self.open_connections,
+                },
+                "nodes": {"active": self.total_nodes},
                 "exceeded_max_retries": self.exceeded_max_retries,
                 "exceeded_total_timeout": self.exceeded_total_timeout,
+                # The per-node retry counters summed (the canonical schema's
+                # name for the cluster retry total).
+                "command_retries": aggregated.get("transaction-retry-count", 0),
+                # Counted by this SDK, not the underlying client: one per user
+                # API call made through this API, whenever metrics are on, and
+                # never reduced by the sampler.
+                **({"command_count": self._command_count}
+                   if self._command_count is not None else {}),
             },
             "nodes": nodes,
+            "nodes_departed": departed,
         }
         if self._usage:
             document["usage"] = dict(self._usage)
@@ -324,14 +437,22 @@ class MetricsSnapshot:
         )
         return {
             "name": getattr(node, "name", "") if node is not None else "",
-            "address": getattr(node, "address", address) if node is not None else address,
+            # Identity comes from the snapshot's own host key: the live node's
+            # `address` carries its port too, and a departed node has no live
+            # counterpart to ask, so the key is the one form both share.
+            "address": address,
             "port": int(port) if port.isdigit() else None,
             # `in_use` / `in_pool` are absent: the underlying client keeps a
-            # single open-connection gauge rather than the split.
+            # single open-connection gauge rather than the split. TLS and auth
+            # failures are absent too -- `open_failure` is the undifferentiated
+            # rollup, the only connect-failure counter the client keeps -- and
+            # of the close reasons only the idle drop is tracked distinctly.
             "connections": {
                 "opened": node_raw.get("connections-successful", 0),
                 "closed": node_raw.get("closed-connections", 0),
                 "open": node_raw.get("open-connections", 0),
+                "open_failure": node_raw.get("connections-failed", 0),
+                "closed_idle": node_raw.get("connections-idle-dropped", 0),
             },
             "namespaces": [
                 _namespace_view(
@@ -356,6 +477,11 @@ class MetricsSnapshot:
 # the node and cluster and are promoted to their own canonical fields, so they
 # are kept out of the user's `labels` map rather than duplicated into it.
 _RESERVED_LABELS = frozenset({"node", "host", "cluster", "app-id"})
+
+# Reported for `app_id` when the application named none and the connection is
+# unauthenticated. A placeholder rather than an empty string, so a consumer
+# grouping by application never has to tell "" apart from a missing field.
+_APP_ID_UNSET = "not-set"
 
 
 class _SplitLabels(NamedTuple):

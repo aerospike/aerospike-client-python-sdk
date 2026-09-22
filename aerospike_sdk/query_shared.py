@@ -447,7 +447,11 @@ class _QueryBuilderBase:
     # the usage group, which keeps every hook point on this path down to one
     # attribute load. `_usage_features` accumulates across chained segments
     # because finalizing a segment clears the state it was derived from.
+    # `_record_on` is the per-call gate: true whenever the command count is
+    # being kept (metrics on) or usage is on, so the execute paths test one
+    # flag and `_record_call` splits the cold half.
     _usage_on: bool = False
+    _record_on: bool = False
     _usage_features: Optional[List[str]] = None
 
     def __init__(
@@ -532,8 +536,11 @@ class _QueryBuilderBase:
             and sdk_client.supports_query_selection
         ):
             self._supports_query_selection = True
-        if sdk_client is not None and sdk_client._usage_on:
-            self._usage_on = True
+        if sdk_client is not None:
+            if sdk_client._usage_on:
+                self._usage_on = True
+            if sdk_client._record_on:
+                self._record_on = True
         if txn is None:
             self._base_read_policy: Optional[ReadPolicy] = cached_read_policy
             self._base_write_policy: Optional[WritePolicy] = cached_write_policy
@@ -1461,12 +1468,18 @@ class _QueryBuilderBase:
             return usage.SHAPE_POINT
         return usage.SHAPE_BATCH
 
-    def _flush_usage(self, execution_mode: str, shape: str) -> None:
-        """Send the accumulated feature set plus this call's mode and shape.
+    def _record_call(self, execution_mode: str, shape: str) -> None:
+        """Record this user API call: the command count, and usage when on.
 
-        Only reached while ``_usage_on``. One crossing into the client core
-        per user API call, however many features it touched.
+        Only reached while ``_record_on``, once per user API call. The
+        command count and the usage flush share this boundary so the two can
+        never disagree about what constitutes a call.
         """
+        sdk = self._sdk_client
+        if sdk is not None and sdk._cmd_count_on:
+            sdk._command_counts.add(usage.COMMAND_COUNT_KEY)
+        if not self._usage_on:
+            return
         features = self._usage_features
         if features is None:
             features = [execution_mode, shape]
@@ -1481,6 +1494,25 @@ class _QueryBuilderBase:
         if self._txn is not None:
             features.append(usage.TRANSACTION)
         usage.record(self._sdk_client, features)
+
+    def _flush_background_usage(self, kind: str) -> None:
+        """Record a background job that has passed validation.
+
+        Dataset queries never hit :meth:`_finalize_current_spec`'s collect
+        (no keys), so the current segment's filters and ops are folded in
+        here. ``kind`` is :data:`~aerospike_sdk.metrics.usage.BACKGROUND_OPERATE`
+        or :data:`~aerospike_sdk.metrics.usage.BACKGROUND_UDF`.
+        """
+        if not self._record_on:
+            return
+        if self._usage_on:
+            self._collect_segment_usage()
+            features = self._usage_features
+            if features is None:
+                self._usage_features = [kind]
+            else:
+                features.append(kind)
+        self._record_call(usage.API_BACKGROUND, usage.SHAPE_QUERY)
 
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""

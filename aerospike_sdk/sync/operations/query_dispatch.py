@@ -73,6 +73,7 @@ from aerospike_sdk.exceptions import (
     _convert_pac_exception,
     _result_code_to_exception,
 )
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
@@ -141,6 +142,7 @@ class _BlockingQueryDispatch:
                 "At least one write operation is required; use with_write_operations(...).",
             )
         self._reject_unsupported_background_write_ops(self._operations)
+        self._flush_background_usage(usage.BACKGROUND_OPERATE)
         wp = self._make_background_write_policy()
         statement = self._build_statement()
         try:
@@ -169,6 +171,7 @@ class _BlockingQueryDispatch:
             raise ValueError(
                 "Do not combine with_write_operations with execute_udf_background_task.",
             )
+        self._flush_background_usage(usage.BACKGROUND_UDF)
         wp = self._make_background_write_policy()
         statement = self._build_statement()
         py_args: Optional[List[Any]] = list(args) if args is not None else None

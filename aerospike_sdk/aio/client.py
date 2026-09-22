@@ -119,6 +119,12 @@ class Client(RoutingCapabilitiesMixin):
         # Feature-usage counters. The flag is read on every gated call
         # site, so it is a plain attribute rather than a policy lookup.
         self._usage_on: bool = False
+        # Per-call recording gates: `_cmd_count_on` mirrors metrics-enabled and
+        # drives the cluster command count; `_record_on` is the one flag the
+        # hot paths test (true when either recording kind is on).
+        self._cmd_count_on: bool = False
+        self._record_on: bool = False
+        self._command_counts = UsageCounters()
         self._usage_counters = UsageCounters()
         # Set by the owning Cluster. Weak so the pair does not form a
         # cycle; a reload needs the Cluster because collection, the

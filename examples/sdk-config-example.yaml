@@ -42,6 +42,33 @@ system:
       implicit_batch_write_transactions: false
       sleep_between_attempts: 250ms
       number_of_attempts: 3
+    metrics:
+      # Turns collection on at connect and on hot reload; false turns it off.
+      enabled: true
+      # Static labels attached to every snapshot.
+      labels:
+        owner: platform-team
+      # Histogram shape: unit, bucket count, and boundary spacing (2**shift).
+      latency_unit: milliseconds
+      latency_columns: 7
+      latency_shift: 1
+      # Record-time gate: measure a call when random % range < threshold.
+      # range=1/threshold=1 records every call; 1000000/100000 samples ~10%.
+      sampler:
+        range: 1
+        threshold: 1
+      # Push cadence to registered exporters, and the built-in file exporter,
+      # installed only when the application registered no exporter itself.
+      # With report_dir empty (the default) no file is written; exporter: none
+      # never installs the built-in.
+      export_interval: 30s
+      exporter: learn_metrics_file
+      report_dir: ""
+      report_size_limit: 10mb
+      extended:
+        usage:
+          # Feature-usage counters, exposed on the snapshot as `usage`.
+          enabled: false
 
   # Layers on DEFAULT for connections that name this cluster via
   # ClusterDefinition.validate_cluster_name_is("production").

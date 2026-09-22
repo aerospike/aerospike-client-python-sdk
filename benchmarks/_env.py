@@ -203,4 +203,6 @@ def maybe_enable_metrics(client, cfg) -> None:
         client.enable_metrics(policy)
         return
     client.underlying_client.enable_metrics(policy._to_pac())
+    client._cmd_count_on = True
+    client._record_on = True
     client._usage_on = policy.usage_enabled

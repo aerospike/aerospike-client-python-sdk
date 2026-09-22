@@ -637,3 +637,59 @@ system:
         assert merged.metrics.latency_columns == 24        # higher wins
         assert merged.metrics.latency_unit == "microseconds"  # falls through
 
+
+
+class TestUnmatchedClusterProfileWarning:
+    """A ``system.<name>`` block can silently never match; the warning makes it loud."""
+
+    YAML = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    refresh:\n"
+        "      tend_interval: 1s\n"
+        "  production:\n"
+        "    refresh:\n"
+        "      tend_interval: 500ms\n"
+        "  staging:\n"
+        "    refresh:\n"
+        "      tend_interval: 2s\n"
+    )
+
+    def test_named_profiles_excludes_default(self):
+        from aerospike_sdk.policy.sdk_config_loader import named_profiles
+
+        assert named_profiles(self.YAML.encode(), "sdk.yaml") == {"production", "staging"}
+
+    def test_named_profiles_is_fail_soft(self):
+        from aerospike_sdk.policy.sdk_config_loader import named_profiles
+
+        assert named_profiles(None, None) == frozenset()
+        assert named_profiles(b"\x00not yaml", "sdk.yaml") == frozenset()
+
+    def test_matching_server_name_warns_with_the_selection_hint(self, caplog):
+        from aerospike_sdk.policy.sdk_config_loader import (
+            named_profiles,
+            warn_unmatched_cluster_profile,
+        )
+
+        profiles = named_profiles(self.YAML.encode(), "sdk.yaml")
+        with caplog.at_level(logging.WARNING):
+            warn_unmatched_cluster_profile({"cluster-name": "production"}, profiles)
+        assert "system.production" in caplog.text
+        assert "was not applied" in caplog.text
+        assert "validate_cluster_name_is('production')" in caplog.text
+
+    def test_non_matching_or_absent_name_is_silent(self, caplog):
+        from aerospike_sdk.policy.sdk_config_loader import (
+            named_profiles,
+            warn_unmatched_cluster_profile,
+        )
+
+        profiles = named_profiles(self.YAML.encode(), "sdk.yaml")
+        with caplog.at_level(logging.WARNING):
+            warn_unmatched_cluster_profile({"cluster-name": "docker"}, profiles)
+            # Servers report "null" when no cluster name is configured.
+            warn_unmatched_cluster_profile({"cluster-name": "null"}, profiles)
+            warn_unmatched_cluster_profile({"cluster-name": ""}, profiles)
+            warn_unmatched_cluster_profile(None, profiles)
+        assert "was not applied" not in caplog.text

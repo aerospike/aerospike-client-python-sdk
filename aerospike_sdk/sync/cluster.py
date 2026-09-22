@@ -30,10 +30,8 @@ from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError
 from aerospike_sdk.metrics.export import (
     DEFAULT_EXPORT_INTERVAL_SECONDS,
-    NoOpMetricsExporter,
     built_in_exporter,
     check_exporter,
-    dispatch_disable,
     SyncMetricsExportTimer,
 )
 from aerospike_sdk.metrics import (
@@ -41,6 +39,7 @@ from aerospike_sdk.metrics import (
     MetricsSnapshot,
     policy_from_settings,
 )
+from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 from aerospike_sdk.sync.client import SyncClient
@@ -84,7 +83,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         """
         self._sdk_client = sdk_client
         self._metrics_policy: Optional[MetricsPolicy] = None
-        self._metrics_exporter: Any = NoOpMetricsExporter()
+        self._exporters: list = []
+        # The exporter this cluster installed from configuration, as opposed
+        # to one the application registered: the only one the cluster closes.
+        self._installed_exporter: Any = None
         self._export_timer: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
     
@@ -296,36 +298,54 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
     # configure it and pull snapshots.
 
     @property
-    def metrics_exporter(self) -> Any:
-        """The exporter snapshots are pushed to.
+    def exporters(self) -> tuple:
+        """The registered exporters, in the order snapshots reach them."""
+        return tuple(self._exporters)
 
-        A cluster has exactly one. Assigning replaces whatever was there,
-        including the built-in default; use
-        :class:`~aerospike_sdk.metrics.export.MultipleMetricsExporter` to
-        reach several destinations.
+    def add_exporter(self, exporter: Any) -> None:
+        """Register an exporter; snapshots are pushed to each one registered.
 
-        Returns:
-            The current exporter.
+        Exporters receive every snapshot in registration order. One that keeps
+        raising is suspended and periodically retried without affecting the
+        others. The cluster never closes an exporter registered here -- the
+        application owns its lifecycle.
+
+        Args:
+            exporter: A :class:`~aerospike_sdk.metrics.MetricsExporter`
+                (plain ``def export``).
+
+        Raises:
+            TypeError: If ``exporter`` has no ``export`` method or defines an
+                async one.
 
         Example::
 
-            cluster.metrics_exporter = LearnMetricsFileExporter("/var/log/aerospike")
+            exporter = LearnMetricsFileExporter("/var/log/aerospike")
+            cluster.add_exporter(exporter)
 
         See Also:
-            :meth:`enable_metrics`
+            :meth:`remove_exporter`, :meth:`enable_metrics`
         """
-        return self._metrics_exporter
-
-    @metrics_exporter.setter
-    def metrics_exporter(self, exporter: Any) -> None:
-        if exporter is None:
-            self._metrics_exporter = NoOpMetricsExporter()
-            return
         # The two protocols are easy to confuse and a mismatch produces no
         # data at all -- only a warning once per interval, far from the
-        # assignment that caused it. Fail here instead.
+        # registration that caused it. Fail here instead.
         check_exporter(exporter, awaitable=False)
-        self._metrics_exporter = exporter
+        self._exporters.append(exporter)
+
+    def remove_exporter(self, exporter: Any) -> bool:
+        """Unregister an exporter previously passed to :meth:`add_exporter`.
+
+        Args:
+            exporter: The exporter object to remove.
+
+        Returns:
+            ``True`` if it was registered, ``False`` if it was not found.
+        """
+        try:
+            self._exporters.remove(exporter)
+        except ValueError:
+            return False
+        return True
 
     def _apply_metrics_settings(self, metrics: Any) -> None:
         """Turn collection on or off to match configuration-file settings.
@@ -341,29 +361,44 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             self.disable_metrics()
 
     def _start_export_timer(self, policy: MetricsPolicy) -> None:
-        """Begin pushing snapshots to the exporter, replacing any running timer.
+        """Begin pushing snapshots to the registered exporters.
 
-        The export settings come from the config file when there is one; a
-        client that enables metrics in code and configures no file gets the
-        default interval and no built-in file output.
+        Replaces any running timer, and re-evaluates the configured built-in
+        exporter: the config file installs one only while the application has
+        registered nothing itself. The timer runs whenever metrics are on --
+        an interval with no exporters skips the snapshot, so a registration
+        made after enabling still takes effect.
         """
         self._stop_export_timer()
+        self._uninstall_built_in()
         settings = getattr(self._sdk_client, "_sdk_settings", None)
         metrics = getattr(settings, "metrics", None)
         interval = DEFAULT_EXPORT_INTERVAL_SECONDS
         if metrics is not None and metrics.export_interval is not None:
             interval = metrics.export_interval.total_seconds()
-        if isinstance(self._metrics_exporter, NoOpMetricsExporter) and metrics is not None:
+        if not self._exporters and metrics is not None:
             built_in = built_in_exporter(metrics)
             if built_in is not None:
-                self._metrics_exporter = built_in
-        if isinstance(self._metrics_exporter, NoOpMetricsExporter):
-            # Nothing consumes the snapshot, and taking one drains and
-            # aggregates per-node state in the client core. Polling
-            # callers still get everything through metrics().
-            return
-        self._export_timer = SyncMetricsExportTimer(self, self._metrics_exporter, interval, metrics)
+                self._exporters.append(built_in)
+                self._installed_exporter = built_in
+        self._export_timer = SyncMetricsExportTimer(self, interval, metrics)
         self._export_timer.start()
+
+    def _uninstall_built_in(self) -> None:
+        """Retire the config-installed exporter, closing what it opened.
+
+        Only ever the cluster's own install: exporters the application
+        registered are its to close.
+        """
+        installed, self._installed_exporter = self._installed_exporter, None
+        if installed is None:
+            return
+        if installed in self._exporters:
+            self._exporters.remove(installed)
+        try:
+            installed.close()
+        except OSError:
+            pass
 
     def _stop_export_timer(self) -> None:
         """Stop the export timer if one is running."""
@@ -394,16 +429,29 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         # Kept because the snapshot does not carry its own histogram shape,
         # which the structured export has to report.
         self._metrics_policy = effective
-        self._sdk_client._usage_on = effective.usage_enabled
-        self._sdk_client.underlying_client.enable_metrics(effective._to_pac())
+        client = self._sdk_client
+        client._usage_on = effective.usage_enabled
+        # The command count rides on metrics being enabled at all; `_record_on`
+        # is the single flag the per-op paths test.
+        client._cmd_count_on = True
+        client._record_on = True
+        client.underlying_client.enable_metrics(effective._to_pac())
         self._start_export_timer(effective)
 
     def disable_metrics(self) -> None:
-        """Disable metrics collection. Accumulated data is retained."""
-        self._sdk_client.underlying_client.disable_metrics()
-        self._sdk_client._usage_on = False
+        """Disable metrics collection. Accumulated data is retained.
+
+        Stops the export push; exporters the application registered stay
+        registered and are not closed -- their lifecycle belongs to the
+        application.
+        """
+        client = self._sdk_client
+        client.underlying_client.disable_metrics()
+        client._usage_on = False
+        client._cmd_count_on = False
+        client._record_on = False
         self._stop_export_timer()
-        dispatch_disable(self._metrics_exporter, self)
+        self._uninstall_built_in()
 
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
@@ -426,12 +474,19 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             reads = snapshot.latency(LatencyType.READ)
             print(f"{reads.count} reads, avg {reads.average:.1f}")
         """
-        pac = self._sdk_client.underlying_client
+        client = self._sdk_client
+        pac = client.underlying_client
+        client_policy = client._policy
         return MetricsSnapshot(
             pac.metrics(),
             policy=self._metrics_policy,
             nodes=pac.nodes_blocking(),
-            usage=self._sdk_client._usage_counters.totals(),
+            usage=client._usage_counters.totals(),
+            command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
+            # With no application identity of its own, the snapshot reports the
+            # authenticated user -- the identity the server already knows this
+            # connection by, and so the one that joins the two views.
+            app_id=client_policy.application_id or client_policy.user,
         )
 
     def close(self) -> None:
@@ -449,9 +504,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         """
         # Stop exporting before the client goes away: the timer polls the
         # client every interval and would otherwise keep firing against a
-        # closed one, and the exporter never gets its final flush.
-        if self._export_timer is not None:
-            self._stop_export_timer()
-            dispatch_disable(self._metrics_exporter, self)
+        # closed one.
+        self._stop_export_timer()
+        self._uninstall_built_in()
         self._sdk_client.close()
 

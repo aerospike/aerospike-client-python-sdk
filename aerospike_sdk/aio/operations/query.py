@@ -291,8 +291,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             rp_sc = self._base_read_policy_sc
             if rp_ap is not None and rp_sc is not None:
                 key = self._single_key
-                if self._usage_on:
-                    self._flush_usage(usage.API_DEFERRED, usage.SHAPE_POINT)
+                if self._record_on:
+                    self._record_call(usage.API_DEFERRED, usage.SHAPE_POINT)
                 cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
                 try:
                     record = await self._client.get(
@@ -313,8 +313,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # them): legacy path with explicit mode resolution.
 
         self._finalize_current_spec()
-        if self._usage_on:
-            self._flush_usage(usage.API_DEFERRED, self._usage_shape())
+        if self._record_on:
+            self._record_call(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()
         await self._ensure_batch_namespace_modes()
 
@@ -556,6 +556,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 "At least one write operation is required; use with_write_operations(...).",
             )
         self._reject_unsupported_background_write_ops(self._operations)
+        self._flush_background_usage(usage.BACKGROUND_OPERATE)
         log.debug(
             "background task: %s.%s ops=%d",
             self._namespace, self._set_name, len(self._operations),
@@ -591,6 +592,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             raise ValueError(
                 "Do not combine with_write_operations with execute_udf_background_task.",
             )
+        self._flush_background_usage(usage.BACKGROUND_UDF)
         log.debug(
             "background UDF: %s.%s %s.%s",
             self._namespace, self._set_name, package_name, function_name,
@@ -1373,8 +1375,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # Read the flag off the client rather than slotting it here: this
         # segment counts its per-op attribute stores.
         sdk_fast = self._sdk_client_fast
-        if sdk_fast is not None and sdk_fast._usage_on:
-            usage.record_point(sdk_fast, usage.API_DEFERRED, self._txn, self._ops)
+        if sdk_fast is not None and sdk_fast._record_on:
+            usage.record_call_point(sdk_fast, usage.API_DEFERRED, self._txn, self._ops)
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the

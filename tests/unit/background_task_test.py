@@ -16,6 +16,7 @@
 """Unit tests for session.background_task() builders."""
 
 from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from aerospike_sdk import Filter, Key
@@ -31,12 +32,14 @@ from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.background import (
     BackgroundOperationBuilder as SyncBackgroundOperationBuilder,
     BackgroundUdfBuilder as SyncBackgroundUdfBuilder,
 )
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 def _session_mock() -> MagicMock:
@@ -47,6 +50,27 @@ def _session_mock() -> MagicMock:
     s._client = fc
     s._resolve_namespace_mode = AsyncMock(return_value=Mode.AP)
     return s
+
+
+def _usage_sdk():
+    """SDK-client stand-in that captures each flushed feature set.
+
+    ``sdk.counted`` collects one entry per counted call, so a test can assert
+    the command count and the usage flush agree about what a call is.
+    """
+    calls = []
+    counted = []
+    sdk = SimpleNamespace(
+        _record_on=True,
+        _cmd_count_on=True,
+        _usage_on=True,
+        _usage_counters=SimpleNamespace(add=lambda features: calls.append(list(features))),
+        _command_counts=SimpleNamespace(add=counted.append),
+        supports_server_compiled_ael=False,
+        supports_query_selection=False,
+    )
+    sdk.counted = counted
+    return sdk, calls
 
 
 def test_update_builder_produces_put_operation():
@@ -271,6 +295,141 @@ async def test_execute_udf_background_task_rejects_key_chain():
     qb._set_current_keys(Key("test", "bgset", 1))
     with pytest.raises(ValueError, match="dataset queries"):
         await qb.execute_udf_background_task("pkg", "fn")
+
+
+async def test_execute_background_task_records_usage():
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    client.query_operate = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(client, "test", "bgset", sdk_client=sdk)
+    qb.with_write_operations([Operation.put("x", 1)])
+    await qb.execute_background_task()
+    features = calls[0]
+    assert usage.API_BACKGROUND in features
+    assert usage.SHAPE_QUERY in features
+    assert usage.BACKGROUND_OPERATE in features
+    assert usage.API_DEFERRED not in features
+
+
+async def test_execute_udf_background_task_records_usage():
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    client.query_execute_udf = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(client, "test", "bgset", sdk_client=sdk)
+    await qb.execute_udf_background_task("pkg", "fn")
+    features = calls[0]
+    assert usage.API_BACKGROUND in features
+    assert usage.BACKGROUND_UDF in features
+
+
+async def test_rejected_background_task_does_not_record_usage():
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    qb = QueryBuilder(client, "test", "bgset", sdk_client=sdk)
+    qb._set_current_keys(Key("test", "bgset", 1))
+    qb.with_write_operations([Operation.put("x", 1)])
+    with pytest.raises(ValueError, match="dataset queries"):
+        await qb.execute_background_task()
+    assert calls == []
+
+
+def test_sync_execute_background_task_records_usage():
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    client.query_operate_blocking = MagicMock(return_value=MagicMock())
+    qb = SyncQueryBuilder(
+        client, "test", "bgset", behavior=Behavior.DEFAULT, sdk_client=sdk,
+    )
+    qb.with_write_operations([Operation.put("x", 1)])
+    qb._execute_background_task_blocking()
+    features = calls[0]
+    assert usage.API_BACKGROUND in features
+    assert usage.BACKGROUND_OPERATE in features
+    assert usage.API_BLOCKING not in features
+
+
+def test_sync_execute_udf_background_task_records_usage():
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    client.query_execute_udf_blocking = MagicMock(return_value=MagicMock())
+    qb = SyncQueryBuilder(
+        client, "test", "bgset", behavior=Behavior.DEFAULT, sdk_client=sdk,
+    )
+    qb._execute_udf_background_task_blocking("pkg", "fn")
+    assert usage.BACKGROUND_UDF in calls[0]
+
+
+async def test_background_operation_execute_records_usage():
+    s = _session_mock()
+    sdk, calls = _usage_sdk()
+    s._client = sdk
+    sdk._client = MagicMock()
+    sdk._client.query_operate = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    await (
+        BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+        .bin("x").set_to(1)
+        .execute()
+    )
+    features = calls[0]
+    assert usage.API_BACKGROUND in features
+    assert usage.SHAPE_QUERY in features
+    assert usage.BACKGROUND_OPERATE in features
+
+
+def test_background_operation_blocking_records_usage():
+    s = _session_mock()
+    sdk, calls = _usage_sdk()
+    s._client = sdk
+    sdk._client = MagicMock()
+    sdk._client.query_operate_blocking = MagicMock(return_value=MagicMock())
+    s._resolve_namespace_mode_blocking = MagicMock(return_value=Mode.AP)
+    ds = DataSet.of("test", "bgset")
+    BackgroundOperationBuilder(s, ds, _OpType.UPDATE).bin("x").set_to(1)._execute_blocking()
+    assert usage.API_BACKGROUND in calls[0]
+    assert usage.BACKGROUND_OPERATE in calls[0]
+
+
+async def test_background_udf_execute_records_usage():
+    s = _session_mock()
+    sdk, calls = _usage_sdk()
+    s._client = sdk
+    sdk._client = MagicMock()
+    sdk._client.query_execute_udf = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    await (
+        BackgroundUdfFunctionBuilder(s, ds)
+        .function("pkg", "fn")
+        .execute()
+    )
+    features = calls[0]
+    assert usage.API_BACKGROUND in features
+    assert usage.BACKGROUND_UDF in features
+
+
+async def test_background_task_counts_the_call_once():
+    """Registering a job is one call, however many records it goes on to touch."""
+    sdk, calls = _usage_sdk()
+    client = MagicMock()
+    client.query_operate = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(client, "test", "bgset", sdk_client=sdk)
+    qb.with_write_operations([Operation.put("x", 1)])
+    await qb.execute_background_task()
+    assert len(sdk.counted) == 1
+    assert len(calls) == 1
+
+
+async def test_background_task_is_counted_without_the_usage_group():
+    """The command count is the wider gate: no usage, still one call."""
+    sdk, calls = _usage_sdk()
+    sdk._usage_on = False
+    client = MagicMock()
+    client.query_operate = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(client, "test", "bgset", sdk_client=sdk)
+    qb.with_write_operations([Operation.put("x", 1)])
+    await qb.execute_background_task()
+    assert len(sdk.counted) == 1
+    assert calls == []
 
 
 class TestSyncDurableDeleteForwarding:

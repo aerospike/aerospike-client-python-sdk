@@ -263,3 +263,42 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
         ) as cluster:
             client = cluster._sdk_client
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
+
+
+async def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path, caplog):
+    """A ``system.<name>`` block matching the server's name warns when no name was declared.
+
+    Without ``validate_cluster_name_is`` nothing selects a named block, so a
+    file written for this cluster resolves ``DEFAULT`` everywhere. The connect
+    path asks the server its name and warns when a block would have matched.
+    When the server has no cluster name configured, the same connect must stay
+    silent -- both arms run against whatever the server reports.
+    """
+    import logging
+
+    host, port = _host_port(aerospike_host)
+    async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
+        by_node = await probe._sdk_client.underlying_client.info("cluster-name")
+    names = {v for v in by_node.values() if v and v != "null"}
+
+    profile = next(iter(names)) if names else "some-other-cluster"
+    yaml_text = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    transactions:\n"
+        "      implicit_batch_write_transactions: true\n"
+        f"  {profile}:\n"
+        "    transactions:\n"
+        "      implicit_batch_write_transactions: false\n"
+    )
+    with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
+        with caplog.at_level(logging.WARNING):
+            async with apply_general_auth(ClusterDefinition(host, port)).connect():
+                pass
+    if names:
+        # Server reports a name and the file carries its block: loud.
+        assert f"system.{profile}" in caplog.text
+        assert "was not applied" in caplog.text
+    else:
+        # Server reports no name: the block legitimately matches nothing.
+        assert "was not applied" not in caplog.text

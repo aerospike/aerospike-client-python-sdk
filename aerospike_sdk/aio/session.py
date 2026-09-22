@@ -1284,8 +1284,9 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         if self._client._client is None:
             raise RuntimeError("Client is not connected")
 
-        if self._client._usage_on:
-            usage.record(self._client, [usage.ADMIN_TRUNCATE])
+        client = self._client
+        if client._record_on:
+            usage.record_call(client, (usage.ADMIN_TRUNCATE,))
         await self._client._client.truncate(dataset.namespace, dataset.set_name, before_nanos)
 
     def __repr__(self) -> str:

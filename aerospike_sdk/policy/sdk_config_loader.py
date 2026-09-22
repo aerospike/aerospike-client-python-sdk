@@ -949,3 +949,50 @@ def load_at_connect(
                 f"entr{'y' if len(dropped) == 1 else 'ies'}: {', '.join(sorted(dropped))}"
             )
     return settings, path, loaded.raw
+
+
+def named_profiles(raw: Optional[bytes], path: Optional[str]) -> frozenset:
+    """The ``system:`` profile names in *raw* that select by cluster name.
+
+    Everything except ``DEFAULT``, which applies unconditionally. Fail-soft:
+    unreadable or malformed bytes yield an empty set (the connect-time parse
+    already warned about them).
+    """
+    if raw is None:
+        return frozenset()
+    loaded = parse_config_bytes(raw, path or "<config>")
+    if loaded is None:
+        return frozenset()
+    return frozenset(name for name in loaded.profiles if name != DEFAULT_PROFILE)
+
+
+def warn_unmatched_cluster_profile(
+    info_response: Optional[Mapping], profiles: frozenset
+) -> None:
+    """Warn when a ``system.<name>`` block matches the server's cluster name but was not applied.
+
+    Profile selection uses only the name declared via
+    ``validate_cluster_name_is()`` -- nothing reads the name back from the
+    server to pick a block. A block named after the server's real cluster is
+    well-formed YAML, so the unknown-key warnings never fire for it, and
+    without this check it would silently never match: the operator gets
+    ``DEFAULT`` everywhere with nothing in the log to explain why. This turns
+    that silent failure into a loud one.
+
+    Args:
+        info_response: The ``cluster-name`` info response, or ``None`` when
+            the lookup failed. Servers report ``null`` when no cluster name
+            is configured.
+        profiles: The file's named profiles, from :func:`named_profiles`.
+    """
+    if not info_response:
+        return
+    discovered = {v for v in info_response.values() if v and v != "null"}
+    for name in sorted(discovered & profiles):
+        log.warning(
+            "SDK config: block system.%s matches this cluster's server-reported "
+            "name but was not applied — profile selection uses the declared "
+            "name only. Call validate_cluster_name_is(%r) on the "
+            "ClusterDefinition to select it.",
+            name, name,
+        )

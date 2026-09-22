@@ -78,6 +78,8 @@ def _sdk_client():
         supports_query_selection=False,
         _sdk_settings=settings,
         _usage_on=False,
+        _record_on=False,
+        _cmd_count_on=False,
     )
     client._supports_mrt_blocking = lambda: False
     return client

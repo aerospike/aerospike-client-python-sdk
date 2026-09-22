@@ -96,36 +96,30 @@ async def part3_export(cluster) -> None:
         def __init__(self) -> None:
             self.snapshots = 0
 
-        async def on_enable(self, cluster, settings) -> None:
-            print("  exporter enabled")
-
-        async def on_snapshot(self, snapshot) -> None:
+        async def export(self, snapshot) -> None:
             self.snapshots += 1
             document = snapshot.to_canonical_dict()
-            reads = document["nodes"][0]["namespaces"]
+            namespaces = document["nodes"][0]["namespaces"]
             print(
                 f"  snapshot #{self.snapshots}: "
                 f"{document['client_type']} {document['client_version']}, "
-                f"{len(document['nodes'])} node(s), {len(reads)} namespace(s)"
+                f"{len(document['nodes'])} node(s), {len(namespaces)} namespace(s)"
             )
-
-        async def on_node_close(self, host, snapshot) -> None:
-            print(f"  node left the cluster: {host}")
-
-        async def on_disable(self, cluster) -> None:
-            print("  exporter disabled")
+            for node in document["nodes_departed"]:
+                print(f"  node left the cluster: {node['address']}:{node['port']}")
 
     exporter = PrintingExporter()
-    cluster.metrics_exporter = exporter
+    cluster.add_exporter(exporter)
 
     # The export interval comes from configuration; without a config file it
     # is 30s, which is too long to demonstrate, so this reads the snapshot the
     # exporter would have been handed.
     cluster.enable_metrics(MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS))
     await _traffic(cluster, 5)
-    await exporter.on_snapshot(await cluster.metrics())
+    await exporter.export(await cluster.metrics())
 
     cluster.disable_metrics()
+    cluster.remove_exporter(exporter)
     print(f"  metrics_enabled after disable: {cluster.metrics_enabled()}")
 
 

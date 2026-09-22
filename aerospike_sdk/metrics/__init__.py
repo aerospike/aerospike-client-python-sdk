@@ -32,18 +32,12 @@ from aerospike_sdk.metrics.policy import (
 from aerospike_sdk.metrics.snapshot import DerivedHistogram, MetricsSnapshot
 from aerospike_sdk.metrics.export import (
     AsyncMetricsExporter,
-    AsyncMultipleMetricsExporter,
-    AsyncNoOpMetricsExporter,
     LearnMetricsFileExporter,
     MetricsExporter,
-    MultipleMetricsExporter,
-    NoOpMetricsExporter,
 )
 
 __all__ = [
     "AsyncMetricsExporter",
-    "AsyncMultipleMetricsExporter",
-    "AsyncNoOpMetricsExporter",
     "CommandType",
     "DerivedHistogram",
     "LatencyType",
@@ -52,8 +46,6 @@ __all__ = [
     "MetricsExporter",
     "MetricsPolicy",
     "MetricsSnapshot",
-    "MultipleMetricsExporter",
-    "NoOpMetricsExporter",
     "Sampler",
     "apply_metrics_settings",
     "policy_from_settings",
