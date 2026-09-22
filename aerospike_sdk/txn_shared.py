@@ -54,12 +54,18 @@ def is_retryable_txn_error(exc: BaseException) -> bool:
 
     A commit failure is classified by type rather than by result code: it is
     the roll-up of a failed verify or roll phase and carries no code of its
-    own. Verify-fail and mark-roll-forward-abandoned mean nothing was applied,
-    so they are retryable on the same grounds as a mid-block conflict.
+    own. A clean failure applied nothing, so it is retryable on the same
+    grounds as a mid-block conflict.
 
-    An abandoned roll-forward is the opposite: the client already marked the
-    transaction committed and the server will eventually make the writes
-    visible. Retrying would open a second transaction on the same keys.
+    An in-doubt commit failure is not. The commit may still advance on the
+    server, so the transaction's outcome is unknown to the client; re-running
+    the block could apply the same writes twice. The safe recovery is to retry
+    the commit itself, not the transaction.
+
+    An abandoned roll-forward is unretryable for the converse reason: the
+    client already marked the transaction committed and the server will
+    eventually make the writes visible. Retrying would open a second
+    transaction on the same keys.
 
     Args:
         exc: The exception that ended the attempt.
@@ -68,6 +74,8 @@ def is_retryable_txn_error(exc: BaseException) -> bool:
         ``True`` when a fresh attempt may succeed.
     """
     if isinstance(exc, CommitError):
+        if exc.in_doubt:
+            return False
         return exc.commit_error_type not in _ROLL_FORWARD_ABANDONED
     return getattr(exc, "result_code", None) in RETRYABLE_TXN_CODES
 

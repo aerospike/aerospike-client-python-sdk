@@ -29,6 +29,8 @@ The two outcomes are not the same severity, and that is the point of the pair:
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from aerospike_async import CommitErrorType, CommitStatus
@@ -40,6 +42,9 @@ from integration.tcp_gate import TcpGate
 BIN_NAME = "bin"
 NAMESPACE = "test_sc"
 
+# Cut before mark-roll-forward, so the commit's first command is the one that
+# fails and the transaction's outcome is left in doubt.
+BEFORE_MARK_ROLL_FORWARD = 0
 # Let mark-roll-forward through, so the roll-forward batch is the command that
 # fails.
 THROUGH_MARK_ROLL_FORWARD = 1
@@ -132,5 +137,47 @@ class TestAbandonedMonitorClose:
                     CommitStatus.OK,
                     CommitStatus.CLOSE_ABANDONED,
                 )
+            finally:
+                await cluster.close()
+
+
+class TestInDoubtMarkRollForward:
+    """The commit may still advance, so the block must not be run a second time."""
+
+    async def test_in_doubt_mark_roll_forward_is_not_retried(
+        self, aerospike_host_sc_single
+    ):
+        """Re-running could apply the same writes twice; the caller decides instead."""
+        host, _, port = aerospike_host_sc_single.rpartition(":")
+        async with await TcpGate.open(host, int(port)) as gate:
+            cluster = await _gated_cluster(gate)
+            try:
+                session = cluster.create_session()
+                # An in-doubt commit leaves the transaction unresolved, so the
+                # record stays locked; a fresh key keeps the test re-runnable.
+                key = DataSet.of(NAMESPACE, "gate_commit").id(
+                    f"indoubt_{time.monotonic_ns()}"
+                )
+                await session.upsert(key).put({BIN_NAME: 1}).execute()
+                attempts = 0
+
+                async def operation(tx):
+                    nonlocal attempts
+                    attempts += 1
+                    await tx.upsert(key).put({BIN_NAME: 2}).execute()
+                    # Cut before mark-roll-forward, so the commit's outcome is
+                    # unknown rather than cleanly failed.
+                    gate.refuse_after_client_messages(BEFORE_MARK_ROLL_FORWARD)
+                    return "unreachable"
+
+                with pytest.raises(CommitError) as excinfo:
+                    await session.do_in_transaction(
+                        operation, max_attempts=3, sleep_between_retries=0.0
+                    )
+
+                exc = excinfo.value
+                assert exc.commit_error_type is CommitErrorType.MARK_ROLL_FORWARD_ABANDONED
+                assert exc.in_doubt is True
+                assert attempts == 1
             finally:
                 await cluster.close()

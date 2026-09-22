@@ -36,6 +36,43 @@ def test_roll_forward_abandoned_error_type_is_not_retryable() -> None:
     assert is_retryable_txn_error(err) is False
 
 
+def test_in_doubt_mark_roll_forward_is_not_retryable() -> None:
+    """An in-doubt commit may still advance on the server, so do not re-run it."""
+    err = CommitError(
+        "mark roll forward abandoned",
+        commit_error_type=CommitErrorType.MARK_ROLL_FORWARD_ABANDONED,
+        in_doubt=True,
+    )
+    assert is_retryable_txn_error(err) is False
+
+
+def test_not_in_doubt_mark_roll_forward_stays_retryable() -> None:
+    """A clean failure applied nothing, so re-running the transaction is safe."""
+    err = CommitError(
+        "mark roll forward abandoned",
+        commit_error_type=CommitErrorType.MARK_ROLL_FORWARD_ABANDONED,
+        in_doubt=False,
+    )
+    assert is_retryable_txn_error(err) is True
+
+
+def test_in_doubt_blocks_retry_for_every_commit_error_type() -> None:
+    """``in_doubt`` alone decides: the phase that reported it does not matter."""
+    for name in (
+        "VERIFY_FAIL",
+        "VERIFY_FAIL_CLOSE_ABANDONED",
+        "VERIFY_FAIL_ABORT_ABANDONED",
+        "MARK_ROLL_FORWARD_ABANDONED",
+        "ROLL_FORWARD_ABANDONED",
+    ):
+        err = CommitError(
+            name,
+            commit_error_type=getattr(CommitErrorType, name),
+            in_doubt=True,
+        )
+        assert is_retryable_txn_error(err) is False, name
+
+
 def test_mrt_blocked_is_retryable() -> None:
     err = AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
     assert is_retryable_txn_error(err) is True
