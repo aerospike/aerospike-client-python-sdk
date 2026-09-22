@@ -24,7 +24,9 @@ import pytest
 from aerospike_async import FilterExpression
 
 from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_values, val
+from aerospike_sdk import ResultCode
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import AerospikeError
 
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_async,
@@ -2346,3 +2348,253 @@ class TestAelMetadata:
         """A record with no TTL reports a negative void time."""
         assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.voidTime() > 0") == 1
         assert await _matches(session_with_metadata, _METADATA_NO_TTL_KEY, "$.voidTime() < 0") == 1
+
+
+# ---------------------------------------------------------------------------
+# AEL literal and operator forms. The server owns this grammar, so these assert
+# what it accepts rather than anything PSDK computes -- including the two forms
+# it rejects, which are easy to write by accident.
+# ---------------------------------------------------------------------------
+_LITERAL_SET = "ael_literals"
+(_LITERAL_KEY,) = _set_keys(_LITERAL_SET, "r1")
+
+
+@pytest.fixture(scope="module")
+async def session_with_literals(aerospike_host, make_cluster_definition):
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
+        await session.delete(_LITERAL_KEY).execute()
+        await (
+            session.upsert(_LITERAL_KEY)
+            .put({"num": 42, "s": "hello", "m": {"a": 1}})
+            .execute()
+        )
+        yield session
+        await session.delete(_LITERAL_KEY).execute()
+
+
+async def _literal_matches(session, expression) -> int:
+    stream = await session.query(_LITERAL_KEY).where(expression).execute()
+    return len([record async for record in stream])
+
+
+class TestAelLiterals:
+    """Literal forms, boolean logic and comments in server-compiled AEL."""
+
+    @requires_server_compiled_ael
+    async def test_integer_radix_forms_are_equivalent(self, session_with_literals):
+        for expression in ("$.num:INT == 0x2A", "$.num:INT == 0b101010"):
+            assert await _literal_matches(session_with_literals, expression) == 1
+
+    @requires_server_compiled_ael
+    async def test_negative_integer_literal(self, session_with_literals):
+        assert await _literal_matches(session_with_literals, "$.num:INT > -1") == 1
+
+    @requires_server_compiled_ael
+    async def test_boolean_literals_combine_with_predicates(
+        self, session_with_literals,
+    ):
+        assert await _literal_matches(
+            session_with_literals, "$.num:INT == 42 and true",
+        ) == 1
+        assert await _literal_matches(
+            session_with_literals, "$.num:INT == 42 and false",
+        ) == 0
+
+    @requires_server_compiled_ael
+    async def test_unknown_is_absorbed_by_or(self, session_with_literals):
+        assert await _literal_matches(
+            session_with_literals, "$.num:INT == 42 or unknown",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_in_membership_over_list_literals(self, session_with_literals):
+        assert await _literal_matches(
+            session_with_literals, "$.num:INT in [41, 42, 43]",
+        ) == 1
+        assert await _literal_matches(session_with_literals, "$.num:INT in [1, 2]") == 0
+        assert await _literal_matches(
+            session_with_literals, "$.s:STRING in ['hello', 'world']",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_single_and_double_quoted_strings_are_equivalent(
+        self, session_with_literals,
+    ):
+        assert await _literal_matches(
+            session_with_literals, "$.s:STRING == 'hello'",
+        ) == 1
+        assert await _literal_matches(
+            session_with_literals, '$.s:STRING == "hello"',
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_not_requires_the_parenthesised_call_form(
+        self, session_with_literals,
+    ):
+        """``not(x)`` negates; a bare ``not x`` does not parse."""
+        assert await _literal_matches(
+            session_with_literals, "not($.num:INT == 1)",
+        ) == 1
+        with pytest.raises(AerospikeError) as excinfo:
+            await _literal_matches(session_with_literals, "not $.num:INT == 1")
+        assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
+
+    @requires_server_compiled_ael
+    async def test_type_reports_the_bin_particle_type(self, session_with_literals):
+        assert await _literal_matches(
+            session_with_literals, "$.num.type() == INT",
+        ) == 1
+        assert await _literal_matches(
+            session_with_literals, "$.s.type() == STRING",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_quoted_bin_name_resolves_the_same_as_bare(
+        self, session_with_literals,
+    ):
+        assert await _literal_matches(
+            session_with_literals, "$.'num':INT == 42",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_block_comments_are_ignored_and_line_comments_are_not(
+        self, session_with_literals,
+    ):
+        assert await _literal_matches(
+            session_with_literals, "$.num:INT /* inline */ == 42",
+        ) == 1
+        with pytest.raises(AerospikeError) as excinfo:
+            await _literal_matches(session_with_literals, "$.num:INT // trailing\n")
+        assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
+
+    @requires_server_compiled_ael
+    async def test_absent_bin_matches_nothing(self, session_with_literals):
+        assert await _literal_matches(
+            session_with_literals, "$.nosuchbin:INT == 1",
+        ) == 0
+        assert await _literal_matches(
+            session_with_literals, "$.nosuchbin.exists()",
+        ) == 0
+
+
+# ---------------------------------------------------------------------------
+# AEL bit operations on a blob bin. The HLL half of the reference suite is
+# already covered in hll_test.py (hllCount / hllDescribe / hllMayContain), so
+# this covers the bit ops, which had none.
+#
+# The fixture blob is 0x01020304: 32 bits, population count 5, and its first
+# byte is 0x01 so single-byte reads are easy to state.
+# ---------------------------------------------------------------------------
+_BIT_SET = "ael_bitops"
+(_BIT_KEY,) = _set_keys(_BIT_SET, "b1")
+_BIT_BLOB = bytes([0x01, 0x02, 0x03, 0x04])
+
+
+@pytest.fixture(scope="module")
+async def session_with_blob(aerospike_host, make_cluster_definition):
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
+        await session.delete(_BIT_KEY).execute()
+        await session.upsert(_BIT_KEY).put({"b": _BIT_BLOB}).execute()
+        yield session
+        await session.delete(_BIT_KEY).execute()
+
+
+async def _bit_matches(session, expression) -> int:
+    stream = await session.query(_BIT_KEY).where(expression).execute()
+    return len([record async for record in stream])
+
+
+class TestAelBitOperations:
+    """Bit reads, scans, logic, shifts and resizes expressed as AEL text."""
+
+    @requires_server_compiled_ael
+    async def test_bit_count_over_full_and_partial_ranges(self, session_with_blob):
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.bitCount(offset: 0, size: 32) == 5",
+        ) == 1
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.bitCount(offset: 0, size: 8) == 1",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_bit_get_reads_bytes_and_integers(self, session_with_blob):
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.bitGet(offset: 0, size: 8) == x'01'",
+        ) == 1
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.bitGetInt(offset: 0, size: 8) == 1",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_bit_scans_locate_a_set_bit(self, session_with_blob):
+        """The first set bit of 0x01020304 is at offset 7."""
+        assert await _bit_matches(
+            session_with_blob,
+            "$.b:BLOB.bitLscan(offset: 0, size: 32, value: true) == 7",
+        ) == 1
+        assert await _bit_matches(
+            session_with_blob,
+            "$.b:BLOB.bitRscan(offset: 0, size: 32, value: true) >= 0",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_base64_encoding_renders_the_blob_as_text(self, session_with_blob):
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.b64Encode() == 'AQIDBA=='",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_bitwise_logic_against_a_mask(self, session_with_blob):
+        """0x01 against mask 0xF0: AND clears it, OR and XOR set the top bits."""
+        for expression in (
+            "$.b:BLOB.bitAnd(offset: 0, size: 8, value: x'F0')"
+            ".bitCount(offset: 0, size: 8) == 0",
+            "$.b:BLOB.bitOr(offset: 0, size: 8, value: x'F0')"
+            ".bitCount(offset: 0, size: 8) == 5",
+            "$.b:BLOB.bitXor(offset: 0, size: 8, value: x'FF')"
+            ".bitCount(offset: 0, size: 8) == 7",
+            "$.b:BLOB.bitNot(offset: 0, size: 8).bitCount(offset: 0, size: 8) == 7",
+        ):
+            assert await _bit_matches(session_with_blob, expression) == 1, expression
+
+    @requires_server_compiled_ael
+    async def test_arithmetic_and_shifts_move_bits_within_a_selection(
+        self, session_with_blob,
+    ):
+        for expression in (
+            "$.b:BLOB.bitAdd(offset: 0, size: 8, value: 1)"
+            ".bitGetInt(offset: 0, size: 8) == 2",
+            "$.b:BLOB.bitLshift(offset: 0, size: 8, shift: 1)"
+            ".bitGetInt(offset: 0, size: 8) == 2",
+            "$.b:BLOB.bitRshift(offset: 8, size: 8, shift: 1)"
+            ".bitGetInt(offset: 8, size: 8) == 1",
+        ):
+            assert await _bit_matches(session_with_blob, expression) == 1, expression
+
+    @requires_server_compiled_ael
+    async def test_resize_insert_and_remove_change_the_blob_length(
+        self, session_with_blob,
+    ):
+        for expression in (
+            # Grown with zero padding, so the population count is unchanged.
+            "$.b:BLOB.bitResize(byteSize: 8).bitCount(offset: 0, size: 64) == 5",
+            "$.b:BLOB.bitInsert(byteOffset: 0, value: x'AA')"
+            ".bitGetInt(offset: 0, size: 8) == 170",
+            # Dropping the leading 0x01 byte promotes 0x02 to the front.
+            "$.b:BLOB.bitRemove(byteOffset: 0, byteSize: 1)"
+            ".bitGetInt(offset: 0, size: 8) == 2",
+        ):
+            assert await _bit_matches(session_with_blob, expression) == 1, expression
+
+    @requires_server_compiled_ael
+    async def test_bit_operations_leave_the_source_bin_unchanged(
+        self, session_with_blob,
+    ):
+        """Every expression above is a read; the stored blob never moved."""
+        assert await _bit_matches(
+            session_with_blob, "$.b:BLOB.bitCount(offset: 0, size: 32) == 5",
+        ) == 1
+        record = await session_with_blob.get(_BIT_KEY)
+        assert record.bins["b"] == _BIT_BLOB
