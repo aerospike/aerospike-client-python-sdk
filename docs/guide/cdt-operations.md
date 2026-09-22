@@ -288,6 +288,62 @@ await (
 )
 ```
 
+## Paths: acting on every child at once
+
+The navigation above picks out *one* element. A **path** selects a whole level —
+every child, or only those matching a predicate — and applies a single server
+operation across the selection.
+
+`on_each_child()` walks every element; `on_each_child_where(pred)` keeps the
+matches. The predicate is an `Exp` over the current element's *loop variable*:
+
+```python
+from aerospike_sdk import Exp, LoopVarPart
+
+# add 10 to every element of the list
+add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+await session.update(key).bin("nums").on_each_child().modify_by(add_10).execute()
+
+# drop just the elements over 5
+over_5 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))
+await (
+    session.update(key).bin("nums").on_each_child_where(over_5).remove_matches().execute()
+)
+```
+
+Reads use the `collect_*` terminals — named apart from `get_*` because they
+return a selection rather than one element:
+
+| Terminal | Returns |
+|---|---|
+| `collect_values()` | the value of every selected element |
+| `collect_map_keys()` | the key of every selected map entry |
+| `collect_map_entries()` | selected map entries as key/value pairs |
+| `collect_matching_tree()` | the selection, still nested as it was found |
+
+Paths nest, so a predicate can apply a level down:
+
+```python
+# every value over 5, in every list under the map
+result = await (
+    await session.query(key)
+    .bin("m").on_each_child().on_each_child_where(over_5).collect_values()
+    .execute()
+).first_or_raise()
+```
+
+Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elements
+the expression cannot be applied to — and `remove_matches()`. For explicit
+`SelectFlags`, `collect_by_path(flags)` is the unsugared form.
+
+When the shape varies between records, pass `no_fail=True` so a path that does
+not resolve yields nothing instead of failing the operation:
+
+```python
+# an absent or empty "items" collection is not an error here
+.bin("d").on_map_key("items").on_each_child().collect_values(no_fail=True)
+```
+
 ## AEL expressions on CDT
 
 AEL supports CDT paths for filtering. A collection predicate like the ones

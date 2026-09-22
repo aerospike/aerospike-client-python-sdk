@@ -42,12 +42,15 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 
 from aerospike_async import (
     CTX,
+    CdtOperation,
     ListOperation,
     ListOrderType,
     ListReturnType,
     MapOperation,
     MapOrder,
     MapReturnType,
+    ModifyFlags,
+    SelectFlags,
     StringNumericType,
     StringOperation,
     StringRegexFlags,
@@ -108,6 +111,34 @@ class CdtReadBuilder(Generic[T]):
         self._bin_name = bin_name
         self._ctx: tuple[Any, ...] = tuple(ctx)
         self._to_ctx = to_ctx
+
+    def on_each_child(self) -> "CdtPathBuilder[T]":
+        """Continue from this selection as a path over every child.
+
+        Returns:
+            A :class:`CdtPathBuilder` one level below the current selection.
+
+        Example::
+
+            .bin("catalog").on_map_key("book").on_each_child().collect_values()
+        """
+        bin_name, new_ctx, _ = self._push_ctx()
+        return CdtPathBuilder(self._parent, bin_name, new_ctx + (CTX.all_children(),))
+
+    def on_each_child_where(self, predicate: Any) -> "CdtPathBuilder[T]":
+        """Continue as a path over the children matching *predicate*.
+
+        Args:
+            predicate: An :class:`~aerospike_sdk.Exp` over the element's loop
+                variable.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the matching children.
+        """
+        bin_name, new_ctx, _ = self._push_ctx()
+        return CdtPathBuilder(
+            self._parent, bin_name, new_ctx + (CTX.all_children_with_filter(predicate),),
+        )
 
     # -- Internal helpers -----------------------------------------------------
 
@@ -938,3 +969,268 @@ class CdtReadInvertableBuilder(CdtReadBuilder[T]):
             The parent builder for chaining.
         """
         return self._emit(self._rt.REVERSE_RANK | self._rt.INVERTED)
+
+
+class CdtPathBuilder(Generic[T]):
+    """Fluent builder for CDT *path* selects and modifies.
+
+    The other CDT builders navigate to one element and read or write it. A path
+    walks a whole level -- every child, or every child matching a predicate --
+    and applies one server operation across the selection. That is a different
+    family of server ops (``CdtOperation.select_* / modify_* / remove``), hence
+    a separate builder rather than more terminals on
+    :class:`CdtReadBuilder`.
+
+    Reached from ``on_each_child()`` / ``on_each_child_where()``; not
+    constructed directly. Navigation accumulates ``CTX`` steps, so paths nest:
+    ``.on_each_child().on_each_child()`` walks two levels down.
+    """
+
+    __slots__ = ("_parent", "_bin_name", "_ctx")
+
+    def __init__(self, parent: T, bin_name: str, ctx: Sequence[Any]) -> None:
+        self._parent = parent
+        self._bin_name = bin_name
+        self._ctx: tuple[Any, ...] = tuple(ctx)
+
+    # -- Navigation -----------------------------------------------------------
+
+    def on_each_child(self) -> CdtPathBuilder[T]:
+        """Descend to every child of the current selection.
+
+        Returns:
+            A :class:`CdtPathBuilder` one level deeper.
+
+        Example::
+
+            .bin("m").on_each_child().on_each_child().collect_values()
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.all_children(),),
+        )
+
+    def on_each_child_where(self, predicate: Any) -> CdtPathBuilder[T]:
+        """Descend to the children matching *predicate*.
+
+        Args:
+            predicate: An :class:`~aerospike_sdk.Exp` over the current
+                element's loop variable, e.g.
+                ``Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))``.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the matching children.
+
+        Example::
+
+            .bin("nums").on_each_child_where(over_5).remove_matches()
+        """
+        return CdtPathBuilder(
+            self._parent,
+            self._bin_name,
+            self._ctx + (CTX.all_children_with_filter(predicate),),
+        )
+
+    def on_map_key(self, key: Any) -> CdtPathBuilder[T]:
+        """Descend into one map key, continuing the path.
+
+        Args:
+            key: Map key to step into.
+
+        Returns:
+            A :class:`CdtPathBuilder` at that key.
+
+        Example::
+
+            .bin("catalog").on_map_key("book").on_each_child().collect_values()
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.map_key(key),),
+        )
+
+    def on_list_index(self, index: int) -> CdtPathBuilder[T]:
+        """Descend into one list index, continuing the path.
+
+        Args:
+            index: List index to step into.
+
+        Returns:
+            A :class:`CdtPathBuilder` at that index.
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.list_index(index),),
+        )
+
+    def on_map_value(self, value: Any) -> CdtPathBuilder[T]:
+        """Descend into map elements matching *value*, continuing the path.
+
+        Returns:
+            A :class:`CdtPathBuilder` at the matching elements.
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.map_value(value),),
+        )
+
+    def on_list_value(self, value: Any) -> CdtPathBuilder[T]:
+        """Descend into list elements matching *value*, continuing the path.
+
+        Returns:
+            A :class:`CdtPathBuilder` at the matching elements.
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.list_value(value),),
+        )
+
+    # -- Read terminals -------------------------------------------------------
+
+    def _emit(self, op: Any) -> T:
+        self._parent.add_operation(op)  # type: ignore[union-attr]
+        return self._parent
+
+    def collect_values(self, *, no_fail: bool = False) -> T:
+        """Read the value of every element the path selects.
+
+        Args:
+            no_fail: When true, a path that does not resolve yields no result
+                instead of failing the operation. Useful when the shape varies
+                between records -- an empty or absent collection is then not an
+                error.
+
+        Returns:
+            The parent builder for chaining.
+
+        Example::
+
+            .bin("nums").on_each_child().collect_values()
+        """
+        if no_fail:
+            return self._emit(
+                CdtOperation.select_by_path(
+                    self._bin_name, SelectFlags.VALUE | SelectFlags.NO_FAIL,
+                    list(self._ctx),
+                )
+            )
+        return self._emit(
+            CdtOperation.select_values(self._bin_name, list(self._ctx))
+        )
+
+    def collect_map_keys(self, *, no_fail: bool = False) -> T:
+        """Read the key of every map entry the path selects.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        if no_fail:
+            return self._emit(
+                CdtOperation.select_by_path(
+                    self._bin_name, SelectFlags.MAP_KEY | SelectFlags.NO_FAIL,
+                    list(self._ctx),
+                )
+            )
+        return self._emit(
+            CdtOperation.select_map_keys(self._bin_name, list(self._ctx))
+        )
+
+    def collect_map_entries(self, *, no_fail: bool = False) -> T:
+        """Read every selected map entry as a key/value pair.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        if no_fail:
+            return self._emit(
+                CdtOperation.select_by_path(
+                    self._bin_name, SelectFlags.MAP_KEY_VALUE | SelectFlags.NO_FAIL,
+                    list(self._ctx),
+                )
+            )
+        return self._emit(
+            CdtOperation.select_map_entries(self._bin_name, list(self._ctx))
+        )
+
+    def collect_matching_tree(self, *, no_fail: bool = False) -> T:
+        """Read the selection as a tree, preserving the nesting it was found in.
+
+        Returns:
+            The parent builder for chaining.
+        """
+        if no_fail:
+            return self._emit(
+                CdtOperation.select_by_path(
+                    self._bin_name, SelectFlags.MATCHING_TREE | SelectFlags.NO_FAIL,
+                    list(self._ctx),
+                )
+            )
+        return self._emit(
+            CdtOperation.select_matching_tree(self._bin_name, list(self._ctx))
+        )
+
+    def collect_by_path(self, flags: Any) -> T:
+        """Read the selection with explicit :class:`SelectFlags`.
+
+        Args:
+            flags: The :class:`SelectFlags` controlling what is returned.
+
+        Returns:
+            The parent builder for chaining.
+
+        See Also:
+            :meth:`collect_values`: the common ``SelectFlags.VALUE`` case.
+        """
+        return self._emit(
+            CdtOperation.select_by_path(self._bin_name, flags, list(self._ctx))
+        )
+
+    # -- Write terminals ------------------------------------------------------
+
+    def modify_by(self, expression: Any, flags: Any = None) -> T:
+        """Rewrite every selected element to *expression*.
+
+        Args:
+            expression: An :class:`~aerospike_sdk.Exp` computing the new value,
+                typically over the element's loop variable.
+            flags: Optional :class:`ModifyFlags`; the server default applies
+                when omitted.
+
+        Returns:
+            The parent builder for chaining.
+
+        Example::
+
+            .bin("nums").on_each_child().modify_by(
+                Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+            )
+        """
+        flag = ModifyFlags.DEFAULT if flags is None else flags
+        return self._emit(
+            CdtOperation.modify_by_path(
+                self._bin_name, flag, expression, list(self._ctx),
+            )
+        )
+
+    def modify_no_fail(self, expression: Any) -> T:
+        """Rewrite every selected element, tolerating elements that cannot be.
+
+        Args:
+            expression: An :class:`~aerospike_sdk.Exp` computing the new value.
+
+        Returns:
+            The parent builder for chaining.
+
+        See Also:
+            :meth:`modify_by`: fails the operation instead of skipping.
+        """
+        return self._emit(
+            CdtOperation.modify_no_fail(self._bin_name, expression, list(self._ctx))
+        )
+
+    def remove_matches(self) -> T:
+        """Remove every element the path selects.
+
+        Returns:
+            The parent builder for chaining.
+
+        Example::
+
+            .bin("nums").on_each_child_where(over_5).remove_matches()
+        """
+        return self._emit(CdtOperation.remove(self._bin_name, list(self._ctx)))

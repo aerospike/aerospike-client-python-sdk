@@ -9,8 +9,11 @@ variable*. The path is handed to a ``CdtOperation.select_by_path`` /
 ``modify_by_path`` / ``remove`` factory and added to an ordinary query or update,
 or to ``Exp.exp_select_by_path`` for the expression-read form.
 
-These are the low-level factories; PSDK does not yet expose a fluent path builder
-(``.on_each_child().modify_by(...)``), so the ``CTX`` list is spelled out.
+These are the low-level factories, shown here because they are what the fluent
+surface emits and what an explicit ``CTX`` list looks like. Most code should
+prefer the fluent path builder --
+``session.update(key).bin("nums").on_each_child().modify_by(expr)`` -- which
+accumulates the same context. See ``docs/guide/cdt-operations.md``.
 
 If the cluster does not support CDT path operations, this example prints a
 skip message and exits.

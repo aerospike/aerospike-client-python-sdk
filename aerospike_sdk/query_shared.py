@@ -102,6 +102,7 @@ from aerospike_async.exceptions import ResultCode
 
 
 from aerospike_sdk.aio.operations.cdt_read import (
+    CdtPathBuilder,
     CdtReadBuilder,
     CdtReadInvertableBuilder,
     _map_item_pairs,
@@ -4729,6 +4730,38 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             bin_name=b, to_ctx=lambda: CTX.map_index(index),
         )
 
+    def on_each_child(self) -> CdtPathBuilder[WriteSegmentBuilder]:
+        """Select every child of this bin, for a path read or modify.
+
+        Walks a whole level instead of one element, so the terminal applies
+        across the selection: ``collect_values()`` reads them all,
+        ``modify_by(expr)`` rewrites them all. Chain again to go deeper.
+
+        Example::
+
+            await session.update(key).bin("nums").on_each_child().modify_by(
+                Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+            ).execute()
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation or a terminal.
+        """
+        return CdtPathBuilder(self._segment, self._bin, [CTX.all_children()])
+
+    def on_each_child_where(self, predicate: Any) -> CdtPathBuilder[WriteSegmentBuilder]:
+        """Select the children matching *predicate*.
+
+        Args:
+            predicate: An :class:`Exp` over the element's loop variable, e.g.
+                ``Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))``.
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation or a terminal.
+        """
+        return CdtPathBuilder(
+            self._segment, self._bin, [CTX.all_children_with_filter(predicate)],
+        )
+
     def on_map_key(
         self, key: Any, *, create_type: Optional[MapOrder] = None,
     ) -> CdtWriteBuilder[WriteSegmentBuilder]:
@@ -5765,6 +5798,38 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             lambda rt: MapOperation.get_by_index(b, index, rt),
             MapReturnType, is_map=True,
             bin_name=b, to_ctx=lambda: CTX.map_index(index),
+        )
+
+    def on_each_child(self) -> CdtPathBuilder[_T]:
+        """Select every child of this bin, for a path read or modify.
+
+        Walks a whole level instead of one element, so the terminal applies
+        across the selection: ``collect_values()`` reads them all,
+        ``modify_by(expr)`` rewrites them all. Chain again to go deeper.
+
+        Example::
+
+            await session.update(key).bin("nums").on_each_child().modify_by(
+                Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+            ).execute()
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation or a terminal.
+        """
+        return CdtPathBuilder(self._parent, self._bin, [CTX.all_children()])
+
+    def on_each_child_where(self, predicate: Any) -> CdtPathBuilder[_T]:
+        """Select the children matching *predicate*.
+
+        Args:
+            predicate: An :class:`Exp` over the element's loop variable, e.g.
+                ``Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(5))``.
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation or a terminal.
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin, [CTX.all_children_with_filter(predicate)],
         )
 
     def on_map_key(
