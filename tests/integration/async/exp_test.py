@@ -23,7 +23,7 @@ import base64
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import Exp, QueryHint, in_list, map_keys, map_values, val
+from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_values, val
 from aerospike_sdk.dataset import DataSet
 
 from tests.pac_compat import (
@@ -2233,3 +2233,116 @@ class TestAelMapBlobIntegrationQueries:
         assert rows[0].bins["payload"] == payload
 
         await session.delete(k).execute()
+
+
+# ---------------------------------------------------------------------------
+# Record metadata through AEL text. The server compiles these, so they reach it
+# unchanged through ``where()`` and ``select_from()``; nothing here needs a
+# client-side grammar. ``$.key()`` requires the key to have been stored, so the
+# fixture's behavior sets ``send_key``.
+# ---------------------------------------------------------------------------
+_METADATA_SET = "ael_metadata"
+_METADATA_TTL_SECONDS = 120
+_METADATA_STR_KEY, _METADATA_NO_TTL_KEY = _set_keys(_METADATA_SET, "strkey", "nottl")
+(_METADATA_INT_KEY,) = _set_keys(_METADATA_SET, 4242)
+
+
+@pytest.fixture(scope="module")
+async def session_with_metadata(aerospike_host, make_cluster_definition):
+    """A keyed record with a TTL, and a second one that never expires."""
+    behavior = Behavior.DEFAULT.derive_with_changes(name="ael_metadata", send_key=True)
+    keys = (_METADATA_STR_KEY, _METADATA_INT_KEY, _METADATA_NO_TTL_KEY)
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session(behavior=behavior)
+        for key in keys:
+            await session.delete(key).execute()
+        for key, value in ((_METADATA_STR_KEY, 1), (_METADATA_INT_KEY, 2)):
+            await (
+                session.upsert(key)
+                .put({"v": value})
+                .expire_record_after_seconds(_METADATA_TTL_SECONDS)
+                .execute()
+            )
+        await session.upsert(_METADATA_NO_TTL_KEY).put({"v": 3}).never_expire().execute()
+        yield session
+        for key in keys:
+            await session.delete(key).execute()
+
+
+async def _matches(session, key, expression) -> int:
+    stream = await session.query(key).where(expression).execute()
+    return len([record async for record in stream])
+
+
+class TestAelMetadata:
+    """Record metadata predicates expressed as AEL text."""
+
+    @requires_server_compiled_ael
+    async def test_string_key_matches(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.key():STRING == 'strkey'") == 1
+
+    @requires_server_compiled_ael
+    async def test_string_key_misses_a_different_value(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.key():STRING == 'other-key'") == 0
+
+    @requires_server_compiled_ael
+    async def test_integer_key_matches(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_INT_KEY, "$.key():INT == 4242") == 1
+
+    @requires_server_compiled_ael
+    async def test_key_is_readable_as_a_projection(self, session_with_metadata):
+        """``$.key()`` is a read projection, not only a filter."""
+        stream = await (
+            session_with_metadata.query(_METADATA_STR_KEY).bin("k").select_from("$.key():STRING").execute()
+        )
+        records = [record async for record in stream]
+        assert [r.record.bins["k"] for r in records] == ["strkey"]
+
+    @requires_server_compiled_ael
+    async def test_key_exists_on_a_keyed_record(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.keyExists()") == 1
+
+    @requires_server_compiled_ael
+    async def test_digest_modulo_is_within_its_divisor(self, session_with_metadata):
+        assert await _matches(
+            session_with_metadata, _METADATA_STR_KEY,
+            "$.digestModulo(3) >= 0 and $.digestModulo(3) < 3",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_record_size_is_positive(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.recordSize() > 0") == 1
+
+    @requires_server_compiled_ael
+    async def test_set_name_matches_the_current_set(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, f"$.setName() == '{_METADATA_SET}'") == 1
+
+    @requires_server_compiled_ael
+    async def test_live_record_is_not_a_tombstone(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.isTombstone() == false") == 1
+
+    @requires_server_compiled_ael
+    async def test_last_update_time_is_populated(self, session_with_metadata):
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.lastUpdateTime() > 0") == 1
+
+    @requires_server_compiled_ael
+    async def test_time_since_last_update_is_recent(self, session_with_metadata):
+        assert await _matches(
+            session_with_metadata, _METADATA_STR_KEY,
+            "$.timeSinceLastUpdate() >= 0 and $.timeSinceLastUpdate() < 3600000",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_ttl_reflects_the_expiry_that_was_set(self, session_with_metadata):
+        assert await _matches(
+            session_with_metadata, _METADATA_STR_KEY,
+            f"$.ttl() <= {_METADATA_TTL_SECONDS}",
+        ) == 1
+
+    @requires_server_compiled_ael
+    async def test_void_time_is_set_only_when_the_record_expires(
+        self, session_with_metadata
+    ):
+        """A record with no TTL reports a negative void time."""
+        assert await _matches(session_with_metadata, _METADATA_STR_KEY, "$.voidTime() > 0") == 1
+        assert await _matches(session_with_metadata, _METADATA_NO_TTL_KEY, "$.voidTime() < 0") == 1

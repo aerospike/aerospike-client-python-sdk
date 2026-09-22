@@ -299,6 +299,27 @@ stream = await (
 )
 ```
 
+### Draining a chunked query
+
+`chunk_size()` sets how many records arrive per server round trip, and
+**advancing between chunks is the caller's job**. Iterating the stream yields
+only the chunk already loaded, so the plain `async for` shown below would stop
+after 500 records and silently leave the rest unread. Drive `has_more_chunks()`
+in an outer loop instead:
+
+```python
+stream = await session.query(users).where("$.age > 18").chunk_size(500).execute()
+try:
+    while await stream.has_more_chunks():
+        async for result in stream:
+            print(result.record.bins)
+finally:
+    stream.close()
+```
+
+To cap how many records you get in total — rather than how many arrive per trip
+— use `max_records()`.
+
 ## RecordResult
 
 Each item in the stream is a [`RecordResult`](../api/record-result.md):

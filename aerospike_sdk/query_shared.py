@@ -1086,6 +1086,15 @@ class _QueryBuilderBase:
         round trips (Larger values reduce round trips; smaller values bound memory per fetch).
         This is distinct from client-side pagination.
 
+        .. important::
+
+            Advancing between chunks is the caller's job. Iterating the stream
+            yields only the chunk already loaded, so a plain ``for`` / ``async for``
+            over a chunked query stops after ``chunk_size`` records and the rest
+            are never fetched. Drive
+            :meth:`~aerospike_sdk.record_stream.RecordStream.has_more_chunks`
+            in an outer loop to read the whole result, as the example below does.
+
         Args:
             chunk_size: Records per chunk; must be positive.
 
@@ -1097,10 +1106,18 @@ class _QueryBuilderBase:
 
         Example::
 
-                query = session.query(dataset).chunk_size(100)
+                stream = await session.query(dataset).chunk_size(100).execute()
+                try:
+                    while await stream.has_more_chunks():
+                        async for result in stream:
+                            print(result.record.bins)
+                finally:
+                    stream.close()
 
         See Also:
             :meth:`max_records`: Cap total records returned.
+            :meth:`~aerospike_sdk.record_stream.RecordStream.has_more_chunks`:
+            Advance to the next server chunk.
         """
         if chunk_size <= 0:
             raise ValueError(f"Chunk size must be > 0, not {chunk_size}")

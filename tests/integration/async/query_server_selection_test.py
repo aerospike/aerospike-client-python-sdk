@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_sdk import Exp, QueryDuration, QueryHint, ResultCode, val
+from aerospike_async import IndexType
+
+from aerospike_sdk import DataSet, Exp, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
@@ -40,9 +42,18 @@ from tests.integration.query_selection_helpers import (
     collect_ages_async,
     collect_scores_async,
     count_records_async,
+    create_index_quiet_async,
+    drop_index_quiet_async,
     explain_plan_async,
 )
 from tests.pac_compat import requires_query_selection, requires_server_compiled_ael
+
+# Long enough that the planner cannot carry it as index range bytes, so the
+# plan falls back to the primary index instead of a secondary one.
+OVERSIZED_LITERAL = "x" * 2048
+# Scans behind a where() are refused by Behavior.DEFAULT, so the tests that
+# want to observe a primary-index fallback have to permit them.
+PERMIT_SCANS = QueryHint(allow_scans_with_where=True)
 
 
 
@@ -148,6 +159,55 @@ class TestQueryExplain:
         assert plan.index_name != SCORE_INDEX_NAME
         assert plan.index_name == INDEX_NAME
         assert ages == [14, 15, 16, 17, 18]
+
+    @requires_query_selection
+    async def test_oversized_literal_on_an_unindexed_bin_falls_back_to_primary(
+        self, query_selection_cluster,
+    ):
+        pac = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(
+            pac, f"$.{BIN_COUNTRY} == '{OVERSIZED_LITERAL}'",
+        )
+        assert plan.selection == QuerySelection.PRIMARY_INDEX
+        assert plan.index_name is None
+
+    @requires_query_selection
+    async def test_oversized_literal_on_an_indexed_bin_falls_back_to_primary(
+        self, query_selection_cluster,
+    ):
+        pac = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(
+            pac, f"$.{BIN_AGE} == '{OVERSIZED_LITERAL}'",
+        )
+        assert plan.selection == QuerySelection.PRIMARY_INDEX
+        assert plan.index_name is None
+
+    @requires_query_selection
+    async def test_oversized_literal_beside_an_indexable_term_still_selects_the_index(
+        self, query_selection_cluster,
+    ):
+        """One unusable conjunct does not cost the plan its usable one."""
+        pac = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(
+            pac,
+            f"$.{BIN_AGE} >= 14 and $.{BIN_COUNTRY} == '{OVERSIZED_LITERAL}'",
+        )
+        assert plan.selection == QuerySelection.SECONDARY_INDEX
+        assert plan.index_name == INDEX_NAME
+
+    @requires_query_selection
+    async def test_or_conjunct_with_an_indexable_sibling_selects_the_index(
+        self, query_selection_cluster,
+    ):
+        """An OR the index cannot serve does not disqualify the AND beside it."""
+        pac = query_selection_cluster.client.underlying_client
+        for where in (
+            "$.age > 10 and ($.age < 50 or $.country == 'US')",
+            "($.age < 50 or $.country == 'US') and $.age > 10",
+        ):
+            plan = await explain_plan_async(pac, where)
+            assert plan.selection == QuerySelection.SECONDARY_INDEX, where
+            assert plan.index_name == INDEX_NAME, where
 
 
 class TestQueryExecute:
@@ -289,6 +349,51 @@ class TestQueryExecute:
         count = await count_records_async(stream)
         assert count == 0
 
+    @requires_query_selection
+    async def test_or_conjunct_with_an_indexable_sibling_returns_matching_records(
+        self, query_selection_cluster,
+    ):
+        stream = await (
+            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            .where("$.age > 10 and ($.age < 14 or $.country == 'US')")
+            .execute()
+        )
+        # The seed sets country US on even ages, so past 13 only those qualify.
+        expected = [age for age in range(11, SIZE + 1) if age < 14 or age % 2 == 0]
+        assert await collect_ages_async(stream) == expected
+
+    @requires_query_selection
+    async def test_integer_range_boundaries_are_inclusive_where_written(
+        self, query_selection_cluster,
+    ):
+        session = query_selection_cluster.session
+
+        async def ages(where):
+            stream = await (
+                session.query(namespace=NS, set_name=SET_NAME).where(where).execute()
+            )
+            return await collect_ages_async(stream)
+
+        assert await ages("$.age >= 10 and $.age <= 12") == [10, 11, 12]
+        assert await ages("$.age > 10 and $.age < 12") == [11]
+        assert await ages("$.age >= 10 and $.age < 12") == [10, 11]
+        assert await ages("$.age > 10 and $.age <= 12") == [11, 12]
+        assert await ages("$.age >= 1 and $.age <= 1") == [1]
+        assert await ages(f"$.age >= {SIZE}") == [SIZE]
+
+    @requires_query_selection
+    async def test_integer_range_with_no_representable_value_is_filtered_out(
+        self, query_selection_cluster,
+    ):
+        """No integer lies strictly between 10 and 11."""
+        with pytest.raises(AerospikeError) as excinfo:
+            await (
+                query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+                .where("$.age > 10 and $.age < 11")
+                .execute()
+            )
+        assert excinfo.value.result_code == ResultCode.FILTERED_OUT
+
 
 class TestQuerySelectionRouting:
     @requires_server_compiled_ael
@@ -406,3 +511,89 @@ class TestQuerySelectionRouting:
         stream = await query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).execute()
         count = await count_records_async(stream)
         assert count == SIZE
+
+    @requires_query_selection
+    async def test_parameterized_where_matches_the_literal_form(
+        self, query_selection_cluster,
+    ):
+        """A bound ``where()`` takes the same selection path as literal text."""
+        session = query_selection_cluster.session
+        bound = await count_records_async(
+            await session.query(namespace=NS, set_name=SET_NAME)
+            .where("$.age >= %s and $.age <= %s", 14, 18)
+            .execute()
+        )
+        literal = await count_records_async(
+            await session.query(namespace=NS, set_name=SET_NAME)
+            .where("$.age >= 14 and $.age <= 18")
+            .execute()
+        )
+        assert bound == literal > 0
+
+
+# ---------------------------------------------------------------------------
+# The shared seed is a dense 1..SIZE run of ages, so it cannot show what a range
+# does with gaps or with records that lack the bin entirely. This set supplies
+# both, and owns its own index so the shared one is left alone.
+# ---------------------------------------------------------------------------
+SPARSE_SET = "qsel_sparse"
+SPARSE_INDEX = "qsel_sparse_age_idx"
+SPARSE_AGES = (2, 7, 23, 41)
+MISSING_AGE_KEYS = ("noage1", "noage2")
+
+
+@pytest.fixture
+async def sparse_set(query_selection_cluster):
+    session = query_selection_cluster.session
+    client = query_selection_cluster.client
+    ds = DataSet.of(NS, SPARSE_SET)
+
+    for age in SPARSE_AGES:
+        await session.upsert(ds.id(f"age{age}")).put({BIN_AGE: age}).execute()
+    for name in MISSING_AGE_KEYS:
+        await session.upsert(ds.id(name)).put({BIN_SCORE: 1}).execute()
+    await create_index_quiet_async(
+        client.underlying_client,
+        set_name=SPARSE_SET,
+        bin_name=BIN_AGE,
+        index_name=SPARSE_INDEX,
+        index_type=IndexType.NUMERIC,
+    )
+    yield session
+    await drop_index_quiet_async(client, NS, SPARSE_SET, SPARSE_INDEX)
+    for age in SPARSE_AGES:
+        await session.delete(ds.id(f"age{age}")).execute()
+    for name in MISSING_AGE_KEYS:
+        await session.delete(ds.id(name)).execute()
+
+
+class TestSparseRanges:
+    """Ranges over values that are absent, and over records without the bin."""
+
+    @requires_query_selection
+    async def test_range_returns_only_the_ages_that_exist(self, sparse_set):
+        stream = await (
+            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            .where("$.age >= 5 and $.age <= 30")
+            .execute()
+        )
+        assert await collect_ages_async(stream) == [7, 23]
+
+    @requires_query_selection
+    async def test_range_spanning_a_gap_returns_nothing(self, sparse_set):
+        stream = await (
+            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            .where("$.age >= 8 and $.age <= 22")
+            .execute()
+        )
+        assert await collect_ages_async(stream) == []
+
+    @requires_query_selection
+    async def test_range_skips_records_without_the_bin(self, sparse_set):
+        """The two bin-less records must not appear, and must not error."""
+        stream = await (
+            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            .where("$.age >= 1")
+            .execute()
+        )
+        assert await collect_ages_async(stream) == list(SPARSE_AGES)
