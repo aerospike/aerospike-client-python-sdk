@@ -89,6 +89,33 @@ $.when              # so are keywords like 'when', 'and', 'or', 'let', etc.
 The substring `null` (case-insensitive) is reserved in bin names: `$.null`,
 `$.my_null_bin`, and `$."NULL"` are invalid.
 
+#### Every bin reference needs a resolvable type
+
+A bin carries no type the expression can see, so the server has to work one out
+before it can read the bin. It resolves the type from **either an explicit pin
+or a literal somewhere in the expression** — and rejects the expression with
+`PARAMETER_ERROR` when it has neither. One literal is enough for every bin in
+the expression:
+
+```python
+session.query(users).where("$.age == 25")            # the literal 25 resolves $.age
+session.query(users).bin("n").select_from("$.age:INT")  # pinned
+session.query(users).bin("n").select_from("$.age + 0")  # the literal 0 resolves it
+session.query(users).bin("n").select_from("$.age + $.score + 0")  # resolves both
+
+session.query(users).bin("n").select_from("$.age")      # PARAMETER_ERROR
+session.query(users).where("$.age > $.score")           # PARAMETER_ERROR
+```
+
+This is one rule, not a difference between `where()` and `select_from()`: the
+last two fail because nothing in them names a type, and pinning either operand
+(`$.age:INT > $.score`) makes both legal. A method call resolves its receiver
+the same way — `$.rate.toInt()` is rejected, `$.rate:FLOAT.toInt()` is not.
+
+Failures here arrive as a bare `PARAMETER_ERROR`. Raise
+`error_detail_verbosity` to `ErrorDetailVerbosity.MESSAGE` on the session's
+`Behavior` to have the server's own explanation returned with the error.
+
 ### Comparison Operators
 
 ```

@@ -2598,3 +2598,81 @@ class TestAelBitOperations:
         ) == 1
         record = await session_with_blob.get(_BIT_KEY)
         assert record.bins["b"] == _BIT_BLOB
+
+
+# ---------------------------------------------------------------------------
+# AEL type inference. A bin reference carries no type of its own, so the server
+# has to resolve one before it can read the bin: from an explicit pin, or from
+# a literal somewhere in the expression. An expression that offers neither is
+# rejected -- which is the whole reason `$.A` alone fails while `$.A + 0` does
+# not, on both `where()` and `select_from()`.
+# ---------------------------------------------------------------------------
+_INFER_SET = "ael_inference"
+(_INFER_KEY,) = _set_keys(_INFER_SET, "r1")
+
+
+@pytest.fixture(scope="module")
+async def session_with_two_int_bins(aerospike_host, make_cluster_definition):
+    async with make_cluster_definition(aerospike_host).connect() as cluster:
+        session = cluster.create_session()
+        await session.delete(_INFER_KEY).execute()
+        await session.upsert(_INFER_KEY).put({"A": 1, "C": 3}).execute()
+        yield session
+        await session.delete(_INFER_KEY).execute()
+
+
+async def _select(session, expression):
+    stream = await (
+        session.query(_INFER_KEY).bin("r").select_from(expression).execute()
+    )
+    rows = [record async for record in stream]
+    return rows[0].record.bins["r"] if rows else None
+
+
+async def _where_count(session, expression) -> int:
+    stream = await session.query(_INFER_KEY).where(expression).execute()
+    return len([record async for record in stream])
+
+
+class TestAelTypeInference:
+    """What the server accepts depends on whether the bin's type is resolvable."""
+
+    @requires_server_compiled_ael
+    async def test_an_unresolvable_bin_reference_is_rejected(
+        self, session_with_two_int_bins,
+    ):
+        """Neither a bare read nor arithmetic between two bins resolves a type."""
+        for expression in ("$.A", "$.A + $.C"):
+            with pytest.raises(AerospikeError) as excinfo:
+                await _select(session_with_two_int_bins, expression)
+            assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR, expression
+
+    @requires_server_compiled_ael
+    async def test_a_comparison_between_two_bins_is_rejected_in_a_filter(
+        self, session_with_two_int_bins,
+    ):
+        with pytest.raises(AerospikeError) as excinfo:
+            await _where_count(session_with_two_int_bins, "$.A > $.C")
+        assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
+
+    @requires_server_compiled_ael
+    async def test_a_literal_operand_resolves_every_bin_in_the_expression(
+        self, session_with_two_int_bins,
+    ):
+        """One trailing literal is enough for both bins: 1 + 3 + 0."""
+        assert await _select(session_with_two_int_bins, "$.A + $.C + 0") == 4
+
+    @requires_server_compiled_ael
+    async def test_pinning_one_operand_resolves_the_other(
+        self, session_with_two_int_bins,
+    ):
+        assert await _select(session_with_two_int_bins, "$.A:INT + $.C") == 4
+        assert await _select(session_with_two_int_bins, "$.A:INT + $.C:INT") == 4
+
+    @requires_server_compiled_ael
+    async def test_a_pin_rescues_a_filter_comparing_two_bins(
+        self, session_with_two_int_bins,
+    ):
+        """The same comparison the server rejected above, now resolvable."""
+        assert await _where_count(session_with_two_int_bins, "$.A:INT > $.C") == 0
+        assert await _where_count(session_with_two_int_bins, "$.C:INT > $.A") == 1
