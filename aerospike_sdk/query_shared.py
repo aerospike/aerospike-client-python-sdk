@@ -3011,13 +3011,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         )
 
     def list_create(
-        self, order: ListOrderType, *, pad: bool = False, persist_index: bool = False,
+        self, order: ListOrderType, *, pad: bool = True, persist_index: bool = False,
     ) -> WriteSegmentBuilder:
         """Create an empty list with the given order.
 
         Args:
             order: List element order.
-            pad: Whether to pad with None entries.
+            pad: When creating through a context path, allow the target index
+                to leave a gap, filling the skipped entries with ``None``.
+                Defaults to ``True``. Has no effect on a top-level list,
+                which has no context element to carry the flag.
             persist_index: Whether to persist element indices.
 
         Returns:
