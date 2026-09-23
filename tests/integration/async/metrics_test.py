@@ -262,6 +262,36 @@ class TestMetricsSnapshot:
         metrics_cluster.disable_metrics()
 
 
+    async def test_canonical_byte_totals_reflect_the_payload(self, metrics_cluster):
+        """`bytes_in` is summed by this SDK, not read from a field.
+
+        Bounded by the payload rather than pinned to a total: the framing
+        overhead tracks bin-name length and record metadata, so an equality
+        would fail on changes unrelated to the measurement. The bounds still
+        catch both real failures -- summing to zero, and accumulating across
+        commands instead of per command.
+        """
+        metrics_cluster.enable_metrics(_SHAPE_SAFE)
+        payload, reads = 4096, 5
+        session = metrics_cluster.create_session()
+        key = DataSet.of(general_namespace(), "canonical_bytes").id("k1")
+        await session.upsert(key).put({"blob": "x" * payload}).execute()
+        for _ in range(reads):
+            await session.get(key)
+
+        document = (await metrics_cluster.metrics()).to_canonical_dict()
+        namespaces = [
+            ns
+            for node in document["nodes"]
+            for ns in node["namespaces"]
+            if ns["name"] == general_namespace()
+        ]
+        assert namespaces, "the namespace produced no canonical entry"
+        bytes_in = sum(ns["bytes_in"] for ns in namespaces)
+        assert bytes_in >= reads * payload
+        assert bytes_in < (reads + 2) * (payload + 512)
+
+
 class TestMetricsExport:
     """Snapshots reaching an exporter, against a live cluster."""
 
@@ -324,6 +354,12 @@ class TestMetricsExport:
             assert histogram is not None, f"{field} missing"
             for attr in ("count", "min", "max", "sum", "average", "buckets"):
                 assert hasattr(histogram, attr), f"{field}.{attr} missing"
+
+        # Byte histograms carry totals, not just sample counts. Asserting
+        # the count alone cannot tell a measured total from one that
+        # summed to zero.
+        assert detail.bytes_sent.sum > 0
+        assert detail.bytes_received.sum > 0
 
         # Neither reaches the canonical document -- the reason this tier exists.
         document = snapshot.to_canonical_dict()
