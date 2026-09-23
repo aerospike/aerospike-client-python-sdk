@@ -32,7 +32,11 @@ def metrics_cluster(aerospike_host, make_cluster_definition):
 
 
 # Same shape as the core's construction default; see the async twin for why.
-_SHAPE_SAFE = MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS, latency_columns=24)
+_SHAPE_SAFE = MetricsPolicy(
+    operational_enabled=True,
+    latency_unit=LatencyUnit.MICROSECONDS,
+    latency_columns=24,
+)
 
 
 def _do_some_ops(cluster, count):
@@ -79,6 +83,7 @@ class TestSyncMetrics:
 
     def test_sampler_never_gates_command_metrics(self, metrics_cluster):
         policy = MetricsPolicy(
+            operational_enabled=True,
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=24,
             sampler=Sampler.never(),
@@ -95,8 +100,8 @@ class TestSyncMetrics:
         _do_some_ops(metrics_cluster, count=1)
 
         d = metrics_cluster.metrics().to_dict()
-        assert d["total-nodes"] >= 1
-        assert d["cluster-aggregated-metrics"]["latency-unit"] == "us"
+        assert d["total_nodes"] >= 1
+        assert d["cluster_aggregated_metrics"]["latency_unit"] == "us"
         metrics_cluster.disable_metrics()
 
     def test_usage_counters_record_and_gate(self, metrics_cluster):

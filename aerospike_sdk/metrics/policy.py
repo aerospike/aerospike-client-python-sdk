@@ -92,8 +92,13 @@ _DEFAULT_LATENCY_SHIFT = 1
 class MetricsPolicy:
     """Configuration for client metrics collection.
 
-    The defaults are the cross-SDK metrics defaults: latency recorded in
-    milliseconds across 7 logarithmic buckets whose boundaries double per
+    Enabling metrics records the always-on gauges only. The operational tier
+    -- latency and byte histograms, result codes, retry and error counters --
+    is opt-in through ``operational_enabled``, so the cost of measuring every
+    command is never paid by accident.
+
+    That tier's defaults are the cross-SDK metrics defaults: latency recorded
+    in milliseconds across 7 logarithmic buckets whose boundaries double per
     column (``<= 1``, ``> 1``, ``> 2``, ``> 4``, ``> 8``, ``> 16``, ``> 32``
     ms), with every command recorded. Choose
     :attr:`~aerospike_async.LatencyUnit.MICROSECONDS` with more columns when
@@ -106,12 +111,19 @@ class MetricsPolicy:
 
         from aerospike_sdk.metrics import LatencyUnit, MetricsPolicy, Sampler
 
+        # Pool and membership gauges only -- no per-command measurement.
+        cluster.enable_metrics(MetricsPolicy())
+
         # Classic milliseconds view, sampling 10% of calls.
-        policy = MetricsPolicy(sampler=Sampler.probability(0.1))
+        policy = MetricsPolicy(
+            operational_enabled=True,
+            sampler=Sampler.probability(0.1),
+        )
         cluster.enable_metrics(policy)
 
         # Sub-millisecond resolution for a low-latency deployment.
         fine = MetricsPolicy(
+            operational_enabled=True,
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=18,
         )
@@ -123,6 +135,12 @@ class MetricsPolicy:
         latency_shift: Bucket-boundary spacing exponent — each boundary after
             the first bucket multiplies by ``2**latency_shift``. Defaults to
             1 (no skipped powers of two). Must be at least 1.
+        operational_enabled: Record the operational tier -- latency and byte
+            histograms, result codes, and the command retry/error and
+            connection failure counters. Off by default, leaving the always-on
+            gauges: pool occupancy, connections opened and closed, tend counts
+            and node membership. The histogram settings above shape this tier
+            and do nothing while it is off.
         sampler: Record-time gate for the per-command metrics; a fractional
             sampler decides once per call (not per retry) whether the whole
             call is measured. Defaults to recording every command.
@@ -141,6 +159,7 @@ class MetricsPolicy:
     """
 
     __slots__ = (
+        "operational_enabled",
         "latency_unit",
         "latency_columns",
         "latency_shift",
@@ -152,6 +171,7 @@ class MetricsPolicy:
     def __init__(
         self,
         *,
+        operational_enabled: bool = False,
         latency_unit: LatencyUnit = LatencyUnit.MILLISECONDS,
         latency_columns: int = _DEFAULT_LATENCY_COLUMNS,
         latency_shift: int = _DEFAULT_LATENCY_SHIFT,
@@ -161,6 +181,7 @@ class MetricsPolicy:
     ) -> None:
         if latency_shift < 1:
             raise ValueError(f"latency_shift must be at least 1, got {latency_shift}")
+        self.operational_enabled = operational_enabled
         self.latency_unit = latency_unit
         self.latency_columns = latency_columns
         self.latency_shift = latency_shift
@@ -175,6 +196,7 @@ class MetricsPolicy:
         recorded in this SDK, not below it.
         """
         pac = _PacMetricsPolicy()
+        pac.operational = self.operational_enabled
         pac.latency_unit = self.latency_unit
         pac.latency_columns = self.latency_columns
         pac.latency_shift = self.latency_shift
@@ -184,7 +206,8 @@ class MetricsPolicy:
 
     def __repr__(self) -> str:
         return (
-            f"MetricsPolicy(latency_unit={self.latency_unit}, "
+            f"MetricsPolicy(operational_enabled={self.operational_enabled}, "
+            f"latency_unit={self.latency_unit}, "
             f"latency_columns={self.latency_columns}, "
             f"latency_shift={self.latency_shift}, sampler={self.sampler!r})"
         )

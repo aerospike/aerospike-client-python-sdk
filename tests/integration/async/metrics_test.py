@@ -32,7 +32,11 @@ async def metrics_cluster(aerospike_host, make_cluster_definition):
 # (microseconds / 24 columns); enabling with the same shape keeps every part of
 # the snapshot populated, since a shape change resets the accumulated counts.
 # The ms-default detail path is covered by test_default_policy_detailed_metrics.
-_SHAPE_SAFE = MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS, latency_columns=24)
+_SHAPE_SAFE = MetricsPolicy(
+    operational_enabled=True,
+    latency_unit=LatencyUnit.MICROSECONDS,
+    latency_columns=24,
+)
 
 
 async def _do_some_ops(cluster, count):
@@ -121,7 +125,9 @@ class TestMetricsSnapshot:
     # two), so these survive that core change without edits.
 
     async def test_millisecond_buckets_collapse_fast_ops(self, metrics_cluster):
-        metrics_cluster.enable_metrics(MetricsPolicy())  # milliseconds / 7
+        metrics_cluster.enable_metrics(
+            MetricsPolicy(operational_enabled=True)  # milliseconds / 7
+        )
         await _do_some_ops(metrics_cluster, count=5)
 
         hist = (
@@ -136,7 +142,11 @@ class TestMetricsSnapshot:
 
     async def test_microsecond_buckets_resolve_fast_ops(self, metrics_cluster):
         metrics_cluster.enable_metrics(
-            MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS, latency_columns=18)
+            MetricsPolicy(
+                operational_enabled=True,
+                latency_unit=LatencyUnit.MICROSECONDS,
+                latency_columns=18,
+            )
         )
         await _do_some_ops(metrics_cluster, count=5)
 
@@ -153,6 +163,7 @@ class TestMetricsSnapshot:
 
     async def test_sampler_never_gates_command_metrics(self, metrics_cluster):
         policy = MetricsPolicy(
+            operational_enabled=True,
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=24,
             sampler=Sampler.never(),
@@ -172,11 +183,27 @@ class TestMetricsSnapshot:
         await _do_some_ops(metrics_cluster, count=1)
 
         d = (await metrics_cluster.metrics()).to_dict()
-        assert d["total-nodes"] >= 1
-        agg = d["cluster-aggregated-metrics"]
-        assert agg["latency-unit"] == "us"
-        assert agg["get-metrics"]["count"] >= 1
+        assert d["total_nodes"] >= 1
+        agg = d["cluster_aggregated_metrics"]
+        assert agg["latency_unit"] == "us"
+        assert agg["get_metrics"]["count"] >= 1
         metrics_cluster.disable_metrics()
+
+    async def test_operational_off_records_only_the_always_on_gauges(
+        self, aerospike_host, make_cluster_definition
+    ):
+        """Enabling metrics does not by itself start measuring commands."""
+        async with make_cluster_definition(aerospike_host).connect() as c:
+            c.enable_metrics(MetricsPolicy())
+            await _do_some_ops(c, count=3)
+
+            snapshot = await c.metrics()
+            agg = snapshot.cluster_aggregated
+            assert agg.command_histogram(CommandType.GET).count == 0
+            assert agg.detailed_metric(general_namespace(), CommandType.GET) is None
+            # The always-on tier is not gated with it.
+            assert snapshot.open_connections >= 1
+            assert snapshot.total_nodes >= 1
 
     async def test_default_policy_detailed_metrics(
         self, aerospike_host, make_cluster_definition
@@ -184,7 +211,8 @@ class TestMetricsSnapshot:
         # A fresh cluster so the detail slots are created lazily AFTER the
         # ms/7 enable — the exact path the core bug loses.
         async with make_cluster_definition(aerospike_host).connect() as c:
-            c.enable_metrics()  # default: milliseconds / 7 columns
+            # Default shape: milliseconds / 7 columns.
+            c.enable_metrics(MetricsPolicy(operational_enabled=True))
             await _do_some_ops(c, count=3)
 
             snapshot = await c.metrics()
@@ -197,7 +225,10 @@ class TestMetricsSnapshot:
     async def test_labels_reach_the_snapshot(self, metrics_cluster):
         """User labels are merged with the identity labels the core stamps."""
         metrics_cluster.enable_metrics(
-            MetricsPolicy(labels=[{"team": "billing", "region": "us-west"}])
+            MetricsPolicy(
+                operational_enabled=True,
+                labels=[{"team": "billing", "region": "us-west"}],
+            )
         )
         await _do_some_ops(metrics_cluster, count=2)
 
