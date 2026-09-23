@@ -209,8 +209,8 @@ class TestCreateIfMissingSync:
         assert raw[1] == 2
         # list_set index is relative to the navigated slot; a new padded cell is a list.
         assert raw[5] == [9]
-
-
+        # The gap itself is what "pad" means: the skipped cells are nil.
+        assert raw[2] is None and raw[3] is None and raw[4] is None
 class TestValueSelectorChainingSync:
 
     def test_nested_list_value_count(self, cluster):

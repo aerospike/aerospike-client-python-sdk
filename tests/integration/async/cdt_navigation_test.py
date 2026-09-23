@@ -15,11 +15,13 @@
 
 """Integration tests for nested CDT navigation, ranges, create-if-missing, and value chaining."""
 
+import pytest
 import pytest_asyncio
 
 from aerospike_sdk import ListOrderType, MapOrder
 
-from aerospike_sdk import DataSet, ListReturnType, MapReturnType
+from aerospike_sdk import DataSet, ListReturnType, MapReturnType, ResultCode
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 
 
@@ -232,6 +234,86 @@ class TestCreateIfMissing:
         assert raw[1] == 2
         # list_set index is relative to the navigated slot; a new padded cell is a list.
         assert raw[5] == [9]
+        # The gap itself is what "pad" means: the skipped cells are nil.
+        assert raw[2] is None and raw[3] is None and raw[4] is None
+
+    async def test_on_list_index_without_pad_rejects_out_of_bounds(self, cluster):
+        """The same navigation, unpadded, is refused rather than filled.
+
+        This is the behavior `pad` switches off, and the reason the flag is not
+        cosmetic: without it an out-of-range index is an error, not a write.
+        """
+        session = cluster.create_session()
+        k = _key(10)
+        await session.upsert(k).put({"m": {"lst": [1, 2]}}).execute()
+
+        with pytest.raises(AerospikeError) as excinfo:
+            await (
+                session.update(k)
+                .bin("m").on_map_key("lst")
+                .on_list_index(5, order=ListOrderType.UNORDERED, pad=False)
+                .list_set(0, 9)
+                .execute()
+            )
+        assert excinfo.value.result_code == ResultCode.OP_NOT_APPLICABLE
+
+        # The record is untouched -- a refused operation writes nothing.
+        rs = await (
+            await session.query(k).bin("m").on_map_key("lst").list_get_range(0, None).execute()
+        ).first_or_raise()
+        assert rs.record.bins["m"] == [1, 2]
+
+    async def test_list_create_pad_creates_through_a_context_path(self, cluster):
+        """`list_create`'s own pad flag reaches the last context element.
+
+        It is inert on a top-level list -- the create op carries no context to
+        stamp -- so this is the only shape where the flag is observable.
+        """
+        session = cluster.create_session()
+        k = _key(11)
+        await session.upsert(k).put({"d": [[1], [2]]}).execute()
+
+        await (
+            session.upsert(k)
+            .bin("d").on_list_index(5)
+            .list_create(ListOrderType.UNORDERED, pad=True)
+            .execute()
+        )
+        assert (await session.get(k)).bins["d"] == [[1], [2], None, None, None, []]
+
+    async def test_list_create_without_pad_rejects_a_missing_context(self, cluster):
+        session = cluster.create_session()
+        k = _key(12)
+        await session.upsert(k).put({"d": [[1], [2]]}).execute()
+
+        with pytest.raises(AerospikeError) as excinfo:
+            await (
+                session.upsert(k)
+                .bin("d").on_list_index(5)
+                .list_create(ListOrderType.UNORDERED, pad=False)
+                .execute()
+            )
+        assert excinfo.value.result_code == ResultCode.OP_NOT_APPLICABLE
+        assert (await session.get(k)).bins["d"] == [[1], [2]]
+
+    async def test_a_contiguous_index_needs_no_pad(self, cluster):
+        """`pad` permits gaps, not creation: the next index needs no padding.
+
+        Appending at exactly one past the end leaves no hole to fill, so it
+        succeeds unpadded. Without this the pair above reads as "pad=False
+        cannot create", which is not what the flag means.
+        """
+        session = cluster.create_session()
+        k = _key(13)
+        await session.upsert(k).put({"d": [[1], [2], [3]]}).execute()
+
+        await (
+            session.upsert(k)
+            .bin("d").on_list_index(3)
+            .list_create(ListOrderType.UNORDERED, pad=False)
+            .execute()
+        )
+        assert (await session.get(k)).bins["d"] == [[1], [2], [3], []]
 
 
 # ===================================================================
