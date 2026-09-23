@@ -38,7 +38,7 @@ from aerospike_sdk.exceptions import RecordNotFoundError as _SdkRecordNotFound
 from aerospike_sdk.exceptions import TimeoutError as AsTimeoutError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.client import SyncClient
-from aerospike_sdk.sync.session import SyncSession
+from aerospike_sdk.sync.session import Session as SyncSession
 
 from ._env import (
     client_policy_from_config,
