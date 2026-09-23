@@ -29,13 +29,14 @@ The two outcomes are not the same severity, and that is the point of the pair:
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
 
-from aerospike_async import CommitErrorType, CommitStatus
+from aerospike_async import CommitErrorType, CommitStatus, TxnState
 from aerospike_sdk import ClusterDefinition, DataSet, Host
-from aerospike_sdk.exceptions import CommitError
+from aerospike_sdk.exceptions import AerospikeError, CommitError
 
 from integration.tcp_gate import TcpGate
 
@@ -179,5 +180,79 @@ class TestInDoubtMarkRollForward:
                 assert exc.commit_error_type is CommitErrorType.MARK_ROLL_FORWARD_ABANDONED
                 assert exc.in_doubt is True
                 assert attempts == 1
+            finally:
+                await cluster.close()
+
+
+class TestCommitFailedIsRetryable:
+    """An in-doubt commit leaves the only resolution path open: another commit."""
+
+    async def test_the_transaction_survives_an_in_doubt_commit(
+        self, aerospike_host_sc_single
+    ):
+        """Finalizing here would strand the transaction with no way to resolve it."""
+        host, _, port = aerospike_host_sc_single.rpartition(":")
+        async with await TcpGate.open(host, int(port)) as gate:
+            cluster = await _gated_cluster(gate)
+            try:
+                session = cluster.create_session()
+                key = DataSet.of(NAMESPACE, "gate_commit").id(
+                    f"retryable_{time.monotonic_ns()}"
+                )
+                await session.upsert(key).put({BIN_NAME: 1}).execute()
+
+                tx = session.transaction()
+                await tx.__aenter__()
+                await tx.upsert(key).put({BIN_NAME: 2}).execute()
+                gate.refuse_after_client_messages(BEFORE_MARK_ROLL_FORWARD)
+
+                with pytest.raises(CommitError) as excinfo:
+                    await tx.commit()
+                assert excinfo.value.in_doubt is True
+
+                # The client core marks the state; the session keeps the
+                # transaction because of it.
+                assert tx._txn is not None
+                assert tx._txn.state == TxnState.COMMIT_FAILED
+                assert tx._finalized is False
+            finally:
+                await cluster.close()
+
+    async def test_abort_is_refused_and_leaves_the_commit_path_open(
+        self, aerospike_host_sc_single
+    ):
+        """Rolling back could discard writes the server is committing."""
+        host, _, port = aerospike_host_sc_single.rpartition(":")
+        async with await TcpGate.open(host, int(port)) as gate:
+            cluster = await _gated_cluster(gate)
+            try:
+                session = cluster.create_session()
+                key = DataSet.of(NAMESPACE, "gate_commit").id(
+                    f"refused_{time.monotonic_ns()}"
+                )
+                await session.upsert(key).put({BIN_NAME: 1}).execute()
+
+                tx = session.transaction()
+                await tx.__aenter__()
+                await tx.upsert(key).put({BIN_NAME: 2}).execute()
+                gate.refuse_after_client_messages(BEFORE_MARK_ROLL_FORWARD)
+                with pytest.raises(CommitError):
+                    await tx.commit()
+
+                # Refused client-side, so it does not need the connection back.
+                with pytest.raises(AerospikeError) as excinfo:
+                    await tx.abort()
+                assert "commit already failed" in str(excinfo.value).lower()
+
+                # Refusing an abort must not finalize what it refused to end.
+                assert tx._txn is not None
+                assert tx._finalized is False
+
+                # A second commit gets past the "no active transaction" guard
+                # and out to the network, where the cut connection keeps it
+                # retrying. Reaching the timeout is the proof; waiting for the
+                # retries to exhaust would only cost time.
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(tx.commit(), timeout=2.0)
             finally:
                 await cluster.close()

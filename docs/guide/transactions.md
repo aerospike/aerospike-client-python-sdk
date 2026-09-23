@@ -102,6 +102,39 @@ transaction. Querying for keys and then writing those keys
 transactionally is still a valid pattern; call `.with_txn(None)` on the
 query to confirm that is intended and silence the warning.
 
+## When a Commit Fails In Doubt
+
+Most commit failures end the transaction: it is finalized, and the session
+will not accept another `commit()` or `abort()`.
+
+One does not. If the roll-forward *mark* may or may not have reached the
+server — an in-doubt outcome, `commit_error_type` `MARK_ROLL_FORWARD_ABANDONED`
+with `in_doubt` set — the server may still be committing the transaction. The
+session keeps it open, and calling `commit()` again is the only way to resolve
+it from the client side:
+
+```python
+tx = session.transaction()
+await tx.__aenter__()
+try:
+    await tx.upsert(key).put({"balance": 100}).execute()
+    await tx.commit()
+except CommitError as exc:
+    if exc.in_doubt:
+        await tx.commit()      # the transaction is still open; retry resolves it
+    else:
+        raise
+```
+
+`abort()` is **refused** from that point and raises: rolling back could discard
+writes the server is in the middle of committing. The refusal does not finalize
+the session either, so the commit path stays available afterwards.
+
+A `with` block that exits while a transaction is in this state leaves it alone
+rather than attempting an abort it knows will be refused — which also keeps the
+original `CommitError` from being replaced by the refusal. Handling the retry
+means calling `commit()` explicitly, inside the block.
+
 ## Tuning the Verify and Roll Phases
 
 A commit runs two system phases: *verify* re-reads every record the
