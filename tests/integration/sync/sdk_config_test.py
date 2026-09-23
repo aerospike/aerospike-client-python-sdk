@@ -21,8 +21,11 @@ never blocks a connect, and hot-reload swaps settings on a live client.
 """
 
 import contextlib
+import logging
 import os
 import time
+
+import pytest
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy import SystemSettings, TransactionSettings
@@ -194,16 +197,41 @@ def test_hot_reload_broken_file_keeps_last_good(aerospike_host, tmp_path):
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
 
 
-def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path, caplog):
-    """The sync connect path also warns when a named block would have matched."""
-    import logging
+def test_server_reported_name_selects_its_block(aerospike_host, tmp_path):
+    """The sync connect path selects on the discovered name too.
 
+    `sync` builds its cluster through its own `_create`, so the adoption step
+    is wired separately from the async one and needs its own proof.
+    """
     host, port = _host_port(aerospike_host)
     with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        by_node = probe._sdk_client.underlying_client.info_blocking("cluster-name")
-    names = {v for v in by_node.values() if v and v != "null"}
+        reported = probe._sdk_client.underlying_client.server_cluster_name
+    if not reported:
+        pytest.skip("cluster reports no name")
 
-    profile = next(iter(names)) if names else "some-other-cluster"
+    yaml_text = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    metrics:\n"
+        "      enabled: false\n"
+        f"  {reported}:\n"
+        "    metrics:\n"
+        "      enabled: true\n"
+    )
+    with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is True   # DEFAULT says false
+
+
+def test_connect_time_settings_in_a_discovered_block_are_reported(
+    aerospike_host, tmp_path, caplog
+):
+    """Selection lands after connect, so connection settings are already spent."""
+    host, port = _host_port(aerospike_host)
+    with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
+        reported = probe._sdk_client.underlying_client.server_cluster_name
+
+    profile = reported or "some-other-cluster"
     yaml_text = (
         "system:\n"
         "  DEFAULT:\n"
@@ -215,10 +243,11 @@ def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path, capl
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         with caplog.at_level(logging.WARNING):
-            with apply_general_auth(ClusterDefinition(host, port)).connect():
-                pass
-    if names:
+            with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+                settings = cluster._sdk_client._sdk_settings
+    if reported:
         assert f"system.{profile}" in caplog.text
-        assert "was not applied" in caplog.text
+        assert "cannot take effect on a connected client" in caplog.text
+        assert settings.transactions.implicit_batch_write_transactions is True
     else:
-        assert "was not applied" not in caplog.text
+        assert "cannot take effect" not in caplog.text

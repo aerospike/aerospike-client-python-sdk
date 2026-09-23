@@ -37,14 +37,23 @@ system:
 ```
 
 The `system:` section holds named profiles. `DEFAULT` applies to every
-cluster; a profile whose name matches the cluster name declared via
-`validate_cluster_name_is(...)` layers on top of `DEFAULT`. Selection uses
-only the *declared* name — nothing reads the name back from the server to
-pick a profile. Because a named block that never matches is well-formed YAML,
-it would otherwise fail silently; instead, when no name was declared, the
-connect asks the server its cluster name and logs a warning if a block would
-have matched it, naming the `validate_cluster_name_is(...)` call that selects
-it. Effective settings resolve per field, highest layer first:
+cluster; a profile whose name matches the cluster's name layers on top of it.
+
+The name comes from either side. Declaring it with
+`validate_cluster_name_is(...)` selects the profile before the connection is
+built, so the whole block applies. Declaring nothing is also fine: the name
+the servers report is read once the connection is up, and a block matching it
+is selected then.
+
+That second path arrives after the `ClientPolicy` has been built, so the
+`connections`, `circuit_breaker`, and `refresh` groups in such a block cannot
+take effect on the connection that is already open. Rather than apply half a
+block quietly, the client applies the live-appliable half (`metrics`), leaves
+the rest at the values the connection was built with, and logs a warning
+naming exactly which settings were skipped and that
+`validate_cluster_name_is(...)` is what applies them at connect.
+
+Effective settings resolve per field, highest layer first:
 
 1. file cluster-name profile (`system.<cluster-name>`)
 2. file `DEFAULT` profile

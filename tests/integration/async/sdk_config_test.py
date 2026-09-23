@@ -266,23 +266,69 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
             assert client._sdk_settings.transactions.implicit_batch_write_transactions is False
 
 
-async def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path, caplog):
-    """A ``system.<name>`` block matching the server's name warns when no name was declared.
+async def test_server_reported_name_selects_its_block(aerospike_host, tmp_path):
+    """A `system.<clusterName>` block applies without the name being declared.
 
-    Without ``validate_cluster_name_is`` nothing selects a named block, so a
-    file written for this cluster resolves ``DEFAULT`` everywhere. The connect
-    path asks the server its name and warns when a block would have matched.
-    When the server has no cluster name configured, the same connect must stay
-    silent -- both arms run against whatever the server reports.
+    Deliberately keyed on `metrics.enabled` alone: it means the same thing at
+    every layer of the config schema, so this test does not move when the
+    histogram keys do.
+    """
+    host, port = _host_port(aerospike_host)
+    async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
+        reported = probe._sdk_client.underlying_client.server_cluster_name
+    if not reported:
+        pytest.skip("cluster reports no name")
+
+    yaml_text = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    metrics:\n"
+        "      enabled: false\n"
+        f"  {reported}:\n"
+        "    metrics:\n"
+        "      enabled: true\n"
+    )
+    with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
+        async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is True   # DEFAULT says false
+
+
+async def test_an_undeclared_name_that_matches_nothing_leaves_default(
+    aerospike_host, tmp_path
+):
+    """Discovery only selects a block that exists; otherwise DEFAULT stands."""
+    host, port = _host_port(aerospike_host)
+    yaml_text = (
+        "system:\n"
+        "  DEFAULT:\n"
+        "    metrics:\n"
+        "      enabled: true\n"
+        "  no-such-cluster:\n"
+        "    metrics:\n"
+        "      enabled: false\n"
+    )
+    with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
+        async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is True
+
+
+async def test_connect_time_settings_in_a_discovered_block_are_reported(
+    aerospike_host, tmp_path, caplog
+):
+    """A discovered block whose settings are already spent says so.
+
+    Selection happens after the connection is open, so the block's
+    connection-shaping settings cannot take effect. Applying half of it
+    silently would be worse than not applying it at all -- the operator has to
+    be told which half, and how to get the rest.
     """
     import logging
 
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        by_node = await probe._sdk_client.underlying_client.info("cluster-name")
-    names = {v for v in by_node.values() if v and v != "null"}
+        reported = probe._sdk_client.underlying_client.server_cluster_name
 
-    profile = next(iter(names)) if names else "some-other-cluster"
+    profile = reported or "some-other-cluster"
     yaml_text = (
         "system:\n"
         "  DEFAULT:\n"
@@ -294,12 +340,13 @@ async def test_unmatched_named_profile_warns_at_connect(aerospike_host, tmp_path
     )
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         with caplog.at_level(logging.WARNING):
-            async with apply_general_auth(ClusterDefinition(host, port)).connect():
-                pass
-    if names:
-        # Server reports a name and the file carries its block: loud.
+            async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+                settings = cluster._sdk_client._sdk_settings
+    if reported:
         assert f"system.{profile}" in caplog.text
-        assert "was not applied" in caplog.text
+        assert "cannot take effect on a connected client" in caplog.text
+        assert "transactions" in caplog.text
+        # Reported, not applied: the value stays what the connection was built with.
+        assert settings.transactions.implicit_batch_write_transactions is True
     else:
-        # Server reports no name: the block legitimately matches nothing.
-        assert "was not applied" not in caplog.text
+        assert "cannot take effect" not in caplog.text

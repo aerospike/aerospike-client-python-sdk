@@ -35,7 +35,7 @@ import asyncio
 import logging
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from typing import Callable, Optional
 
 from aerospike_sdk.loggers import SdkLoggers
@@ -43,6 +43,7 @@ from aerospike_sdk.policy.sdk_config_loader import (
     apply_behaviors,
     fill_hard_defaults,
     merge_settings,
+    named_profiles,
     parse_config_bytes,
     read_config_bytes,
     resolve_for_cluster,
@@ -67,6 +68,77 @@ class SdkConfigSource:
     cluster_name: Optional[str]
     programmatic: Optional[SystemSettings]
     initial_raw: Optional[bytes] = None
+
+
+# Everything in SystemSettings except these is read once, while building the
+# ClientPolicy that opens the connection, and cannot change on a live client.
+_LIVE_APPLIED_FIELDS = frozenset({"metrics"})
+
+
+def adopt_discovered_cluster_name(
+    discovered: Optional[str],
+    settings: SystemSettings,
+    source: SdkConfigSource,
+) -> tuple[SystemSettings, SdkConfigSource]:
+    """Re-resolve *settings* against the cluster name the server reports.
+
+    Profile selection normally uses the name declared through
+    ``validate_cluster_name_is()``. When nothing was declared, a
+    ``system.<clusterName>`` block naming the real cluster is well-formed YAML
+    that simply never matches, so the operator gets ``DEFAULT`` everywhere with
+    nothing in the log to explain it. This closes that by selecting on the
+    discovered name once the connection is up.
+
+    Connect-time settings are already spent by then -- the pool sizes and tend
+    interval in the adopted block cannot take effect on a running client -- so
+    those are reported rather than applied, and only the live-appliable ones
+    change. The returned source carries the discovered name so later reloads
+    keep selecting the same block.
+
+    Args:
+        discovered: The server-reported cluster name, or ``None``.
+        settings: The settings currently in force.
+        source: The reload inputs, carrying the raw file and the code layer.
+
+    Returns:
+        ``(settings, source)`` -- re-resolved when a block matched, and the
+        originals unchanged otherwise.
+    """
+    if not discovered or source.cluster_name is not None:
+        return settings, source
+    profiles = named_profiles(source.initial_raw, source.path)
+    if discovered not in profiles:
+        return settings, source
+
+    loaded = parse_config_bytes(source.initial_raw, source.path)
+    if loaded is None:
+        return settings, source
+    file_layer = resolve_for_cluster(loaded.profiles, discovered)
+    adopted = fill_hard_defaults(merge_settings(file_layer, source.programmatic))
+
+    spent = sorted(
+        f.name
+        for f in fields(SystemSettings)
+        if f.name not in _LIVE_APPLIED_FIELDS
+        and getattr(adopted, f.name) != getattr(settings, f.name)
+    )
+    if spent:
+        log.warning(
+            "SDK config: block system.%s was selected by the cluster's "
+            "server-reported name, but %s in it cannot take effect on a "
+            "connected client — declare the name with "
+            "validate_cluster_name_is(%r) to have them applied at connect",
+            discovered, ", ".join(spent), discovered,
+        )
+        # Those fields keep the values the connection was actually built with,
+        # so what the object reports stays what the client is doing.
+        adopted = replace(
+            adopted,
+            **{f: getattr(settings, f) for f in spent},
+        )
+
+    log.info("SDK config: applying block system.%s (server-reported name)", discovered)
+    return adopted, replace(source, cluster_name=discovered)
 
 
 class _SdkConfigPoller:

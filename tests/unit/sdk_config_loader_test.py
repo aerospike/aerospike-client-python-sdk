@@ -654,8 +654,8 @@ system:
 
 
 
-class TestUnmatchedClusterProfileWarning:
-    """A ``system.<name>`` block can silently never match; the warning makes it loud."""
+class TestDiscoveredClusterName:
+    """A ``system.<name>`` block is selected by the name the server reports."""
 
     YAML = (
         "system:\n"
@@ -681,30 +681,80 @@ class TestUnmatchedClusterProfileWarning:
         assert named_profiles(None, None) == frozenset()
         assert named_profiles(b"\x00not yaml", "sdk.yaml") == frozenset()
 
-    def test_matching_server_name_warns_with_the_selection_hint(self, caplog):
-        from aerospike_sdk.policy.sdk_config_loader import (
-            named_profiles,
-            warn_unmatched_cluster_profile,
+    def test_a_discovered_name_selects_its_block(self):
+        """No declared name: the server-reported one picks the profile."""
+        from aerospike_sdk.sdk_config_monitor import (
+            SdkConfigSource,
+            adopt_discovered_cluster_name,
         )
+        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 
-        profiles = named_profiles(self.YAML.encode(), "sdk.yaml")
-        with caplog.at_level(logging.WARNING):
-            warn_unmatched_cluster_profile({"cluster-name": "production"}, profiles)
-        assert "system.production" in caplog.text
-        assert "was not applied" in caplog.text
-        assert "validate_cluster_name_is('production')" in caplog.text
+        doc = (
+            "system:\n"
+            "  DEFAULT:\n"
+            "    metrics:\n"
+            "      enabled: false\n"
+            "  production:\n"
+            "    metrics:\n"
+            "      enabled: true\n"
+        ).encode()
+        source = SdkConfigSource("sdk.yaml", None, None, doc)
+        before = fill_hard_defaults(None)
+        after, adopted_source = adopt_discovered_cluster_name("production", before, source)
+        assert after.metrics.enabled is True
+        # Later reloads have to keep selecting the same block.
+        assert adopted_source.cluster_name == "production"
 
-    def test_non_matching_or_absent_name_is_silent(self, caplog):
-        from aerospike_sdk.policy.sdk_config_loader import (
-            named_profiles,
-            warn_unmatched_cluster_profile,
+    def test_a_declared_name_is_never_overridden(self):
+        from aerospike_sdk.sdk_config_monitor import (
+            SdkConfigSource,
+            adopt_discovered_cluster_name,
         )
+        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 
-        profiles = named_profiles(self.YAML.encode(), "sdk.yaml")
+        source = SdkConfigSource("sdk.yaml", "staging", None, self.YAML.encode())
+        before = fill_hard_defaults(None)
+        after, adopted_source = adopt_discovered_cluster_name("production", before, source)
+        assert after is before
+        assert adopted_source.cluster_name == "staging"
+
+    def test_an_unmatched_or_absent_name_changes_nothing(self):
+        from aerospike_sdk.sdk_config_monitor import (
+            SdkConfigSource,
+            adopt_discovered_cluster_name,
+        )
+        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+
+        source = SdkConfigSource("sdk.yaml", None, None, self.YAML.encode())
+        before = fill_hard_defaults(None)
+        for discovered in ("docker", "", None):
+            after, after_source = adopt_discovered_cluster_name(discovered, before, source)
+            assert after is before
+            assert after_source is source
+
+    def test_connect_time_fields_are_reported_and_not_applied(self, caplog):
+        """The connection is already open; its pool sizes cannot change now."""
+        from aerospike_sdk.sdk_config_monitor import (
+            SdkConfigSource,
+            adopt_discovered_cluster_name,
+        )
+        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
+
+        doc = (
+            "system:\n"
+            "  production:\n"
+            "    connections:\n"
+            "      maximum_connections_per_node: 512\n"
+            "    metrics:\n"
+            "      enabled: true\n"
+        ).encode()
+        source = SdkConfigSource("sdk.yaml", None, None, doc)
+        before = fill_hard_defaults(None)
         with caplog.at_level(logging.WARNING):
-            warn_unmatched_cluster_profile({"cluster-name": "docker"}, profiles)
-            # Servers report "null" when no cluster name is configured.
-            warn_unmatched_cluster_profile({"cluster-name": "null"}, profiles)
-            warn_unmatched_cluster_profile({"cluster-name": ""}, profiles)
-            warn_unmatched_cluster_profile(None, profiles)
-        assert "was not applied" not in caplog.text
+            after, _ = adopt_discovered_cluster_name("production", before, source)
+        # The live-appliable half lands...
+        assert after.metrics.enabled is True
+        # ...the spent half keeps what the connection was built with, and says so.
+        assert after.max_connections_per_node == before.max_connections_per_node
+        assert "max_connections_per_node" in caplog.text
+        assert "cannot take effect on a connected client" in caplog.text

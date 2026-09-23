@@ -22,8 +22,6 @@ from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.tls_builder import TlsBuilder
 from aerospike_sdk.policy.sdk_config_loader import (
     load_at_connect,
-    named_profiles,
-    warn_unmatched_cluster_profile,
 )
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 
@@ -98,18 +96,4 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
             sdk_settings=settings,
             sdk_config_source=config_source,
         )
-        # With no declared cluster name, a system.<name> block can only ever
-        # silently fail to match. When the file carries one, ask the server
-        # its name and warn if a block would have matched it. Diagnostic
-        # only -- never allowed to fail the connect.
-        if self._cluster_name is None:
-            profiles = named_profiles(raw, config_path)
-            if profiles:
-                try:
-                    response = cluster._sdk_client.underlying_client.info_blocking(
-                        "cluster-name"
-                    )
-                except Exception:
-                    response = None
-                warn_unmatched_cluster_profile(response, profiles)
         return cluster
