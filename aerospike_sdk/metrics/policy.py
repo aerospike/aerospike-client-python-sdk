@@ -226,6 +226,8 @@ def policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
         The equivalent policy.
     """
     kwargs: Dict[str, Any] = {}
+    if settings.operational_enabled is not None:
+        kwargs["operational_enabled"] = settings.operational_enabled
     if settings.latency_unit is not None:
         kwargs["latency_unit"] = (
             LatencyUnit.MICROSECONDS

@@ -129,7 +129,8 @@ async def test_metrics_hot_reload_applies_the_whole_policy(aerospike_host, tmp_p
     off = "system:\n  DEFAULT:\n    metrics:\n      enabled: false\n"
     on = (
         "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
-        "      latency_unit: microseconds\n      latency_columns: 24\n"
+        "      extended:\n        operational:\n          enabled: true\n"
+        "          latency_unit: microseconds\n          latency_columns: 24\n"
     )
     path = _write(tmp_path, "sdk.yaml", off)
     with _sdk_config_env(path):
@@ -162,8 +163,8 @@ async def test_metrics_hot_reload_applies_the_whole_policy(aerospike_host, tmp_p
 async def test_usage_counters_enable_from_the_config_file(aerospike_host, tmp_path):
     """``metrics.extended.usage.enabled`` switches the counters on at connect.
 
-    The counters are recorded by this SDK rather than the client core, so this
-    is the one ``extended`` group whose flag is genuinely honored.
+    The counters are recorded by this SDK rather than the client core, so the
+    flag is honored here without the client core being told anything.
     """
     host, port = _host_port(aerospike_host)
     yaml_text = (

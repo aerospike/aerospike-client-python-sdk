@@ -442,17 +442,22 @@ class MetricsSnapshot:
             # counterpart to ask, so the key is the one form both share.
             "address": address,
             "port": int(port) if port.isdigit() else None,
-            # `in_use` / `in_pool` are absent: the underlying client keeps a
-            # single open-connection gauge rather than the split. TLS and auth
-            # failures are absent too -- `open_failure` is the undifferentiated
-            # rollup, the only connect-failure counter the client keeps -- and
-            # of the close reasons only the idle drop is tracked distinctly.
+            # `open_failure` stays the undifferentiated rollup; the TLS and
+            # auth counters beside it name two of its causes rather than
+            # partitioning it, so they are reported alongside, not subtracted.
             "connections": {
                 "opened": node_raw.get("connections_successful", 0),
                 "closed": node_raw.get("closed_connections", 0),
                 "open": node_raw.get("open_connections", 0),
+                "in_use": node_raw.get("connections_in_use", 0),
+                "in_pool": node_raw.get("connections_in_pool", 0),
+                "recovering": node_raw.get("connections_recovering", 0),
                 "open_failure": node_raw.get("connections_failed", 0),
+                "tls_handshake_failure": node_raw.get("connections_error_tls", 0),
+                "auth_failure": node_raw.get("connections_error_auth", 0),
                 "closed_idle": node_raw.get("connections_idle_dropped", 0),
+                "closed_error": node_raw.get("connections_closed_error", 0),
+                "closed_node_removed": node_raw.get("connections_closed_node_removed", 0),
             },
             "namespaces": [
                 _namespace_view(

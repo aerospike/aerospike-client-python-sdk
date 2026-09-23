@@ -146,35 +146,40 @@ _TRANSACTIONS_KEYS: _KeyMap = {
     "number_of_attempts": ("number_of_attempts", int),
 }
 
-# Client metrics. The histogram shape keys sit at the `metrics` root rather
-# than under the spec's `extended.operational` group: collection is a single
-# on/off here, so nesting them under a group whose own `enabled` flag cannot be
-# honored would advertise a tier split that does not exist. `extended.*` is
-# therefore not a recognized key and reports itself as unrecognized.
-_METRICS_HANDLED_ELSEWHERE = frozenset({"sampler", "labels", "extended"})
+# Client metrics. The root holds what applies to collection as a whole; the
+# histogram shape and the sampler live under `extended.operational` with the
+# tier they configure, and the feature counters under `extended.usage`, per the
+# cross-SDK key names.
+_METRICS_HANDLED_ELSEWHERE = frozenset({"labels", "extended"})
+_OPERATIONAL_HANDLED_ELSEWHERE = frozenset({"sampler"})
 _METRICS_KEYS: _KeyMap = {
     "enabled": ("enabled", bool),
-    "latency_unit": ("latency_unit", "latency_unit"),
-    "latency_columns": ("latency_columns", int),
-    "latency_shift": ("latency_shift", int),
     "export_interval": ("export_interval", "duration"),
     "exporter": ("exporter", str),
     "report_dir": ("report_dir", str),
     "report_size_limit": ("report_size_limit", "size"),
 }
-# `sampler` and `labels` are mappings rather than scalars, so they are parsed
-# separately from the table above.
+_OPERATIONAL_KEYS: _KeyMap = {
+    "enabled": ("operational_enabled", bool),
+    "latency_unit": ("latency_unit", "latency_unit"),
+    "latency_columns": ("latency_columns", int),
+    "latency_shift": ("latency_shift", int),
+}
+# `sampler` is a mapping rather than a scalar, so it is parsed separately from
+# the table above.
 _SAMPLER_KEYS: _KeyMap = {
     "range": ("sampler_range", int),
     "threshold": ("sampler_threshold", int),
 }
-
-# `metrics.extended.usage.enabled` per the cross-SDK key names. Only the `usage`
-# child is recognized: `extended.operational.enabled` would promise a Tier 0 /
-# operational split the client core cannot make, so it falls through to the
-# unrecognized-key warning rather than being silently accepted and ignored.
 _USAGE_KEYS: _KeyMap = {
     "enabled": ("usage_enabled", bool),
+}
+# Keys whose values are mappings: skipped by the scalar parser and picked up by
+# _parse_metrics_extras instead. Keyed by identity, since a key map is a plain
+# dict and two of them can compare equal.
+_HANDLED_ELSEWHERE = {
+    id(_METRICS_KEYS): _METRICS_HANDLED_ELSEWHERE,
+    id(_OPERATIONAL_KEYS): _OPERATIONAL_HANDLED_ELSEWHERE,
 }
 
 _SECTIONS: Dict[str, _KeyMap] = {
@@ -388,7 +393,7 @@ def _parse_section(
         return {}
     kwargs: Dict[str, object] = {}
     for disk_key, raw in section.items():
-        if key_map is _METRICS_KEYS and disk_key in _METRICS_HANDLED_ELSEWHERE:
+        if disk_key in _HANDLED_ELSEWHERE.get(id(key_map), frozenset()):
             continue  # mappings, parsed by _parse_metrics_extras
         entry = key_map.get(disk_key)
         if entry is None:
@@ -437,27 +442,37 @@ def _parse_profile(name: str, profile: object) -> SystemSettings:
 
 
 def _parse_metrics_extras(profile_name: str, section: object) -> Dict[str, object]:
-    """Parse the two ``metrics`` values that are mappings, not scalars.
+    """Parse the ``metrics`` values that are mappings, not scalars.
 
-    ``sampler`` is ``{range, threshold}``, ``labels`` is an arbitrary string
-    map, and ``extended`` carries the ``usage`` group, so none of them fit the
-    scalar key table.
+    ``labels`` is an arbitrary string map, and ``extended`` carries the
+    ``operational`` and ``usage`` groups -- the first of which carries a
+    ``sampler`` mapping of its own -- so none of them fit the scalar key table.
     """
     if not isinstance(section, Mapping):
         return {}
     extras: Dict[str, object] = {}
-    sampler = section.get("sampler")
-    if sampler is not None:
-        extras.update(_parse_section(f"{profile_name}.metrics.sampler", sampler, _SAMPLER_KEYS))
     extended = section.get("extended")
     if isinstance(extended, Mapping):
+        operational = extended.get("operational")
+        if isinstance(operational, Mapping):
+            prefix = f"{profile_name}.metrics.extended.operational"
+            extras.update(
+                _parse_section(prefix, operational, _OPERATIONAL_KEYS)
+            )
+            sampler = operational.get("sampler")
+            if sampler is not None:
+                extras.update(_parse_section(f"{prefix}.sampler", sampler, _SAMPLER_KEYS))
+        elif operational is not None:
+            _record_drop(
+                f"key metrics.extended.operational in profile {profile_name!r} (not a mapping)"
+            )
         usage = extended.get("usage")
         if usage is not None:
             extras.update(
                 _parse_section(f"{profile_name}.metrics.extended.usage", usage, _USAGE_KEYS)
             )
         for name in extended:
-            if name != "usage":
+            if name not in ("operational", "usage"):
                 _record_drop(f"key metrics.extended.{name} in profile {profile_name!r}")
     elif extended is not None:
         _record_drop(f"key metrics.extended in profile {profile_name!r} (not a mapping)")
