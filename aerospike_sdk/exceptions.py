@@ -855,6 +855,13 @@ def _result_code_to_exception(
     a caller holding the operation knows more than the code alone conveys.
     """
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
+    # A row-level failure arrives as a bare code; the code's descriptive string
+    # is then both the message and the base message, as it is for a server
+    # failure that reaches this layer already rendered.
+    if not message:
+        message = result_code.description
+    if base_message is None:
+        base_message = result_code.description
     if hint is not None:
         guidance: str | None = hint
     elif sub_code:

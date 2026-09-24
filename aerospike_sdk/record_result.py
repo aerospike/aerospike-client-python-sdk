@@ -164,7 +164,7 @@ class RecordResult:
             if self.exception is not None:
                 raise self.exception
             raise _result_code_to_exception(
-                self.result_code, str(self.result_code), self.in_doubt,
+                self.result_code, in_doubt=self.in_doubt,
                 sub_code=self.sub_code,
                 server_message=self.server_message,
                 exp_trace=self.exp_trace,
@@ -357,7 +357,7 @@ def batch_failure_records_to_results(
             in_doubt=br.in_doubt,
             index=i,
             exception=None if rc == ResultCode.OK else _result_code_to_exception(
-                rc, str(rc), br.in_doubt,
+                rc, in_doubt=br.in_doubt,
                 sub_code=br.sub_code,
                 server_message=br.server_message,
                 exp_trace=br.exp_trace,

@@ -90,6 +90,29 @@ async for result in stream:
     record = result.record_or_raise()  # raises AerospikeError on failure
 ```
 
+## Result Codes and Messages
+
+`result_code` is a `ResultCode` constant that behaves like an `IntEnum` member:
+`repr` shows the name and the numeric wire value, while `str` and `int` give the
+number alone, so an f-string prints the same `code 5` that server logs and the
+result-code reference use. `name` and `value` expose the two halves.
+
+```python
+try:
+    await session.insert(key).bin("name").set_to("Alice").execute()
+except RecordExistsError as exc:
+    print(f"{type(exc).__name__} (code {exc.result_code}): {exc.base_message}")
+    # RecordExistsError (code 5): Key already exists
+    exc.result_code.name    # 'KEY_EXISTS_ERROR'
+    exc.result_code.value   # 5
+```
+
+`base_message` is the failure in plain words -- the result code's descriptive
+string, or the server's own message when it sent one (an index create that
+collides with a different definition reports that collision). `str(exc)` is the
+full message: the numeric code, then any retry decoration (`iter=`, `In Doubt:`,
+`node=`), then the base message.
+
 ## Extended Server Error Detail
 
 For failures the result code alone does not fully explain, the server can attach
@@ -159,7 +182,7 @@ When the SDK still holds the operation that failed, the guidance names the
 specific cause rather than the general one:
 
 ```
-Code: BinNameTooLong, In Doubt: false, Node: 10.0.0.4:3000
+Error 21, iter=1, node=10.0.0.4:3000: Bin name length greater than 15 characters or maximum bins exceeded
 Bin name 'a_very_long_bin_name' exceeds the server's 15-character limit.
 ```
 
@@ -193,7 +216,7 @@ misdirect whenever it is not that one. With a subcode it names the condition
 exactly:
 
 ```
-Code: FailForbidden, In Doubt: false, Node: 10.0.0.4:3000
+Error 22, SubCode: 8, iter=1, node=10.0.0.4:3000: Operation not allowed at this time
 A non-durable delete was refused because it would violate durability.
 Strong-consistency namespaces require durable deletes: enable durable delete on
 the operation, or on the Behavior the session carries.

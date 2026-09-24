@@ -76,11 +76,11 @@ def _services_alternate() -> bool:
 
 def _is_role_violation(exc) -> bool:
     """Match a ROLE_VIOLATION (code 81) heuristically across PAC's exception shapes."""
-    code_repr = str(getattr(exc, "result_code", "")).lower()
+    code_name = getattr(getattr(exc, "result_code", None), "name", "").lower()
     msg = str(exc).lower()
     type_name = type(exc).__name__.lower()
-    needles = ("roleviolation", "role violation", "forbidden", "fail_forbidden")
-    return any(n in code_repr or n in msg or n in type_name for n in needles)
+    needles = ("role_violation", "role violation", "forbidden", "fail_forbidden")
+    return any(n in code_name or n in msg or n in type_name for n in needles)
 
 
 # ---------------------------------------------------------------------------
