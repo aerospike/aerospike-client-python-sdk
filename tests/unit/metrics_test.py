@@ -163,25 +163,25 @@ class _FakePacSnapshot:
 
 
 _RAW = {
-    "cluster-aggregated-metrics": {
-        "latency-unit": "us",
+    "cluster_aggregated_metrics": {
+        "latency_unit": "us",
         "labels": [{"node": "BB9", "host": "127.0.0.1:3010", "cluster": "c1",
-                    "app-id": "billing", "owner": "platform"}],
+                    "app_id": "billing", "owner": "platform"}],
     },
     "127.0.0.1:3010": {
-        "open-connections": 3,
-        "connections-successful": 7,
-        "closed-connections": 2,
-        "detailed-resultcode-counts": {
+        "open_connections": 3,
+        "connections_successful": 7,
+        "closed_connections": 2,
+        "detailed_resultcode_counts": {
             # Serialized display names, as a real snapshot carries them.
             "test": {"Get": {"ok": 4, "Timeout": 1, "Hot key": 2, "Bin type error": 3}}
         },
-        "detailed-metrics": {
+        "detailed_metrics": {
             "test": {
                 "Get": {
-                    "bytes-received": {"buckets": [1], "count": 1, "sum": 120.0},
-                    "bytes-sent": {"buckets": [1], "count": 1, "sum": 80.0},
-                    "connection-aq": {"buckets": [5, 1], "count": 6, "sum": 6.0},
+                    "bytes_received": {"buckets": [1], "count": 1, "sum": 120.0},
+                    "bytes_sent": {"buckets": [1], "count": 1, "sum": 80.0},
+                    "connection_aq": {"buckets": [5, 1], "count": 6, "sum": 6.0},
                     "latency": {"buckets": [0, 4], "count": 4, "sum": 40.0},
                 },
                 "Put": {
@@ -265,8 +265,8 @@ class TestCanonicalSnapshot:
     def _no_app_id_snapshot(self, app_id=None):
         """A snapshot whose underlying client reports no application identity."""
         raw = copy.deepcopy(_RAW)
-        labels = raw["cluster-aggregated-metrics"]["labels"][0]
-        del labels["app-id"]
+        labels = raw["cluster_aggregated_metrics"]["labels"][0]
+        del labels["app_id"]
         return MetricsSnapshot(_FakePacSnapshot(raw), app_id=app_id)
 
     def test_app_id_falls_back_to_the_authenticated_user(self):
@@ -316,7 +316,7 @@ class TestCanonicalSnapshot:
         assert "tls_handshake_failure" not in conns and "auth_failure" not in conns
 
     def test_connection_open_failures_are_reported(self):
-        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections-failed": 4})}
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections_failed": 4})}
         snapshot = MetricsSnapshot(_FakePacSnapshot(raw))
         conns = snapshot.to_canonical_dict()["nodes"][0]["connections"]
         assert conns["open_failure"] == 4
@@ -333,8 +333,8 @@ class TestCanonicalSnapshot:
 
     def test_retry_count_sums_the_per_node_counters(self):
         raw = dict(_RAW)
-        raw["cluster-aggregated-metrics"] = dict(
-            _RAW["cluster-aggregated-metrics"], **{"transaction-retry-count": 9}
+        raw["cluster_aggregated_metrics"] = dict(
+            _RAW["cluster_aggregated_metrics"], **{"transaction_retry_count": 9}
         )
         doc = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()
         assert doc["cluster"]["command_retries"] == 9
@@ -346,7 +346,7 @@ class TestCanonicalSnapshot:
 
     def test_idle_close_reason_is_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(
-            _RAW["127.0.0.1:3010"], **{"connections-idle-dropped": 5}
+            _RAW["127.0.0.1:3010"], **{"connections_idle_dropped": 5}
         )}
         conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
         assert conns["closed_idle"] == 5

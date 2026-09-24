@@ -32,9 +32,9 @@ Metrics are cluster-scoped: enable them on the
 interval.
 
 ```python
-from aerospike_sdk.metrics import LatencyType
+from aerospike_sdk.metrics import LatencyType, MetricsPolicy
 
-cluster.enable_metrics()
+cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
 
 # ... application traffic ...
 
@@ -50,24 +50,39 @@ an interval (for example every 30 seconds), not per operation.
 
 ## Configuring collection
 
+`enable_metrics()` on its own records only the always-on gauges: pool
+occupancy, connections opened and closed, tend counts and node membership. No
+per-command timing is measured and the latency histograms read zero. Ask for
+the operational tier when you want them:
+
+```python
+cluster.enable_metrics(MetricsPolicy())                          # gauges only
+cluster.enable_metrics(MetricsPolicy(operational_enabled=True))  # + histograms
+```
+
 {class}`~aerospike_sdk.metrics.MetricsPolicy` controls the histogram shape and how
-much is recorded:
+much is recorded. The shape settings configure the operational tier and do
+nothing while it is off:
 
 ```python
 from aerospike_sdk.metrics import LatencyUnit, MetricsPolicy, Sampler
 
 # Millisecond view (the default): 7 buckets covering
 # <1, >=1, >=2, >=4, >=8, >=16, >=32 ms.
-cluster.enable_metrics(MetricsPolicy())
+cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
 
 # Sub-millisecond resolution for fast clusters.
 cluster.enable_metrics(MetricsPolicy(
+    operational_enabled=True,
     latency_unit=LatencyUnit.MICROSECONDS,
     latency_columns=18,
 ))
 
 # Record ~10% of calls on a high-throughput deployment.
-cluster.enable_metrics(MetricsPolicy(sampler=Sampler.probability(0.1)))
+cluster.enable_metrics(MetricsPolicy(
+    operational_enabled=True,
+    sampler=Sampler.probability(0.1),
+))
 ```
 
 - `latency_shift` spaces the bucket boundaries: each boundary after the

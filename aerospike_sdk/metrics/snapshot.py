@@ -306,7 +306,7 @@ class MetricsSnapshot:
         """The raw snapshot as the underlying client serializes it.
 
         Node snapshots appear under their host address; the aggregate under
-        ``"cluster-aggregated-metrics"``. Field names are the underlying
+        ``"cluster_aggregated_metrics"``. Field names are the underlying
         client's own (hyphenated), which is why this is not the shape
         exporters consume — see :meth:`to_canonical_dict`.
         """
@@ -352,7 +352,7 @@ class MetricsSnapshot:
             :meth:`to_dict`: The underlying client's own serialization.
         """
         raw = self._pac.to_dict()
-        aggregated = raw.get("cluster-aggregated-metrics") or {}
+        aggregated = raw.get("cluster_aggregated_metrics") or {}
         labels = _split_labels(aggregated.get("labels") or [])
 
         nodes_by_host = {}
@@ -391,17 +391,17 @@ class MetricsSnapshot:
             "client_type": "python",
             "client_version": _client_version(),
             "cluster_name": labels.reserved.get("cluster", ""),
-            "app_id": labels.reserved.get("app-id") or self._app_id or _APP_ID_UNSET,
+            "app_id": labels.reserved.get("app_id") or self._app_id or _APP_ID_UNSET,
             "labels": labels.user,
-            "latency_unit": _canonical_unit(aggregated.get("latency-unit")),
+            "latency_unit": _canonical_unit(aggregated.get("latency_unit")),
             "cluster": {
                 # Cluster rollups summed across nodes by the aggregate, which
                 # retains departed hosts, so the totals survive node churn.
                 # `in_use` / `in_pool` are absent: the underlying client keeps
                 # the single `open` gauge, not the pool-walk split.
                 "connections": {
-                    "opened": aggregated.get("connections-successful", 0),
-                    "closed": aggregated.get("closed-connections", 0),
+                    "opened": aggregated.get("connections_successful", 0),
+                    "closed": aggregated.get("closed_connections", 0),
                     "open": self.open_connections,
                 },
                 "nodes": {"active": self.total_nodes},
@@ -409,7 +409,7 @@ class MetricsSnapshot:
                 "exceeded_total_timeout": self.exceeded_total_timeout,
                 # The per-node retry counters summed (the canonical schema's
                 # name for the cluster retry total).
-                "command_retries": aggregated.get("transaction-retry-count", 0),
+                "command_retries": aggregated.get("transaction_retry_count", 0),
                 # Counted by this SDK, not the underlying client: one per user
                 # API call made through this API, whenever metrics are on, and
                 # never reduced by the sampler.
@@ -432,8 +432,8 @@ class MetricsSnapshot:
         """One canonical per-node object, joined with its live node when known."""
         address, _, port = host.rpartition(":")
         namespaces = sorted(
-            set(node_raw.get("detailed-resultcode-counts") or {})
-            | set(node_raw.get("detailed-metrics") or {})
+            set(node_raw.get("detailed_resultcode_counts") or {})
+            | set(node_raw.get("detailed_metrics") or {})
         )
         return {
             "name": getattr(node, "name", "") if node is not None else "",
@@ -448,16 +448,16 @@ class MetricsSnapshot:
             # rollup, the only connect-failure counter the client keeps -- and
             # of the close reasons only the idle drop is tracked distinctly.
             "connections": {
-                "opened": node_raw.get("connections-successful", 0),
-                "closed": node_raw.get("closed-connections", 0),
-                "open": node_raw.get("open-connections", 0),
-                "open_failure": node_raw.get("connections-failed", 0),
-                "closed_idle": node_raw.get("connections-idle-dropped", 0),
+                "opened": node_raw.get("connections_successful", 0),
+                "closed": node_raw.get("closed_connections", 0),
+                "open": node_raw.get("open_connections", 0),
+                "open_failure": node_raw.get("connections_failed", 0),
+                "closed_idle": node_raw.get("connections_idle_dropped", 0),
             },
             "namespaces": [
                 _namespace_view(
-                    node_raw.get("detailed-resultcode-counts") or {},
-                    node_raw.get("detailed-metrics") or {},
+                    node_raw.get("detailed_resultcode_counts") or {},
+                    node_raw.get("detailed_metrics") or {},
                     namespace,
                 )
                 for namespace in namespaces
@@ -476,7 +476,7 @@ class MetricsSnapshot:
 # Labels the underlying client stamps into every snapshot itself. They identify
 # the node and cluster and are promoted to their own canonical fields, so they
 # are kept out of the user's `labels` map rather than duplicated into it.
-_RESERVED_LABELS = frozenset({"node", "host", "cluster", "app-id"})
+_RESERVED_LABELS = frozenset({"node", "host", "cluster", "app_id"})
 
 # Reported for `app_id` when the application named none and the connection is
 # unauthenticated. A placeholder rather than an empty string, so a consumer
@@ -556,8 +556,8 @@ def _namespace_view(
 ) -> Dict[str, Any]:
     """Build one canonical per-namespace object from the two raw trees.
 
-    ``detailed-resultcode-counts`` carries the outcome counts and
-    ``detailed-metrics`` the byte and latency histograms; both are keyed
+    ``detailed_resultcode_counts`` carries the outcome counts and
+    ``detailed_metrics`` the byte and latency histograms; both are keyed
     namespace -> command -> value.
     """
     # `errors` is every non-OK outcome, timeouts and hot keys included; those
@@ -581,8 +581,8 @@ def _namespace_view(
     for command, entry in (detailed.get(namespace) or {}).items():
         if not isinstance(entry, Mapping):
             continue
-        bytes_in += _histogram_sum(entry.get("bytes-received"))
-        bytes_out += _histogram_sum(entry.get("bytes-sent"))
+        bytes_in += _histogram_sum(entry.get("bytes_received"))
+        bytes_out += _histogram_sum(entry.get("bytes_sent"))
         group = _COMMAND_LATENCY_GROUP.get(command) or str(command).lower()
         histogram = entry.get("latency")
         if isinstance(histogram, Mapping):
@@ -592,7 +592,7 @@ def _namespace_view(
                 buckets if existing is None
                 else [a + b for a, b in zip(existing, buckets)]
             )
-        acquisition = entry.get("connection-aq")
+        acquisition = entry.get("connection_aq")
         if isinstance(acquisition, Mapping):
             buckets = list(acquisition.get("buckets") or [])
             existing = latency.get(LatencyType.CONN.value)
