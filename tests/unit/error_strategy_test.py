@@ -225,10 +225,9 @@ class TestRecordResultException:
             rr.record_or_raise()
 
     def test_client_side_error_row_is_not_ok(self):
-        # Client-side failures never reach the server, so they carry no result
-        # code and the row's code reads OK. The attached exception is what
-        # makes the row a failure — reporting it as success would claim a
-        # write that never happened.
+        # A failure attached to a row leaves the row's own code at OK: the
+        # attached exception is what makes the row a failure, and reporting
+        # it as success would claim a write that never happened.
         exc = AerospikeError("client rejected the command")
         assert exc.result_code is None
         rr = RecordResult(

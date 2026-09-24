@@ -18,6 +18,7 @@
 import pytest
 
 from aerospike_sdk import Behavior, ClusterDefinition, Host
+from aerospike_sdk.exceptions import ConnectionError, ResultCode
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -219,8 +220,10 @@ async def test_host_of():
 async def test_fail_if_not_connected_default_bad_host():
     """Default fail_if_not_connected=True raises on unreachable host."""
     cd = apply_general_auth(ClusterDefinition("127.0.0.1", 19999))
-    with pytest.raises(Exception):
+    with pytest.raises(ConnectionError) as exc_info:
         await cd.connect()
+    # Nothing answered, so the client names the condition itself.
+    assert exc_info.value.result_code == ResultCode.SERVER_NOT_AVAILABLE
 
 
 async def test_fail_if_not_connected_explicit_true(aerospike_host):

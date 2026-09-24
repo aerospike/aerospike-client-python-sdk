@@ -113,6 +113,24 @@ collides with a different definition reports that collision). `str(exc)` is the
 full message: the numeric code, then any retry decoration (`iter=`, `In Doubt:`,
 `node=`), then the base message.
 
+A failure the client raises without a server answer carries a code too. Those
+codes are negative, and they are the same numbers every Aerospike client
+reports for the same condition, so a log line or a runbook reads the same
+across languages. The exception type stays the thing to catch; the code is
+what tells two failures of the same type apart:
+
+```python
+try:
+    await session.upsert(key).bin("n").set_to(1).execute()
+except TimeoutError as exc:
+    if exc.result_code == ResultCode.MAX_RETRIES_EXCEEDED:
+        ...  # the retry budget ran out: a policy problem, not a slow server
+    else:
+        ...  # ResultCode.TIMEOUT: the deadline fired
+except ConnectionError as exc:
+    exc.result_code  # ResultCode.SERVER_NOT_AVAILABLE
+```
+
 ## Extended Server Error Detail
 
 For failures the result code alone does not fully explain, the server can attach
