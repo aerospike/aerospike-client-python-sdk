@@ -48,17 +48,29 @@ deltas since the last poll. Connection gauges (`open_connections`) are
 point-in-time. Snapshotting drains and aggregates per-node state, so poll on
 an interval (for example every 30 seconds), not per operation.
 
-## Configuring collection
+## Collection tiers
 
-`enable_metrics()` on its own records only the always-on gauges: pool
-occupancy, connections opened and closed, tend counts and node membership. No
-per-command timing is measured and the latency histograms read zero. Ask for
-the operational tier when you want them:
+Collection comes in tiers, so the cost of measuring is opt-in:
+
+| Tier | Contents | Switched on by |
+|---|---|---|
+| Always on | Pool occupancy, connections opened/closed, tend counts, node membership | `enable_metrics()` |
+| Operational | Latency and byte histograms, result codes, retry and error counters | `operational_enabled=True` |
+| Usage | Which SDK features the application uses | `usage_enabled=True` |
+
+`enable_metrics()` on its own gives the always-on gauges and nothing more: no
+per-command timing is recorded, and the latency histograms read zero. Ask for
+the operational tier when you want them.
 
 ```python
 cluster.enable_metrics(MetricsPolicy())                          # gauges only
 cluster.enable_metrics(MetricsPolicy(operational_enabled=True))  # + histograms
 ```
+
+The two extended tiers are independent — usage counters are recorded by this
+SDK rather than by the client core, and ignore the sampler.
+
+## Configuring collection
 
 {class}`~aerospike_sdk.metrics.MetricsPolicy` controls the histogram shape and how
 much is recorded. The shape settings configure the operational tier and do
@@ -382,33 +394,30 @@ system:
   DEFAULT:
     metrics:
       enabled: true
-      latency_unit: microseconds
-      latency_columns: 18
-      latency_shift: 1
-      sampler:
-        range: 1000
-        threshold: 100
       labels:
         owner: platform-team
       extended:
+        operational:
+          enabled: true
+          latency_unit: microseconds
+          latency_columns: 18
+          latency_shift: 1
+          sampler:
+            range: 1000
+            threshold: 100
         usage:
           enabled: true
 ```
 
+The file mirrors the tiers: `metrics.enabled` turns collection on at all, and
+each extended tier has its own `enabled` beneath it. The histogram shape and
+the sampler live inside `metrics.extended.operational` with the tier they
+configure — at the `metrics` root they are reported as unrecognized, since
+there is nothing there for them to shape.
+
 A block that never sets `enabled` leaves collection as it is, so a file that
 only tunes the histogram shape does not switch collection on by itself.
 Changing `enabled` in the file takes effect on reload, without reconnecting.
-
-`metrics.extended.usage.enabled` switches on the [feature usage
-counters](#feature-usage-counters), and defaults to off. It is nested under
-`extended` to match the key the other Aerospike clients use.
-
-Its sibling `metrics.extended.operational.*` is **not** recognized. Operational
-collection here is part of a single on/off rather than a separately switchable
-tier, so accepting that key would promise a split the snapshot cannot deliver;
-it is reported as unrecognized and ignored. Usage counters are unaffected
-because this SDK records them itself — see
-[Known limitations](#known-limitations).
 
 (known-limitations)=
 ## Known limitations
@@ -422,7 +431,7 @@ current behavior, not bugs in configuration:
 | **Bucket boundaries** | Bucket *i* covers `[2**i, 2**(i+1))`. Server-side latency tooling reports the adjacent layout `(2**i, 2**(i+1)]`, so bucket *counts* differ by the samples landing exactly on a boundary. Totals, the unit, and min/max/sum agree. |
 | **Sampler granularity** | A fractional sampler decides per network attempt, not per API call. A command that retries gets more than one decision, so its effective sampling rate is higher than configured. |
 | **Retried latency** | Each attempt is timed separately, so a retried operation records less than its true end-to-end duration; time spent in backoff between attempts is not represented. |
-| **Collection tiers** | Collection is a single on/off. There is no separate always-on tier, and no way to enable error counters without also enabling latency histograms. |
+| **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
 | **TLS handshake counters** | Not collected. The connection counters that are reported do not distinguish TLS or authentication phases. |
 | **Connection detail** | Only a single open-connection gauge is available; in-use versus idle-in-pool is not broken out. |
 | **Recover queue** | Depth of the timeout-recovery queue is not collected. |

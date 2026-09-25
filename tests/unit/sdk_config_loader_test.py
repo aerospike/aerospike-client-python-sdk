@@ -412,14 +412,15 @@ system:
   DEFAULT:
     metrics:
       enabled: true
-      latencyUnit: microseconds
-      latencyColumns: 18
       reportDir: /tmp/x
       exportInterval: 5s
-      sampler:
-        Range: 100
-        Threshold: 10
       extended:
+        operational:
+          latencyUnit: microseconds
+          latencyColumns: 18
+          sampler:
+            Range: 100
+            Threshold: 10
         usage:
           Enabled: true
 """
@@ -483,8 +484,8 @@ system:
                 else:
                     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = previous
 
-    def test_extended_block_warns(self, caplog):
-        """`extended.*` is deliberately not in the schema; it must not look accepted."""
+    def test_unknown_key_inside_a_recognized_tier_warns(self, caplog):
+        """The tier is in the schema; an unknown key under it still is not."""
         doc = """
 system:
   DEFAULT:
@@ -492,10 +493,12 @@ system:
       extended:
         operational:
           enabled: true
+          latency_precision: high
 """
         with caplog.at_level(logging.WARNING):
-            parse_sdk_config(doc)
-        assert "metrics" in caplog.text
+            m = parse_sdk_config(doc)["DEFAULT"].metrics
+        assert m.operational_enabled is True
+        assert "metrics.extended.operational.latency_precision" in caplog.text
 
     def test_unknown_behavior_block_warns(self, caplog):
         doc = """
@@ -552,19 +555,23 @@ system:
   DEFAULT:
     metrics:
       enabled: true
-      latency_unit: microseconds
-      latency_columns: 18
-      latency_shift: 2
-      sampler:
-        range: 1000
-        threshold: 100
       labels:
         owner: platform-team
+      extended:
+        operational:
+          enabled: true
+          latency_unit: microseconds
+          latency_columns: 18
+          latency_shift: 2
+          sampler:
+            range: 1000
+            threshold: 100
 """
 
     def test_full_block(self):
         m = parse_sdk_config(self.FULL)["DEFAULT"].metrics
         assert m.enabled is True
+        assert m.operational_enabled is True
         assert m.latency_unit == "microseconds"
         assert m.latency_columns == 18
         assert m.latency_shift == 2
@@ -582,20 +589,22 @@ system:
         m = parse_sdk_config(self.FULL)["DEFAULT"].metrics
         assert m.usage_enabled is None
 
-    def test_extended_operational_is_rejected_but_usage_still_lands(self, caplog):
-        """The core cannot split Tier 0 from operational, so that key is a drop.
-
-        Accepting it silently would promise a split the snapshot cannot deliver;
-        the sibling ``usage`` group is unaffected because this SDK records those
-        counters itself.
-        """
+    def test_the_two_extended_tiers_are_independently_switchable(self):
+        """Operational gates the histograms; usage gates the feature counters."""
         text = ("system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
                 "      extended:\n        usage:\n          enabled: true\n"
-                "        operational:\n          enabled: true\n")
-        with caplog.at_level(logging.WARNING):
-            m = parse_sdk_config(text)["DEFAULT"].metrics
+                "        operational:\n          enabled: false\n")
+        m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.enabled is True
         assert m.usage_enabled is True
-        assert "metrics.extended.operational" in caplog.text
+        assert m.operational_enabled is False
+
+    def test_an_unknown_extended_tier_is_reported(self, caplog):
+        text = ("system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+                "      extended:\n        speculative:\n          enabled: true\n")
+        with caplog.at_level(logging.WARNING):
+            parse_sdk_config(text)
+        assert "metrics.extended.speculative" in caplog.text
 
     def test_absent_block_leaves_everything_unset(self):
         m = parse_sdk_config("system:\n  DEFAULT:\n    connections:\n"
@@ -606,24 +615,29 @@ system:
     def test_bad_latency_unit_is_skipped_not_fatal(self, caplog):
         with caplog.at_level(logging.WARNING):
             m = parse_sdk_config(
-                "system:\n  DEFAULT:\n    metrics:\n"
-                "      enabled: true\n      latency_unit: fortnights\n")["DEFAULT"].metrics
-        assert m.enabled is True          # the rest of the block still applies
+                "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+                "      extended:\n        operational:\n"
+                "          enabled: true\n"
+                "          latency_unit: fortnights\n")["DEFAULT"].metrics
+        assert m.enabled is True               # the rest of the block still applies
+        assert m.operational_enabled is True   # and the rest of the group does too
         assert m.latency_unit is None
         assert "fortnights" in caplog.text
 
-    def test_extended_group_is_not_a_recognized_key(self, caplog):
-        """The spec nests shape keys under `extended`; we do not, so it must warn."""
+    def test_shape_keys_at_the_metrics_root_are_reported(self, caplog):
+        """They configure the operational tier, so they belong inside its group."""
         with caplog.at_level(logging.WARNING):
-            parse_sdk_config(
-                "system:\n  DEFAULT:\n    metrics:\n      extended:\n"
-                "        operational:\n          enabled: true\n")
-        assert "metrics.extended" in caplog.text
+            m = parse_sdk_config(
+                "system:\n  DEFAULT:\n    metrics:\n"
+                "      enabled: true\n      latency_columns: 18\n")["DEFAULT"].metrics
+        assert m.latency_columns is None
+        assert "metrics.latency_columns" in caplog.text
 
     def test_policy_round_trip(self):
         from aerospike_sdk.metrics import LatencyUnit
         from aerospike_sdk.metrics import policy_from_settings
         policy = policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
+        assert policy.operational_enabled is True
         assert policy.latency_unit == LatencyUnit.MICROSECONDS
         assert policy.latency_columns == 18
         assert policy.latency_shift == 2
@@ -631,7 +645,8 @@ system:
 
     def test_metrics_merges_per_field(self):
         higher = parse_sdk_config(
-            "system:\n  c1:\n    metrics:\n      latency_columns: 24\n")["c1"]
+            "system:\n  c1:\n    metrics:\n      extended:\n"
+            "        operational:\n          latency_columns: 24\n")["c1"]
         lower = parse_sdk_config(self.FULL)["DEFAULT"]
         merged = merge_settings(higher, lower)
         assert merged.metrics.latency_columns == 24        # higher wins

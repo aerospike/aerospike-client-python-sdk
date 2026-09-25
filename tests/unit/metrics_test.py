@@ -306,14 +306,39 @@ class TestCanonicalSnapshot:
         assert entry["address"] == "127.0.0.1"
         assert entry["port"] == 3010
 
-    def test_connections_omit_the_unavailable_split(self):
+    def test_connections_report_the_full_set(self):
         conns = self._snapshot().to_canonical_dict()["nodes"][0]["connections"]
-        assert conns == {"opened": 7, "closed": 2, "open": 3,
-                         "open_failure": 0, "closed_idle": 0}
-        assert "in_use" not in conns and "in_pool" not in conns
-        # The failure rollup is undifferentiated; the TLS/auth split is not
-        # measured and stays absent rather than zeroed.
-        assert "tls_handshake_failure" not in conns and "auth_failure" not in conns
+        assert conns == {
+            "opened": 7, "closed": 2, "open": 3,
+            "in_use": 0, "in_pool": 0, "recovering": 0,
+            "open_failure": 0, "tls_handshake_failure": 0, "auth_failure": 0,
+            "closed_idle": 0, "closed_error": 0, "closed_node_removed": 0,
+        }
+
+    def test_connection_failure_causes_are_reported_beside_the_rollup(self):
+        """TLS and auth name causes of `open_failure`; they do not partition it."""
+        raw = {**_RAW, "127.0.0.1:3010": dict(
+            _RAW["127.0.0.1:3010"],
+            **{"connections_failed": 5, "connections_error_tls": 3,
+               "connections_error_auth": 1},
+        )}
+        conns = MetricsSnapshot(
+            _FakePacSnapshot(raw)
+        ).to_canonical_dict()["nodes"][0]["connections"]
+        assert conns["open_failure"] == 5
+        assert conns["tls_handshake_failure"] == 3
+        assert conns["auth_failure"] == 1
+
+    def test_pool_occupancy_split_is_reported(self):
+        raw = {**_RAW, "127.0.0.1:3010": dict(
+            _RAW["127.0.0.1:3010"],
+            **{"connections_in_use": 2, "connections_in_pool": 6,
+               "connections_recovering": 1},
+        )}
+        conns = MetricsSnapshot(
+            _FakePacSnapshot(raw)
+        ).to_canonical_dict()["nodes"][0]["connections"]
+        assert (conns["in_use"], conns["in_pool"], conns["recovering"]) == (2, 6, 1)
 
     def test_connection_open_failures_are_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections_failed": 4})}
@@ -344,15 +369,16 @@ class TestCanonicalSnapshot:
         assert doc["cluster"]["command_retries"] == 0
         assert self._snapshot().command_retries == 0
 
-    def test_idle_close_reason_is_reported(self):
+    def test_close_reasons_are_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(
-            _RAW["127.0.0.1:3010"], **{"connections_idle_dropped": 5}
+            _RAW["127.0.0.1:3010"],
+            **{"connections_idle_dropped": 5, "connections_closed_error": 2,
+               "connections_closed_node_removed": 1},
         )}
         conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
         assert conns["closed_idle"] == 5
-        # The remaining close reasons are not measured distinctly and stay
-        # absent rather than zeroed.
-        assert "closed_error" not in conns and "closed_node_removed" not in conns
+        assert conns["closed_error"] == 2
+        assert conns["closed_node_removed"] == 1
 
     def test_nodes_departed_is_empty_on_a_plain_pull(self):
         """Departure is tracked by the export timer, not by pulls."""

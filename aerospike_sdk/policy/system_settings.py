@@ -73,15 +73,15 @@ class MetricsSettings:
     Every field is ``None`` when the file did not set it, so an absent block
     changes nothing and a partial block only overrides what it names.
 
-    The histogram shape keys sit at the ``metrics`` root rather than under an
-    ``extended`` group: collection here is a single on/off, so a group whose
-    own ``enabled`` flag could not be honored would imply a tier split that
-    does not exist.
+    The two extended tiers each have their own ``enabled`` flag, under the
+    cross-SDK key names: ``metrics.extended.operational.enabled`` gates the
+    latency histograms and per-command counters, and carries the histogram
+    shape keys that only mean anything while it is on;
+    ``metrics.extended.usage.enabled`` gates the feature-usage counters, which
+    this SDK records itself rather than reading from the client core.
 
-    ``usage_enabled`` is the exception, and comes from
-    ``metrics.extended.usage.enabled``. Usage counters are recorded by this SDK
-    rather than the client core, so unlike ``extended.operational`` they really
-    are independently switchable, and the cross-SDK key names them there.
+    ``metrics.enabled`` sits above both: it turns collection on at all, and on
+    its own yields the always-on gauges.
 
     Example::
 
@@ -89,10 +89,13 @@ class MetricsSettings:
         #   DEFAULT:
         #     metrics:
         #       enabled: true
-        #       latency_unit: microseconds
-        #       latency_columns: 18
         #       labels:
         #         owner: platform-team
+        #       extended:
+        #         operational:
+        #           enabled: true
+        #           latency_unit: microseconds
+        #           latency_columns: 18
 
     See Also:
         :class:`~aerospike_sdk.metrics.MetricsPolicy`: The runtime policy these
@@ -110,6 +113,7 @@ class MetricsSettings:
     sampler_range: Optional[int] = None
     sampler_threshold: Optional[int] = None
     labels: Optional[Dict[str, str]] = None
+    operational_enabled: Optional[bool] = None
     usage_enabled: Optional[bool] = None
 
 
