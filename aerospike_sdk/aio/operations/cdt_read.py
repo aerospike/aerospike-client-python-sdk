@@ -37,7 +37,7 @@ for the next selector with ``.set_context()`` applied.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 
 from aerospike_async import (
@@ -138,6 +138,24 @@ class CdtReadBuilder(Generic[T]):
         bin_name, new_ctx, _ = self._push_ctx()
         return CdtPathBuilder(
             self._parent, bin_name, new_ctx + (CTX.all_children_with_filter(predicate),),
+        )
+
+    def on_map_keys_in(self, keys: Iterable[Any]) -> "CdtPathBuilder[T]":
+        """Continue as a path over the map entries whose key is in *keys*.
+
+        Args:
+            keys: The map keys to select.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the selected entries.
+
+        Example::
+
+            .bin("catalog").on_map_key("prices").on_map_keys_in(["a", "c"]).collect_values()
+        """
+        bin_name, new_ctx, _ = self._push_ctx()
+        return CdtPathBuilder(
+            self._parent, bin_name, new_ctx + (CTX.map_keys_in(list(keys)),), filterable=True,
         )
 
     # -- Internal helpers -----------------------------------------------------
@@ -981,17 +999,23 @@ class CdtPathBuilder(Generic[T]):
     a separate builder rather than more terminals on
     :class:`CdtReadBuilder`.
 
-    Reached from ``on_each_child()`` / ``on_each_child_where()``; not
-    constructed directly. Navigation accumulates ``CTX`` steps, so paths nest:
-    ``.on_each_child().on_each_child()`` walks two levels down.
+    Reached from ``on_each_child()`` / ``on_each_child_where()`` /
+    ``on_map_keys_in()``; not constructed directly. Navigation accumulates
+    ``CTX`` steps, so paths nest: ``.on_each_child().on_each_child()`` walks
+    two levels down.
     """
 
-    __slots__ = ("_parent", "_bin_name", "_ctx")
+    __slots__ = ("_parent", "_bin_name", "_ctx", "_filterable")
 
-    def __init__(self, parent: T, bin_name: str, ctx: Sequence[Any]) -> None:
+    def __init__(
+        self, parent: T, bin_name: str, ctx: Sequence[Any], *, filterable: bool = False,
+    ) -> None:
         self._parent = parent
         self._bin_name = bin_name
         self._ctx: tuple[Any, ...] = tuple(ctx)
+        # Only a key selection accepts and_filter(); the server rejects the
+        # filter after every other step, so the builder refuses it up front.
+        self._filterable = filterable
 
     # -- Navigation -----------------------------------------------------------
 
@@ -1081,6 +1105,62 @@ class CdtPathBuilder(Generic[T]):
         )
 
     # -- Read terminals -------------------------------------------------------
+
+    def on_map_keys_in(self, keys: Iterable[Any]) -> CdtPathBuilder[T]:
+        """Descend to the map entries whose key is in *keys*.
+
+        Args:
+            keys: The map keys to select.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the selected entries. Follow it
+            with :meth:`and_filter` to narrow them by a predicate.
+
+        Example::
+
+            .bin("rows").on_each_child().on_map_keys_in(["id", "total"]).collect_values()
+        """
+        return CdtPathBuilder(
+            self._parent,
+            self._bin_name,
+            self._ctx + (CTX.map_keys_in(list(keys)),),
+            filterable=True,
+        )
+
+    def and_filter(self, predicate: Any) -> CdtPathBuilder[T]:
+        """Keep only the entries of the preceding key selection matching *predicate*.
+
+        Args:
+            predicate: An :class:`~aerospike_sdk.Exp` over the entry's loop
+                variable, e.g.
+                ``Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))``.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the narrowed selection.
+
+        Raises:
+            TypeError: If the previous step was not :meth:`on_map_keys_in`.
+                The filter refines a key selection only. It cannot open a
+                path or follow ``on_each_child()`` / ``on_each_child_where()``
+                (the predicate belongs there instead), and it cannot follow
+                another ``and_filter()`` (combine conditions with
+                ``Exp.and_`` in one call).
+
+        Example::
+
+            over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
+            .bin("m").on_map_keys_in(["a", "b", "c"]).and_filter(over_10).collect_map_entries()
+        """
+        if not self._filterable:
+            raise TypeError(
+                "and_filter() must directly follow on_map_keys_in(); combine conditions "
+                "with Exp.and_, or filter children with on_each_child_where()"
+            )
+        return CdtPathBuilder(
+            self._parent, self._bin_name, self._ctx + (CTX.and_filter(predicate),),
+        )
+
+    # -- Terminals ------------------------------------------------------------
 
     def _emit(self, op: Any) -> T:
         self._parent.add_operation(op)  # type: ignore[union-attr]

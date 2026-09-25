@@ -36,6 +36,7 @@ from typing import (
     Callable,
     Dict,
     Generic,
+    Iterable,
     List,
     Optional,
     Sequence,
@@ -4765,6 +4766,27 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             self._segment, self._bin, [CTX.all_children_with_filter(predicate)],
         )
 
+    def on_map_keys_in(self, keys: Iterable[Any]) -> CdtPathBuilder[WriteSegmentBuilder]:
+        """Select the map entries whose key is in *keys*, for a path read or modify.
+
+        Args:
+            keys: The map keys to select.
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
+            or a terminal.
+
+        Example::
+
+            add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+            await (
+                session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
+            )
+        """
+        return CdtPathBuilder(
+            self._segment, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+        )
+
     def on_map_key(
         self, key: Any, *, create_type: Optional[MapOrder] = None,
     ) -> CdtWriteBuilder[WriteSegmentBuilder]:
@@ -5833,6 +5855,29 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """
         return CdtPathBuilder(
             self._parent, self._bin, [CTX.all_children_with_filter(predicate)],
+        )
+
+    def on_map_keys_in(self, keys: Iterable[Any]) -> CdtPathBuilder[_T]:
+        """Select the map entries whose key is in *keys*, for a path read.
+
+        Args:
+            keys: The map keys to select.
+
+        Returns:
+            :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
+            or a terminal.
+
+        Example::
+
+            over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
+            result = await (
+                await session.query(key)
+                .bin("m").on_map_keys_in(["a", "b", "c"]).and_filter(over_10).collect_map_entries()
+                .execute()
+            ).first_or_raise()
+        """
+        return CdtPathBuilder(
+            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
         )
 
     def on_map_key(

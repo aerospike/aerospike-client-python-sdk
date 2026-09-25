@@ -138,12 +138,43 @@ async def run_examples(session) -> None:
             "Sayings of the Century", "Sword of Honour", "Moby Dick", "The Lord of the Rings",
         })
 
+        # --- 6) Keys-in with a filter: chosen entries, narrowed by value ---
+        print("\n--- 6) Keys-in with a filter: chosen entries, narrowed by value ---")
+        k6 = DEMO.id(6)
+        await session.delete(k6).execute()
+        stock = {"apples": 5, "pears": 15, "plums": 25, "figs": 35}
+        await session.upsert(k6).bin("stock").set_to(stock).execute()
+        print(f"initial stock: {stock}")
+        over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
+        # CTX.map_keys_in picks the entries; CTX.and_filter keeps those over 10.
+        # The filter is only valid directly after the key selection.
+        chosen = CdtOperation.select_by_path(
+            "stock", SelectFlags.MAP_KEY_VALUE,
+            [CTX.map_keys_in(["apples", "pears", "plums"]), CTX.and_filter(over_10)],
+        )
+        result = await (await session.query(k6).add_operation(chosen).execute()).first_or_raise()
+        flat = result.record.bins["stock"]
+        entries = dict(zip(flat[::2], flat[1::2]))
+        print(f"apples/pears/plums over 10 (projection bin 'stock'): {entries}")
+        # The fluent form emits the same operation.
+        result = await (
+            await session.query(k6)
+            .bin("stock").on_map_keys_in(["apples", "pears", "plums"]).and_filter(over_10)
+            .collect_map_entries()
+            .execute()
+        ).first_or_raise()
+        flat = result.record.bins["stock"]
+        fluent_entries = dict(zip(flat[::2], flat[1::2]))
+        all_ok &= _report_check(
+            6, entries == {"pears": 15, "plums": 25} and fluent_entries == entries,
+        )
+
         if not all_ok:
             raise AssertionError("One or more CDT path expression checks failed")
         print("\nOverall: SUCCESS")
 
     finally:
-        for pk in range(1, 6):
+        for pk in range(1, 7):
             await session.delete(DEMO.id(pk)).execute()
 
 

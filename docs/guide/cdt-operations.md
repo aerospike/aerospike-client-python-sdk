@@ -332,6 +332,38 @@ result = await (
 ).first_or_raise()
 ```
 
+### Selecting map entries by key
+
+`on_map_keys_in(keys)` selects the entries of a map whose key is in `keys`; keys
+the map does not hold are skipped. It opens a path from a bin, or continues one
+after any navigation step. `and_filter(pred)` then narrows that selection with a
+predicate over each entry:
+
+```python
+# the values under "alpha" and "gamma"
+result = await (
+    await session.query(key)
+    .bin("m").on_map_keys_in(["alpha", "gamma"]).collect_values()
+    .execute()
+).first_or_raise()
+
+# entries a, b, c whose value is over 10, as key/value pairs
+over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
+result = await (
+    await session.query(key)
+    .bin("m").on_map_keys_in(["a", "b", "c"]).and_filter(over_10).collect_map_entries()
+    .execute()
+).first_or_raise()
+
+# add 10 to just the selected entries
+await session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
+```
+
+`and_filter` refines a key selection only, so it must directly follow
+`on_map_keys_in`; the builder raises `TypeError` anywhere else. To filter the
+children of a collection use `on_each_child_where(pred)`, and to apply several
+conditions combine them with `Exp.and_` in one call.
+
 Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elements
 the expression cannot be applied to — and `remove_matches()`. For explicit
 `SelectFlags`, `collect_by_path(flags)` is the unsugared form.
