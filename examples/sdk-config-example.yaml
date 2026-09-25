@@ -48,15 +48,6 @@ system:
       # Static labels attached to every snapshot.
       labels:
         owner: platform-team
-      # Histogram shape: unit, bucket count, and boundary spacing (2**shift).
-      latency_unit: milliseconds
-      latency_columns: 7
-      latency_shift: 1
-      # Record-time gate: measure a call when random % range < threshold.
-      # range=1/threshold=1 records every call; 1000000/100000 samples ~10%.
-      sampler:
-        range: 1
-        threshold: 1
       # Push cadence to registered exporters, and the built-in file exporter,
       # installed only when the application registered no exporter itself.
       # With report_dir empty (the default) no file is written; exporter: none
@@ -65,7 +56,22 @@ system:
       exporter: learn_metrics_file
       report_dir: ""
       report_size_limit: 10mb
+      # Two independent opt-in groups. enabled: true above turns on neither;
+      # enabled: false above turns off both.
       extended:
+        operational:
+          # Latency histograms, byte counts, error and retry counters.
+          enabled: false
+          # Histogram shape: unit, bucket count, and boundary spacing (2**shift).
+          latency_unit: milliseconds
+          latency_columns: 7
+          latency_shift: 1
+          # Record-time gate, drawn once per API call: measure it when
+          # random % range < threshold. 1/1 records every call;
+          # 1000000/100000 samples ~10%.
+          sampler:
+            range: 1
+            threshold: 1
         usage:
           # Feature-usage counters, exposed on the snapshot as `usage`.
           enabled: false

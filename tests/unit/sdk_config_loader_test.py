@@ -15,7 +15,9 @@
 
 """Tests for the SDK config loader: parsing, profiles, precedence, fail-soft."""
 
+import glob
 import logging
+import os
 from datetime import timedelta
 
 import pytest
@@ -758,3 +760,23 @@ class TestDiscoveredClusterName:
         assert after.max_connections_per_node == before.max_connections_per_node
         assert "max_connections_per_node" in caplog.text
         assert "cannot take effect on a connected client" in caplog.text
+
+
+class TestShippedExamplesLoadClean:
+    """Every example YAML parses with no unrecognized-key warning.
+
+    The loader ignores what it does not know and only warns, so a stale example
+    keeps parsing while silently configuring less than it claims; this is what
+    catches a layout change that the examples did not follow.
+    """
+
+    @pytest.mark.parametrize(
+        "path", sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "..", "examples", "*.yaml")))
+    )
+    def test_example_loads_without_warnings(self, path, caplog):
+        from aerospike_sdk.policy.sdk_config_loader import parse_config_bytes
+
+        with caplog.at_level(logging.WARNING, logger="aerospike_sdk"):
+            assert parse_config_bytes(open(path, "rb").read(), path) is not None
+        assert [r.getMessage() for r in caplog.records] == []
+
