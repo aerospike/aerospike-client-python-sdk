@@ -146,14 +146,35 @@ class TlsBuilder:
         return self
     
     def for_login_only(self, for_login_only: bool = True) -> TlsBuilder:
-        """
-        Sets whether TLS should be used only for login/authentication.
-        
+        """Use TLS for the login exchange only; data connections are cleartext.
+
+        The credential exchange runs over TLS, that connection is closed once
+        the session token is held, and every later connection to the node is
+        opened in cleartext at the node's cleartext service address. No
+        socket is ever downgraded: each connection is wholly TLS or wholly
+        cleartext for its lifetime. This trades data-plane encryption for
+        throughput on trusted networks. Requires credentials on the cluster
+        definition; the client refuses login-only without authentication,
+        where it would only mean "no TLS at all".
+
         Args:
-            for_login_only: If True, TLS is only used for authentication
-        
+            for_login_only: ``True`` to encrypt the login only. The default
+                without this call is TLS for all communication.
+
         Returns:
-            This TlsBuilder for method chaining
+            This builder, for chaining.
+
+        Example::
+
+            cluster_def = (
+                ClusterDefinition("db.example.com", 4333)
+                .with_tls_config_of()
+                    .tls_name("myTlsName")
+                    .ca_file("/path/to/ca.pem")
+                    .for_login_only()
+                .done()
+                .with_native_credentials("app", "secret")
+            )
         """
         self._for_login_only = for_login_only
         return self
@@ -186,17 +207,7 @@ class TlsBuilder:
 
         Raises:
             ValueError: An unrecognized protocol or cipher-suite name.
-            NotImplementedError: ``for_login_only`` was requested. The
-                underlying connection decides TLS once at connect and cannot
-                drop to cleartext afterwards, so honoring it is not possible
-                here; accepting it silently would misrepresent the transport.
         """
-        if self._for_login_only:
-            raise NotImplementedError(
-                "for_login_only is not supported: the connection cannot drop "
-                "to cleartext after login. Omit it to use TLS for the whole "
-                "connection."
-            )
 
         from aerospike_async import TlsConfig
 
@@ -207,11 +218,13 @@ class TlsBuilder:
                 self._client_key_file,
                 protocols=self._protocols,
                 ciphers=self._ciphers,
+                for_login_only=self._for_login_only,
             )
         return TlsConfig(
             self._ca_file,
             protocols=self._protocols,
             ciphers=self._ciphers,
+            for_login_only=self._for_login_only,
         )
 
 

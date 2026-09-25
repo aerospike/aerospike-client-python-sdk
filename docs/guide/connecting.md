@@ -154,6 +154,28 @@ validation. Setting `tls_name()` on the `ClusterDefinition` builder
 automatically applies it to all hosts.
 :::
 
+TLS for the login exchange only, with cleartext data connections, for trusted
+networks where data-plane encryption is not worth its cost:
+
+```python
+cluster_def = (
+    ClusterDefinition("localhost", 4333)
+    .with_tls_config_of()
+        .tls_name("myTlsName")
+        .ca_file("/path/to/ca.pem")
+        .for_login_only()
+    .done()
+    .with_native_credentials("username", "password")
+    .using_services_alternate()
+)
+```
+
+The credential exchange runs over TLS; that connection is then closed, and
+every later connection is opened in cleartext at the node's cleartext service
+address. No socket is ever downgraded. The node must advertise a cleartext
+service port, and credentials are required: login-only without authentication
+would only mean "no TLS at all", so the client refuses it.
+
 ### Rack Awareness
 
 ```python

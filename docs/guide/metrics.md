@@ -80,7 +80,7 @@ nothing while it is off:
 from aerospike_sdk.metrics import LatencyUnit, MetricsPolicy, Sampler
 
 # Millisecond view (the default): 7 buckets covering
-# <1, >=1, >=2, >=4, >=8, >=16, >=32 ms.
+# <=1, >1, >2, >4, >8, >16, >32 ms.
 cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
 
 # Sub-millisecond resolution for fast clusters.
@@ -99,15 +99,13 @@ cluster.enable_metrics(MetricsPolicy(
 
 - `latency_shift` spaces the bucket boundaries: each boundary after the
   first multiplies by `2**latency_shift`, so `shift=3` gives
-  `<1, >=1, >=8, >=64, ...`. Bucket *i* holds samples in the half-open range
-  `[2**i, 2**(i+1))` — see [Known limitations](#known-limitations), because
-  these boundaries do not line up with the ones server-side latency tools
-  report.
+  `<=1, >1, >8, >64, ...`. Bucket *i* holds samples in the range
+  `(2**i, 2**(i+1)]`, the same layout server-side latency tools report, so
+  the two line up bucket for bucket.
 - A fractional `sampler` reduces how much is recorded, at the cost of tail
-  fidelity. Read [Known limitations](#known-limitations) before choosing a
-  rate: the decision is currently taken per network attempt rather than per
-  API call, so the effective rate for a retried command is not the rate you
-  set.
+  fidelity. The decision is taken once per API call, before any retry, so a
+  retried command is either fully recorded or not at all and the effective
+  rate is the rate you set.
 - Re-enabling with a changed latency unit or histogram shape discards the
   accumulated latency samples. Counters are always retained.
 
@@ -439,9 +437,7 @@ current behavior, not bugs in configuration:
 
 | Area | What to expect |
 | --- | --- |
-| **Bucket boundaries** | Bucket *i* covers `[2**i, 2**(i+1))`. Server-side latency tooling reports the adjacent layout `(2**i, 2**(i+1)]`, so bucket *counts* differ by the samples landing exactly on a boundary. Totals, the unit, and min/max/sum agree. |
-| **Sampler granularity** | A fractional sampler decides per network attempt, not per API call. A command that retries gets more than one decision, so its effective sampling rate is higher than configured. |
-| **Retried latency** | Each attempt is timed separately, so a retried operation records less than its true end-to-end duration; time spent in backoff between attempts is not represented. |
+| **Two latency measures** | The per-namespace `latency` histograms time each network attempt, connection acquired to response parsed, so a retried command contributes one sample per attempt and its backoff between attempts is not in them. The whole-call latency, first attempt through the last retry, is recorded separately per command type and is read through `command_histogram()` on the cluster aggregate and per node. It has no field in the canonical snapshot yet, because the cross-SDK schema does not define one. |
 | **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
 | **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call whenever metrics are on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
 | **Log file omits the per-call count** | The line format has no field for `command_count`, nor for the cluster-level `exceeded_max_retries` / `exceeded_total_timeout`. The format is defined outside this SDK, so it is not extended. All of it is present in the canonical snapshot. |
