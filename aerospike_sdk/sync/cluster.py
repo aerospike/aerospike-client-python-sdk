@@ -39,6 +39,7 @@ from aerospike_sdk.metrics import (
     MetricsSnapshot,
     policy_from_settings,
 )
+from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
@@ -82,6 +83,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
         self._sdk_client = sdk_client
+        self._process_sampler = ProcessSampler()
         self._metrics_policy: Optional[MetricsPolicy] = None
         self._exporters: list = []
         # The exporter this cluster installed from configuration, as opposed
@@ -499,6 +501,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
             # authenticated user -- the identity the server already knows this
             # connection by, and so the one that joins the two views.
             app_id=client_policy.application_id or client_policy.user,
+            process=self._process_sampler.sample(),
         )
 
     def close(self) -> None:

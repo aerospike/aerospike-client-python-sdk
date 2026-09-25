@@ -224,22 +224,32 @@ class TestLearnMetricsFileExporter:
         assert lines[0].startswith("header(3)")
         assert lines[1].startswith("cluster[")
 
-    def test_header_names_the_fields_it_cannot_emit(self, tmp_path):
-        """Only the process samples are unavailable; the pool and node gauges are collected."""
+    def test_header_carries_every_format_field(self, tmp_path):
+        """Nothing is unavailable any more, so the header names no such segment."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
-        unavailable = header.rsplit("unavailable[", 1)[1]
-        assert unavailable == "cpu,mem]"
+        assert "unavailable[" not in header
         assert "retryCount,node[]]" in header
 
-    def test_header_declares_the_usage_columns(self, tmp_path):
-        """Recover depth and invalid-node count precede the six usage columns and retryCount."""
+    def test_header_declares_the_cluster_columns_in_the_format_order(self, tmp_path):
+        """cpu, mem, recover depth and invalid nodes precede the six usage columns and retryCount."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
         assert (
-            "label[],recoverQueueSize,invalidNodeCount,singleCount,batchCount,queryCount,"
+            "label[],cpu,mem,recoverQueueSize,invalidNodeCount,singleCount,batchCount,queryCount,"
             "blockingCount,deferredCount,backgroundCount,retryCount" in header
         )
         # The format has no field for the per-call count.
         assert "commandCount" not in header
+
+    def test_cluster_line_writes_the_process_samples(self, tmp_path):
+        """cpu is written as a whole percent and mem as bytes, in the header's positions."""
+        doc = dict(_DOC, cluster={"command_count": 57, "command_retries": 3,
+                                  "cpu_percent": 12.7, "memory_bytes": 1048576,
+                                  "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1}})
+        exporter = LearnMetricsFileExporter(str(tmp_path))
+        exporter.export(_StubSnapshot(doc))
+        exporter.close()
+        line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[1]
+        assert "label[owner=platform],12,1048576,2,1," in line
 
     def test_conn_segment_uses_the_legacy_layout(self, tmp_path):
         """`conn[inUse,inPool,opened,closed]`, the order existing parsers expect."""
@@ -254,8 +264,9 @@ class TestLearnMetricsFileExporter:
         header, line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[:2]
         assert "conn[inUse,inPool,opened,closed]" in header
         assert "conn[1,2,4,1]" in line
-        # recoverQueueSize and invalidNodeCount sit after the labels.
-        assert "label[owner=platform],2,1," in line
+        # cpu and mem (absent here, so 0) then recoverQueueSize and
+        # invalidNodeCount sit after the labels.
+        assert "label[owner=platform],0,0,2,1," in line
 
     def test_cluster_line_carries_identity_and_labels(self, tmp_path):
         line = self._write_one(tmp_path)[0].read_text().splitlines()[1]
@@ -358,7 +369,7 @@ class TestLegacyFormatIsNotExtended:
         exporter.export(_StubSnapshot(_DOC))
         exporter.close()
         header = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[0]
-        for segment in ("cluster[", "node[", "namespace[", "latency(", "unavailable["):
+        for segment in ("cluster[", "node[", "namespace[", "latency("):
             assert segment in header
         assert "usage[" not in header
 

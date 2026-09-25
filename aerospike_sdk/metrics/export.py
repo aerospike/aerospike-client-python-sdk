@@ -146,9 +146,8 @@ class AsyncMetricsExporter(Protocol):
 # Fields the legacy line format carries that this client cannot measure. Named
 # in the header so whoever owns the log shipper learns it from the file rather
 # than from a parse failure downstream.
-# Process samples the SDK does not take; every other field the format
-# defines is filled from the canonical snapshot.
-_UNAVAILABLE_FIELDS = ("cpu", "mem")
+# Format fields this SDK cannot fill; named in the header when non-empty.
+_UNAVAILABLE_FIELDS: tuple = ()
 
 # Usage counters on the cluster line, in the order and under the names the
 # format defines. Values come from the canonical snapshot's ``usage``.
@@ -277,13 +276,13 @@ class LearnMetricsFileExporter:
         usage_names = ",".join(name for name, _ in _USAGE_FILE_COLUMNS)
         header = (
             "header(3) cluster[name,clientType,clientVersion,appId,label[],"
-            f"recoverQueueSize,invalidNodeCount,{usage_names},retryCount,node[]] "
+            f"cpu,mem,recoverQueueSize,invalidNodeCount,{usage_names},retryCount,node[]] "
             "label[name,value] "
             "node[name,address,port,conn,namespace[]] "
             "conn[inUse,inPool,opened,closed] "
             "namespace[name,errors,timeouts,keyBusy,bytesIn,bytesOut,latency[]] "
-            "latency(unit,columns,shift)[type[buckets]] "
-            f"unavailable[{','.join(_UNAVAILABLE_FIELDS)}]"
+            "latency(unit,columns,shift)[type[buckets]]"
+            + (f" unavailable[{','.join(_UNAVAILABLE_FIELDS)}]" if _UNAVAILABLE_FIELDS else "")
         )
         # Not through _write: the header must never trip rotation, or a limit
         # smaller than the header rotates forever.
@@ -319,11 +318,14 @@ class LearnMetricsFileExporter:
         retry_count = int(cluster.get("command_retries", 0) or 0)
         recover = int((cluster.get("recover_queue") or {}).get("size", 0) or 0)
         invalid = int((cluster.get("nodes") or {}).get("invalid", 0) or 0)
+        # The format writes cpu as a whole percent and mem as bytes.
+        cpu = int(cluster.get("cpu_percent", 0) or 0)
+        mem = int(cluster.get("memory_bytes", 0) or 0)
         nodes = ",".join(self._node_segment(n) for n in doc.get("nodes", []))
         return (
             f"cluster[{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
             f"{doc.get('client_version', '')},{doc.get('app_id', '')},"
-            f"label[{labels}],{recover},{invalid},{counts},{retry_count},node[{nodes}]]"
+            f"label[{labels}],{cpu},{mem},{recover},{invalid},{counts},{retry_count},node[{nodes}]]"
         )
 
     def _node_segment(self, node: Dict[str, Any]) -> str:

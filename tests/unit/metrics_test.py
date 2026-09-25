@@ -16,6 +16,8 @@ import copy
 from dataclasses import dataclass
 from typing import List
 
+import time
+
 import pytest
 
 from aerospike_sdk.metrics import (
@@ -313,6 +315,7 @@ class TestCanonicalSnapshot:
             "in_use": 0, "in_pool": 0, "recovering": 0,
             "open_failure": 0, "tls_handshake_failure": 0, "auth_failure": 0,
             "closed_idle": 0, "closed_error": 0, "closed_node_removed": 0,
+            "pool_exhausted": 0,
         }
 
     def test_connection_failure_causes_are_reported_beside_the_rollup(self):
@@ -355,6 +358,31 @@ class TestCanonicalSnapshot:
         assert cluster["connections"]["in_pool"] == 6
         assert cluster["recover_queue"] == {"size": 1}
         assert cluster["nodes"] == {"active": 1, "invalid": 3}
+
+    def test_pool_exhaustion_is_mapped(self):
+        """A poll against a full pool with no idle socket counts as pool_exhausted."""
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], connections_pool_empty=3)}
+        conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
+        assert conns["pool_exhausted"] == 3
+
+    def test_command_timeouts_are_split_by_who_reported_them(self):
+        """Client-side expiries are the two cluster counters; server timeouts are the TIMEOUT answers."""
+        # The fake reports exceeded_max_retries=1 and exceeded_total_timeout=2;
+        # the namespace fixture carries one server TIMEOUT answer.
+        cluster = self._snapshot().to_canonical_dict()["cluster"]
+        assert cluster["command_timeout_client"] == 3
+        assert cluster["command_timeout_server"] == 1
+
+    def test_process_samples_reach_the_cluster_section(self):
+        cluster = MetricsSnapshot(
+            _FakePacSnapshot(_RAW), process=(12.5, 1048576)
+        ).to_canonical_dict()["cluster"]
+        assert cluster["cpu_percent"] == 12.5
+        assert cluster["memory_bytes"] == 1048576
+
+    def test_process_samples_are_omitted_when_not_taken(self):
+        cluster = self._snapshot().to_canonical_dict()["cluster"]
+        assert "cpu_percent" not in cluster and "memory_bytes" not in cluster
 
     def test_node_error_rate_is_mapped(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
@@ -449,4 +477,27 @@ class TestCanonicalSnapshot:
         assert ns["latency"]["read"] == [0, 4]      # Get
         assert ns["latency"]["write"] == [2, 0]     # Put
         assert ns["latency"]["conn"] == [5, 1]      # connection acquisition
+
+
+class TestProcessSampler:
+    """The SDK's own process samples: CPU over the interval, resident memory now."""
+
+    def test_samples_are_a_percent_and_bytes(self):
+        from aerospike_sdk.metrics.snapshot import ProcessSampler
+
+        sampler = ProcessSampler()
+        cpu, rss = sampler.sample()
+        assert 0.0 <= cpu <= 100.0 * 64
+        assert isinstance(rss, int) and rss > 0
+
+    def test_cpu_reflects_work_since_the_previous_sample(self):
+        from aerospike_sdk.metrics.snapshot import ProcessSampler
+
+        sampler = ProcessSampler()
+        sampler.sample()
+        deadline = time.monotonic() + 0.05
+        while time.monotonic() < deadline:
+            pass
+        cpu, _ = sampler.sample()
+        assert cpu > 0.0
 

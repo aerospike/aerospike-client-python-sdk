@@ -444,9 +444,14 @@ current behavior, not bugs in configuration:
 | **Latency unit in the log file** | Older consumers of the line format read `latency(...)` as milliseconds regardless of what the unit field says. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 
-The line-oriented log format additionally defines `cpu` and `mem`. This SDK
-takes no process samples, so they are omitted from the output rather than
-written as zero, and the file's header line names them under `unavailable[...]`.
+The line-oriented log format's `cpu` and `mem` columns are this process's CPU
+share and resident memory, sampled by the SDK when the snapshot is built. `cpu`
+is CPU time consumed since the previous snapshot as a percentage of the wall
+time elapsed, so a busy process on several cores can read above 100. `mem` is
+the resident set size in bytes: current on Linux, and the process's peak on
+macOS, which is what the platform reports without a third-party dependency.
+The canonical snapshot carries the same two values as `cpu_percent` and
+`memory_bytes`.
 
 What the file does carry, beyond the per-node and per-namespace segments: the
 six feature-usage counters as the `singleCount` … `backgroundCount` columns,

@@ -204,6 +204,18 @@ class TestSyncMetrics:
             # The upsert and the UDF call; the registration is not a command.
             assert snapshot.command_count == 2
 
+    def test_process_samples_are_live(self, aerospike_host, make_cluster_definition):
+        """The cluster section carries this process's CPU and resident memory."""
+        with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+            cluster.enable_metrics(MetricsPolicy())
+            session = cluster.create_session()
+            ds = DataSet.of(general_namespace(), "sdk_metrics_proc")
+            for i in range(50):
+                session.upsert(ds.id(i)).put({"n": i}).execute()
+            doc = cluster.metrics().to_canonical_dict()
+            assert doc["cluster"]["memory_bytes"] > 0
+            assert doc["cluster"]["cpu_percent"] >= 0.0
+
     def test_app_id_defaults_without_being_declared(
         self, aerospike_host, make_cluster_definition,
     ):

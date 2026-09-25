@@ -24,7 +24,11 @@ from collections.abc import Mapping
 from functools import lru_cache
 from importlib.metadata import version
 from datetime import datetime, timezone
-from typing import Any, Dict, List, NamedTuple, Optional
+import os
+import resource
+import sys
+import time
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from aerospike_async import (
     ClusterMetrics as _PacClusterMetrics,
@@ -100,6 +104,43 @@ def _merge_histograms(histograms, latency_unit: LatencyUnit) -> DerivedHistogram
     )
 
 
+class ProcessSampler:
+    """This process's CPU share and resident memory, read at snapshot time.
+
+    CPU is the process's CPU time consumed since the previous sample as a
+    percentage of the wall time elapsed, so a busy process on several cores
+    can read above 100. The first sample measures from the sampler's
+    creation. Memory is the resident set size in bytes: current on Linux,
+    from the process's own accounting; the process peak elsewhere, which is
+    what the platform reports without a third-party dependency.
+    """
+
+    def __init__(self) -> None:
+        self._cpu_time = time.process_time()
+        self._wall = time.monotonic()
+
+    def sample(self) -> Tuple[float, int]:
+        """Return ``(cpu_percent, rss_bytes)`` for the interval since the last call."""
+        cpu_time = time.process_time()
+        wall = time.monotonic()
+        elapsed = wall - self._wall
+        cpu = 100.0 * (cpu_time - self._cpu_time) / elapsed if elapsed > 0 else 0.0
+        self._cpu_time, self._wall = cpu_time, wall
+        return max(cpu, 0.0), _resident_bytes()
+
+
+def _resident_bytes() -> int:
+    try:
+        with open("/proc/self/statm", encoding="ascii") as f:
+            pages = int(f.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        pass
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kilobytes here; macOS and the BSDs report bytes.
+    return int(peak) if sys.platform == "darwin" or "bsd" in sys.platform else int(peak) * 1024
+
+
 class MetricsSnapshot:
     """A point-in-time view of accumulated client metrics.
 
@@ -121,7 +162,7 @@ class MetricsSnapshot:
     """
 
     __slots__ = (
-        "_pac", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id",
+        "_pac", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
     )
 
     def __init__(
@@ -133,6 +174,7 @@ class MetricsSnapshot:
         usage: Optional[Dict[str, int]] = None,
         command_count: Optional[int] = None,
         app_id: Optional[str] = None,
+        process: Optional[Tuple[float, int]] = None,
     ) -> None:
         """Wrap a raw PAC snapshot.
 
@@ -156,6 +198,7 @@ class MetricsSnapshot:
         self._command_count = command_count
         self._departed: tuple = ()
         self._app_id = app_id
+        self._process = process
 
     def _mark_departed(self, tracker: Any) -> None:
         """Record which hosts left the cluster, for ``nodes_departed``.
@@ -320,8 +363,9 @@ class MetricsSnapshot:
         client happens to name its fields.
 
         The cluster section carries the pool occupancy split, recover-queue
-        depth and invalid-node count the underlying client reports, and each
-        node its circuit-breaker ``error_rate``. The cluster
+        depth and invalid-node count the underlying client reports, this
+        process's CPU share and resident memory when the cluster sampled them,
+        and each node its circuit-breaker ``error_rate``. The cluster
         ``command_retries`` is the per-node retry counters summed;
         ``command_count`` is present when this SDK counted calls — see
         :attr:`command_count` for its scope.
@@ -412,6 +456,18 @@ class MetricsSnapshot:
                 "recover_queue": {"size": int(raw.get("recover_queue_size", 0) or 0)},
                 "exceeded_max_retries": self.exceeded_max_retries,
                 "exceeded_total_timeout": self.exceeded_total_timeout,
+                # Both cluster counters are client-side timeouts (the retry
+                # budget and the deadline are the two ways a client gives up),
+                # so their sum is the client-reported total; the server-
+                # reported total is the TIMEOUT answers across namespaces.
+                # Derived from the same counts the nodes carry, never counted
+                # a second time here.
+                "command_timeout_client": self.exceeded_max_retries + self.exceeded_total_timeout,
+                "command_timeout_server": sum(
+                    ns["timeouts"] for node in nodes for ns in node["namespaces"]
+                ),
+                **({"cpu_percent": self._process[0], "memory_bytes": self._process[1]}
+                   if self._process is not None else {}),
                 # The per-node retry counters summed (the canonical schema's
                 # name for the cluster retry total).
                 "command_retries": aggregated.get("transaction_retry_count", 0),
@@ -466,6 +522,8 @@ class MetricsSnapshot:
                 "closed_idle": node_raw.get("connections_idle_dropped", 0),
                 "closed_error": node_raw.get("connections_closed_error", 0),
                 "closed_node_removed": node_raw.get("connections_closed_node_removed", 0),
+                # A poll against a pool at capacity with no idle socket.
+                "pool_exhausted": node_raw.get("connections_pool_empty", 0),
             },
             "namespaces": [
                 _namespace_view(
