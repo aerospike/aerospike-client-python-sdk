@@ -22,10 +22,10 @@ was set when metrics were enabled. Call sites gate on a cached flag before
 assembling anything, so the disabled path costs one attribute load and a
 branch.
 
-The counter transport is a flat name-to-count mapping, so the specification's
-``execution_mode`` dimension on ``feature.api`` is carried in the name rather
-than as a separate attribute: ``feature.api.blocking`` is the counter the
-specification writes as ``feature.api`` with ``execution_mode=blocking``.
+The counter transport is a flat name-to-count mapping with no dimensions,
+matching the specification: the API style is three identifiers,
+``feature.api.blocking``, ``feature.api.deferred`` and
+``feature.api.background``, not one counter with a label.
 
 Counters live in this SDK rather than in the client core, so they count calls
 made through this API only.

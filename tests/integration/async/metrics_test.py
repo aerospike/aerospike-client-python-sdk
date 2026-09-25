@@ -15,6 +15,9 @@
 import pytest
 
 from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
+import os
+
+from aerospike_sdk import UDFLang
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.metrics.export import AsyncMetricsExportTimer
 
@@ -204,6 +207,26 @@ class TestMetricsSnapshot:
             # The always-on tier is not gated with it.
             assert snapshot.open_connections >= 1
             assert snapshot.total_nodes >= 1
+
+    async def test_record_udf_call_is_counted(self, aerospike_host, make_cluster_definition):
+        """A record UDF call counts like any other deferred point call, plus its feature."""
+        lua = os.path.join(os.path.dirname(__file__), "..", "udf", "record_example.lua")
+        async with make_cluster_definition(aerospike_host).connect() as cluster:
+            task = await cluster.register_udf_from_file(
+                os.path.normpath(lua), "record_example.lua", UDFLang.LUA
+            )
+            await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
+            cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
+            session = cluster.create_session()
+            key = DataSet.of(general_namespace(), "sdk_metrics_udf").id("k")
+            await session.upsert(key).put({"n": 1}).execute()
+            await session.execute_udf(key).function("record_example", "readBin").passing("n").execute()
+            snapshot = await cluster.metrics()
+            counts = snapshot.usage
+            assert counts.get("feature.udf.record", 0) == 1, counts
+            assert counts.get("feature.api.deferred", 0) == 2, counts
+            assert counts.get("feature.shape.point", 0) == 2, counts
+            assert snapshot.command_count == 2
 
     async def test_default_policy_detailed_metrics(
         self, aerospike_host, make_cluster_definition

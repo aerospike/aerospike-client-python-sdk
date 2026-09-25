@@ -146,7 +146,9 @@ class AsyncMetricsExporter(Protocol):
 # Fields the legacy line format carries that this client cannot measure. Named
 # in the header so whoever owns the log shipper learns it from the file rather
 # than from a parse failure downstream.
-_UNAVAILABLE_FIELDS = ("cpu", "mem", "inUse", "inPool", "recoverQueueSize", "invalidNodeCount")
+# Process samples the SDK does not take; every other field the format
+# defines is filled from the canonical snapshot.
+_UNAVAILABLE_FIELDS = ("cpu", "mem")
 
 # Usage counters on the cluster line, in the order and under the names the
 # format defines. Values come from the canonical snapshot's ``usage``.
@@ -275,10 +277,10 @@ class LearnMetricsFileExporter:
         usage_names = ",".join(name for name, _ in _USAGE_FILE_COLUMNS)
         header = (
             "header(3) cluster[name,clientType,clientVersion,appId,label[],"
-            f"{usage_names},retryCount,node[]] "
+            f"recoverQueueSize,invalidNodeCount,{usage_names},retryCount,node[]] "
             "label[name,value] "
             "node[name,address,port,conn,namespace[]] "
-            "conn[opened,closed,open] "
+            "conn[inUse,inPool,opened,closed] "
             "namespace[name,errors,timeouts,keyBusy,bytesIn,bytesOut,latency[]] "
             "latency(unit,columns,shift)[type[buckets]] "
             f"unavailable[{','.join(_UNAVAILABLE_FIELDS)}]"
@@ -312,13 +314,16 @@ class LearnMetricsFileExporter:
         labels = ",".join(f"{k}={v}" for k, v in sorted(doc.get("labels", {}).items()))
         usage = doc.get("usage") or {}
         counts = ",".join(str(int(usage.get(key, 0))) for _, key in _USAGE_FILE_COLUMNS)
+        cluster = doc.get("cluster") or {}
         # The line format's own name for the canonical `command_retries`.
-        retry_count = int((doc.get("cluster") or {}).get("command_retries", 0) or 0)
+        retry_count = int(cluster.get("command_retries", 0) or 0)
+        recover = int((cluster.get("recover_queue") or {}).get("size", 0) or 0)
+        invalid = int((cluster.get("nodes") or {}).get("invalid", 0) or 0)
         nodes = ",".join(self._node_segment(n) for n in doc.get("nodes", []))
         return (
             f"cluster[{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
             f"{doc.get('client_version', '')},{doc.get('app_id', '')},"
-            f"label[{labels}],{counts},{retry_count},node[{nodes}]]"
+            f"label[{labels}],{recover},{invalid},{counts},{retry_count},node[{nodes}]]"
         )
 
     def _node_segment(self, node: Dict[str, Any]) -> str:
@@ -328,8 +333,8 @@ class LearnMetricsFileExporter:
         )
         return (
             f"{node.get('name', '')},{node.get('address', '')},{node.get('port', '')},"
-            f"conn[{conns.get('opened', 0)},{conns.get('closed', 0)},"
-            f"{conns.get('open', 0)}],namespace[{namespaces}]"
+            f"conn[{conns.get('in_use', 0)},{conns.get('in_pool', 0)},"
+            f"{conns.get('opened', 0)},{conns.get('closed', 0)}],namespace[{namespaces}]"
         )
 
     def _namespace_segment(self, namespace: Dict[str, Any]) -> str:

@@ -444,3 +444,56 @@ class TestForceSingleNode:
 
         alternate = ClusterDefinition("localhost", 3000).using_services_alternate()
         assert alternate._get_policy().seed_only_cluster is False
+
+
+class TestConnectValidationCarriesACode:
+    """The SDK's own post-connect refusal names its condition by code, like every other failure."""
+
+    @pytest.mark.asyncio
+    async def test_async_not_connected_reports_server_not_available(self):
+        from aerospike_sdk.aio.cluster import Cluster
+        from aerospike_sdk.exceptions import ConnectionError, ResultCode
+
+        class _Pac:
+            async def is_connected(self):
+                return False
+
+        class _Client:
+            _seeds = "127.0.0.1:19999"
+            underlying_client = _Pac()
+
+            async def connect(self):
+                pass
+
+            async def close(self):
+                pass
+
+        with pytest.raises(ConnectionError) as excinfo:
+            await Cluster._connect_and_wrap(_Client())
+        assert excinfo.value.result_code == ResultCode.SERVER_NOT_AVAILABLE
+
+    def test_sync_not_connected_reports_server_not_available(self, monkeypatch):
+        import aerospike_sdk.sync.cluster as sync_cluster
+        from aerospike_sdk.exceptions import ConnectionError, ResultCode
+
+        class _Pac:
+            def is_connected_blocking(self):
+                return False
+
+        class _Client:
+            def __init__(self, *, seeds, policy):
+                self._seeds = seeds
+
+            def connect(self):
+                pass
+
+            def _pac_client(self):
+                return _Pac()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(sync_cluster, "SyncClient", _Client)
+        with pytest.raises(ConnectionError) as excinfo:
+            sync_cluster.Cluster._create(object(), "127.0.0.1:19999")
+        assert excinfo.value.result_code == ResultCode.SERVER_NOT_AVAILABLE

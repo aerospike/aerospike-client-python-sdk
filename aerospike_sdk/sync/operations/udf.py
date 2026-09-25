@@ -33,6 +33,7 @@ from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.sync.operations.query import QueryBuilder
 from aerospike_sdk.sync.record_stream import RecordStream
 from aerospike_sdk.udf_shared import _UdfBuilderBase, _UdfFunctionBuilderBase
+from aerospike_sdk.metrics import usage
 
 __all__ = [
     "UdfBuilder",
@@ -95,6 +96,11 @@ class UdfBuilder(_UdfBuilderBase[QueryBuilder]):
                 "function(package, name) must be called before execute()",
             )
         qb._finalize_udf_spec()
+        # This builder dispatches directly rather than through the query
+        # builder's execute, so it records the call itself; the async twin
+        # inherits the query builder's recording.
+        if qb._record_on:
+            qb._record_call(usage.API_BLOCKING, qb._usage_shape())
 
         # Tier 1: list-returning blocking dispatch (single + multi-key UDF
         # land here via "udf" op_type → execute_udf_blocking / batch_apply_blocking).

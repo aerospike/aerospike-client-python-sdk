@@ -225,24 +225,37 @@ class TestLearnMetricsFileExporter:
         assert lines[1].startswith("cluster[")
 
     def test_header_names_the_fields_it_cannot_emit(self, tmp_path):
+        """Only the process samples are unavailable; the pool and node gauges are collected."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
         unavailable = header.rsplit("unavailable[", 1)[1]
-        for field in ("cpu", "mem", "inUse", "inPool", "recoverQueueSize", "invalidNodeCount"):
-            assert field in unavailable
-        # Derived from the per-node counters, so it graduated out of the
-        # unavailable list and into the cluster segment.
-        assert "retryCount" not in unavailable
+        assert unavailable == "cpu,mem]"
         assert "retryCount,node[]]" in header
 
     def test_header_declares_the_usage_columns(self, tmp_path):
-        """The six usage columns sit between the labels and retryCount."""
+        """Recover depth and invalid-node count precede the six usage columns and retryCount."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
         assert (
-            "label[],singleCount,batchCount,queryCount,"
+            "label[],recoverQueueSize,invalidNodeCount,singleCount,batchCount,queryCount,"
             "blockingCount,deferredCount,backgroundCount,retryCount" in header
         )
         # The format has no field for the per-call count.
         assert "commandCount" not in header
+
+    def test_conn_segment_uses_the_legacy_layout(self, tmp_path):
+        """`conn[inUse,inPool,opened,closed]`, the order existing parsers expect."""
+        doc = dict(_DOC, cluster={"command_count": 57, "command_retries": 3,
+                                  "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1}})
+        doc["nodes"] = [dict(_DOC["nodes"][0], connections={
+            "opened": 4, "closed": 1, "open": 3, "in_use": 1, "in_pool": 2, "open_failure": 0,
+        })]
+        exporter = LearnMetricsFileExporter(str(tmp_path))
+        exporter.export(_StubSnapshot(doc))
+        exporter.close()
+        header, line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[:2]
+        assert "conn[inUse,inPool,opened,closed]" in header
+        assert "conn[1,2,4,1]" in line
+        # recoverQueueSize and invalidNodeCount sit after the labels.
+        assert "label[owner=platform],2,1," in line
 
     def test_cluster_line_carries_identity_and_labels(self, tmp_path):
         line = self._write_one(tmp_path)[0].read_text().splitlines()[1]

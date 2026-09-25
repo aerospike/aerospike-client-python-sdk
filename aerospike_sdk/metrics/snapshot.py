@@ -319,12 +319,12 @@ class MetricsSnapshot:
         exporter can serialize directly, independent of how the underlying
         client happens to name its fields.
 
-        Fields the underlying client does not measure are **omitted rather
-        than zeroed**, so a consumer can tell "not collected" from "zero":
-        per-node ``in_use`` / ``in_pool`` connection splits and recover-queue
-        depth. The cluster ``command_retries`` is the per-node retry counters
-        summed; ``command_count`` is present when this SDK counted calls —
-        see :attr:`command_count` for its scope.
+        The cluster section carries the pool occupancy split, recover-queue
+        depth and invalid-node count the underlying client reports, and each
+        node its circuit-breaker ``error_rate``. The cluster
+        ``command_retries`` is the per-node retry counters summed;
+        ``command_count`` is present when this SDK counted calls — see
+        :attr:`command_count` for its scope.
 
         ``app_id`` is always populated, so a consumer can group by application
         without a missing-field case: the identity the application set on the
@@ -397,14 +397,19 @@ class MetricsSnapshot:
             "cluster": {
                 # Cluster rollups summed across nodes by the aggregate, which
                 # retains departed hosts, so the totals survive node churn.
-                # `in_use` / `in_pool` are absent: the underlying client keeps
-                # the single `open` gauge, not the pool-walk split.
+                # The gauges come from the snapshot's own cluster totals.
                 "connections": {
                     "opened": aggregated.get("connections_successful", 0),
                     "closed": aggregated.get("closed_connections", 0),
                     "open": self.open_connections,
+                    "in_use": int(raw.get("connections_in_use", 0) or 0),
+                    "in_pool": int(raw.get("connections_in_pool", 0) or 0),
                 },
-                "nodes": {"active": self.total_nodes},
+                "nodes": {
+                    "active": self.total_nodes,
+                    "invalid": int(raw.get("nodes_invalid", 0) or 0),
+                },
+                "recover_queue": {"size": int(raw.get("recover_queue_size", 0) or 0)},
                 "exceeded_max_retries": self.exceeded_max_retries,
                 "exceeded_total_timeout": self.exceeded_total_timeout,
                 # The per-node retry counters summed (the canonical schema's
@@ -442,6 +447,9 @@ class MetricsSnapshot:
             # counterpart to ask, so the key is the one form both share.
             "address": address,
             "port": int(port) if port.isdigit() else None,
+            # The circuit-breaker window count, zeroed by the client every
+            # error-rate window.
+            "error_rate": int(node_raw.get("error_rate", 0) or 0),
             # `open_failure` stays the undifferentiated rollup; the TLS and
             # auth counters beside it name two of its causes rather than
             # partitioning it, so they are reported alongside, not subtracted.
@@ -533,6 +541,8 @@ def _client_version() -> str:
 _RESULT_OK = "ok"
 _RESULT_TIMEOUT = "Timeout"
 _RESULT_KEY_BUSY = "Hot key"
+_RESULT_RECORD_TOO_BIG = "Record too big"
+_RESULT_DEVICE_OVERLOAD = "Device overload"
 
 # Canonical latency group for each command type, inverted from the five-way
 # grouping so a per-namespace command histogram can be filed under conn / read /
@@ -565,9 +575,12 @@ def _namespace_view(
     ``detailed_metrics`` the byte and latency histograms; both are keyed
     namespace -> command -> value.
     """
-    # `errors` is every non-OK outcome, timeouts and hot keys included; those
-    # two are also reported separately, so they are counted twice by design.
-    errors = timeouts = key_busy = 0
+    # `errors` is every non-OK outcome, the named causes included; those are
+    # also reported separately, so they are counted twice by design. The
+    # counts are server answers only: a client-side deadline never reaches a
+    # result code here and is counted as the cluster's
+    # `exceeded_total_timeout` instead.
+    errors = timeouts = key_busy = record_too_big = device_overload = 0
     for counts in (result_codes.get(namespace) or {}).values():
         if not isinstance(counts, Mapping):
             continue
@@ -580,6 +593,10 @@ def _namespace_view(
                 timeouts += value
             elif code == _RESULT_KEY_BUSY:
                 key_busy += value
+            elif code == _RESULT_RECORD_TOO_BIG:
+                record_too_big += value
+            elif code == _RESULT_DEVICE_OVERLOAD:
+                device_overload += value
 
     bytes_in = bytes_out = 0
     latency: Dict[str, List[int]] = {}
@@ -611,6 +628,8 @@ def _namespace_view(
         "errors": errors,
         "timeouts": timeouts,
         "key_busy": key_busy,
+        "record_too_big": record_too_big,
+        "device_overload": device_overload,
         "bytes_in": bytes_in,
         "bytes_out": bytes_out,
         "latency": latency,

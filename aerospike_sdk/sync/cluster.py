@@ -27,7 +27,7 @@ from aerospike_async import ClientPolicy, UDFLang, Version
 
 from aerospike_sdk import capabilities
 from aerospike_sdk.cluster_shared import ClusterBase
-from aerospike_sdk.exceptions import ConnectionError
+from aerospike_sdk.exceptions import ConnectionError, ResultCode
 from aerospike_sdk.metrics.export import (
     DEFAULT_EXPORT_INTERVAL_SECONDS,
     built_in_exporter,
@@ -125,7 +125,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         # on PAC is a non-blocking synchronous probe (no I/O).
         if not sdk_client._pac_client().is_connected_blocking():
             sdk_client.close()
-            raise ConnectionError(f"Connected to seeds '{seeds}' but cluster reports not connected")
+            raise ConnectionError(
+                f"Connected to seeds '{seeds}' but cluster reports not connected",
+                result_code=ResultCode.SERVER_NOT_AVAILABLE,
+            )
         cluster = cls(sdk_client)
         if sdk_settings is not None and sdk_config_source is not None:
             # The server-reported name can select a `system.<clusterName>`

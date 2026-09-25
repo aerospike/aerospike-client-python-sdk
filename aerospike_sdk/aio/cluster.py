@@ -29,7 +29,7 @@ from aerospike_async import ClientPolicy, UDFLang, Version
 from aerospike_sdk import capabilities
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.cluster_shared import ClusterBase
-from aerospike_sdk.exceptions import ConnectionError
+from aerospike_sdk.exceptions import ConnectionError, ResultCode
 from aerospike_sdk.metrics.export import (
     DEFAULT_EXPORT_INTERVAL_SECONDS,
     built_in_exporter,
@@ -154,7 +154,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         if not await sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
-                f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected"
+                f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected",
+                result_code=ResultCode.SERVER_NOT_AVAILABLE,
             )
         return cls(sdk_client)
     

@@ -313,14 +313,25 @@ exporter should serialize: a stable `snake_case` document independent of how
 the underlying client names its own fields.
 
 Within each namespace object, `errors` is the total of *every* non-OK outcome.
-Timeouts and hot keys are part of that total and are also reported on their own
-as `timeouts` and `key_busy`, so those two are counted twice by design. An
-exporter that wants a breakdown should subtract rather than add:
+Timeouts, hot keys, oversized records and device overloads are part of that
+total and are also reported on their own as `timeouts`, `key_busy`,
+`record_too_big` and `device_overload`, so those four are counted twice by
+design. An exporter that wants a breakdown should subtract rather than add:
 
 ```python
 namespace = document["nodes"][0]["namespaces"][0]
-other_errors = namespace["errors"] - namespace["timeouts"] - namespace["key_busy"]
+named = ("timeouts", "key_busy", "record_too_big", "device_overload")
+other_errors = namespace["errors"] - sum(namespace[k] for k in named)
 ```
+
+These are server answers. A command that runs out of client-side deadline
+never receives a result code, so it is not in `timeouts`; it is counted once,
+cluster-wide, under `exceeded_total_timeout` or `exceeded_max_retries`. The
+two cluster counters together are the client-side timeouts, and they never
+overlap with `timeouts`. Read them as a pair: the underlying client
+attributes an expiry to the retry budget whenever that budget is also spent,
+so with retries disabled every client-side timeout lands in
+`exceeded_max_retries`.
 
 ### Writing metrics to files
 
@@ -432,18 +443,14 @@ current behavior, not bugs in configuration:
 | **Sampler granularity** | A fractional sampler decides per network attempt, not per API call. A command that retries gets more than one decision, so its effective sampling rate is higher than configured. |
 | **Retried latency** | Each attempt is timed separately, so a retried operation records less than its true end-to-end duration; time spent in backoff between attempts is not represented. |
 | **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
-| **TLS handshake counters** | Not collected. The connection counters that are reported do not distinguish TLS or authentication phases. |
-| **Connection detail** | Only a single open-connection gauge is available; in-use versus idle-in-pool is not broken out. |
-| **Recover queue** | Depth of the timeout-recovery queue is not collected. |
 | **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call whenever metrics are on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
 | **Log file omits the per-call count** | The line format has no field for `command_count`, nor for the cluster-level `exceeded_max_retries` / `exceeded_total_timeout`. The format is defined outside this SDK, so it is not extended. All of it is present in the canonical snapshot. |
 | **Latency unit in the log file** | Older consumers of the line format read `latency(...)` as milliseconds regardless of what the unit field says. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 
-The line-oriented log format additionally defines `cpu`, `mem`, `inUse`,
-`inPool`, `recoverQueueSize` and `invalidNodeCount`. None can be filled from
-what is collected, so they are omitted from the output rather than written as
-zero, and the file's header line names them under `unavailable[...]`.
+The line-oriented log format additionally defines `cpu` and `mem`. This SDK
+takes no process samples, so they are omitted from the output rather than
+written as zero, and the file's header line names them under `unavailable[...]`.
 
 What the file does carry, beyond the per-node and per-namespace segments: the
 six feature-usage counters as the `singleCount` … `backgroundCount` columns,

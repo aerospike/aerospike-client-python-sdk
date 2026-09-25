@@ -346,6 +346,34 @@ class TestCanonicalSnapshot:
         conns = snapshot.to_canonical_dict()["nodes"][0]["connections"]
         assert conns["open_failure"] == 4
 
+    def test_cluster_gauges_core_now_reports_are_mapped(self):
+        """Pool occupancy, recover depth and invalid-node count reach the cluster section."""
+        raw = dict(_RAW, connections_in_use=2, connections_in_pool=6,
+                   recover_queue_size=1, nodes_invalid=3)
+        cluster = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["cluster"]
+        assert cluster["connections"]["in_use"] == 2
+        assert cluster["connections"]["in_pool"] == 6
+        assert cluster["recover_queue"] == {"size": 1}
+        assert cluster["nodes"] == {"active": 1, "invalid": 3}
+
+    def test_node_error_rate_is_mapped(self):
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
+        node = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]
+        assert node["error_rate"] == 4
+
+    def test_namespace_splits_the_named_error_causes(self):
+        """Record-too-big and device-overload are broken out beside key_busy."""
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], detailed_resultcode_counts={
+            "test": {"Put": {"ok": 4, "Timeout": 1, "Hot key": 2,
+                             "Record too big": 5, "Device overload": 3}},
+        })}
+        ns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["namespaces"][0]
+        assert ns["record_too_big"] == 5
+        assert ns["device_overload"] == 3
+        assert ns["key_busy"] == 2 and ns["timeouts"] == 1
+        # Every non-OK outcome, the named causes included.
+        assert ns["errors"] == 11
+
     def test_command_count_reaches_the_cluster_section(self):
         snapshot = MetricsSnapshot(_FakePacSnapshot(_RAW), command_count=42)
         doc = snapshot.to_canonical_dict()
