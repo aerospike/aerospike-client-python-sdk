@@ -280,7 +280,7 @@ class _BlockingQueryDispatch:
         for i, (key, found) in enumerate(zip(spec.keys, found_list)):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
             if not found and self._is_actionable(rc, "exists") and disp is _ErrorDisposition.THROW:
-                raise _result_code_to_exception(rc, str(rc), False)
+                raise _result_code_to_exception(rc)
             if not self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
             ):

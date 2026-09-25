@@ -381,13 +381,13 @@ class TestRetryContextPropagation:
     def test_server_error_fields_propagated(self):
         pac = PacServerError(
             "fail", ResultCode.GENERATION_ERROR, True, 2, "conflict", None,
-            "BB9020011AC4202", 4, "Server error: GenerationError", None,
+            "BB9020011AC4202", 4, "Generation error", None,
         )
         pfc = _convert_pac_exception(pac)
         assert type(pfc) is GenerationError
         assert pfc.node == "BB9020011AC4202"
         assert pfc.iteration == 4
-        assert pfc.base_message == "Server error: GenerationError"
+        assert pfc.base_message == "Generation error"
         assert pfc.sub_exceptions == ()
         assert pfc.sub_code == 2
         assert pfc.server_message == "conflict"
@@ -591,9 +591,23 @@ class TestResultCodeGuidance:
         assert exc.hint == "bin 'x' is the problem"
         assert "nsup-period" not in str(exc)
 
-    def test_hint_stands_alone_when_there_is_no_message(self):
+    def test_description_leads_when_there_is_no_message(self):
+        # A bare code, as a batch or query row delivers it, renders as the
+        # code's descriptive string with the guidance beneath it.
         exc = _result_code_to_exception(ResultCode.BIN_NAME_TOO_LONG, "")
-        assert str(exc) == exc.hint
+        assert str(exc) == f"{ResultCode.BIN_NAME_TOO_LONG.description}\n{exc.hint}"
+        assert exc.base_message == ResultCode.BIN_NAME_TOO_LONG.description
+
+    def test_bare_code_message_is_the_description(self):
+        exc = _result_code_to_exception(ResultCode.KEY_EXISTS_ERROR)
+        assert str(exc) == "Key already exists"
+        assert exc.base_message == "Key already exists"
+        # An explicit message wins, and a supplied base message is kept.
+        exc = _result_code_to_exception(
+            ResultCode.KEY_EXISTS_ERROR, "Error 5: Key already exists", base_message="custom",
+        )
+        assert str(exc) == "Error 5: Key already exists"
+        assert exc.base_message == "custom"
 
     def test_guidance_survives_the_pac_boundary(self):
         # Real errors arrive as PAC exceptions, so the converter must carry it.

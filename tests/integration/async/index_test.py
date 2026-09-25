@@ -20,7 +20,7 @@ import os
 import pytest
 
 from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet, Filter
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError, ResultCode
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
 
@@ -162,9 +162,14 @@ async def test_create_duplicate_index_fails(cluster):
     # Create first index
     await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
 
-    # Try to create another index with same name should fail
-    with pytest.raises(AerospikeError):
+    # Reusing the name for a different definition fails with the server's own
+    # explanation kept as the base message, under the index result code.
+    with pytest.raises(IndexAlreadyExistsError) as exc_info:
         await cluster.create_session().index(general_namespace(), "test").on_bin("name").named(index_name).string().create()
+    err = exc_info.value
+    assert err.result_code == ResultCode.INDEX_FOUND
+    assert err.base_message.startswith("Create index failed: ")
+    assert "already exists with different definition" in err.base_message
 
     # Clean up
     try:

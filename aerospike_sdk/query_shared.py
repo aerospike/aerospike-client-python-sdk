@@ -1765,10 +1765,10 @@ class _QueryBuilderBase:
             row_op = per_row[i] if per_row is not None else op_type
             if not r.is_ok and self._is_actionable(r.result_code, row_op):
                 if disp is _ErrorDisposition.THROW:
-                    raise _result_code_to_exception(r.result_code, str(r.result_code), r.in_doubt)
+                    raise _result_code_to_exception(r.result_code, in_doubt=r.in_doubt)
                 if disp is _ErrorDisposition.HANDLER and handler is not None:
                     handler(r.key, r.index, _result_code_to_exception(
-                        r.result_code, str(r.result_code), r.in_doubt))
+                        r.result_code, in_doubt=r.in_doubt))
                     continue
 
             if not self._should_include_result(

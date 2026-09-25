@@ -251,7 +251,15 @@ class TestOpTypeErrors:
 
         with pytest.raises(AerospikeError) as exc_info:
             await session.insert(k).bin("v").set_to(2).execute()
-        assert exc_info.value.result_code == ResultCode.KEY_EXISTS_ERROR
+        err = exc_info.value
+        assert err.result_code == ResultCode.KEY_EXISTS_ERROR
+        # The code renders as its number and the base message in plain words,
+        # so a log line reads "code 5: Key already exists".
+        assert f"code {err.result_code}" == "code 5"
+        assert repr(err.result_code) == "<ResultCode.KEY_EXISTS_ERROR: 5>"
+        assert err.base_message == "Key already exists"
+        assert str(err).startswith("Error 5")
+        assert str(err).endswith(": Key already exists")
 
         await _cleanup(session, k)
 
