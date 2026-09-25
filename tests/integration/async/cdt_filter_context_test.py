@@ -116,7 +116,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
             _SET,
             _BIN,
             _INDEX,
-            IndexType.NUMERIC,
+            IndexType.INTEGER,
             None,
             ctx=[CTX.map_key(_OUTER), CTX.map_key(_INNER)],
         )
@@ -195,7 +195,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
             _SET,
             _BIN,
             index_name,
-            IndexType.NUMERIC,
+            IndexType.INTEGER,
             None,
             ctx=[CTX.map_key(_INNER)],
         )

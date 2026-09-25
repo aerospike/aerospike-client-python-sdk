@@ -80,7 +80,7 @@ class _IndexBuilderBase:
 
         The expression is evaluated server-side for every record in the set;
         its result becomes the indexed value. The expression's *result type*
-        must match the index type set via :meth:`numeric`, :meth:`string`,
+        must match the index type set via :meth:`integer`, :meth:`string`,
         or :meth:`geo2dsphere` — a boolean predicate is rejected by the
         server, so build a value-producing expression (e.g. via
         ``FilterExpression.cond``).
@@ -121,7 +121,7 @@ class _IndexBuilderBase:
                 client.index("test", "users")
                 .on_expression(adult_flag)
                 .named("users_adult_idx")
-                .numeric()
+                .integer()
                 .create()
             )
 
@@ -130,7 +130,7 @@ class _IndexBuilderBase:
                 client.index("test", "users")
                 .on_expression("$.age + 1")
                 .named("users_age_ael_idx")
-                .numeric()
+                .integer()
                 .create()
             )
 
@@ -178,7 +178,7 @@ class _IndexBuilderBase:
         if not self._index_type:
             raise ValueError(
                 "index_type is required. "
-                "Call numeric(), string(), blob(), or geo2dsphere() first.",
+                "Call integer(), string(), blob(), or geo2dsphere() first.",
             )
         expression = self._expression
         assert expression is not None
@@ -201,23 +201,25 @@ class _IndexBuilderBase:
         self._index_name = index_name
         return self
 
-    def numeric(self) -> Self:
-        """Set the secondary index type to numeric (for numeric bin values).
+    def integer(self) -> Self:
+        """Set the secondary index type to integer (for integer bin values).
 
         Call this or :meth:`string` before :meth:`create`, matching how the bin is
-        stored. If both are called on the same builder, the last call wins.
+        stored. If both are called on the same builder, the last call wins. The
+        server has called this index type ``integer`` since 8.1.3; the SDK sends
+        that name.
 
         Returns:
             ``self`` for method chaining.
         """
-        self._index_type = IndexType.NUMERIC
+        self._index_type = IndexType.INTEGER
         return self
 
     def string(self) -> Self:
         """Set the secondary index type to string (for string bin values).
 
-        Call this or :meth:`numeric` before :meth:`create`. If both are called,
-        the last call wins (see :meth:`numeric`).
+        Call this or :meth:`integer` before :meth:`create`. If both are called,
+        the last call wins (see :meth:`integer`).
 
         Returns:
             ``self`` for method chaining.
@@ -252,7 +254,7 @@ class _IndexBuilderBase:
     def collection(self, collection_index_type: CollectionIndexType) -> Self:
         """Set the collection index variant for map or list bins (optional).
 
-        Use together with :meth:`numeric` or :meth:`string` when indexing into
+        Use together with :meth:`integer` or :meth:`string` when indexing into
         collection data types.
 
         Args:
@@ -281,7 +283,7 @@ class _IndexBuilderBase:
                 client.index("test", "events")
                 .on_bin("payload")
                 .named("nested_ts_idx")
-                .numeric()
+                .integer()
                 .context([CTX.map_key("meta"), CTX.map_key("timestamp")])
                 .create()
             )

@@ -62,7 +62,7 @@ async def test_list_indexes_via_cluster_and_session(aerospike_host):
             pass
         assert await _wait_visible(cluster.list_indexes, IDX, present=False)
 
-        await session.index(NS, SET).on_bin(BIN).named(IDX).numeric().create()
+        await session.index(NS, SET).on_bin(BIN).named(IDX).integer().create()
         assert await _wait_visible(cluster.list_indexes, IDX, present=True)
 
         mine = [i for i in await cluster.list_indexes() if i["name"] == IDX]

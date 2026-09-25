@@ -9,13 +9,13 @@ with AEL `.where()` on clusters that support query selection (field 44).
 ```python
 users = DataSet.of("test", "users")
 
-# Numeric index. create() returns an IndexTask: the server builds the index
+# Integer index. create() returns an IndexTask: the server builds the index
 # asynchronously, so wait on it before querying through the index.
 task = await (
     session.index(users)
     .on_bin("age")
     .named("users_age_idx")
-    .numeric()
+    .integer()
     .create()
 )
 await task.wait_till_complete()
@@ -82,7 +82,7 @@ await (
     session.index(users)
     .on_expression(expr)
     .named("users_age_exp_idx")
-    .numeric()
+    .integer()
     .create()
 )
 ```
@@ -113,7 +113,7 @@ await (
     session.index(users)
     .on_expression(ael)
     .named("users_age_ael_idx")
-    .numeric()
+    .integer()
     .create()
 )
 
@@ -147,7 +147,7 @@ await (
     session.index(users)
     .on_expression(ael)
     .named("users_adult_age_idx")
-    .numeric()
+    .integer()
     .create()
 )
 ```
@@ -164,7 +164,7 @@ in the background. Querying through an index that is still building can miss
 records that are already written, so wait on the returned task first:
 
 ```python
-task = await session.index(users).on_bin("age").named("users_age_idx").numeric().create()
+task = await session.index(users).on_bin("age").named("users_age_idx").integer().create()
 await task.wait_till_complete()          # raises TimeoutError past the budget
 await task.wait_till_complete(timeout=None)   # or wait indefinitely
 ```

@@ -25,7 +25,7 @@ async def main():
             session.index(users)
             .on_bin("age")
             .named("users_age_idx")
-            .numeric()
+            .integer()
             .create()
         )
 
@@ -66,7 +66,7 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 
     # One-time setup: index the bin the filter below queries on. A .where()
     # query no index can satisfy is rejected rather than run as a full-set scan.
-    session.index(users).on_bin("age").named("users_age_idx").numeric().create()
+    session.index(users).on_bin("age").named("users_age_idx").integer().create()
 
     # Write
     session.upsert(users.id(1)).put({"name": "Alice", "age": 30}).execute()

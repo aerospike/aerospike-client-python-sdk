@@ -57,7 +57,7 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
             pass
         assert _wait_visible(cluster.list_indexes, IDX, present=False)
 
-        session.index(NS, SET).on_bin(BIN).named(IDX).numeric().create()
+        session.index(NS, SET).on_bin(BIN).named(IDX).integer().create()
         assert _wait_visible(cluster.list_indexes, IDX, present=True)
 
         mine = [i for i in cluster.list_indexes() if i["name"] == IDX]
@@ -116,7 +116,7 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
             session.index(NS, SET)
             .on_expression(Exp.int_bin(BIN))
             .named(idx)
-            .numeric()
+            .integer()
             .create()
         )
         assert _wait_visible(cluster.list_indexes, idx, present=True)

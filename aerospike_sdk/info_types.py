@@ -32,6 +32,7 @@ from aerospike_sdk.info_shared import (
     parse_info_records,
     single_info_body,
 )
+from aerospike_sdk.index_list import canonical_index_type
 
 
 # ``file[0]`` / ``device[1]`` name a path; ``file[0].free_wblocks`` is a counter
@@ -310,8 +311,12 @@ class Sindex(dict):
 
     @property
     def index_type(self) -> str:
-        """Value type indexed: ``numeric``, ``string``, ``geo2dsphere``, ``blob``."""
-        return self.get("type", "")
+        """Value type indexed: ``integer``, ``string``, ``geo2dsphere``, ``blob``.
+
+        Reported under the server's current name: a server that still answers
+        ``numeric`` for an integer index is read as ``integer``.
+        """
+        return canonical_index_type(self.get("type", ""))
 
     @property
     def collection_type(self) -> str:

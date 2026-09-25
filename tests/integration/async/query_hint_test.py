@@ -66,7 +66,7 @@ async def cluster(
                 session.index(general_namespace(), SET_NAME)
                 .on_bin("age")
                 .named(INDEX_NAME)
-                .numeric()
+                .integer()
                 .create()
             )
         except Exception:

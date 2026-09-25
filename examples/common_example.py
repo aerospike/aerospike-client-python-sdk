@@ -285,7 +285,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("Create index")
     try:
-        task = await session.index(SET).on_bin("age").named("ageidx").numeric().create()
+        task = await session.index(SET).on_bin("age").named("ageidx").integer().create()
         # The server builds the index asynchronously; a query through one that
         # is still building can miss records that are already written.
         await task.wait_till_complete()

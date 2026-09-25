@@ -20,6 +20,17 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 
+
+def canonical_index_type(server_name: str) -> str:
+    """The server's current name for an index value type.
+
+    Servers from 8.1.3 call the integer index ``integer`` and deprecate
+    ``numeric``, but a plain ``sindex-list`` still answers with the old name
+    unless asked for the v2 form, and the per-index detail always does. Both
+    names denote the same index, so the read side reports the current one.
+    """
+    return "integer" if server_name == "numeric" else server_name
+
 def parse_index_list(
     raw_responses: Dict[str, Dict[str, str]],
     *,
@@ -65,7 +76,7 @@ def parse_index_list(
                     "name": index_name,
                 }
                 if "type" in fields:
-                    rec["type"] = fields["type"]
+                    rec["type"] = canonical_index_type(fields["type"])
                 if "indextype" in fields:
                     rec["index_type"] = fields["indextype"]
                 if "context" in fields:

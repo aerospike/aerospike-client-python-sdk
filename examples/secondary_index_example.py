@@ -42,7 +42,7 @@ PEOPLE = (
 async def run_examples(session) -> None:
     # --- 1) Scalar indexes: numeric and string ---
     print("--- 1) Scalar indexes: numeric and string ---")
-    task = await session.index(SET).on_bin("age").named(AGE_INDEX).numeric().create()
+    task = await session.index(SET).on_bin("age").named(AGE_INDEX).integer().create()
     await task.wait_till_complete()
     task = await session.index(SET).on_bin("city").named(CITY_INDEX).string().create()
     await task.wait_till_complete()
@@ -68,7 +68,7 @@ async def run_examples(session) -> None:
     print("--- 3) Collection index: MAP_VALUES indexes each value of a map bin ---")
     task = await (
         session.index(SET)
-        .on_bin("scores").named(SCORE_INDEX).numeric()
+        .on_bin("scores").named(SCORE_INDEX).integer()
         .collection(CollectionIndexType.MAP_VALUES)
         .create()
     )

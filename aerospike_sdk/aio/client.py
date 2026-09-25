@@ -578,14 +578,14 @@ class Client(RoutingCapabilitiesMixin):
         1. Using a DataSet, positionally or by keyword::
 
               users = DataSet.of("test", "users")
-              await client.index(users).on_bin("age").named("age_idx").numeric().create()
+              await client.index(users).on_bin("age").named("age_idx").integer().create()
 
         2. Explicit namespace/set::
 
               await client.index(
                   namespace="test",
                   set_name="users"
-              ).on_bin("age").named("age_idx").numeric().create()
+              ).on_bin("age").named("age_idx").integer().create()
 
         Args:
             namespace: A dataset, or the namespace name when passing

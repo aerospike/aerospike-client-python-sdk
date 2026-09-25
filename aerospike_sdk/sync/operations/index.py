@@ -39,7 +39,7 @@ class IndexBuilder(_IndexBuilderBase):
     """Synchronous secondary-index builder.
 
     Chain :meth:`on_bin` (or :meth:`on_expression`), :meth:`named`,
-    :meth:`numeric` / :meth:`string` / :meth:`geo2dsphere`, optional
+    :meth:`integer` / :meth:`string` / :meth:`geo2dsphere`, optional
     :meth:`collection` or :meth:`context` (inherited from the shared base),
     then :meth:`create` or :meth:`drop`.
 

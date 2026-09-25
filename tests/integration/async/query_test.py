@@ -209,7 +209,7 @@ async def test_query_with_range_filter(cluster, session, enterprise):
     try:
         index_task = await (
             session.index(general_namespace(), "query_test")
-            .on_bin("age").named("age_idx").numeric().create()
+            .on_bin("age").named("age_idx").integer().create()
         )
     except Exception:
         # Already present from an earlier test: its build is done, no task to await.
@@ -291,7 +291,7 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
     try:
         index_task = await (
             session.index(general_namespace(), "query_test")
-            .on_bin("age").named("age_idx").numeric().create()
+            .on_bin("age").named("age_idx").integer().create()
         )
     except Exception:
         # Already present from an earlier test: its build is done, no task to await.

@@ -302,7 +302,7 @@ async def bgtest_bgval_index(cluster_sc, sc_namespace):
             session.index(sc_namespace, BG_TEST_SET)
             .on_bin(BG_BIN)
             .named(idx_name)
-            .numeric()
+            .integer()
             .create()
         )
     except AerospikeError as ae:
@@ -324,7 +324,7 @@ async def prepare_dd_udf_background(session_sc, ds_sc, enterprise_sc):
             client.index(ds_sc.namespace, ds_sc.set_name)
             .on_bin(DD_UDF_BIN1)
             .named(DD_UDF_INDEX_NAME)
-            .numeric()
+            .integer()
             .create()
         )
     except AerospikeError as ae:
@@ -357,7 +357,7 @@ async def prepare_query_execute(session_sc, ds_sc, enterprise_sc):
             client.index(ds_sc.namespace, ds_sc.set_name)
             .on_bin(TQE_BIN1)
             .named(TQE_INDEX_NAME)
-            .numeric()
+            .integer()
             .create()
         )
     except AerospikeError as ae:

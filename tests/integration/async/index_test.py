@@ -43,7 +43,7 @@ async def test_create_numeric_index(cluster):
         pass
 
     # Create numeric index
-    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).integer().create()
 
     # Clean up
     try:
@@ -104,7 +104,7 @@ async def test_drop_index(cluster):
         pass
 
     # Create index first
-    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).integer().create()
 
     # Drop the index
     await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
@@ -128,7 +128,7 @@ async def test_index_chaining(cluster):
         cluster.create_session().index(general_namespace(), "test")
         .on_bin("age")
         .named(index_name)
-        .numeric()
+        .integer()
         .create()
     )
 
@@ -138,12 +138,12 @@ async def test_index_chaining(cluster):
 async def test_create_index_missing_bin_name(cluster):
     """Test that creating index without bin name raises error."""
     with pytest.raises(ValueError, match="bin_name"):
-        await cluster.create_session().index(general_namespace(), "test").named("test_idx").numeric().create()
+        await cluster.create_session().index(general_namespace(), "test").named("test_idx").integer().create()
 
 async def test_create_index_missing_index_name(cluster):
     """Test that creating index without index name raises error."""
     with pytest.raises(ValueError, match="index_name"):
-        await cluster.create_session().index(general_namespace(), "test").on_bin("age").numeric().create()
+        await cluster.create_session().index(general_namespace(), "test").on_bin("age").integer().create()
 
 async def test_create_index_missing_index_type(cluster):
     """Test that creating index without index type raises error."""
@@ -160,7 +160,7 @@ async def test_create_duplicate_index_fails(cluster):
         pass
 
     # Create first index
-    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).numeric().create()
+    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).integer().create()
 
     # Reusing the name for a different definition fails with the server's own
     # explanation kept as the base message, under the index result code.
@@ -212,7 +212,7 @@ async def test_create_index_with_cdt_context(cluster, enterprise):
         cluster.create_session().index(general_namespace(), "test")
         .on_bin(bin_name)
         .named(index_name)
-        .numeric()
+        .integer()
         .context([CTX.map_key("inner")])
         .create()
     )
@@ -266,7 +266,7 @@ async def test_create_expression_index_and_query(cluster, server_version):
             session.index(general_namespace(), set_name)
             .on_expression(expr)
             .named(index_name)
-            .numeric()
+            .integer()
             .create()
         )
         # The build task is authoritative; a query probe only infers readiness.
@@ -276,6 +276,8 @@ async def test_create_expression_index_and_query(cluster, server_version):
         assert listed, "expression index not visible in list_indexes"
         assert listed[0]["namespace"] == general_namespace()
         assert listed[0]["set"] == set_name
+        # The server's own name for the type from 8.1.3 on.
+        assert listed[0]["type"] == "integer"
 
         flt = Filter.range("age", 31, 33).expression(expr)
 
@@ -417,7 +419,7 @@ async def test_create_index_from_ael_string_and_query(cluster):
             session.index(general_namespace(), set_name)
             .on_expression(ael)
             .named(index_name)
-            .numeric()
+            .integer()
             .create()
         )
         await index_task.wait_till_complete()
@@ -455,7 +457,7 @@ async def test_create_index_from_boolean_ael_rejected(cluster):
             session.index(general_namespace(), "ael_idx_set")
             .on_expression("$.age > 31")
             .named("psdk_ael_bool_idx")
-            .numeric()
+            .integer()
             .create()
         )
 
@@ -484,7 +486,7 @@ async def test_where_selects_ael_expression_index(cluster):
             session.index(general_namespace(), set_name)
             .on_expression(ael)
             .named(index_name)
-            .numeric()
+            .integer()
             .create()
         )
         await index_task.wait_till_complete()

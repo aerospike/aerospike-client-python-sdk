@@ -71,11 +71,11 @@ class TestExpressionCreateAsync:
             _async_builder()
             .on_expression(exp)
             .named("users_age_exp_idx")
-            .numeric()
+            .integer()
         )
         await b.create()
         b._client._async_client.create_index_using_expression.assert_awaited_once_with(
-            "test", "users", "users_age_exp_idx", IndexType.NUMERIC, exp, None,
+            "test", "users", "users_age_exp_idx", IndexType.INTEGER, exp, None,
         )
         b._client._async_client.create_index.assert_not_called()
 
@@ -98,7 +98,7 @@ class TestExpressionCreateAsync:
             .on_expression(Exp.int_bin("age"))
             .on_bin("age")
             .named("idx")
-            .numeric()
+            .integer()
         )
         with pytest.raises(ValueError, match="mutually exclusive"):
             await b.create()
@@ -108,14 +108,14 @@ class TestExpressionCreateAsync:
             _async_builder()
             .on_expression(Exp.int_bin("age"))
             .named("idx")
-            .numeric()
+            .integer()
             .context([CTX.map_key("meta")])
         )
         with pytest.raises(ValueError, match="context"):
             await b.create()
 
     async def test_missing_name_raises(self):
-        b = _async_builder().on_expression(Exp.int_bin("age")).numeric()
+        b = _async_builder().on_expression(Exp.int_bin("age")).integer()
         with pytest.raises(ValueError, match="index_name"):
             await b.create()
 
@@ -125,7 +125,7 @@ class TestExpressionCreateAsync:
             await b.create()
 
     async def test_bin_path_unchanged(self):
-        b = _async_builder().on_bin("age").named("idx").numeric()
+        b = _async_builder().on_bin("age").named("idx").integer()
         await b.create()
         b._client._async_client.create_index.assert_awaited_once()
         b._client._async_client.create_index_using_expression.assert_not_called()
@@ -144,12 +144,12 @@ class TestExpressionCreateSync:
             SyncIB(sync_client, "test", "users")
             .on_expression(exp)
             .named("users_age_exp_idx")
-            .numeric()
+            .integer()
         )
         b.create()
         pac = sync_client._async_client
         pac.create_index_using_expression_blocking.assert_called_once_with(
-            "test", "users", "users_age_exp_idx", IndexType.NUMERIC, exp, None,
+            "test", "users", "users_age_exp_idx", IndexType.INTEGER, exp, None,
         )
         pac.create_index_blocking.assert_not_called()
 
@@ -161,7 +161,7 @@ class TestAelStringCreate:
             _async_builder(supports_server_compiled_ael=True)
             .on_expression("$.age")
             .named("users_age_ael_idx")
-            .numeric()
+            .integer()
         )
         await b.create()
         pac = b._client._async_client
@@ -174,7 +174,7 @@ class TestAelStringCreate:
             _async_builder(supports_server_compiled_ael=False)
             .on_expression("$.age")
             .named("users_age_ael_idx")
-            .numeric()
+            .integer()
         )
         with pytest.raises(AerospikeError) as excinfo:
             await b.create()
@@ -202,7 +202,7 @@ class TestAelStringCreate:
 
         client = GateSpyClient()
         b = IndexBuilder(client, "test", "users")
-        b.on_expression(Exp.int_bin("age")).named("idx").numeric()
+        b.on_expression(Exp.int_bin("age")).named("idx").integer()
         await b.create()
         assert client.gate_reads == 0
 
@@ -215,7 +215,7 @@ class TestAelStringCreate:
             SyncIB(sync_client, "test", "users")
             .on_expression("$.age")
             .named("users_age_ael_idx")
-            .numeric()
+            .integer()
         )
         b.create()
         pac = sync_client._async_client
@@ -231,7 +231,7 @@ class TestIndexTypeSetters:
         assert b._index_type is IndexType.BLOB
 
     def test_last_type_setter_wins(self):
-        b = _async_builder().on_bin("payload").numeric().blob()
+        b = _async_builder().on_bin("payload").integer().blob()
         assert b._index_type is IndexType.BLOB
 
     async def test_blob_passes_through_to_create(self):
@@ -270,7 +270,7 @@ class TestSyncBinPathValidation:
         client, b = self._sync_builder()
         client._async_client.create_index_blocking.side_effect = RuntimeError("boom")
         with pytest.raises(AerospikeError):
-            b.on_bin("age").named("idx_age").numeric().create()
+            b.on_bin("age").named("idx_age").integer().create()
 
     def test_drop_without_name_raises(self):
         _, b = self._sync_builder()

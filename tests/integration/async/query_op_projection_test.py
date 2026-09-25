@@ -84,7 +84,7 @@ async def _seed_qopproj_dataset(c, wait_for_set_visible):
 
     try:
         index_task = await (
-            session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").numeric().create()
+            session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").integer().create()
         )
     except Exception:
         # Already present from an earlier run: its build is done, no task to await.

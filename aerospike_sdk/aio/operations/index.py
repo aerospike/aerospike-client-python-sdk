@@ -42,7 +42,7 @@ class IndexBuilder(_IndexBuilderBase):
     """Configure a secondary index, then :meth:`create` or :meth:`drop` it.
 
     Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
-    :meth:`numeric` or :meth:`string` → optional :meth:`collection` or
+    :meth:`integer` or :meth:`string` → optional :meth:`collection` or
     :meth:`context` → ``await`` :meth:`create`. Expression-based indexes
     replace :meth:`on_bin` with :meth:`on_expression`.
 

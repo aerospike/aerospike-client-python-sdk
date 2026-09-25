@@ -81,7 +81,7 @@ def _admin_create_nested(pac) -> IndexTask:
         _SET,
         _BIN,
         _INDEX,
-        IndexType.NUMERIC,
+        IndexType.INTEGER,
         None,
         ctx=[CTX.map_key(_OUTER), CTX.map_key(_INNER)],
     )
@@ -93,7 +93,7 @@ def _admin_create_flat(pac, index_name: str) -> IndexTask:
         _SET,
         _BIN,
         index_name,
-        IndexType.NUMERIC,
+        IndexType.INTEGER,
         None,
         ctx=[CTX.map_key(_INNER)],
     )

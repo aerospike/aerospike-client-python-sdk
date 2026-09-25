@@ -110,8 +110,8 @@ class _SetSeed:
 _QSEL = _SetSeed(
     set_name=SET_NAME,
     indexes=(
-        _IndexSpec(BIN_AGE, INDEX_NAME, IndexType.NUMERIC),
-        _IndexSpec(BIN_SCORE, SCORE_INDEX_NAME, IndexType.NUMERIC),
+        _IndexSpec(BIN_AGE, INDEX_NAME, IndexType.INTEGER),
+        _IndexSpec(BIN_SCORE, SCORE_INDEX_NAME, IndexType.INTEGER),
     ),
     rows=tuple(
         (
@@ -126,7 +126,7 @@ _QSEL = _SetSeed(
 _QSCEXP = _SetSeed(
     set_name=SCOPE_SET_NAME,
     indexes=(
-        _IndexSpec(SCOPE_AGE_BIN, SCOPE_INT_INDEX, IndexType.NUMERIC),
+        _IndexSpec(SCOPE_AGE_BIN, SCOPE_INT_INDEX, IndexType.INTEGER),
         _IndexSpec(SCOPE_BLOB_BIN, SCOPE_BLOB_INDEX, IndexType.BLOB),
         _IndexSpec(
             SCOPE_MAP_BIN, SCOPE_MAP_INDEX, IndexType.STRING,
@@ -147,8 +147,8 @@ _QSCEXP = _SetSeed(
 _QSELHINT = _SetSeed(
     set_name=HINT_SET_NAME,
     indexes=(
-        _IndexSpec(BIN_AGE, HINT_INDEX_NAME, IndexType.NUMERIC),
-        _IndexSpec(BIN_SCORE, HINT_SCORE_INDEX_NAME, IndexType.NUMERIC),
+        _IndexSpec(BIN_AGE, HINT_INDEX_NAME, IndexType.INTEGER),
+        _IndexSpec(BIN_SCORE, HINT_SCORE_INDEX_NAME, IndexType.INTEGER),
     ),
     rows=(
         (hint_key_name("1"), {BIN_AGE: 25, BIN_SCORE: 25, BIN_COUNTRY: "US"}),

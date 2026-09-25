@@ -216,7 +216,7 @@ async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     # creating an index that already exists fails.
     await _drop_index_quiet(session, ds)
     index_task = await (
-        session.index(dataset=ds).on_bin("v").named(V_INDEX).numeric().create()
+        session.index(dataset=ds).on_bin("v").named(V_INDEX).integer().create()
     )
     try:
         # The build task is authoritative; a query probe only infers readiness.

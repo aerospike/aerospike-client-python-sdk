@@ -33,7 +33,7 @@ class TestParseIndexList:
             "set": "users",
             "bin": "age",
             "name": "age_idx",
-            "type": "numeric",
+            "type": "integer",
             "index_type": "default",
             "context": "null",
             "state": "RW",

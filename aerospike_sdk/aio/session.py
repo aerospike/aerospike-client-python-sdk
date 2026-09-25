@@ -860,7 +860,7 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         Example::
 
             users = DataSet.of("test", "users")
-            await session.index(users).on_bin("age").named("age_idx").numeric().create()
+            await session.index(users).on_bin("age").named("age_idx").integer().create()
 
         See Also:
             :meth:`Client.index`

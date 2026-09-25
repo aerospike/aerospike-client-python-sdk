@@ -98,7 +98,7 @@ async def test_quick_example_async(session):
         session.index(dataset=USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
-        .numeric()
+        .integer()
         .create()
     )
     try:
@@ -148,7 +148,7 @@ def test_quick_example_sync(doc_sync_cluster):
         s.index(dataset=USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
-        .numeric()
+        .integer()
         .create()
     )
     try:

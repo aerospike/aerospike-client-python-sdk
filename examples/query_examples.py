@@ -564,7 +564,7 @@ async def demonstrate_query_hints(session) -> None:
     print("\n--- Query hints ---")
     # A hint can only name an index that exists, so this section owns one.
     try:
-        task = await session.index(SET).on_bin("age").named("age_idx").numeric().create()
+        task = await session.index(SET).on_bin("age").named("age_idx").integer().create()
         await task.wait_till_complete()
     except IndexAlreadyExistsError:
         pass  # An earlier run already created it with the same definition.
