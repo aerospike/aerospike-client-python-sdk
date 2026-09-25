@@ -50,6 +50,11 @@ TLS_PASS = os.environ.get("AEROSPIKE_PASSWORD", "admin")
 
 USERS = DataSet.of("test", "tls_smoke")
 
+def _tls_login_host_env():
+    """A TLS node with security and a cleartext service port, for login-only TLS."""
+    return os.environ.get("AEROSPIKE_HOST_TLS_LOGIN")
+
+
 def _ca_exists():
     return TLS_CA is not None and os.path.isfile(TLS_CA)
 
@@ -323,3 +328,77 @@ class TestTlsTransportOptions:
             ),
             "tls_both",
         )
+
+
+
+@pytest.mark.skipif(
+    not _tls_login_host_env() or not _ca_exists(),
+    reason="AEROSPIKE_HOST_TLS_LOGIN and AEROSPIKE_TLS_CA_FILE required",
+)
+class TestTlsForLoginOnly:
+    """TLS for the login exchange only: the data connections are cleartext.
+
+    The falsifier is the port the client ends up on. The node advertises a
+    TLS service port and a cleartext one; after a login-only connect the
+    single node is reached on the cleartext port, and without the flag it
+    stays on the TLS port.
+    """
+
+    @pytest.fixture
+    def host_port(self):
+        return _parse_host_port(_tls_login_host_env())
+
+    def _definition(self, cls, hostname, port, for_login_only):
+        return (
+            cls(hostname, port)
+            .with_tls_config_of()
+            .tls_name(TLS_NAME or "")
+            .ca_file(TLS_CA)
+            .for_login_only(for_login_only)
+            .done()
+            .with_native_credentials(TLS_USER, TLS_PASS)
+            .using_services_alternate()
+        )
+
+    async def test_async_data_connections_move_to_the_cleartext_port(self, host_port):
+        hostname, tls_port = host_port
+        cluster = await self._definition(ClusterDefinition, hostname, tls_port, True).connect()
+        try:
+            nodes = await cluster._sdk_client.underlying_client.nodes()
+            assert len(nodes) == 1
+            assert nodes[0].host[1] != tls_port, f"node still on the TLS port {tls_port}"
+            key = DataSet.of("test", "tls_login").id("k")
+            session = cluster.create_session()
+            await session.upsert(key).put({"n": 1}).execute()
+            stream = await session.query(key).execute()
+            result = await stream.first()
+            assert result.record_or_raise().bins["n"] == 1
+        finally:
+            await cluster.close()
+
+    async def test_async_without_the_flag_the_node_stays_on_the_tls_port(self, host_port):
+        hostname, tls_port = host_port
+        cluster = await self._definition(ClusterDefinition, hostname, tls_port, False).connect()
+        try:
+            nodes = await cluster._sdk_client.underlying_client.nodes()
+            assert nodes[0].host[1] == tls_port
+        finally:
+            await cluster.close()
+
+    def test_sync_data_connections_move_to_the_cleartext_port(self, host_port):
+        hostname, tls_port = host_port
+        with self._definition(SyncClusterDefinition, hostname, tls_port, True).connect() as cluster:
+            nodes = cluster._sdk_client.underlying_client.nodes_blocking()
+            assert len(nodes) == 1
+            assert nodes[0].host[1] != tls_port, f"node still on the TLS port {tls_port}"
+            key = DataSet.of("test", "tls_login").id("k_sync")
+            session = cluster.create_session()
+            session.upsert(key).put({"n": 2}).execute()
+            result = session.query(key).execute().first()
+            assert result.record_or_raise().bins["n"] == 2
+
+    def test_sync_without_the_flag_the_node_stays_on_the_tls_port(self, host_port):
+        hostname, tls_port = host_port
+        with self._definition(SyncClusterDefinition, hostname, tls_port, False).connect() as cluster:
+            nodes = cluster._sdk_client.underlying_client.nodes_blocking()
+            assert nodes[0].host[1] == tls_port

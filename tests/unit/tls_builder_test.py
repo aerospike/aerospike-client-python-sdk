@@ -91,21 +91,11 @@ class TestCiphersReachTheConfig:
 class TestForLoginOnlyIsNotSilentlyDropped:
 
     @pytest.mark.parametrize("builder", _builders())
-    def test_for_login_only_raises_rather_than_lying(self, builder):
-        """Login-only TLS cannot be honored: the underlying connection decides
-        TLS once at connect and has no way to drop to cleartext afterwards.
-        Accepting the flag and ignoring it would misrepresent the transport to
-        the caller, so raise instead.
-
-        Deliberately a plain assertion and not an xfail. An xfail would
-        claim this is expected to start working, and that is undecided:
-        whether login-only TLS should be built at all is an open question,
-        since it trades data-plane encryption for throughput. If the answer is
-        no, raising is the permanent behavior and this test is correct as
-        written.
-        """
-        with pytest.raises(NotImplementedError, match="login"):
-            builder.tls_name("x").for_login_only(True).build_tls_config()
+    def test_login_only_reaches_the_config(self, builder):
+        """The flag rides on the built config; the client core does the rest."""
+        config = builder.tls_name("x").for_login_only(True).build_tls_config()
+        assert config.for_login_only is True
+        assert builder.for_login_only(False).build_tls_config().for_login_only is False
 
 
 class TestUnsatisfiableRestrictionIsRefused:
