@@ -43,7 +43,7 @@ from aerospike_sdk.metrics import (
 )
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
-from aerospike_sdk.sdk_config_monitor import SdkConfigSource
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 
 if typing.TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
@@ -120,6 +120,15 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         if sdk_settings is not None:
             sdk_client._sdk_settings = sdk_settings
         cluster = await cls._connect_and_wrap(sdk_client)
+        if sdk_settings is not None and sdk_config_source is not None:
+            # The server-reported name can select a `system.<clusterName>`
+            # block, so this has to happen before the settings are used.
+            sdk_settings, sdk_config_source = adopt_discovered_cluster_name(
+                sdk_client.underlying_client.server_cluster_name,
+                sdk_settings,
+                sdk_config_source,
+            )
+            sdk_client._sdk_settings = sdk_settings
         if sdk_settings is not None:
             # After connect: enabling collection needs a live client, and it
             # goes through the cluster so the export timer starts with it.
