@@ -353,12 +353,13 @@ class SindexDetail(dict):
     ) -> "Optional[SindexDetail]":
         """Build from a raw ``info`` response, or ``None`` when the index is absent.
 
-        An index the server does not know answers ``ERROR:201:no index``, which
-        is reported as ``None`` rather than an empty view.
+        An index the server does not know answers ``ERROR:201:...`` (the info
+        error form is ``ERROR:<code>:<message>``; 201 is index-not-found),
+        which is reported as ``None`` rather than an empty view.
         """
         command = f"sindex/{namespace}/{index_name}"
         body = single_info_body(response, command)
-        if body is None or "ERROR:201:no index" in body:
+        if body is None or body.startswith("ERROR:201:"):
             return None
         return cls(parse_info_body(body))
 

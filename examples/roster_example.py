@@ -32,7 +32,8 @@ async def run_examples(session) -> None:
     print(f"Namespace: {ns}")
     response = await info.info(f"roster:namespace={ns}")
     raw = next(iter(response.values()))
-    if "error" in raw.lower() or "observed_nodes=" not in raw:
+    # An info failure answers in the ERROR:<code>:<message> form.
+    if raw.startswith("ERROR") or "observed_nodes=" not in raw:
         print(f"Skipped: roster info unavailable for {ns!r} "
               f"(is it a strong-consistency namespace?): {raw}")
         return

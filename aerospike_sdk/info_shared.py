@@ -254,12 +254,14 @@ class InfoCommandsBase:
     ) -> Optional[Dict[str, str]]:
         """Return the sindex-details response, or ``None`` when missing.
 
-        A non-existent index reports ``{"sindex/<ns>/<name>": "ERROR:201:no index"}``.
+        A non-existent index reports ``{"sindex/<ns>/<name>": "ERROR:201:..."}``;
+        the info error form is ``ERROR:<code>:<message>``, and 201 is the
+        index-not-found code.
         """
         if not response:
             return None
         expected_key = f"sindex/{namespace}/{index_name}"
-        if expected_key in response and "ERROR:201:no index" in str(response[expected_key]):
+        if expected_key in response and str(response[expected_key]).startswith("ERROR:201:"):
             return None
         return response
 

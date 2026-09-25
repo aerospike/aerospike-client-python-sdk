@@ -36,7 +36,7 @@ import pytest
 
 from aerospike_async import CommitErrorType, CommitStatus, TxnState
 from aerospike_sdk import ClusterDefinition, DataSet, Host
-from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.exceptions import CommitError, ResultCode, TransactionError
 
 from integration.tcp_gate import TcpGate
 
@@ -240,9 +240,9 @@ class TestCommitFailedIsRetryable:
                     await tx.commit()
 
                 # Refused client-side, so it does not need the connection back.
-                with pytest.raises(AerospikeError) as excinfo:
+                with pytest.raises(TransactionError) as excinfo:
                     await tx.abort()
-                assert "commit already failed" in str(excinfo.value).lower()
+                assert excinfo.value.result_code == ResultCode.TXN_FAILED
 
                 # Refusing an abort must not finalize what it refused to end.
                 assert tx._txn is not None
