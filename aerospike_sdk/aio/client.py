@@ -36,6 +36,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
@@ -212,7 +213,10 @@ class Client(RoutingCapabilitiesMixin):
         refresh_log_levels()
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting to cluster seeds=%r", self._seeds)
-        self._client = await new_client(self._policy, self._seeds)
+        try:
+            self._client = await new_client(self._policy, self._seeds)
+        except PacAerospikeError as exc:
+            raise _convert_pac_exception(exc) from exc
         self._connected = True
         await self._warm_routing_capabilities()
         log.info(
@@ -281,7 +285,10 @@ class Client(RoutingCapabilitiesMixin):
         refresh_log_levels()
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
-        self._client = new_client_blocking(self._policy, self._seeds)
+        try:
+            self._client = new_client_blocking(self._policy, self._seeds)
+        except PacAerospikeError as exc:
+            raise _convert_pac_exception(exc) from exc
         self._connected = True
         self._warm_routing_capabilities_blocking()
         log.info(

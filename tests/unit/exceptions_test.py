@@ -336,6 +336,37 @@ class TestConvertPacException:
         assert type(pfc) is AerospikeError
         assert pfc.in_doubt is True
 
+    def test_client_failure_keeps_its_client_code(self):
+        pac = PacConnectionError("no node reachable")
+        pac.result_code = ResultCode.SERVER_NOT_AVAILABLE
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is ConnectionError
+        assert pfc.result_code == ResultCode.SERVER_NOT_AVAILABLE
+        assert pfc.result_code == -8
+
+    def test_retry_exhaustion_is_told_apart_from_a_slow_server(self):
+        pac = PacTimeoutError("gave up after 3 attempts")
+        pac.result_code = ResultCode.MAX_RETRIES_EXCEEDED
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TimeoutError
+        assert pfc.client is True
+        assert pfc.result_code == ResultCode.MAX_RETRIES_EXCEEDED
+
+    def test_refused_abort_is_a_transaction_error(self):
+        pac = PacAerospikeError("Error -17: Transaction failed")
+        pac.result_code = ResultCode.TXN_FAILED
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is TransactionError
+        assert pfc.result_code == ResultCode.TXN_FAILED
+        assert pfc.base_message == "Transaction failed"
+
+    def test_client_cut_stream_is_a_terminated_query(self):
+        pac = PacAerospikeError("Error -4: Scan was terminated")
+        pac.result_code = ResultCode.SCAN_TERMINATED
+        pfc = _convert_pac_exception(pac)
+        assert type(pfc) is QueryTerminatedError
+        assert pfc.result_code == ResultCode.SCAN_TERMINATED
+
     def test_unknown_exception_wrapped(self):
         pfc = _convert_pac_exception(RuntimeError("wat"))
         assert type(pfc) is AerospikeError

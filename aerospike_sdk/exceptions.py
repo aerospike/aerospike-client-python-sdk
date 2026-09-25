@@ -58,9 +58,12 @@ class AerospikeError(Exception):
     fall back to this type for all other Aerospike-related errors.
 
     Attributes:
-        result_code: Server :class:`~aerospike_async.exceptions.ResultCode` when
-            the failure came from a result code; ``None`` for purely client-side
-            issues (for example connection setup).
+        result_code: The :class:`~aerospike_async.exceptions.ResultCode` of the
+            failure. A server failure carries the code the server returned;
+            a failure the client raised on its own carries a client code
+            (``ResultCode.SERVER_NOT_AVAILABLE``, ``ResultCode.TXN_FAILED``),
+            the same negative number every Aerospike client reports for it.
+            ``None`` only on an instance built by hand.
         in_doubt: ``True`` when a write may have completed on the server despite
             the error; safe retry usually requires a read-verify strategy.
         sub_code: Server-supplied numeric subcode refining ``result_code`` when
@@ -154,8 +157,10 @@ class TimeoutError(AerospikeError):
             reported the timeout result code. A client timeout says nothing
             about server-side progress — pair it with ``in_doubt`` when
             deciding whether a write needs read-verification.
-        result_code: Set when the server returned a timeout-related code;
-            otherwise often ``None`` for client-side timeouts.
+        result_code: ``ResultCode.TIMEOUT`` whether the server or the client's
+            own deadline reported it, so both classify alike;
+            ``ResultCode.MAX_RETRIES_EXCEEDED`` when the retry budget, not the
+            clock, ran out -- a retry-policy problem rather than a slow server.
 
     See Also:
         :class:`ConnectionError`: Cluster reachability rather than deadline
@@ -184,8 +189,8 @@ class ConnectionError(AerospikeError):
     a deadline rather than an immediate transport failure.
 
     Attributes:
-        result_code: Usually ``None`` because the failure occurs before a server
-            result code is available.
+        result_code: ``ResultCode.SERVER_NOT_AVAILABLE`` when no node could be
+            reached, or the code of the failure that cut the connection.
 
     Example::
         try:
@@ -540,7 +545,8 @@ class QueryTerminatedError(QueryError):
     failures.
 
     Attributes:
-        result_code: May include ``ResultCode.QUERY_ABORTED`` or related codes.
+        result_code: ``ResultCode.QUERY_ABORTED`` or a related server code, or
+            ``ResultCode.SCAN_TERMINATED`` when the client cut the stream short.
     """
 
 
@@ -612,7 +618,10 @@ class TransactionError(AerospikeError):
     failure at once.
 
     Attributes:
-        result_code: An MRT-related code such as ``ResultCode.MRT_EXPIRED``.
+        result_code: An MRT-related server code such as
+            ``ResultCode.MRT_EXPIRED``, or ``ResultCode.TXN_FAILED`` when the
+            client refuses to continue a transaction whose commit already
+            failed.
     """
 
 
@@ -629,7 +638,8 @@ class CommitError(TransactionError):
             of the same work is not safe.
         verify_records: Verify-phase records or summaries, if available.
         roll_records: Roll-forward or rollback-phase records, if available.
-        result_code: Server or client result associated with the commit, when set.
+        result_code: The server code that tripped the failing stage when there
+            was one, otherwise ``ResultCode.TXN_FAILED``.
         in_doubt: Inherited; ``True`` when commit outcome may be ambiguous on
             the server.
     """
@@ -661,11 +671,18 @@ class CommitError(TransactionError):
 # Factory: ResultCode -> typed exception
 # ---------------------------------------------------------------------------
 
-# Server codes without a meaningfully distinct handling story (for example
-# INVALID_GEOJSON, PARAMETER_ERROR) fall through to AerospikeError; client-side
-# failures never reach this map (they convert by PAC exception type instead).
+# Codes without a meaningfully distinct handling story (for example
+# INVALID_GEOJSON, PARAMETER_ERROR) fall through to AerospikeError. Client-side
+# failures with their own exception type (timeouts, connection loss) convert
+# by that type before this map is consulted; the client codes listed here are
+# the ones that arrive on the generic client error.
 
 _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
+    # Client-assigned codes
+    ResultCode.TXN_FAILED: TransactionError,
+    ResultCode.SCAN_TERMINATED: QueryTerminatedError,
+    ResultCode.QUERY_TERMINATED: QueryTerminatedError,
+    ResultCode.SERIALIZE_ERROR: SerializationError,
     ResultCode.GENERATION_ERROR: GenerationError,
     # Authentication (identity / credential problems)
     ResultCode.NOT_AUTHENTICATED: AuthenticationError,
@@ -919,6 +936,19 @@ def _retry_context_kwargs(exc: Exception) -> dict:
     }
 
 
+def _client_error_kwargs(exc: Exception) -> dict:
+    """The fields a client-side PAC failure carries, ready for a constructor.
+
+    The result code rides along with the retry context: a client failure
+    carries its client code the way a server failure carries the server's.
+    """
+    return {
+        "result_code": getattr(exc, "result_code", None),
+        "in_doubt": getattr(exc, "in_doubt", False),
+        **_retry_context_kwargs(exc),
+    }
+
+
 def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> AerospikeError:
     """Convert a PAC exception to the appropriate PSDK typed exception.
 
@@ -947,31 +977,19 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         )
 
     if isinstance(exc, PacMaxErrorRate):
-        return MaxErrorRateError(
-            str(exc), in_doubt=getattr(exc, "in_doubt", False),
-            **_retry_context_kwargs(exc),
-        )
+        return MaxErrorRateError(str(exc), **_client_error_kwargs(exc))
 
     if isinstance(exc, PacTimeoutError):
         # PAC's TimeoutError is core's client-side deadline; a server-reported
         # timeout arrives as a ServerError with the TIMEOUT result code and
         # keeps the default client=False.
-        return TimeoutError(
-            str(exc), client=True, in_doubt=getattr(exc, "in_doubt", False),
-            **_retry_context_kwargs(exc),
-        )
+        return TimeoutError(str(exc), client=True, **_client_error_kwargs(exc))
 
     if isinstance(exc, PacConnectionError):
-        return ConnectionError(
-            str(exc), in_doubt=getattr(exc, "in_doubt", False),
-            **_retry_context_kwargs(exc),
-        )
+        return ConnectionError(str(exc), **_client_error_kwargs(exc))
 
     if isinstance(exc, PacInvalidNodeError):
-        return InvalidNodeError(
-            str(exc), in_doubt=getattr(exc, "in_doubt", False),
-            **_retry_context_kwargs(exc),
-        )
+        return InvalidNodeError(str(exc), **_client_error_kwargs(exc))
 
     if isinstance(exc, PacUDFBadResponse):
         return _result_code_to_exception(
@@ -996,6 +1014,15 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         )
 
     if isinstance(exc, PacAerospikeError):
+        # A generic client failure still names its condition by code, and
+        # some of those conditions have a type here (an abort refused after a
+        # failed commit is a TransactionError).
+        code = getattr(exc, "result_code", None)
+        if code is not None:
+            return _result_code_to_exception(
+                code, str(exc), getattr(exc, "in_doubt", False),
+                **_retry_context_kwargs(exc),
+            )
         return AerospikeError(
             str(exc), in_doubt=getattr(exc, "in_doubt", False),
             **_retry_context_kwargs(exc),
