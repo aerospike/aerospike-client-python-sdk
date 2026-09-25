@@ -725,3 +725,85 @@ class TestRemainingLoopVariableTypes:
         )
         assert len(selected) == 1
         assert "-74" in str(selected[0])
+
+
+class TestMapKeysIn:
+    """``on_map_keys_in`` selects a subset of a map's entries by key.
+
+    ``and_filter`` then narrows that subset by a predicate over each entry.
+    """
+
+    async def test_string_keys_select_only_those_entries(self, cluster):
+        session = cluster.create_session()
+        k = _key(37)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"m": {"alpha": 10, "beta": 20, "gamma": 30, "delta": 40}}
+        ).execute()
+
+        assert sorted(await _collect(
+            session, k, "m",
+            lambda b: b.on_map_keys_in(["alpha", "gamma", "zeta"]).collect_values(),
+        )) == [10, 30]
+
+    async def test_integer_keys_select_only_those_entries(self, cluster):
+        session = cluster.create_session()
+        k = _key(38)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {1: 100, 2: 200, 3: 300, 4: 400}}).execute()
+
+        assert sorted(await _collect(
+            session, k, "m",
+            lambda b: b.on_map_keys_in([1, 3]).collect_values(),
+        )) == [100, 300]
+
+    async def test_and_filter_narrows_the_selected_keys(self, cluster):
+        """Keys a, b, c, then only the entries whose value is over 10."""
+        session = cluster.create_session()
+        k = _key(39)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"a": 5, "b": 15, "c": 25, "d": 35}}).execute()
+
+        flat = await _collect(
+            session, k, "m",
+            lambda b: b.on_map_keys_in(["a", "b", "c"]).and_filter(_value_over(10))
+            .collect_map_entries(),
+        )
+        assert dict(zip(flat[::2], flat[1::2])) == {"b": 15, "c": 25}
+
+    async def test_keys_in_below_element_navigation(self, cluster):
+        session = cluster.create_session()
+        k = _key(40)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"catalog": {"prices": {"a": 1, "b": 2, "c": 3}}}
+        ).execute()
+
+        assert sorted(await _collect(
+            session, k, "catalog",
+            lambda b: b.on_map_key("prices").on_map_keys_in(["a", "c"]).collect_values(),
+        )) == [1, 3]
+
+    async def test_keys_in_on_every_child(self, cluster):
+        """One field out of each row: each_child, then keys_in."""
+        session = cluster.create_session()
+        k = _key(41)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"rows": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
+        ).execute()
+
+        assert sorted(await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_map_keys_in(["a"]).collect_values(),
+        )) == [1, 3]
+
+    async def test_modify_only_the_selected_keys(self, cluster):
+        session = cluster.create_session()
+        k = _key(42)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"a": 1, "b": 2, "c": 3}}).execute()
+
+        add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
+        await session.update(k).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
+        assert (await _bins(session, k))["m"] == {"a": 11, "b": 2, "c": 13}
