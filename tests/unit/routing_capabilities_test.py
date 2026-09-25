@@ -13,6 +13,8 @@
 """Unit tests for the connect-time routing capability cache."""
 
 import asyncio
+import threading
+import time
 from datetime import timedelta
 
 import pytest
@@ -241,6 +243,42 @@ class TestTendIntervalRefresh:
         client = _Client(_FakePacClient(_FakeVersion()))
         assert client.supports_server_compiled_ael is True
         assert client.supports_query_selection is True
+
+    def test_concurrent_first_reads_all_see_the_interval(self):
+        """Threads racing the first read of the interval all get the value.
+
+        The interval is computed once and cached against the settings it came
+        from. A cache that publishes "computed for these settings" before the
+        value itself lets a second thread, arriving between the two stores,
+        take the cached ``None`` and fail the comparison in the refresh check.
+        Under the GIL that window is a few bytecodes; on a free-threaded build
+        with many sync threads entering a builder at once it opens within
+        seconds. The settings stand-in sleeps inside the read so the window is
+        wide on every build.
+        """
+
+        class _SlowSettings:
+            @property
+            def tend_interval(self):
+                time.sleep(0.005)
+                return timedelta(seconds=7)
+
+        client = _Client(_FakePacClient(_FakeVersion()))
+        client._sdk_settings = _SlowSettings()
+        n = 32
+        barrier = threading.Barrier(n)
+        results = [None] * n
+
+        def read(i):
+            barrier.wait()
+            results[i] = client._routing_capability_ttl_seconds()
+
+        threads = [threading.Thread(target=read, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert results == [7.0] * n
 
 
 class TestRefreshUnderARunningLoop:

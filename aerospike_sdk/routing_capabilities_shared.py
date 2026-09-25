@@ -40,7 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, List, Optional, Protocol
+from typing import Any, List, Optional, Protocol, Tuple
 
 from aerospike_async import ClientPolicy
 
@@ -68,8 +68,7 @@ class _RoutingCapabilitiesClient(Protocol):
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_refresh: Optional[asyncio.Task[None]]
-    _routing_capability_ttl_cached: Optional[float]
-    _routing_capability_ttl_settings: Any
+    _routing_capability_ttl: Optional[Tuple[Any, float]]
 
     # Declared so the mixin's own ``self``-annotated methods may call each other.
     def _client_can_list_nodes(self) -> bool: ...
@@ -89,8 +88,7 @@ class RoutingCapabilitiesMixin:
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_refresh: Optional[asyncio.Task[None]]
-    _routing_capability_ttl_cached: Optional[float]
-    _routing_capability_ttl_settings: Any
+    _routing_capability_ttl: Optional[Tuple[Any, float]]
 
     def _init_routing_capability_cache(self) -> None:
         """Initialize routing caches; call from client ``__init__``."""
@@ -98,8 +96,7 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
         self._routing_capability_refresh = None
-        self._routing_capability_ttl_cached = None
-        self._routing_capability_ttl_settings = None
+        self._routing_capability_ttl = None
 
     def _clear_routing_capability_cache(self) -> None:
         """Drop routing caches; call from client close paths."""
@@ -109,8 +106,7 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
-        self._routing_capability_ttl_cached = None
-        self._routing_capability_ttl_settings = None
+        self._routing_capability_ttl = None
 
     def _client_can_list_nodes(self: _RoutingCapabilitiesClient) -> bool:
         """Whether this client's PAC handle exposes a node list.
@@ -179,14 +175,19 @@ class RoutingCapabilitiesMixin:
         cached and recomputed when ``_sdk_settings`` is swapped wholesale.
         """
         settings = self._sdk_settings
-        if self._routing_capability_ttl_settings is not settings:
-            self._routing_capability_ttl_settings = settings
-            interval = settings.tend_interval
-            if interval is None:
-                self._routing_capability_ttl_cached = _pac_default_tend_interval_seconds()
-            else:
-                self._routing_capability_ttl_cached = interval.total_seconds()
-        return self._routing_capability_ttl_cached
+        cached = self._routing_capability_ttl
+        if cached is not None and cached[0] is settings:
+            return cached[1]
+        interval = settings.tend_interval
+        if interval is None:
+            ttl = _pac_default_tend_interval_seconds()
+        else:
+            ttl = interval.total_seconds()
+        # The settings marker and the value travel as one tuple through one
+        # attribute, so a concurrent reader sees either the previous pair or
+        # this complete one, never the marker without its value.
+        self._routing_capability_ttl = (settings, ttl)
+        return ttl
 
     def _resolve_routing_capabilities_blocking(
         self: _RoutingCapabilitiesClient,
