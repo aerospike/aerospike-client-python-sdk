@@ -22,7 +22,7 @@ import typing
 from typing import Any, Optional, TYPE_CHECKING
 
 
-from aerospike_async import AbortStatus, CommitStatus, Txn
+from aerospike_async import AbortStatus, CommitStatus, Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.aio.session import Session
@@ -142,6 +142,13 @@ class TransactionalSession(TransactionalSessionBase, Session):
         monitor cleanup was left to the server. An abandoned roll-forward
         raises instead — those writes are not yet visible.
 
+        A commit that fails **in doubt** — the roll-forward mark may or may not
+        have reached the server — leaves the transaction open and retryable,
+        and calling this again is the only way to resolve it: :meth:`abort` is
+        refused from that point, because rolling back could discard writes the
+        server is committing. Every other commit failure finalizes the session
+        as before.
+
         Raises:
             RuntimeError: If the session has no active transaction.
             CommitError: The roll-forward was abandoned, or another commit
@@ -165,8 +172,9 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 roll_policy=to_txn_roll_policy(self._behavior.get_txn_roll_settings()),
             )
         except Exception as e:
-            self._finalized = True
-            self._txn = None
+            if not self._commit_is_retryable():
+                self._finalized = True
+                self._txn = None
             raise _convert_pac_exception(e) from e
         self._finalized = True
         # Drop the txn reference so operations issued after an explicit
@@ -175,11 +183,27 @@ class TransactionalSession(TransactionalSessionBase, Session):
         self._txn = None
         return status
 
+    def _commit_is_retryable(self) -> bool:
+        """Whether a failed commit left the transaction resolvable by retrying.
+
+        True only for an in-doubt roll-forward, which the client core marks by
+        moving the transaction to ``COMMIT_FAILED``. Holding the transaction
+        open in that one case is what makes the retry possible at all.
+        """
+        return self._txn is not None and self._txn.state == TxnState.COMMIT_FAILED
+
     async def abort(self) -> AbortStatus:
         """Abort the transaction and return the server-reported status.
 
+        Refused after a commit failed in doubt: the server may be rolling the
+        transaction forward, and rolling back would discard those writes. The
+        transaction stays open in that case, so :meth:`commit` can still be
+        retried.
+
         Raises:
             RuntimeError: If the session has no active transaction.
+            AerospikeError: If the abort was refused because a commit already
+                failed in doubt, or the roll-back itself failed.
 
         Returns:
             :class:`~aerospike_async.AbortStatus` reported by the server.
@@ -195,8 +219,9 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 roll_policy=to_txn_roll_policy(self._behavior.get_txn_roll_settings()),
             )
         except Exception as e:
-            self._finalized = True
-            self._txn = None
+            if not self._commit_is_retryable():
+                self._finalized = True
+                self._txn = None
             raise _convert_pac_exception(e) from e
         self._finalized = True
         self._txn = None
@@ -220,8 +245,11 @@ class TransactionalSession(TransactionalSessionBase, Session):
         try:
             if exc_type is None:
                 await self.commit()
-            else:
+            elif not self._commit_is_retryable():
                 await self.abort()
+            # An in-doubt commit already failed inside the block. Abort is
+            # refused from here, and raising that refusal would replace the
+            # error the caller is already handling, so leave it to propagate.
         finally:
             self._finalized = True
             # Drop the txn reference so builders created after exit don't

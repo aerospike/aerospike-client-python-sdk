@@ -40,8 +40,10 @@ unroutable -- point this at a single-node cluster.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 from types import TracebackType
-from typing import Optional
+from typing import Iterator, Optional
 
 # Every proto message starts with a version byte, a type byte, then a 48-bit
 # body length.
@@ -193,3 +195,35 @@ class TcpGate:
         tb: Optional[TracebackType],
     ) -> None:
         await self.close()
+
+
+@contextlib.contextmanager
+def threaded_gate(host: str, port: int) -> Iterator[TcpGate]:
+    """A :class:`TcpGate` for synchronous tests, on its own event loop thread.
+
+    The gate is an asyncio server, and the sync client has no loop to host it.
+    Running one on a daemon thread keeps the fault injection identical for both
+    runtimes rather than growing a second, differently-behaved harness.
+
+    ``refuse_after_client_messages`` is a plain attribute write, so it is safe
+    to call from the test thread; opening and closing are not, and go through
+    the loop.
+
+    Usage::
+
+        with threaded_gate("127.0.0.1", 3130) as gate:
+            cluster_def = ClusterDefinition("127.0.0.1", gate.port).force_single_node()
+    """
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        gate = asyncio.run_coroutine_threadsafe(TcpGate.open(host, port), loop).result(10)
+        try:
+            yield gate
+        finally:
+            asyncio.run_coroutine_threadsafe(gate.close(), loop).result(10)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
