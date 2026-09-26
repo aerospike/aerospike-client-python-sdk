@@ -44,6 +44,7 @@ from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import (
+    DataSetWriteBuilder,
     QueryBuilder,
     WriteSegmentBuilder,
     _SingleKeyWriteSegment,
@@ -89,7 +90,9 @@ def _convert_window_slots(slots: List[Any]) -> List[Any]:
     ]
 
 
-class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
+class Session(
+    SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession", DataSetWriteBuilder],
+):
     """Perform reads and writes against Aerospike with a fixed :class:`~aerospike_sdk.policy.behavior.Behavior`.
 
     A session binds a connected ``Client`` to policy defaults (timeouts,
@@ -717,6 +720,24 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_verb(op_type, target)
+
+    def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:
+        """Dataset-scoped tabular write; rows arrive through ``bins(...)``."""
+        qb = QueryBuilder(
+            client=self._client._client,
+            namespace=dataset.namespace,
+            set_name=dataset.set_name,
+            behavior=self._behavior,
+            cached_read_policy=self._cached_read_policy,
+            cached_write_policy=self._cached_write_policy,
+            cached_read_policy_sc=self._cached_read_policy_sc,
+            cached_write_policy_sc=self._cached_write_policy_sc,
+            txn=self._txn,
+            namespace_mode_resolver=self._resolve_namespace_mode,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
+        )
+        return DataSetWriteBuilder(qb, op_type, dataset)
 
     def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
         """Single-key write shortcut: bypass QueryBuilder entirely.

@@ -61,27 +61,28 @@ async def run_examples(session) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Write multiple records — one batched call, not a call per record
+    # Write multiple records — one batched call, not a call per record.
+    # Records that share the same bins go in as rows under a bin schema:
+    # the verb takes the dataset, each row starts with the record's id.
     # ------------------------------------------------------------------
     print("Write 3 records")
     await (
-        session.upsert(SET.id(1)).bin("name").set_to("Tim").bin("age").set_to(312)
-        .upsert(SET.id(2)).bin("name").set_to("Bob").bin("age").set_to(25)
-        .upsert(SET.id(3)).bin("name").set_to("Jane").bin("age").set_to(46)
+        session.upsert(SET).bins("name", "age")
+        .row(1, "Tim", 312)
+        .row(2, "Bob", 25)
+        .row(3, "Jane", 46)
         .execute()
     )
 
-    # Ten records is the same one call, built in a loop rather than spelled out.
+    # Ten records is the same one call; rows() takes any iterable of tuples.
     print("Write 10 records")
-    batch = session
-    for pk, name, age in [
+    people = [
         (10, "Tim", 312), (11, "Bob", 25), (12, "Jane", 46),
         (13, "Tim", 200), (14, "User1", 201), (15, "User2", 202),
         (16, "User3", 203), (17, "User4", 204), (18, "User5", 205),
         (19, "User6", 206),
-    ]:
-        batch = batch.upsert(SET.id(pk)).bin("name").set_to(name).bin("age").set_to(age)
-    await batch.execute()
+    ]
+    await session.upsert(SET).bins("name", "age").rows(people).execute()
 
     # ------------------------------------------------------------------
     # Read 1 record (point read)

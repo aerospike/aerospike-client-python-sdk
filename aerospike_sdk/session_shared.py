@@ -23,13 +23,14 @@ to reach across tiers for these.
 from __future__ import annotations
 
 from typing import (
-    TYPE_CHECKING,
     Any,
     Generic,
     List,
     NamedTuple,
     Optional,
+    overload,
     Tuple,
+    TYPE_CHECKING,
     TypeVar,
     Union,
 )
@@ -46,7 +47,10 @@ from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
 if TYPE_CHECKING:  # Forward-reference only; the concrete builders live per-tree.
     from aerospike_async import Txn
 
-    from aerospike_sdk.operations_shared import _WriteSegmentBuilderBase
+    from aerospike_sdk.operations_shared import (
+        _DataSetWriteBuilderBase,
+        _WriteSegmentBuilderBase,
+    )
     from aerospike_sdk.policy.behavior import Behavior
     from aerospike_sdk.query_shared import _QueryBuilderBase
 
@@ -54,6 +58,7 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete builders live per-tree
 # so the factories inherited from :class:`SessionBase` return the
 # runtime-appropriate builder type instead of a single hard-coded tree's.
 _WSB = TypeVar("_WSB", bound="_WriteSegmentBuilderBase")
+_DSWB = TypeVar("_DSWB", bound="_DataSetWriteBuilderBase")
 _QB = TypeVar("_QB", bound="_QueryBuilderBase")
 # The tree's transactional-session type. Each leaf binds this to its own class
 # (via a forward reference, so the runtime never has to close the
@@ -111,7 +116,7 @@ def _namespace_sc_status(
     )
 
 
-class SessionBase(Generic[_WSB, _QB, _TS]):
+class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     """Runtime-agnostic session behavior shared by the async and sync sessions.
 
     Holds the parts of a session that never touch the event loop: argument
@@ -246,6 +251,10 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         """Single-key write shortcut; overridden per leaf. Not called on the base."""
         raise NotImplementedError
 
+    def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> _DSWB:
+        """Dataset-scoped tabular write; overridden per leaf. Not called on the base."""
+        raise NotImplementedError
+
     def _build_write_segment(
         self,
         op_type: str,
@@ -321,6 +330,10 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
     # `_build_write_segment`. The chained terminal (`.execute()`) is awaited on
     # async sessions and blocking on sync sessions.
 
+    @overload
+    def upsert(self, arg1: DataSet, /) -> _DSWB: ...
+
+    @overload
     def upsert(
         self,
         arg1: Optional[Union[Key, List[Key]]] = None,
@@ -331,7 +344,19 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> _WSB:
+    ) -> _WSB: ...
+
+    def upsert(  # type: ignore[misc]
+        self,
+        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
+        arg2: Optional[Key] = None,
+        *keys: Key,
+        key: Optional[Key] = None,
+        dataset: Optional[DataSet] = None,
+        namespace: Optional[str] = None,
+        set_name: Optional[str] = None,
+        key_value: Optional[Union[str, int, bytes]] = None,
+    ) -> Union[_WSB, _DSWB]:
         """Start a create-or-replace write for one or more keys.
 
         If the record exists, bins are merged according to the chained
@@ -339,9 +364,11 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         the record must not already exist.
 
         Args:
-            arg1: A single :class:`~aerospike_async.Key`, a list of keys, or omit
-                and pass ``key`` / ``dataset`` + ``key_value`` / ``namespace`` +
-                ``set_name`` + ``key_value``.
+            arg1: A single :class:`~aerospike_async.Key`, a list of keys, a
+                :class:`~aerospike_sdk.dataset.DataSet` for a tabular write
+                (rows follow via ``bins(...)``), or omit and pass ``key`` /
+                ``dataset`` + ``key_value`` / ``namespace`` + ``set_name`` +
+                ``key_value``.
             arg2: Optional second key when passing multiple keys positionally.
             *keys: Additional keys when the first positional is a key.
             key: Single key (keyword form).
@@ -362,6 +389,9 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
             users = DataSet.of("test", "users")
             session.upsert(users.id(1)).put({"name": "Tim", "age": 30}).execute()
 
+            # Several records with the same bins, as rows under a column schema:
+            session.upsert(users).bins("name", "age").row(1, "Tim", 30).row(2, "Bob", 25).execute()
+
         See Also:
             :meth:`insert`: Fails if the record already exists.
             :meth:`update`: Fails if the record does not exist.
@@ -369,12 +399,18 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         """
         if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
             return self._fast_write_segment("upsert", arg1)  # type: ignore[arg-type]
+        if isinstance(arg1, DataSet):
+            return self._dataset_write_builder("upsert", arg1)
         return self._build_write_segment(
-            "upsert", arg1, arg2, *keys,
+            "upsert", arg1, arg2, *keys,  # type: ignore[arg-type]
             key=key, dataset=dataset, namespace=namespace,
             set_name=set_name, key_value=key_value,
         )
 
+    @overload
+    def insert(self, arg1: DataSet, /) -> _DSWB: ...
+
+    @overload
     def insert(
         self,
         arg1: Optional[Union[Key, List[Key]]] = None,
@@ -385,7 +421,19 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> _WSB:
+    ) -> _WSB: ...
+
+    def insert(  # type: ignore[misc]
+        self,
+        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
+        arg2: Optional[Key] = None,
+        *keys: Key,
+        key: Optional[Key] = None,
+        dataset: Optional[DataSet] = None,
+        namespace: Optional[str] = None,
+        set_name: Optional[str] = None,
+        key_value: Optional[Union[str, int, bytes]] = None,
+    ) -> Union[_WSB, _DSWB]:
         """Start a create-only write; fails on execute if the record already exists.
 
         Key resolution matches :meth:`upsert`.
@@ -407,12 +455,18 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         """
         if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
             return self._fast_write_segment("insert", arg1)  # type: ignore[arg-type]
+        if isinstance(arg1, DataSet):
+            return self._dataset_write_builder("insert", arg1)
         return self._build_write_segment(
-            "insert", arg1, arg2, *keys,
+            "insert", arg1, arg2, *keys,  # type: ignore[arg-type]
             key=key, dataset=dataset, namespace=namespace,
             set_name=set_name, key_value=key_value,
         )
 
+    @overload
+    def update(self, arg1: DataSet, /) -> _DSWB: ...
+
+    @overload
     def update(
         self,
         arg1: Optional[Union[Key, List[Key]]] = None,
@@ -423,7 +477,19 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> _WSB:
+    ) -> _WSB: ...
+
+    def update(  # type: ignore[misc]
+        self,
+        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
+        arg2: Optional[Key] = None,
+        *keys: Key,
+        key: Optional[Key] = None,
+        dataset: Optional[DataSet] = None,
+        namespace: Optional[str] = None,
+        set_name: Optional[str] = None,
+        key_value: Optional[Union[str, int, bytes]] = None,
+    ) -> Union[_WSB, _DSWB]:
         """Start an update-only write; fails on execute if the record does not exist.
 
         Key resolution matches :meth:`upsert`.
@@ -446,12 +512,18 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         """
         if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
             return self._fast_write_segment("update", arg1)  # type: ignore[arg-type]
+        if isinstance(arg1, DataSet):
+            return self._dataset_write_builder("update", arg1)
         return self._build_write_segment(
-            "update", arg1, arg2, *keys,
+            "update", arg1, arg2, *keys,  # type: ignore[arg-type]
             key=key, dataset=dataset, namespace=namespace,
             set_name=set_name, key_value=key_value,
         )
 
+    @overload
+    def replace(self, arg1: DataSet, /) -> _DSWB: ...
+
+    @overload
     def replace(
         self,
         arg1: Optional[Union[Key, List[Key]]] = None,
@@ -462,7 +534,19 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         namespace: Optional[str] = None,
         set_name: Optional[str] = None,
         key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> _WSB:
+    ) -> _WSB: ...
+
+    def replace(  # type: ignore[misc]
+        self,
+        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
+        arg2: Optional[Key] = None,
+        *keys: Key,
+        key: Optional[Key] = None,
+        dataset: Optional[DataSet] = None,
+        namespace: Optional[str] = None,
+        set_name: Optional[str] = None,
+        key_value: Optional[Union[str, int, bytes]] = None,
+    ) -> Union[_WSB, _DSWB]:
         """Start a replace-entire-record write (create or replace).
 
         Key resolution matches :meth:`upsert`.
@@ -485,8 +569,10 @@ class SessionBase(Generic[_WSB, _QB, _TS]):
         """
         if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
             return self._fast_write_segment("replace", arg1)  # type: ignore[arg-type]
+        if isinstance(arg1, DataSet):
+            return self._dataset_write_builder("replace", arg1)
         return self._build_write_segment(
-            "replace", arg1, arg2, *keys,
+            "replace", arg1, arg2, *keys,  # type: ignore[arg-type]
             key=key, dataset=dataset, namespace=namespace,
             set_name=set_name, key_value=key_value,
         )

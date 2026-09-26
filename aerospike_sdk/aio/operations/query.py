@@ -52,6 +52,8 @@ from aerospike_sdk.operations_shared import (
     _cmd_enabled,
     _WriteSegmentBuilderBase,
     _WriteVerbs,
+    _DataSetWriteBuilderBase,
+    _RowWriteBuilderBase,
 )
 
 from aerospike_sdk.policy.policy_mapper import (
@@ -1510,6 +1512,51 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             _cmd_done(op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
                       self._client_fast)
         return RecordStream._from_single(key, record)
+
+class RowWriteBuilder(_RowWriteBuilderBase["QueryBuilder"]):
+    """Rows of a tabular write, executed on the async runtime.
+
+    Reached from ``session.upsert(dataset).bins(...)``; see
+    :class:`~aerospike_sdk.operations_shared._RowWriteBuilderBase` for the
+    row and per-row verbs.
+    """
+
+    __slots__ = ()
+
+    async def execute(self, on_error: OnError | None = None) -> RecordStream:
+        """Write every row as one batch and return the per-row results.
+
+        Args:
+            on_error: Optional error strategy or callback; see
+                :meth:`QueryBuilder.execute`.
+
+        Returns:
+            :class:`~aerospike_sdk.record_stream.RecordStream`, one result per row.
+
+        Raises:
+            ValueError: If no row was added.
+
+        Example::
+
+            stream = await session.upsert(users).bins("name", "age").rows(people).execute()
+            failed = [r for r in await stream.collect() if not r.is_ok]
+        """
+        self._check_has_rows()
+        return await self._qb.execute(on_error)
+
+    def stream(self, on_error: OnError | None = None) -> AwaitableContext[RecordStream]:
+        """Lazy streaming variant of :meth:`execute`."""
+        self._check_has_rows()
+        return self._qb.stream(on_error)
+
+
+class DataSetWriteBuilder(_DataSetWriteBuilderBase["QueryBuilder"]):
+    """A write verb scoped to a dataset; :meth:`bins` opens the row builder."""
+
+    __slots__ = ()
+
+    _row_builder_cls = RowWriteBuilder
+
 
 # Bind the async write-segment class onto the shared base's factory hook so
 # `_start_write_segment` on an async QueryBuilder chains into the async

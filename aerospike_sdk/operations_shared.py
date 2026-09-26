@@ -27,17 +27,19 @@ import logging
 from datetime import datetime, timedelta
 from time import perf_counter
 from typing import (
-    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
     ClassVar,
     Generic,
+    Iterable,
     List,
     Optional,
+    overload,
+    Sequence,
+    TYPE_CHECKING,
     TypeVar,
     Union,
-    overload,
 )
 
 from typing import Self
@@ -60,6 +62,7 @@ from aerospike_async import (
 from aerospike_async.exceptions import ResultCode
 
 
+from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.loggers import SdkLoggers
@@ -878,6 +881,223 @@ _FAST_WRITES_REQUIRING_KEY = frozenset({"update", "replace_if_exists"})
 # Server limit on bin-name length. Used only to explain a rejection the server
 # already made -- the SDK does not pre-validate against it.
 _MAX_BIN_NAME_LEN = 15
+
+
+class _DataSetWriteBuilderBase(Generic[_QB]):
+    """A write verb scoped to a dataset rather than to keys.
+
+    Reached from ``session.upsert(dataset)`` and its siblings. The only step
+    is :meth:`bins`, which fixes the column schema and hands back the row
+    builder. Runtime subclasses bind ``_row_builder_cls`` so the rows execute
+    on their own runtime.
+    """
+
+    __slots__ = ("_qb", "_op_type", "_dataset")
+
+    _row_builder_cls: type
+
+    def __init__(self, qb: _QB, op_type: str, dataset: DataSet) -> None:
+        self._qb = qb
+        self._op_type = op_type
+        self._dataset = dataset
+
+    def bins(self, bin_name: str, *bin_names: str) -> "_RowWriteBuilderBase[_QB]":
+        """Fix the bin names every row supplies values for, in order.
+
+        Args:
+            bin_name: The first bin name.
+            *bin_names: Further bin names.
+
+        Returns:
+            A row builder; add records with :meth:`_RowWriteBuilderBase.row`
+            or :meth:`_RowWriteBuilderBase.rows`.
+
+        Raises:
+            TypeError: If a bin name is not a string.
+
+        Example::
+
+            await (
+                session.upsert(users).bins("name", "age")
+                .row(1, "Tim", 312)
+                .row(2, "Bob", 25)
+                .execute()
+            )
+        """
+        names = (bin_name, *bin_names)
+        for name in names:
+            if not isinstance(name, str):
+                raise TypeError(f"bin names must be str, got {type(name).__name__}")
+        return self._row_builder_cls(self._qb, self._op_type, self._dataset, names)
+
+
+class _RowWriteBuilderBase(Generic[_QB]):
+    """Rows for a tabular write: one record per ``(id, *values)``.
+
+    Each row becomes its own write segment on the shared query builder, so the
+    rows leave as one batch and come back as one record stream, exactly as a
+    hand-chained ``upsert(key).put(...)`` sequence would. The TTL and
+    generation verbs apply to the most recent row; the ``default_`` verbs
+    cover every row that sets none of its own.
+    """
+
+    __slots__ = ("_qb", "_op_type", "_dataset", "_bin_names", "_row_count")
+
+    def __init__(
+        self, qb: _QB, op_type: str, dataset: DataSet, bin_names: Sequence[str],
+    ) -> None:
+        self._qb = qb
+        self._op_type = op_type
+        self._dataset = dataset
+        self._bin_names = tuple(bin_names)
+        self._row_count = 0
+
+    # -- Rows -----------------------------------------------------------------
+
+    def row(self, identifier: Union[str, int, bytes], *values: Any) -> Self:
+        """Add one record: its id in the dataset, then one value per bin.
+
+        Args:
+            identifier: The record's user key within the dataset.
+            *values: One value per bin named in ``bins()``, in the same order.
+
+        Returns:
+            self, for the next row or a per-row verb.
+
+        Raises:
+            ValueError: If the value count differs from the bin count.
+
+        Example::
+
+            .bins("name", "age").row(1, "Tim", 312).row(2, "Bob", 25)
+        """
+        names = self._bin_names
+        if len(values) != len(names):
+            raise ValueError(
+                f"row({identifier!r}, ...) supplies {len(values)} values for "
+                f"{len(names)} bins {names}"
+            )
+        qb = self._qb
+        qb._finalize_current_spec()
+        qb._op_type = self._op_type
+        qb._single_key = self._dataset.id(identifier)
+        qb._keys = None
+        ops = qb._operations
+        for name, value in zip(names, values):
+            ops.append(Operation.put(name, value))
+        self._row_count += 1
+        return self
+
+    def rows(self, rows: Iterable[Sequence[Any]]) -> Self:
+        """Add many records from an iterable of ``(id, *values)`` sequences.
+
+        Args:
+            rows: Any iterable, a list or a generator alike, whose items are
+                sequences holding the id first and then one value per bin.
+
+        Returns:
+            self.
+
+        Raises:
+            ValueError: If any row's value count differs from the bin count.
+
+        Example::
+
+            people = [(1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46)]
+            await session.upsert(users).bins("name", "age").rows(people).execute()
+        """
+        for item in rows:
+            self.row(item[0], *item[1:])
+        return self
+
+    # -- Per-row verbs (apply to the most recent row) ---------------------------
+
+    def _require_row(self, verb: str) -> _QB:
+        if self._row_count == 0:
+            raise TypeError(f"{verb}() applies to the most recent row; call row() first")
+        return self._qb
+
+    def expire_record_after_seconds(self, seconds: int) -> Self:
+        """Set the TTL of the most recent row; see the write-segment verb of the same name."""
+        self._require_row("expire_record_after_seconds")._ttl_seconds = seconds
+        return self
+
+    def expire_record_after(self, duration: timedelta) -> Self:
+        """Set the TTL of the most recent row from a ``timedelta``."""
+        self._require_row("expire_record_after")._ttl_seconds = _seconds_from_timedelta(duration)
+        return self
+
+    def expire_record_at(self, when: datetime) -> Self:
+        """Expire the most recent row at an absolute time."""
+        self._require_row("expire_record_at")._ttl_seconds = _seconds_until(when)
+        return self
+
+    def never_expire(self) -> Self:
+        """The most recent row never expires."""
+        self._require_row("never_expire")._ttl_seconds = _TTL_NEVER_EXPIRE
+        return self
+
+    def with_no_change_in_expiration(self) -> Self:
+        """Keep the existing TTL of the most recent row's record."""
+        self._require_row("with_no_change_in_expiration")._ttl_seconds = _TTL_DONT_UPDATE
+        return self
+
+    def expiry_from_server_default(self) -> Self:
+        """The most recent row takes the namespace default TTL."""
+        self._require_row("expiry_from_server_default")._ttl_seconds = _TTL_SERVER_DEFAULT
+        return self
+
+    def ensure_generation_is(self, generation: int) -> Self:
+        """Require the most recent row's record to be at *generation* when written.
+
+        Raises:
+            ValueError: If generation is <= 0.
+        """
+        if generation <= 0:
+            raise ValueError("Generation must be greater than 0")
+        self._require_row("ensure_generation_is")._generation = generation
+        return self
+
+    # -- Chain-wide verbs -------------------------------------------------------
+
+    def default_expire_record_after_seconds(self, seconds: int) -> Self:
+        """TTL for every row that sets none of its own."""
+        self._qb.default_expire_record_after_seconds(seconds)
+        return self
+
+    def default_expire_record_after(self, duration: timedelta) -> Self:
+        """TTL, as a ``timedelta``, for every row that sets none of its own."""
+        self._qb.default_expire_record_after(duration)
+        return self
+
+    def default_expire_record_at(self, when: datetime) -> Self:
+        """Absolute expiry for every row that sets none of its own."""
+        self._qb.default_expire_record_at(when)
+        return self
+
+    def default_never_expire(self) -> Self:
+        """Rows that set no TTL never expire."""
+        self._qb.default_never_expire()
+        return self
+
+    def default_with_no_change_in_expiration(self) -> Self:
+        """Rows that set no TTL keep their record's existing TTL."""
+        self._qb.default_with_no_change_in_expiration()
+        return self
+
+    def default_expiry_from_server_default(self) -> Self:
+        """Rows that set no TTL take the namespace default."""
+        self._qb.default_expiry_from_server_default()
+        return self
+
+    def with_txn(self, txn: Optional[Txn]) -> Self:
+        """Run every row inside *txn*, or outside any transaction with ``None``."""
+        self._qb.with_txn(txn)
+        return self
+
+    def _check_has_rows(self) -> None:
+        if self._row_count == 0:
+            raise ValueError("no rows to write: call row() or rows() before execute()")
 
 
 class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):

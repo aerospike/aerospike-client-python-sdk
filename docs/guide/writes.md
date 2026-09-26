@@ -358,6 +358,56 @@ together, `session.put_many(keys, bins)` fuses them into one client-side
 submission and reports an outcome per key, positionally. It is async-only — see
 [Async window API](#async-window-api).
 
+## Tabular Writes
+
+When many records share the same bins, declare the bins once and supply one
+row per record. The verb takes the **dataset** rather than keys; each row
+starts with the record's id and continues with one value per bin, in order:
+
+```python
+users = DataSet.of("test", "users")
+
+await (
+    session.upsert(users).bins("name", "age")
+    .row(1, "Tim", 312)
+    .row(2, "Bob", 25)
+    .row(3, "Jane", 46)
+    .execute()
+)
+```
+
+`rows(...)` takes any iterable of `(id, *values)` sequences, so data you
+already hold as tuples, or a generator over a file, goes straight in:
+
+```python
+people = [(10, "Tim", 312), (11, "Bob", 25), (12, "Jane", 46)]
+await session.upsert(users).bins("name", "age").rows(people).execute()
+```
+
+The rows leave as one batch and come back as one `RecordStream` with a result
+per row, exactly as a hand-chained `upsert(key).put(...)` sequence would.
+`insert`, `update` and `replace` take the same shape and report their usual
+per-record outcomes, so an `insert` row whose record already exists shows up
+as `KEY_EXISTS_ERROR` on that row alone.
+
+The TTL and generation verbs apply to the most recent row; the `default_`
+verbs cover every row that sets none of its own, and `with_txn` runs the whole
+batch in a transaction:
+
+```python
+await (
+    session.insert(users).bins("name", "age")
+    .default_expire_record_after(timedelta(days=30))
+    .row(1, "Tim", 312)
+    .row(2, "Bob", 25).expire_record_after(timedelta(hours=1))
+    .row(3, "Jane", 46).ensure_generation_is(4)
+    .execute()
+)
+```
+
+A row with the wrong number of values is rejected when it is added, not on
+the server.
+
 (execute-vs-stream)=
 ### `execute()` vs `stream()`
 

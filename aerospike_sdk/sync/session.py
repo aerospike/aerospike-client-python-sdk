@@ -49,7 +49,7 @@ from aerospike_sdk.sync.background import BackgroundTaskSession
 from aerospike_sdk.sync.info import InfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import (
-    QueryBuilder, WriteSegmentBuilder,
+    DataSetWriteBuilder, QueryBuilder, WriteSegmentBuilder,
 )
 from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
@@ -59,7 +59,9 @@ if TYPE_CHECKING:
     from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 
-class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession"]):
+class Session(
+    SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSession", DataSetWriteBuilder],
+):
     """Run session-scoped reads and writes without ``async``/``await``.
 
     Construct via :meth:`Cluster.create_session
@@ -567,6 +569,16 @@ class Session(SessionBase[WriteSegmentBuilder, QueryBuilder, "TransactionalSessi
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
         )
+
+    def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:
+        """Dataset-scoped tabular write; rows arrive through ``bins(...)``."""
+        qb = self._build_sync_query_builder(
+            dataset=dataset, key=None, keys=None,
+            namespace=None, set_name=None,
+            behavior=self._behavior,
+        )
+        self._bind_txn(qb)
+        return DataSetWriteBuilder(qb, op_type, dataset)
 
     def _build_write_segment(
         self,

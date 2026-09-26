@@ -14,6 +14,7 @@ The primary API. All operations are `async`/`await`.
 | [`Session`](session.md) | Scoped reads and writes with a fixed `Behavior` |
 | [`QueryBuilder`](query.md) | Build and execute read queries (point, set, batch) |
 | [`WriteSegmentBuilder`](write-segment.md) | Build and execute writes (upsert, insert, update, replace, delete) |
+| [`RowWriteBuilder`](row-write.md) | Tabular writes: a bin schema, then one row per record |
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
 | [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.2.0+) |
@@ -34,6 +35,7 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`Session`](sync/session.md) | Sync session |
 | [`QueryBuilder`](sync/query.md) | Sync query builder |
 | [`WriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
+| [`RowWriteBuilder`](sync/row-write.md) | Sync tabular writes |
 | [`IndexBuilder`](sync/index-builder.md) | Sync secondary index builder |
 | [`BackgroundTaskSession`](sync/background.md) | Sync server-side background jobs |
 | [`UdfFunctionBuilder`](sync/udf.md) | Sync foreground UDF execution |
@@ -83,6 +85,7 @@ cluster
 session
 query
 write-segment
+row-write
 cdt-read
 cdt-write
 string-builder
@@ -95,6 +98,7 @@ sync/cluster
 sync/session
 sync/query
 sync/write-segment
+sync/row-write
 sync/transactional-session
 sync/record-stream
 sync/cluster-definition

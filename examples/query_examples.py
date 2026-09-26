@@ -115,13 +115,7 @@ async def seed_data(session) -> None:
         (41, "Tim", 27), (42, "Tim", 29), (43, "Tim", 31),
         (44, "Tim", 30), (45, "Tim", 33), (46, "Tim", 35),
     ]
-    for pk, name, age in customers:
-        await (
-            session.upsert(SET.id(pk))
-            .bin("name").set_to(name)
-            .bin("age").set_to(age)
-            .execute()
-        )
+    await session.upsert(SET).bins("name", "age").rows(customers).execute()
 
     # Probe for a record's existence, then delete it.
     exists_row = await (await session.exists(SET.ids(2)).execute()).first_or_raise()

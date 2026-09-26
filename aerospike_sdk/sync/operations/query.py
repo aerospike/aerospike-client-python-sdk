@@ -48,6 +48,8 @@ from aerospike_sdk.operations_shared import (
     _cmd_done,
     _CMD_DEBUG,
     _cmd_enabled,
+    _DataSetWriteBuilderBase,
+    _RowWriteBuilderBase,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
@@ -605,3 +607,41 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             return self._qb.stream(on_error)
         # Still a single-key segment: one record, so buffered == lazy.
         return self.execute(on_error)
+
+
+class RowWriteBuilder(_RowWriteBuilderBase["QueryBuilder"]):
+    """Rows of a tabular write, executed on the sync runtime.
+
+    Reached from ``session.upsert(dataset).bins(...)``; see
+    :class:`~aerospike_sdk.operations_shared._RowWriteBuilderBase` for the
+    row and per-row verbs.
+    """
+
+    __slots__ = ()
+
+    def execute(self, on_error: Optional[OnError] = None) -> RecordStream:
+        """Write every row as one batch and return the per-row results.
+
+        Raises:
+            ValueError: If no row was added.
+
+        Example::
+
+            stream = session.upsert(users).bins("name", "age").rows(people).execute()
+            failed = [r for r in stream if not r.is_ok]
+        """
+        self._check_has_rows()
+        return self._qb.execute(on_error)
+
+    def stream(self, on_error: Optional[OnError] = None) -> RecordStream:
+        """Lazy streaming variant of :meth:`execute`."""
+        self._check_has_rows()
+        return self._qb.stream(on_error)
+
+
+class DataSetWriteBuilder(_DataSetWriteBuilderBase["QueryBuilder"]):
+    """A write verb scoped to a dataset; :meth:`bins` opens the row builder."""
+
+    __slots__ = ()
+
+    _row_builder_cls = RowWriteBuilder
