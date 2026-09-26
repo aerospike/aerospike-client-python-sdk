@@ -1013,8 +1013,8 @@ class CdtPathBuilder(Generic[T]):
         self._parent = parent
         self._bin_name = bin_name
         self._ctx: tuple[Any, ...] = tuple(ctx)
-        # Only a key selection accepts and_filter(); the server rejects the
-        # filter after every other step, so the builder refuses it up front.
+        # The server takes and_filter() only after a non-expression step and
+        # once per level; the builder refuses the other positions up front.
         self._filterable = filterable
 
     # -- Navigation -----------------------------------------------------------
@@ -1068,7 +1068,7 @@ class CdtPathBuilder(Generic[T]):
             .bin("catalog").on_map_key("book").on_each_child().collect_values()
         """
         return CdtPathBuilder(
-            self._parent, self._bin_name, self._ctx + (CTX.map_key(key),),
+            self._parent, self._bin_name, self._ctx + (CTX.map_key(key),), filterable=True,
         )
 
     def on_list_index(self, index: int) -> CdtPathBuilder[T]:
@@ -1081,7 +1081,7 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` at that index.
         """
         return CdtPathBuilder(
-            self._parent, self._bin_name, self._ctx + (CTX.list_index(index),),
+            self._parent, self._bin_name, self._ctx + (CTX.list_index(index),), filterable=True,
         )
 
     def on_map_value(self, value: Any) -> CdtPathBuilder[T]:
@@ -1091,7 +1091,7 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` at the matching elements.
         """
         return CdtPathBuilder(
-            self._parent, self._bin_name, self._ctx + (CTX.map_value(value),),
+            self._parent, self._bin_name, self._ctx + (CTX.map_value(value),), filterable=True,
         )
 
     def on_list_value(self, value: Any) -> CdtPathBuilder[T]:
@@ -1101,7 +1101,7 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` at the matching elements.
         """
         return CdtPathBuilder(
-            self._parent, self._bin_name, self._ctx + (CTX.list_value(value),),
+            self._parent, self._bin_name, self._ctx + (CTX.list_value(value),), filterable=True,
         )
 
     # -- Read terminals -------------------------------------------------------
@@ -1128,7 +1128,7 @@ class CdtPathBuilder(Generic[T]):
         )
 
     def and_filter(self, predicate: Any) -> CdtPathBuilder[T]:
-        """Keep only the entries of the preceding key selection matching *predicate*.
+        """Keep only the elements of the preceding selection matching *predicate*.
 
         Args:
             predicate: An :class:`~aerospike_sdk.Exp` over the entry's loop
@@ -1139,12 +1139,12 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` over the narrowed selection.
 
         Raises:
-            TypeError: If the previous step was not :meth:`on_map_keys_in`.
-                The filter refines a key selection only. It cannot open a
-                path or follow ``on_each_child()`` / ``on_each_child_where()``
-                (the predicate belongs there instead), and it cannot follow
-                another ``and_filter()`` (combine conditions with
-                ``Exp.and_`` in one call).
+            TypeError: If there is no step to refine: the filter cannot open
+                a path, follow ``on_each_child()`` / ``on_each_child_where()``
+                (the predicate belongs there instead), or follow another
+                ``and_filter()`` (combine conditions with ``Exp.and_`` in one
+                call). It follows :meth:`on_map_keys_in` or a single-element
+                step such as :meth:`on_map_key`.
 
         Example::
 
@@ -1153,8 +1153,9 @@ class CdtPathBuilder(Generic[T]):
         """
         if not self._filterable:
             raise TypeError(
-                "and_filter() must directly follow on_map_keys_in(); combine conditions "
-                "with Exp.and_, or filter children with on_each_child_where()"
+                "and_filter() must follow a selection step such as on_map_keys_in(); "
+                "combine conditions with Exp.and_, or filter children with "
+                "on_each_child_where()"
             )
         return CdtPathBuilder(
             self._parent, self._bin_name, self._ctx + (CTX.and_filter(predicate),),

@@ -119,9 +119,9 @@ class TestAndFilter:
         with pytest.raises(TypeError, match="and_filter"):
             QueryBinBuilder(_OpCollector(), "m").on_each_child_where(_over(0)).and_filter(_over(10))
 
-    def test_rejected_after_element_navigation(self):
-        with pytest.raises(TypeError, match="and_filter"):
-            QueryBinBuilder(_OpCollector(), "m").on_each_child().on_map_key("x").and_filter(_over(10))
+    def test_refines_a_single_element_step(self):
+        path = QueryBinBuilder(_OpCollector(), "m").on_each_child().on_map_key("x").and_filter(_over(10))
+        assert path._ctx == (CTX.all_children(), CTX.map_key("x"), CTX.and_filter(_over(10)))
 
     def test_rejected_when_chained(self):
         with pytest.raises(TypeError, match="and_filter"):

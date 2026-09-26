@@ -147,7 +147,8 @@ async def run_examples(session) -> None:
         print(f"initial stock: {stock}")
         over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
         # CTX.map_keys_in picks the entries; CTX.and_filter keeps those over 10.
-        # The filter is only valid directly after the key selection.
+        # The filter refines the step before it and cannot follow an
+        # all-children step or another filter.
         chosen = CdtOperation.select_by_path(
             "stock", SelectFlags.MAP_KEY_VALUE,
             [CTX.map_keys_in(["apples", "pears", "plums"]), CTX.and_filter(over_10)],
