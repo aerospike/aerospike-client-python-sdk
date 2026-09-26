@@ -359,10 +359,11 @@ result = await (
 await session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
 ```
 
-`and_filter` refines a key selection only, so it must directly follow
-`on_map_keys_in`; the builder raises `TypeError` anywhere else. To filter the
-children of a collection use `on_each_child_where(pred)`, and to apply several
-conditions combine them with `Exp.and_` in one call.
+`and_filter` refines the step before it, so it follows `on_map_keys_in` or a
+single-element step such as `on_map_key`, once per level. The builder raises
+`TypeError` where the server would reject it: as the first step, after
+`on_each_child` / `on_each_child_where` (put the predicate there instead), or
+after another `and_filter` (combine conditions with `Exp.and_` in one call).
 
 Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elements
 the expression cannot be applied to — and `remove_matches()`. For explicit

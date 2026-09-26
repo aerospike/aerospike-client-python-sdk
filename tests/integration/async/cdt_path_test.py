@@ -24,10 +24,22 @@ the selection. These tests drive the fluent form; the equivalent low-level
 
 from __future__ import annotations
 
+import pytest
 from aerospike_async import GeoJSON
 
-from aerospike_sdk import DataSet, Exp, ExpType, LoopVarPart, MapReturnType
+from aerospike_sdk import (
+    CTX,
+    CdtOperation,
+    DataSet,
+    Exp,
+    ExpType,
+    LoopVarPart,
+    MapReturnType,
+    SelectFlags,
+)
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
+from tests.pac_compat import requires_server_compiled_ael
 
 SET_NAME = "cdt_path_test"
 
@@ -771,6 +783,68 @@ class TestMapKeysIn:
         )
         assert dict(zip(flat[::2], flat[1::2])) == {"b": 15, "c": 25}
 
+    async def test_and_filter_refines_a_single_element_step(self, cluster):
+        """After a map_key step inside a path, the filter keeps or drops that entry."""
+        session = cluster.create_session()
+        k = _key(43)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"rows": [{"price": 15, "qty": 1}, {"price": 5, "qty": 2}]}
+        ).execute()
+
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_map_key("price").and_filter(_value_over(10))
+            .collect_values(),
+        ) == [15]
+
+    async def test_and_filter_refines_a_list_index_step(self, cluster):
+        session = cluster.create_session()
+        k = _key(46)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"rows": [[15, 1], [5, 2]]}).execute()
+
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_list_index(0).and_filter(_value_over(10))
+            .collect_values(),
+        ) == [15]
+
+    async def test_and_filter_refines_a_map_value_step(self, cluster):
+        """The filter sees the selected value, so it keeps all or none of the matches."""
+        session = cluster.create_session()
+        k = _key(47)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"rows": [{"a": 15}, {"b": 5}]}).execute()
+
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_map_value(15).and_filter(_value_over(10))
+            .collect_values(),
+        ) == [15]
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_map_value(5).and_filter(_value_over(10))
+            .collect_values(),
+        ) == []
+
+    async def test_and_filter_refines_a_list_value_step(self, cluster):
+        session = cluster.create_session()
+        k = _key(48)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"rows": [[15, 1], [5, 2]]}).execute()
+
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_list_value(15).and_filter(_value_over(10))
+            .collect_values(),
+        ) == [15]
+        assert await _collect(
+            session, k, "rows",
+            lambda b: b.on_each_child().on_list_value(5).and_filter(_value_over(10))
+            .collect_values(),
+        ) == []
+
     async def test_keys_in_below_element_navigation(self, cluster):
         session = cluster.create_session()
         k = _key(40)
@@ -807,3 +881,52 @@ class TestMapKeysIn:
         add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
         await session.update(k).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
         assert (await _bins(session, k))["m"] == {"a": 11, "b": 2, "c": 13}
+
+
+class TestFilterAfterIndexStep:
+    """A filter after a map index or rank step returns a corrupted value.
+
+    The server evaluates the filter, which moves its key and value cursors,
+    and then copies the entry without moving them back. The copied value is
+    one byte late, so it is the first byte of the next entry's key. Every
+    other step restores the cursors first. Both forms below compile to the
+    same context chain; the builder cannot express it, so the operation
+    factory stands in. Strict, so the fix flips these to failures and the
+    markers come off.
+    """
+
+    _DEFECT = (
+        "server copies the selected value one byte late when an AND filter "
+        "follows a map index or rank context; map_key and map_keys_in restore "
+        "the cursors and are correct"
+    )
+
+    @pytest.mark.xfail(strict=True, raises=AerospikeError, reason=_DEFECT)
+    async def test_operation_filter_after_map_index(self, cluster):
+        session = cluster.create_session()
+        k = _key(44)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"x": 15, "y": 5}}).execute()
+
+        select = CdtOperation.select_by_path(
+            "m", SelectFlags.VALUE, [CTX.map_index(0), CTX.and_filter(_value_over(10))],
+        )
+        result = await (await session.query(k).add_operation(select).execute()).first_or_raise()
+        assert result.record.bins["m"] == [15]
+
+    @requires_server_compiled_ael
+    @pytest.mark.xfail(strict=True, reason=_DEFECT)
+    async def test_ael_filter_after_map_index(self, cluster):
+        """The same defect through server-compiled AEL is a silent non-match."""
+        session = cluster.create_session()
+        k = _key(45)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"a": {"x": 15, "y": 5}}}).execute()
+
+        # The filtered path and the unfiltered one select the same entry.
+        # The key-step form of this comparison matches; the index-step form
+        # should too.
+        stream = await session.query(k).where(
+            "$.m:MAP.*.{0}&[?(@ > 10)] == $.m:MAP.*.{0}"
+        ).execute()
+        assert await stream.first() is not None
