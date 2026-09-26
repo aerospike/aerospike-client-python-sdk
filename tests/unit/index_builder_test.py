@@ -130,6 +130,11 @@ class TestExpressionCreateAsync:
         b._client._async_client.create_index.assert_awaited_once()
         b._client._async_client.create_index_using_expression.assert_not_called()
 
+    async def test_bin_path_missing_index_type_raises(self):
+        b = _async_builder().on_bin("age").named("idx")
+        with pytest.raises(ValueError, match=r"index_type is required\. Call integer\(\)"):
+            await b.create()
+
 
 class TestExpressionCreateSync:
 
@@ -263,7 +268,7 @@ class TestSyncBinPathValidation:
 
     def test_create_without_index_type_raises(self):
         _, b = self._sync_builder()
-        with pytest.raises(ValueError, match="index_type is required"):
+        with pytest.raises(ValueError, match=r"index_type is required\. Call integer\(\)"):
             b.on_bin("age").named("idx_age").create()
 
     def test_create_converts_pac_failure(self):

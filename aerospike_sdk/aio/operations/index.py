@@ -137,7 +137,7 @@ class IndexBuilder(_IndexBuilderBase):
         if not self._index_type:
             raise ValueError(
                 "index_type is required. "
-                "Call numeric(), string(), blob(), or geo2dsphere() first.")
+                "Call integer(), string(), blob(), or geo2dsphere() first.")
 
         try:
             return await self._client._async_client.create_index(
