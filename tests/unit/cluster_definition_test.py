@@ -66,6 +66,19 @@ class TestAuthMode:
         assert cd.auth_mode == AuthMode.NONE
         assert cd._user_name is None
 
+    def test_external_insecure_credentials_sets_external_insecure(self):
+        cd = ClusterDefinition("localhost", 3000).with_external_insecure_credentials("u", "p")
+        assert cd.auth_mode == AuthMode.EXTERNAL_INSECURE
+        assert cd._user_name == "u"
+
+    def test_external_insecure_credentials_empty_user_resets_to_none(self):
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_external_insecure_credentials("u", "p")
+            .with_external_insecure_credentials("", "")
+        )
+        assert cd.auth_mode == AuthMode.NONE
+
     def test_certificate_credentials_sets_pki(self):
         cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()
         assert cd.auth_mode == AuthMode.PKI
@@ -110,6 +123,10 @@ class TestAuthModePolicy:
         cd = ClusterDefinition("localhost", 3000).with_external_credentials("user", "pass")
         policy = cd._get_policy()
         assert policy.auth_mode == AuthMode.EXTERNAL
+
+    def test_external_insecure_credentials_policy(self):
+        cd = ClusterDefinition("localhost", 3000).with_external_insecure_credentials("u", "p")
+        assert cd._get_policy().auth_mode == AuthMode.EXTERNAL_INSECURE
 
     def test_pki_credentials_policy(self):
         cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()

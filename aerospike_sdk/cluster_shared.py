@@ -300,6 +300,38 @@ class ClusterDefinitionBase(Generic[_TB]):
             self._password = password
         return self
 
+    def with_external_insecure_credentials(self, user_name: str, password: str) -> Self:
+        """Set external (e.g. LDAP) credentials that may travel without TLS.
+
+        The same server-side external authentication as
+        :meth:`with_external_credentials`, but the clear password is sent on
+        node login even when TLS is not configured. Use it only on a network
+        you trust; prefer :meth:`with_external_credentials` with TLS.
+
+        Args:
+            user_name: The username for authentication. An empty name clears
+                the credentials.
+            password: The password for authentication.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Example::
+
+            cd = ClusterDefinition("localhost", 3000).with_external_insecure_credentials(
+                "ldap_user", "pass"
+            )
+        """
+        if not user_name:
+            self._auth_mode = AuthMode.NONE
+            self._user_name = None
+            self._password = None
+        else:
+            self._auth_mode = AuthMode.EXTERNAL_INSECURE
+            self._user_name = user_name
+            self._password = password
+        return self
+
     def with_certificate_credentials(self) -> Self:
         """Configure certificate-based (PKI) authentication.
 

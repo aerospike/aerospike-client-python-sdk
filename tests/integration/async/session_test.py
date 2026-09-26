@@ -56,6 +56,23 @@ async def test_session_creation_custom_behavior(cluster):
 
 
 
+async def test_session_for_derives_a_sibling_session(cluster):
+    """A new session on the same client with the given behavior; the receiver is unchanged."""
+    session = cluster.create_session(Behavior.DEFAULT)
+    fast = session.session_for(Behavior.READ_FAST)
+    assert fast is not session
+    assert fast.behavior.name == "READ_FAST"
+    assert fast._client is session._client
+    assert session.behavior.name == "DEFAULT"
+
+
+async def test_session_for_on_a_transaction_returns_a_plain_session(cluster):
+    txn_session = cluster.transaction()
+    plain = txn_session.session_for(Behavior.DEFAULT)
+    assert type(plain).__name__ == "Session"
+    assert plain._txn is None
+
+
 async def test_session_repr(session):
     """Test session string representation."""
     repr_str = repr(session)

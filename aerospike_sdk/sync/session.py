@@ -92,6 +92,26 @@ class Session(
         # TransactionalSession overrides this to yield its active Txn.
         self._txn: Optional[Txn] = None
 
+    def session_for(self, behavior: Behavior) -> "Session":
+        """A new session on the same cluster with a different behavior.
+
+        Shorthand for ``cluster.create_session(behavior)``; this session is
+        left as it is. Called on a transactional session it returns a plain
+        session, outside the transaction.
+
+        Args:
+            behavior: The behavior for the new session.
+
+        Returns:
+            A new :class:`Session`.
+
+        Example::
+
+            reads = session.session_for(Behavior.READ_FAST)
+            row = reads.query(key).execute().first_or_raise()
+        """
+        return self._client.create_session(behavior)
+
     # -- State accessors ------------------------------------------------------
 
     def _resolve_namespace_mode_blocking(self, namespace: str) -> Mode:

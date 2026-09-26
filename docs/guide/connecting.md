@@ -75,7 +75,13 @@ identical to the async surface.
 ## Advanced Configuration
 
 `ClusterDefinition` exposes a fluent builder for credentials, alternate-access,
-IP mapping, TLS, rack awareness, and more:
+IP mapping, TLS, rack awareness, and more. Credentials come in four forms:
+`with_native_credentials` (internal users), `with_external_credentials`
+(LDAP and similar, password sent under TLS), `with_external_insecure_credentials`
+(the same without TLS, for trusted networks only), and
+`with_certificate_credentials` (PKI). Client-wide connection limits and
+timeouts, including `tend_timeout` and `login_timeout`, are
+[`SystemSettings`](../api/system-settings.md) passed through `with_system_settings`:
 
 ```python
 from aerospike_sdk import ClusterDefinition
@@ -254,6 +260,9 @@ from aerospike_sdk import Behavior
 session = cluster.create_session(Behavior.DEFAULT)
 fast_session = cluster.create_session(Behavior.READ_FAST)
 consistent_session = cluster.create_session(Behavior.STRICTLY_CONSISTENT)
+
+# or derive from a session you already hold; the original is unchanged
+fast_session = session.session_for(Behavior.READ_FAST)
 ```
 
 :::{tip}

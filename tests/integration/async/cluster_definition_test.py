@@ -15,10 +15,13 @@
 
 """Tests for ClusterDefinition and Cluster."""
 
+from datetime import timedelta
+
 import pytest
 
 from aerospike_sdk import Behavior, ClusterDefinition, Host
 from aerospike_sdk.exceptions import ConnectionError, ResultCode
+from aerospike_sdk.policy.system_settings import SystemSettings
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -90,6 +93,19 @@ async def test_cluster_definition_with_credentials(aerospike_host):
         assert cluster.is_connected
     finally:
         await cluster.close()
+
+
+async def test_cluster_definition_with_tend_and_login_timeouts(make_cluster_definition, aerospike_host):
+    """Both timeouts reach the client policy and the cluster still connects."""
+    settings = SystemSettings(
+        tend_timeout=timedelta(milliseconds=800), login_timeout=timedelta(seconds=3),
+    )
+    cluster_def = make_cluster_definition(aerospike_host).with_system_settings(settings)
+    policy = cluster_def._get_policy()
+    assert (policy.timeout, policy.login_timeout) == (800, 3000)
+
+    async with cluster_def.connect() as cluster:
+        assert cluster.is_connected
 
 
 async def test_cluster_definition_services_alternate(aerospike_host):

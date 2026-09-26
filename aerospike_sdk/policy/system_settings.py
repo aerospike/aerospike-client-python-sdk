@@ -149,6 +149,13 @@ class SystemSettings:
     there is no per-operation moment for a connect bound to govern. Unset, it
     falls back to the client policy's total timeout.
 
+    ``tend_timeout`` bounds each cluster-tend info call, the first contact
+    with a seed included; ``login_timeout`` bounds the login exchange on every
+    new connection when the cluster has security enabled. Both are
+    client-wide for the same reason, so they live here rather than on the
+    cluster definition. Unset, the hard defaults are one second and five
+    seconds. Neither has a key in the configuration file.
+
     Connection-pool sizing is the group most worth setting explicitly. Left
     unset, the hard defaults are ``min_connections_per_node=0``,
     ``max_connections_per_node=100``, and ``conn_pools_per_node=1``. The
@@ -167,6 +174,8 @@ class SystemSettings:
     max_connections_per_node: Optional[int] = None
     conn_pools_per_node: Optional[int] = None
     wait_for_connection_to_complete: Optional[timedelta] = None
+    tend_timeout: Optional[timedelta] = None
+    login_timeout: Optional[timedelta] = None
     max_socket_idle_time: Optional[timedelta] = None
     tend_interval: Optional[timedelta] = None
     num_tend_intervals_in_error_window: Optional[int] = None
@@ -190,6 +199,10 @@ class SystemSettings:
             policy.connect_timeout = int(
                 self.wait_for_connection_to_complete.total_seconds() * 1000
             )
+        if self.tend_timeout is not None:
+            policy.timeout = int(self.tend_timeout.total_seconds() * 1000)
+        if self.login_timeout is not None:
+            policy.login_timeout = int(self.login_timeout.total_seconds() * 1000)
         if self.max_socket_idle_time is not None:
             policy.idle_timeout = int(self.max_socket_idle_time.total_seconds() * 1000)
         if self.tend_interval is not None:

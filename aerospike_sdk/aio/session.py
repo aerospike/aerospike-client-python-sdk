@@ -157,6 +157,26 @@ class Session(
         self._coalesce_write_futs: List[Any] = []
         self._coalesce_scheduled = False
 
+    def session_for(self, behavior: Behavior) -> "Session":
+        """A new session on the same cluster with a different behavior.
+
+        Shorthand for ``cluster.create_session(behavior)``; this session is
+        left as it is. Called on a transactional session it returns a plain
+        session, outside the transaction.
+
+        Args:
+            behavior: The behavior for the new session.
+
+        Returns:
+            A new :class:`Session`.
+
+        Example::
+
+            reads = session.session_for(Behavior.READ_FAST)
+            row = await (await reads.query(key).execute()).first_or_raise()
+        """
+        return self._client.create_session(behavior)
+
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
         cache = self._client._namespace_mode_cache

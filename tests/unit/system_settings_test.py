@@ -35,6 +35,22 @@ class TestSystemSettingsApplyTo:
         ss.apply_to(p)
         assert p.max_conns_per_node == 200
 
+    def test_tend_timeout_maps_to_the_tend_info_timeout(self):
+        p = ClientPolicy()
+        SystemSettings(tend_timeout=timedelta(milliseconds=250)).apply_to(p)
+        assert p.timeout == 250
+
+    def test_login_timeout(self):
+        p = ClientPolicy()
+        SystemSettings(login_timeout=timedelta(seconds=2)).apply_to(p)
+        assert p.login_timeout == 2000
+
+    def test_unset_timeouts_leave_the_policy_defaults(self):
+        p = ClientPolicy()
+        before = (p.timeout, p.login_timeout)
+        SystemSettings().apply_to(p)
+        assert (p.timeout, p.login_timeout) == before
+
     def test_conn_pools_per_node(self):
         ss = SystemSettings(conn_pools_per_node=4)
         p = ClientPolicy()
