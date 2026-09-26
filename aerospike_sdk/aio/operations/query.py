@@ -374,44 +374,16 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             disp = _resolve_disposition(on_error, is_single)
             handler = on_error if callable(on_error) else None
             if self._specs_require_sequential_run():
-                sub_disp = _resolve_disposition(on_error, is_single_key=False)
+                if len(self._specs) == 1:
+                    # A homogeneous UDF apply keeps its dedicated apply-many path.
+                    return await self._execute_spec(self._specs[0], disp, handler)
+                # Two or more segments share a key: fold each key-disjoint run
+                # into its own batch and run them in chain order.
                 streams: List[RecordStream] = []
-                for spec in self._specs:
-                    streams.append(await self._execute_spec(spec, sub_disp, handler))
+                for run in self._spec_batch_runs():
+                    streams.append(await self._execute_specs_batch(run, disp, handler))
                 return RecordStream.chain(streams)
-            batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
-            all_ops: list = []
-            all_keys: List[Key] = []
-            row_op_types: List[Optional[str]] = []
-            for spec in self._specs:
-                all_keys.extend(spec.keys)
-                spec_ops = self._spec_to_batch_ops(spec)
-                all_ops.extend(spec_ops)
-                # Rows come back in op order, so this pairs each row with the
-                # verb that produced it.
-                row_op_types.extend([spec.op_type] * len(spec_ops))
-            cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
-            try:
-                if (
-                    self._implicit_txn_precheck(all_keys)
-                    and any(not isinstance(op, BatchReadOp) for op in all_ops)
-                    and await self._sdk_client._supports_mrt()
-                ):
-                    batch_records = await run_in_implicit_txn(
-                        self._client, self._implicit_txn_settings(),
-                        lambda txn: self._client.batch(
-                            all_ops, batch_policy=stamp_txn(batch_policy, txn)))
-                else:
-                    batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
-            except Exception as e:
-                return self._handle_batch_error(all_keys, e, disp, handler)
-            if cmd_t0:
-                _cmd_done(
-                    "batch", self._namespace, self._set_name,
-                    len(all_keys), cmd_t0, self._client,
-                )
-            return self._filtered_batch_stream(
-                batch_records, disp, handler, row_op_types=row_op_types)
+            return await self._execute_specs_batch(self._specs, disp, handler)
 
         # Dataset query path (no keys were specified)
         return await self._execute_dataset_query()
@@ -617,6 +589,47 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
 
 
+
+    async def _execute_specs_batch(
+        self,
+        specs: Sequence[_OperationSpec],
+        disp: _ErrorDisposition,
+        handler: Optional[ErrorHandler],
+    ) -> RecordStream:
+        """Fold *specs* into one mixed ``batch`` call."""
+        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        all_ops: list = []
+        all_keys: List[Key] = []
+        row_op_types: List[Optional[str]] = []
+        for spec in specs:
+            all_keys.extend(spec.keys)
+            spec_ops = self._spec_to_batch_ops(spec)
+            all_ops.extend(spec_ops)
+            # Rows come back in op order, so this pairs each row with the
+            # verb that produced it.
+            row_op_types.extend([spec.op_type] * len(spec_ops))
+        cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
+        try:
+            if (
+                self._implicit_txn_precheck(all_keys)
+                and any(not isinstance(op, BatchReadOp) for op in all_ops)
+                and await self._sdk_client._supports_mrt()
+            ):
+                batch_records = await run_in_implicit_txn(
+                    self._client, self._implicit_txn_settings(),
+                    lambda txn: self._client.batch(
+                        all_ops, batch_policy=stamp_txn(batch_policy, txn)))
+            else:
+                batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
+        except Exception as e:
+            return self._handle_batch_error(all_keys, e, disp, handler)
+        if cmd_t0:
+            _cmd_done(
+                "batch", self._namespace, self._set_name,
+                len(all_keys), cmd_t0, self._client,
+            )
+        return self._filtered_batch_stream(
+            batch_records, disp, handler, row_op_types=row_op_types)
 
     async def _execute_spec(
         self,

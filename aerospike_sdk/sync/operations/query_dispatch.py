@@ -595,16 +595,26 @@ class _BlockingQueryDispatch:
         handler = on_error if callable(on_error) else None
 
         if self._specs_require_sequential_run():
+            # Two or more segments share a key: fold each key-disjoint run
+            # into its own batch and run them in chain order.
             all_results: List[RecordResult] = []
-            for spec in self._specs:
-                all_results.extend(self._execute_spec_blocking(spec, disp, handler))
+            for run in self._spec_batch_runs():
+                all_results.extend(self._execute_specs_batch_blocking(run, disp, handler))
             return all_results
+        return self._execute_specs_batch_blocking(self._specs, disp, handler)
 
+    def _execute_specs_batch_blocking(
+        self,
+        specs: Sequence[_OperationSpec],
+        disp: _ErrorDisposition,
+        handler: Optional[ErrorHandler],
+    ) -> List[RecordResult]:
+        """Fold *specs* into one mixed ``batch_blocking`` call."""
         batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
         all_ops: list = []
         all_keys: List[Key] = []
         row_op_types: List[Optional[str]] = []
-        for spec in self._specs:
+        for spec in specs:
             all_keys.extend(spec.keys)
             spec_ops = self._spec_to_batch_ops(spec)
             all_ops.extend(spec_ops)

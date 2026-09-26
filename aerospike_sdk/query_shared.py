@@ -376,6 +376,9 @@ class _SupportsAddOperation(Protocol):
 _T = TypeVar("_T", bound=_SupportsAddOperation)
 
 
+_UNRESOLVED = object()
+
+
 class _QueryBuilderBase:
     """State + chaining + policy factories + blocking IO shared by query builders.
 
@@ -445,6 +448,11 @@ class _QueryBuilderBase:
     # whether any key in the batch lands in an SC namespace.
     _batch_namespace_modes: Optional[Dict[str, Mode]] = None
     _batch_any_sc: bool = False
+    # Batch commit level, resolved once per builder per mode. A chain of many
+    # single-key segments builds one row policy per segment, and the behavior
+    # lookup behind each would otherwise repeat for every segment.
+    _batch_commit_level_ap: Any = _UNRESOLVED
+    _batch_commit_level_sc: Any = _UNRESOLVED
     # Feature-usage counters. `_usage_on` stays False unless the app enabled
     # the usage group, which keeps every hook point on this path down to one
     # attribute load. `_usage_features` accumulates across chained segments
@@ -1668,15 +1676,40 @@ class _QueryBuilderBase:
         """
         if len(self._specs) < 2:
             return False
+        # Identity is namespace + digest: the digest already folds in the set
+        # name and user key. One membership probe per key keeps the common
+        # many-single-key-segment chain free of per-segment set allocations.
+        seen: set[tuple[str, str]] = set()
+        add = seen.add
+        for spec in self._specs:
+            for key in spec.keys:
+                ident = (key.namespace, key.digest)
+                if ident in seen:
+                    return True
+                add(ident)
+        return False
+
+    def _spec_batch_runs(self) -> List[List["_OperationSpec"]]:
+        """Split the chain into consecutive runs with no key repeated inside a run.
+
+        Each run folds into one batch round trip and the runs execute in
+        chain order, so a repeated key still sees every earlier segment's
+        write. Only the repeat pays: a 64-segment chain with one shared key
+        becomes two batches, not 64 single-key calls.
+        """
+        runs: List[List["_OperationSpec"]] = []
+        run: List["_OperationSpec"] = []
         seen: set[tuple[str, str]] = set()
         for spec in self._specs:
-            # Identity is namespace + digest: the digest already folds in the
-            # set name and user key.
             spec_keys = {(key.namespace, key.digest) for key in spec.keys}
             if seen & spec_keys:
-                return True
+                runs.append(run)
+                run = []
+                seen = set()
+            run.append(spec)
             seen |= spec_keys
-        return False
+        runs.append(run)
+        return runs
 
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
@@ -2478,12 +2511,21 @@ class _QueryBuilderBase:
         """
         if self._behavior is None:
             return None
+        if mode is None:
+            mode = self._resolved_namespace_mode()
+        is_sc = mode is Mode.SC
+        cl = self._batch_commit_level_sc if is_sc else self._batch_commit_level_ap
+        if cl is not _UNRESOLVED:
+            return cl
         cl = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
-            mode if mode is not None else self._resolved_namespace_mode(),
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, mode,
         ).commit_level
         if cl is None or cl == CommitLevel.COMMIT_ALL:
-            return None
+            cl = None
+        if is_sc:
+            self._batch_commit_level_sc = cl
+        else:
+            self._batch_commit_level_ap = cl
         return cl
 
     def _make_batch_delete_policy(

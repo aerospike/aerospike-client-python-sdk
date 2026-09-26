@@ -411,7 +411,7 @@ class TestSameKeyChainFolding:
     directions are pinned.
     """
 
-    def test_overlapping_key_runs_segments_sequentially(self):
+    def test_overlapping_key_splits_the_chain_into_ordered_batches(self):
         pac = _RecordingClient()
         (
             _builder(pac)
@@ -419,9 +419,26 @@ class TestSameKeyChainFolding:
             .upsert(_k_ap(2), _k_ap(3)).bin("a").set_to(2)
             .execute()
         )
-        # k2 spans both segments: no combined batch, one dispatch per segment.
-        assert pac.batch_mixed_calls == []
-        assert len(pac.batch_operate_calls) == 2
+        # k2 spans both segments: one batch per segment, in chain order.
+        assert pac.batch_operate_calls == []
+        assert len(pac.batch_mixed_calls) == 2
+        first, second = (ops for ops, _ in pac.batch_mixed_calls)
+        assert [op.key.digest for op in first] == [_k_ap(1).digest, _k_ap(2).digest]
+        assert [op.key.digest for op in second] == [_k_ap(2).digest, _k_ap(3).digest]
+
+    def test_only_the_repeat_splits_a_long_single_key_chain(self):
+        # Sixty-four single-key segments with one repeated key: every
+        # key-disjoint run stays one batch, so the chain costs two round
+        # trips rather than one per segment.
+        pac = _RecordingClient()
+        builder = _builder(pac)
+        cur = builder.upsert(_k_ap(1)).bin("a").set_to(1)
+        for i in range(2, 64):
+            cur = cur.upsert(_k_ap(i)).bin("a").set_to(1)
+        cur.upsert(_k_ap(40)).bin("a").set_to(1).execute()
+        assert pac.batch_operate_calls == []
+        assert [len(ops) for ops, _ in pac.batch_mixed_calls] == [63, 1]
+        assert pac.batch_mixed_calls[1][0][0].key.digest == _k_ap(40).digest
 
     def test_disjoint_keys_keep_the_single_batch_fold(self):
         pac = _RecordingClient()
