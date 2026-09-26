@@ -130,22 +130,14 @@ class IndexBuilder(_IndexBuilderBase):
                 )
             except Exception as e:
                 raise _convert_pac_exception(e) from e
-        if not self._bin_name:
-            raise ValueError("bin_name is required. Call on_bin() first.")
-        if not self._index_name:
-            raise ValueError("index_name is required. Call named() first.")
-        if not self._index_type:
-            raise ValueError(
-                "index_type is required. "
-                "Call integer(), string(), blob(), or geo2dsphere() first.")
-
+        bin_name, index_name, index_type = self._validate_bin_create()
         try:
             return await self._client._async_client.create_index(
                 self._namespace,
                 self._set_name,
-                self._bin_name,
-                self._index_name,
-                self._index_type,
+                bin_name,
+                index_name,
+                index_type,
                 self._collection_index_type,
                 self._ctx,
             )
@@ -175,14 +167,12 @@ class IndexBuilder(_IndexBuilderBase):
             Namespace and set come from the builder constructor, not from
             :meth:`on_bin`.
         """
-        if not self._index_name:
-            raise ValueError("index_name is required. Call named() first.")
-
+        index_name = self._require_index_name()
         client = self._client
         if client._record_on:
             usage.record_call(client, (usage.ADMIN_INDEX,))
         try:
             return await self._client._async_client.drop_index(
-                self._namespace, self._set_name, self._index_name)
+                self._namespace, self._set_name, index_name)
         except Exception as e:
             raise _convert_pac_exception(e) from e

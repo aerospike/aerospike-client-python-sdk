@@ -173,13 +173,7 @@ class _IndexBuilderBase:
                 "context() cannot be combined with on_expression(); "
                 "encode CDT navigation inside the expression instead",
             )
-        if not self._index_name:
-            raise ValueError("index_name is required. Call named() first.")
-        if not self._index_type:
-            raise ValueError(
-                "index_type is required. "
-                "Call integer(), string(), blob(), or geo2dsphere() first.",
-            )
+        index_name, index_type = self._require_name_and_type()
         expression = self._expression
         assert expression is not None
         if isinstance(expression, str):
@@ -187,7 +181,36 @@ class _IndexBuilderBase:
                 expression,
                 supports_server_compiled_ael=sdk_client.supports_server_compiled_ael,
             )
-        return self._index_name, self._index_type, expression
+        return index_name, index_type, expression
+
+    def _validate_bin_create(self) -> tuple[str, str, IndexType]:
+        """Validate chain state for a bin-based ``create()``.
+
+        Shared by the async and sync leaf terminals so the two runtimes
+        cannot drift on what a valid bin-index chain looks like. Returns the
+        narrowed ``(bin_name, index_name, index_type)`` triple the terminals
+        hand to the client.
+        """
+        if not self._bin_name:
+            raise ValueError("bin_name is required. Call on_bin() first.")
+        index_name, index_type = self._require_name_and_type()
+        return self._bin_name, index_name, index_type
+
+    def _require_name_and_type(self) -> tuple[str, IndexType]:
+        """Return the narrowed ``(index_name, index_type)`` every ``create()`` needs."""
+        index_name = self._require_index_name()
+        if not self._index_type:
+            raise ValueError(
+                "index_type is required. "
+                "Call integer(), string(), blob(), or geo2dsphere() first.",
+            )
+        return index_name, self._index_type
+
+    def _require_index_name(self) -> str:
+        """Return the narrowed index name that both ``create()`` and ``drop()`` need."""
+        if not self._index_name:
+            raise ValueError("index_name is required. Call named() first.")
+        return self._index_name
 
     def named(self, index_name: str) -> Self:
         """Set the secondary index name the cluster stores (required for create and drop).
