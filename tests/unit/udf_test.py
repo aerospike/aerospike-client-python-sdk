@@ -16,11 +16,13 @@
 """Unit tests for foreground UDF chainable builders."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aerospike_async import FilterExpression
 
 from aerospike_sdk import Key
+from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
@@ -87,7 +89,10 @@ async def test_multi_key_routing():
     qb = _connected_qb()
     keys = (Key("test", "set", 1), Key("test", "set", 2))
     qb._set_current_keys_from_varargs(keys)
-    qb._client.batch_apply = AsyncMock(return_value=[])
+    qb._client.batch_apply = AsyncMock(return_value=[
+        SimpleNamespace(record=None, result_code=ResultCode.OK, in_doubt=False, sub_code=None)
+        for _ in keys
+    ])
     await (
         UdfFunctionBuilder(qb)
         .function("record_example", "writeBin")

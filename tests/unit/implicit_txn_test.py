@@ -257,6 +257,13 @@ class TestAsyncRunner:
         assert pac.commits == []
 
 
+def _ok_rows(count):
+    return [
+        SimpleNamespace(record=None, result_code=ResultCode.OK, in_doubt=False, sub_code=None)
+        for _ in range(count)
+    ]
+
+
 class _RecordingBatchClient:
     """Fake PAC surface for driving the sync chain's blocking batch dispatch."""
 
@@ -267,15 +274,15 @@ class _RecordingBatchClient:
 
     def batch_operate_blocking(self, keys, ops_per_key, batch_policy=None, write_policy=None):
         self.batch_policies.append(batch_policy)
-        return []
+        return _ok_rows(len(keys))
 
     def batch_read_blocking(self, keys, bins, batch_policy=None, read_policy=None):
         self.batch_policies.append(batch_policy)
-        return []
+        return _ok_rows(len(keys))
 
     def batch_blocking(self, ops, batch_policy=None):
         self.batch_policies.append(batch_policy)
-        return []
+        return _ok_rows(len(ops))
 
     def commit_blocking(self, txn):
         self.commits.append(txn)

@@ -629,7 +629,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 len(all_keys), cmd_t0, self._client,
             )
         return self._filtered_batch_stream(
-            batch_records, disp, handler, row_op_types=row_op_types)
+            batch_records, all_keys, disp, handler, row_op_types=row_op_types)
 
     async def _execute_spec(
         self,
@@ -740,7 +740,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                         merged[i] = rec
             except Exception as e:
                 return self._handle_batch_error(spec.keys, e, disp, handler)
-            return self._filtered_batch_stream(merged, disp, handler, op_type="udf")
+            return self._filtered_batch_stream(merged, spec.keys, disp, handler, op_type="udf")
         udf_policy = self._make_batch_udf_policy(spec)
         try:
             if (
@@ -765,7 +765,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(
-            batch_records, disp, handler, op_type="udf")
+            batch_records, spec.keys, disp, handler, op_type="udf")
 
 
 
@@ -923,7 +923,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 batch_policy=batch_policy, read_policy=batch_read_policy)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler)
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
 
 
     async def _execute_batch_read_operate(
@@ -942,7 +942,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler)
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
 
     # -- Write execution helpers ----------------------------------------------
 
@@ -997,7 +997,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler, op_type=op_type)
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler, op_type=op_type)
 
     async def _execute_batch_write(
         self, spec: _OperationSpec,
@@ -1026,7 +1026,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler, op_type=spec.op_type)
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler, op_type=spec.op_type)
 
     async def _execute_batch_delete(
         self, spec: _OperationSpec,
@@ -1053,7 +1053,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler, op_type="delete")
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler, op_type="delete")
 
     async def _execute_single_key_touch(
         self, spec: _OperationSpec,
@@ -1096,7 +1096,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
-        return self._filtered_batch_stream(batch_records, disp, handler, op_type="touch")
+        return self._filtered_batch_stream(batch_records, spec.keys, disp, handler, op_type="touch")
 
     async def _execute_single_key_exists(
         self, spec: _OperationSpec,

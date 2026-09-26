@@ -1773,6 +1773,7 @@ class _QueryBuilderBase:
     def _filtered_batch_list(
         self,
         batch_records,
+        keys: Sequence[Key],
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
@@ -1784,9 +1785,10 @@ class _QueryBuilderBase:
         raises on the first error, HANDLER dispatches to the callback and
         omits the entry, IN_STREAM includes errors). Returns a list so
         blocking-dispatch paths (sync collapse onto ``_blocking``) can
-        skip the :class:`RecordStream` wrapping.
+        skip the :class:`RecordStream` wrapping. ``keys`` is the request's
+        key list, positionally parallel to ``batch_records``.
         """
-        all_results = batch_records_to_results(list(batch_records))
+        all_results = batch_records_to_results(list(batch_records), keys)
         # A folded chain carries one verb per row (rows follow segment order);
         # a homogeneous batch shares a single verb across every row.
         per_row = (
@@ -1817,6 +1819,7 @@ class _QueryBuilderBase:
     def _filtered_batch_stream(
         self,
         batch_records,
+        keys: Sequence[Key],
         disp: _ErrorDisposition = _ErrorDisposition.IN_STREAM,
         handler: ErrorHandler | None = None,
         op_type: Optional[str] = None,
@@ -1829,7 +1832,7 @@ class _QueryBuilderBase:
         """
         return RecordStream._from_list(
             self._filtered_batch_list(
-                batch_records, disp, handler, op_type, row_op_types),
+                batch_records, keys, disp, handler, op_type, row_op_types),
         )
 
     def _is_actionable(self, rc: ResultCode, op_type: Optional[str]) -> bool:

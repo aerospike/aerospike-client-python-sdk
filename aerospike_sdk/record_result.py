@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -370,28 +371,38 @@ def batch_failure_records_to_results(
 
 
 def batch_records_to_results(
-    batch_records: list[BatchRecord] | tuple[BatchRecord, ...],
+    batch_records: Sequence[BatchRecord],
+    keys: Sequence[Key],
 ) -> list[RecordResult]:
     """Convert ``BatchRecord`` entries to :class:`RecordResult` (library internal).
 
     Args:
         batch_records: Sequence of :class:`~aerospike_async.BatchRecord` from
             the async client.
+        keys: The request's keys, positionally parallel to ``batch_records``.
+            Rows carry these objects rather than each row's key read back
+            from PAC, which would allocate a copy per row.
 
     Returns:
         Parallel list with :attr:`~RecordResult.index` set to each row's
         position in ``batch_records``.
+
+    Raises:
+        ValueError: ``keys`` and ``batch_records`` differ in length.
     """
+    # The message and trace share the subcode's per-row detail slot, so a row
+    # without a subcode has neither; skipping their getters keeps successful
+    # rows to one detail lookup.
     return [
         RecordResult(
-            key=br.key,
+            key=key,
             record=br.record,
-            result_code=br.result_code if br.result_code is not None else ResultCode.OK,
+            result_code=rc if (rc := br.result_code) is not None else ResultCode.OK,
             in_doubt=br.in_doubt,
             index=i,
-            sub_code=br.sub_code,
-            server_message=br.server_message,
-            exp_trace=br.exp_trace,
+            sub_code=(sc := br.sub_code),
+            server_message=None if sc is None else br.server_message,
+            exp_trace=None if sc is None else br.exp_trace,
         )
-        for i, br in enumerate(batch_records)
+        for i, (key, br) in enumerate(zip(keys, batch_records, strict=True))
     ]

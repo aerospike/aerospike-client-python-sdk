@@ -214,7 +214,7 @@ class _BlockingQueryDispatch:
                         merged[i] = rec
             except Exception as e:
                 return self._handle_batch_error_list(spec.keys, e, disp, handler)
-            return self._filtered_batch_list(merged, disp, handler, op_type="udf")
+            return self._filtered_batch_list(merged, spec.keys, disp, handler, op_type="udf")
         udf_policy = self._make_batch_udf_policy(spec)
         try:
             if self._implicit_txn_gate_blocking(spec.keys):
@@ -235,7 +235,7 @@ class _BlockingQueryDispatch:
                 )
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler, op_type="udf")
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler, op_type="udf")
 
     def _execute_batch_touch_blocking(
         self, spec: _OperationSpec,
@@ -261,7 +261,7 @@ class _BlockingQueryDispatch:
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler, op_type="touch")
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler, op_type="touch")
 
     def _execute_batch_exists_blocking(
         self, spec: _OperationSpec,
@@ -636,7 +636,7 @@ class _BlockingQueryDispatch:
         except Exception as e:
             return self._handle_batch_error_list(all_keys, e, disp, handler)
         return self._filtered_batch_list(
-            batch_records, disp, handler, row_op_types=row_op_types)
+            batch_records, all_keys, disp, handler, row_op_types=row_op_types)
 
     def _execute_blocking_stream(
         self,
@@ -709,7 +709,7 @@ class _BlockingQueryDispatch:
                 batch_policy=batch_policy, read_policy=batch_read_policy)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler)
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler)
 
     def _execute_spec_mixed_mode_batch_blocking(
         self, spec: _OperationSpec,
@@ -728,7 +728,7 @@ class _BlockingQueryDispatch:
             batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler, op_type=op_type)
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler, op_type=op_type)
 
     def _execute_batch_write_blocking(
         self, spec: _OperationSpec,
@@ -756,7 +756,7 @@ class _BlockingQueryDispatch:
                     batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler, op_type=spec.op_type)
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler, op_type=spec.op_type)
 
     def _execute_batch_read_operate_blocking(
         self, spec: _OperationSpec,
@@ -776,7 +776,7 @@ class _BlockingQueryDispatch:
                 batch_policy=batch_policy, write_policy=bwp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler)
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler)
 
     def _execute_batch_delete_blocking(
         self, spec: _OperationSpec,
@@ -802,7 +802,7 @@ class _BlockingQueryDispatch:
                     spec.keys, batch_policy=batch_policy, delete_policy=bdp)
         except Exception as e:
             return self._handle_batch_error_list(spec.keys, e, disp, handler)
-        return self._filtered_batch_list(batch_records, disp, handler, op_type="delete")
+        return self._filtered_batch_list(batch_records, spec.keys, disp, handler, op_type="delete")
 
     def _execute_dataset_query_blocking(self) -> Any:
         """Sync counterpart of :meth:`_execute_dataset_query`.

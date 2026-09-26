@@ -124,9 +124,11 @@ class RecordStream:
         return cls(_iter())
 
     @classmethod
-    def _from_batch_records(cls, batch_records: Sequence) -> RecordStream:
-        """Wrap a sequence of async-client ``BatchRecord`` objects (internal plumbing)."""
-        return cls._from_list(batch_records_to_results(list(batch_records)))
+    def _from_batch_records(
+        cls, batch_records: Sequence, keys: Sequence,
+    ) -> RecordStream:
+        """Wrap async-client ``BatchRecord`` objects and their request keys (internal plumbing)."""
+        return cls._from_list(batch_records_to_results(batch_records, keys))
 
     @classmethod
     def _from_pac_batch_stream(
@@ -158,12 +160,19 @@ class RecordStream:
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
                 async for idx, br in pac_stream:
-                    rc = br.result_code if br.result_code is not None else ResultCode.OK
+                    rc = br.result_code
+                    if rc is None:
+                        rc = ResultCode.OK
+                    # The message and trace share the subcode's per-row detail
+                    # slot, so a row without a subcode has neither.
+                    sub_code = br.sub_code
+                    server_message = None if sub_code is None else br.server_message
+                    exp_trace = None if sub_code is None else br.exp_trace
                     if on_error is not None and rc != ResultCode.OK:
                         on_error(br.key, idx, _result_code_to_exception(
-                            rc, in_doubt=br.in_doubt, sub_code=br.sub_code,
-                            server_message=br.server_message,
-                            exp_trace=br.exp_trace))
+                            rc, in_doubt=br.in_doubt, sub_code=sub_code,
+                            server_message=server_message,
+                            exp_trace=exp_trace))
                         continue
                     yield RecordResult(
                         key=br.key,
@@ -171,9 +180,9 @@ class RecordStream:
                         result_code=rc,
                         in_doubt=br.in_doubt,
                         index=idx,
-                        sub_code=br.sub_code,
-                        server_message=br.server_message,
-                        exp_trace=br.exp_trace,
+                        sub_code=sub_code,
+                        server_message=server_message,
+                        exp_trace=exp_trace,
                     )
             except Exception as e:
                 raise _convert_pac_exception(e) from e

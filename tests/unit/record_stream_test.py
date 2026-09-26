@@ -125,7 +125,7 @@ class TestFromBatchRecords:
             result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None, server_message=None, exp_trace=None,
         )
 
-        stream = RecordStream._from_batch_records([br1, br2])
+        stream = RecordStream._from_batch_records([br1, br2], [br1.key, br2.key])
         results = await stream.collect()
         assert len(results) == 2
         assert results[0].is_ok

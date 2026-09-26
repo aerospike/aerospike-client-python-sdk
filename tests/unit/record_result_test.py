@@ -237,6 +237,10 @@ class TestBatchFailureRecordsToResults:
 # batch_records_to_results
 # ---------------------------------------------------------------------------
 
+def _convert(brs):
+    return batch_records_to_results(brs, [br.key for br in brs])
+
+
 class TestBatchRecordsToResults:
 
     def test_converts_list(self):
@@ -245,7 +249,7 @@ class TestBatchRecordsToResults:
             _batch_record(key_val=1, record=rec, result_code=ResultCode.OK),
             _batch_record(key_val=2, record=None, result_code=ResultCode.KEY_NOT_FOUND_ERROR),
         ]
-        results = batch_records_to_results(brs)
+        results = _convert(brs)
 
         assert len(results) == 2
         assert results[0].is_ok
@@ -257,21 +261,21 @@ class TestBatchRecordsToResults:
 
     def test_none_result_code_defaults_to_ok(self):
         br = _batch_record(result_code=None)
-        results = batch_records_to_results([br])
+        results = _convert([br])
         assert results[0].result_code == ResultCode.OK
 
     def test_in_doubt_propagated(self):
         br = _batch_record(in_doubt=True)
-        results = batch_records_to_results([br])
+        results = _convert([br])
         assert results[0].in_doubt is True
 
     def test_sub_code_propagated(self):
         br = _batch_record(result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=4)
-        results = batch_records_to_results([br])
+        results = _convert([br])
         assert results[0].sub_code == 4
 
     def test_sub_code_defaults_to_none(self):
-        results = batch_records_to_results([_batch_record()])
+        results = _convert([_batch_record()])
         assert results[0].sub_code is None
 
     def test_or_raise_carries_sub_code(self):
@@ -297,13 +301,13 @@ class TestBatchRecordsToResults:
             result_code=ResultCode.OP_NOT_APPLICABLE, sub_code=1,
             server_message="index 99 out of bounds for element count 3",
         )
-        results = batch_records_to_results([br])
+        results = _convert([br])
         assert results[0].server_message == (
             "index 99 out of bounds for element count 3")
         assert results[0].exp_trace is None
 
     def test_server_message_defaults_to_none(self):
-        results = batch_records_to_results([_batch_record()])
+        results = _convert([_batch_record()])
         assert results[0].server_message is None
         assert results[0].exp_trace is None
 
@@ -319,13 +323,18 @@ class TestBatchRecordsToResults:
         assert exc_info.value.exp_trace is None
 
     def test_empty_list_returns_empty(self):
-        assert batch_records_to_results([]) == []
+        assert batch_records_to_results([], []) == []
 
-    def test_keys_preserved(self):
+    def test_rows_carry_request_keys(self):
         brs = [_batch_record(key_val=10), _batch_record(key_val=20)]
-        results = batch_records_to_results(brs)
-        assert results[0].key is brs[0].key
-        assert results[1].key is brs[1].key
+        keys = [_key(10), _key(20)]
+        results = batch_records_to_results(brs, keys)
+        assert results[0].key is keys[0]
+        assert results[1].key is keys[1]
+
+    def test_key_count_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            batch_records_to_results([_batch_record()], [_key(1), _key(2)])
 
 
 # ---------------------------------------------------------------------------
