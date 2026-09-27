@@ -108,10 +108,11 @@ class _CapturedDeleteOp:
 class _CapturedWriteOp:
     """Stand-in for the PAC ``BatchWriteOp``."""
 
-    def __init__(self, key, operations, policy=None):
+    def __init__(self, key, operations, policy=None, bins=None):
         self.key = key
         self.operations = operations
         self.policy = policy
+        self.bins = bins
 
 
 @pytest.fixture(autouse=True)
@@ -387,6 +388,45 @@ class TestPlainWritePolicyReuse:
         assert ops[2].policy.expiration == Expiration.seconds(600)
         assert ops[0].policy.expiration != Expiration.seconds(600)
         assert len({id(op.policy) for op in ops}) == 3
+
+
+class TestPutBinsHandoff:
+    """Leading ``put(bins)`` writes reach PAC as one dict, in operation order."""
+
+    def test_leading_puts_merge_into_one_dict(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1)).put({"name": "Tim", "age": 31}).put({"age": 32})
+            .upsert(_k_ap(2)).put({"name": "Bob"})
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].bins == {"name": "Tim", "age": 32}
+        assert ops[0].operations == []
+        assert ops[1].bins == {"name": "Bob"}
+
+    def test_caller_changes_after_put_do_not_leak(self):
+        pac = _RecordingClient()
+        profile = {"name": "Tim"}
+        chain = _builder(pac).upsert(_k_ap(1)).put(profile)
+        profile["name"] = "Bob"
+        chain.upsert(_k_ap(2)).put(profile).execute()
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].bins == {"name": "Tim"}
+        assert ops[1].bins == {"name": "Bob"}
+
+    def test_puts_after_another_op_follow_it(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .upsert(_k_ap(1)).put({"name": "Tim"}).bin("visits").add(1).put({"name": "Bob"})
+            .upsert(_k_ap(2)).put({"name": "Jane"})
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].bins == {"name": "Tim"}
+        assert len(ops[0].operations) == 2
 
 
 class TestGenerationPolicy:

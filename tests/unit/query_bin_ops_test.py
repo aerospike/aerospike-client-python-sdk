@@ -24,6 +24,7 @@ Covers:
 """
 
 import pytest
+from aerospike_async import Operation
 
 from aerospike_sdk import Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode
@@ -370,11 +371,20 @@ class TestOperationSpec:
 
     def test_fields(self):
         k = _make_key()
-        spec = _OperationSpec(keys=[k], operations=["op1"])
+        spec = _OperationSpec(keys=[k], op_list=["op1"])
         assert spec.keys == [k]
         assert spec.operations == ["op1"]
         assert spec.bins is None
         assert spec.filter_expression is None
+
+    def test_operations_expands_put_bins_ahead_of_op_list(self):
+        later = Operation.add("visits", 1)
+        spec = _OperationSpec(keys=[_make_key()], op_list=[later], put_bins={"name": "Tim"})
+        ops = spec.operations
+        assert len(ops) == 2
+        assert ops[1] is later
+        assert spec.put_bins is None
+        assert spec.operations is ops
 
     def test_defaults(self):
         k = _make_key()

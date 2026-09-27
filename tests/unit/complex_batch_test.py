@@ -124,7 +124,8 @@ class TestWriteSegmentBuilder:
 
         result = wsb.put({"name": "Alice", "age": 25})
         assert result is wsb
-        assert len(qb._operations) == 2
+        qb._finalize_current_spec()
+        assert len(qb._specs[0].operations) == 2
 
     def test_transition_to_query(self):
         qb = _make_builder()

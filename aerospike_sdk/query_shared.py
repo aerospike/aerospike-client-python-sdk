@@ -340,10 +340,15 @@ class _OperationSpec:
     segments it is one of ``"upsert"``, ``"insert"``, ``"update"``,
     ``"replace"``, ``"replace_if_exists"``, ``"delete"``, ``"touch"``,
     or ``"exists"``.
+
+    ``put_bins`` holds the segment's leading ``put(bins)`` writes as a dict
+    so the batch path can hand it to PAC whole, skipping an ``Operation``
+    per bin. Every other path reads :attr:`operations`, which expands it.
     """
 
     keys: List[Key]
-    operations: List[Any] = field(default_factory=list)
+    op_list: List[Any] = field(default_factory=list)
+    put_bins: Optional[Dict[str, Any]] = None
     bins: Optional[List[str]] = None
     filter_expression: Optional[FilterExpression] = None
     op_type: Optional[str] = None
@@ -355,6 +360,15 @@ class _OperationSpec:
     udf_package: Optional[str] = None
     udf_function: Optional[str] = None
     udf_args: Optional[List[Any]] = None
+
+    @property
+    def operations(self) -> List[Any]:
+        """All operations in order: ``put_bins`` as puts, then ``op_list``."""
+        put_bins = self.put_bins
+        if put_bins:
+            self.op_list[:0] = [Operation.put(name, value) for name, value in put_bins.items()]
+            self.put_bins = None
+        return self.op_list
 
 
 class _SupportsAddOperation(Protocol):
@@ -431,6 +445,8 @@ class _QueryBuilderBase:
     _durable_delete: Optional[bool] = None
     _durable_delete_command_default: Optional[bool] = None
     _record_delete_in_operations: bool = False
+    # Puts queued ahead of ``_operations``; see ``_OperationSpec.put_bins``.
+    _put_bins: Optional[Dict[str, Any]] = None
     _default_filter_expression: Optional[FilterExpression] = None
     _default_ttl_seconds: Optional[int] = None
     _udf_package: Optional[str] = None
@@ -1570,7 +1586,8 @@ class _QueryBuilderBase:
         # one for the next spec instead of copying.
         self._specs.append(_OperationSpec(
             keys=keys,
-            operations=self._operations,
+            op_list=self._operations,
+            put_bins=self._put_bins,
             bins=self._bins,
             filter_expression=filt,
             op_type=self._op_type,
@@ -1587,6 +1604,7 @@ class _QueryBuilderBase:
         self._single_key = None
         self._keys = None
         self._operations = []
+        self._put_bins = None
         self._bins = None
         self._with_no_bins = False
         self._filter_expression = None
@@ -1631,7 +1649,6 @@ class _QueryBuilderBase:
         ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
         self._specs.append(_OperationSpec(
             keys=keys,
-            operations=[],
             bins=None,
             filter_expression=filt,
             op_type="udf",
@@ -1647,6 +1664,7 @@ class _QueryBuilderBase:
         self._single_key = None
         self._keys = None
         self._operations = []
+        self._put_bins = None
         self._bins = None
         self._with_no_bins = False
         self._filter_expression = None
@@ -2633,7 +2651,8 @@ class _QueryBuilderBase:
                 for key in spec.keys:
                     ops.append(BatchUDFOp(key, pkg, fn, udf_args, policy=up))
         else:
-            write_ops = list(spec.operations)
+            write_ops = spec.op_list
+            put_bins = spec.put_bins
             if mixed:
                 per_mode = {
                     mode: self._make_batch_write_policy_mixed(spec, mode)
@@ -2641,11 +2660,11 @@ class _QueryBuilderBase:
                 }
                 for key in spec.keys:
                     bwp = per_mode[self._mode_for_namespace(key.namespace)]
-                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp, bins=put_bins))
             else:
                 bwp = self._make_batch_write_policy_mixed(spec)
                 for key in spec.keys:
-                    ops.append(BatchWriteOp(key, write_ops, policy=bwp))
+                    ops.append(BatchWriteOp(key, write_ops, policy=bwp, bins=put_bins))
         return ops
 
     @staticmethod

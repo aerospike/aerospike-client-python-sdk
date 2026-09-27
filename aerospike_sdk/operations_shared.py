@@ -674,8 +674,17 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
         See Also:
             :meth:`bin`: Per-bin CDT or scalar follow-ups.
         """
-        for bin_name, value in bins.items():
-            self._qb._operations.append(Operation.put(bin_name, value))
+        qb = self._qb
+        ops = qb._operations
+        # Puts that lead the segment stay a dict (see ``_OperationSpec.put_bins``);
+        # once another operation is queued, later puts must follow it in order.
+        if ops:
+            for bin_name, value in bins.items():
+                ops.append(Operation.put(bin_name, value))
+        elif qb._put_bins is None:
+            qb._put_bins = dict(bins)
+        else:
+            qb._put_bins.update(bins)
         return self
 
     def _add_op(self, op: Any) -> Self:
@@ -983,8 +992,11 @@ class _RowWriteBuilderBase(Generic[_QB]):
         qb._single_key = self._dataset.id(identifier)
         qb._keys = None
         ops = qb._operations
-        for name, value in zip(names, values):
-            ops.append(Operation.put(name, value))
+        if ops or qb._put_bins is not None:
+            for name, value in zip(names, values):
+                ops.append(Operation.put(name, value))
+        else:
+            qb._put_bins = dict(zip(names, values))
         self._row_count += 1
         return self
 
