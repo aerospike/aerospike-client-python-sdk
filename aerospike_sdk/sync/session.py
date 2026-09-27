@@ -199,7 +199,13 @@ class Session(
             raise _convert_pac_exception(e) from e
 
     def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
-        """Truncate a set, synchronously (PAC ``truncate_blocking``)."""
+        """Truncate a set, synchronously (PAC ``truncate_blocking``).
+
+        .. warning::
+
+            A ``dataset`` with no set truncates the **entire namespace**. See
+            :meth:`~aerospike_sdk.aio.session.Session.truncate`.
+        """
         client = self._client
         if client._record_on:
             usage.record_call(client, (usage.ADMIN_TRUNCATE,))
@@ -382,7 +388,7 @@ class Session(
         if dataset is not None:
             namespace = dataset.namespace
             set_name = dataset.set_name
-        if not namespace or not set_name:
+        if not namespace or set_name is None:
             raise ValueError("namespace and set_name are required (or provide dataset)")
         return IndexBuilder(
             async_client=self._client,

@@ -81,6 +81,41 @@ def test_sync_create_index_from_ael_string_and_query(cluster):
 
 
 @requires_server_compiled_ael
+def test_sync_namespace_wide_index_and_query(cluster):
+    """A set-less dataset builds a namespace-wide index, and one query spans sets.
+
+    The sync index builder has its own argument guard, which async coverage
+    cannot reach. The record in the null set is one no set-scoped index could
+    serve, so getting it back proves the namespace-wide index answered.
+    """
+    index_name = "psdk_nsw_idx_sync"
+    score_bin = "nsw_score_sync"
+    whole_namespace = DataSet.of(NS)
+    keys = [DS.id("nsw_named"), whole_namespace.id("nsw_null")]
+    session = cluster.create_session()
+    for score, key in enumerate(keys, start=80):
+        session.upsert(key).bin(score_bin).set_to(score).execute()
+
+    try:
+        index_task = (
+            session.index(whole_namespace)
+            .on_bin(score_bin)
+            .named(index_name)
+            .integer()
+            .create()
+        )
+        assert index_task.wait_till_complete_blocking()
+
+        stream = session.query(whole_namespace).where(f"$.{score_bin} >= 80").execute()
+        rows = list(stream)
+        assert all(rr.is_ok for rr in rows)
+        assert {rr.record.bins[score_bin] for rr in rows} == {80, 81}
+    finally:
+        session.delete(keys).execute()
+        session.index(whole_namespace).named(index_name).drop()
+
+
+@requires_server_compiled_ael
 def test_sync_create_index_from_boolean_ael_rejected(cluster):
     """The index basis must produce a value — a boolean AEL predicate is rejected."""
     session = cluster.create_session()

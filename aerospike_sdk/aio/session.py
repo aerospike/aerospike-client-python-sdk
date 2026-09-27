@@ -1301,8 +1301,16 @@ class Session(
         """
         Truncate (delete all records) from a set; this cannot be undone.
 
+        .. warning::
+
+            A ``dataset`` with no set truncates the **entire namespace**, every
+            set and the null set. ``DataSet.of("prod")`` and
+            ``DataSet.of("prod", None)`` both mean that. Name the set unless a
+            namespace-wide truncate is what you intend.
+
         Args:
-            dataset: The DataSet to truncate.
+            dataset: The DataSet to truncate. With no set name, the whole
+                namespace is truncated.
             before_nanos: Optional timestamp in nanoseconds. Only records with
                 last update time (LUT) less than this value are truncated.
                 If None, all records in the set are truncated.

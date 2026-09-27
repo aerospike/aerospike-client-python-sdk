@@ -41,10 +41,32 @@ class TestDataSet:
         with pytest.raises(ValueError, match="namespace cannot be empty"):
             DataSet.of("", "users")
 
-    def test_empty_set_name_raises_error(self):
-        """Test that empty set_name raises ValueError."""
-        with pytest.raises(ValueError, match="set_name cannot be empty"):
-            DataSet.of("test", "")
+    @pytest.mark.parametrize("no_set", [None, ""])
+    def test_no_set_covers_the_whole_namespace(self, no_set):
+        """A set-less dataset is the handle for namespace-wide work."""
+        dataset = DataSet.of("test", no_set)
+        assert dataset.namespace == "test"
+        assert dataset.set_name == ""
+
+    def test_omitted_none_and_empty_set_are_the_same_dataset(self):
+        """All three spellings normalize, so equality and hashing stay coherent."""
+        spellings = [DataSet.of("test"), DataSet.of("test", None), DataSet.of("test", "")]
+        assert len(set(spellings)) == 1
+        assert all(dataset == spellings[0] for dataset in spellings)
+
+    def test_a_set_less_dataset_is_not_a_named_set(self):
+        """The null set must not compare equal to a set that happens to exist."""
+        assert DataSet.of("test", None) != DataSet.of("test", "users")
+
+    def test_id_on_a_set_less_dataset_targets_the_null_set(self):
+        """Keys need a concrete set: with none given, that is the null set.
+
+        Note the asymmetry this pins: a set-less dataset means *every* set to a
+        query, but the *null* set to a key. Both follow the server.
+        """
+        key = DataSet.of("test", None).id(1)
+        assert key.namespace == "test"
+        assert key.set_name == ""
 
     def test_equality(self):
         """Test DataSet equality comparison."""
