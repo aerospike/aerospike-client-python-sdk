@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from typing import List, Union, overload
+from typing import List, Optional, Union, overload
 
 from aerospike_async import Key
 
@@ -35,46 +35,65 @@ class DataSet:
         k = users.id("user-123")
         ks = users.ids("a", "b", "c")
 
+        # No set: covers the whole namespace, for queries and namespace-wide indexes.
+        everything = DataSet.of("test")
+
     See Also:
         :class:`~aerospike_sdk.aio.session.Session`: Operations on keys.
     """
 
-    def __init__(self, namespace: str, set_name: str) -> None:
+    def __init__(self, namespace: str, set_name: Optional[str] = None) -> None:
         """
         Create a DataSet instance.
 
         Args:
             namespace: The Aerospike namespace
-            set_name: The set name within the namespace
+            set_name: The set name within the namespace. ``None`` or ``""``
+                means no set: the dataset then covers the whole namespace.
 
         Raises:
-            ValueError: If namespace or set_name is empty
+            ValueError: If namespace is empty
         """
         if not namespace:
             raise ValueError("namespace cannot be empty")
-        if not set_name:
-            raise ValueError("set_name cannot be empty")
 
         self._namespace = namespace
-        self._set_name = set_name
+        # One spelling for "no set" so equality, hashing and the wire agree:
+        # the server distinguishes a set-less request by an empty set name.
+        self._set_name = set_name or ""
 
     @staticmethod
-    def of(namespace: str, set_name: str) -> DataSet:
+    def of(namespace: str, set_name: Optional[str] = None) -> DataSet:
         """Construct a dataset handle for ``namespace`` and ``set_name``.
+
+        Omit the set, or pass ``None`` or ``""``, to cover the whole namespace.
+        A query on such a dataset reaches every set **and** the null set, and can
+        be served by a namespace-wide secondary index — one created without a set.
+
+        The set-less form means different things to different verbs, because the
+        server does: to a query it means *every* set; to :meth:`id` and
+        :meth:`ids` it means the *null* set, the one records carry when they were
+        written without a set name.
 
         Args:
             namespace: Non-empty Aerospike namespace name.
-            set_name: Non-empty set name within that namespace.
+            set_name: Set name within that namespace, or ``None`` / ``""`` for
+                no set.
 
         Returns:
             A :class:`DataSet` sharing the same equality/hash for the pair.
+            ``None`` and ``""`` produce equal datasets.
 
         Raises:
-            ValueError: If either string is empty.
+            ValueError: If ``namespace`` is empty.
 
         Example::
 
             orders = DataSet.of("prod", "orders")
+
+            # Every set in the namespace, through a namespace-wide index.
+            everything = DataSet.of("prod")
+            stream = await session.query(everything).where("$.created >= %s", cutoff).execute()
 
         See Also:
             :meth:`id`: Build a single user key.
@@ -89,7 +108,7 @@ class DataSet:
 
     @property
     def set_name(self) -> str:
-        """Get the set name of this dataset."""
+        """Get the set name of this dataset, or ``""`` when it has no set."""
         return self._set_name
 
     def id(self, identifier: Union[str, int, bytes]) -> Key:

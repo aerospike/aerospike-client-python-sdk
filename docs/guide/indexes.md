@@ -65,6 +65,49 @@ await (
 )
 ```
 
+## Namespace-Wide Indexes (No Set)
+
+An index created without a set covers **every record in the namespace**, across
+all sets and the null set. Build one from a set-less `DataSet` — pass only the
+namespace, or `None` for the set:
+
+```python
+everything = DataSet.of("test")          # same as DataSet.of("test", None)
+
+await session.index(everything).on_bin("created").named("ns_created_idx").integer().create()
+```
+
+Query through it with the same handle:
+
+```python
+stream = await (
+    session.query(everything)
+    .where("$.created >= %s and $.created <= %s", one_week_ago, now)
+    .execute()
+)
+```
+
+That query returns matching records from every set **and** the null set. A
+set-scoped index cannot serve it, because no such index spans more than its own
+set.
+
+A set-less `DataSet` means different things to different verbs, because the
+server does:
+
+| Used with | Meaning |
+|---|---|
+| `session.query(...)` | every set in the namespace, plus the null set |
+| `session.index(...)` | an index covering the whole namespace |
+| `.id()` / `.ids()` | keys in the **null set** — the set records carry when written without one |
+| `session.background_task()` | ⚠️ every record in the namespace, every set and the null set |
+| `session.truncate(...)` | ⚠️ the **entire namespace**, every set and the null set |
+
+```{warning}
+`session.truncate(DataSet.of("test"))` truncates the whole namespace and cannot
+be undone, and `session.background_task().delete(DataSet.of("test"))` deletes
+every record in it. Name the set unless that is what you intend.
+```
+
 ## Expression-Based Indexes
 
 An index can cover the value an expression computes per record instead of a

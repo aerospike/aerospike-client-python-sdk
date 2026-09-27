@@ -342,7 +342,7 @@ class SyncClient(RoutingCapabilitiesMixin):
         if dataset is not None:
             namespace = dataset.namespace
             set_name = dataset.set_name
-        if not namespace or not set_name:
+        if not namespace or set_name is None:
             raise ValueError("namespace and set_name are required (or provide dataset)")
         return IndexBuilder(
             async_client=self,
