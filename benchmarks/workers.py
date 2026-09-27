@@ -243,7 +243,25 @@ def _make_keys(
 ) -> Union[Key, List[Key]]:
     if batch_size <= 1:
         return dataset.id(rng.randint(1, key_count))
-    return [dataset.id(rng.randint(1, key_count)) for _ in range(batch_size)]
+    return [dataset.id(kid) for kid in _distinct_ids(rng, key_count, batch_size)]
+
+
+def _distinct_ids(rng: Any, key_count: int, n: int) -> List[int]:
+    """``n`` distinct ids in ``[1, key_count]``, drawn with only ``randint``.
+
+    Batches draw without replacement: a key repeated within a write chain
+    splits it into sequential batches, billing the run for a sampling artifact.
+    Redrawing on a repeat is cheap while ``n`` is far below ``key_count``;
+    config parsing rejects ``n > key_count``.
+    """
+    seen: set[int] = set()
+    ids: List[int] = []
+    while len(ids) < n:
+        kid = rng.randint(1, key_count)
+        if kid not in seen:
+            seen.add(kid)
+            ids.append(kid)
+    return ids
 
 
 class _BenchState:
@@ -476,10 +494,14 @@ def _build_op_sync(
             i = _pk_counter[0]
             _pk_counter[0] = (i + 1) & 0x7FFFFFFF
             return _pk_pairs[i % pkn]
+        def pick_batch_keys(rng):
+            return [pick_key(rng)[0] for _ in range(bsz)]
     else:
         def pick_key(rng):
             kid = rng.randint(1, kc)
             return (key_from_int(ns_str, set_str, kid), kid)
+        def pick_batch_keys(rng):
+            return [key_from_int(ns_str, set_str, kid) for kid in _distinct_ids(rng, kc, bsz)]
 
     if cfg.workload == WorkloadKind.INSERT:
         if bsz <= 1:
@@ -566,7 +588,7 @@ def _build_op_sync(
 
         # batch RU
         def op(rng):
-            keys = [pick_key(rng)[0] for _ in range(bsz)]
+            keys = pick_batch_keys(rng)
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)
@@ -611,7 +633,13 @@ def _prebuilt_key_pairs(cfg: WorkloadConfig):
     ns_str = cfg.namespace
     set_str = cfg.set_name
     kc = cfg.key_count
-    return [(key_from_int(ns_str, set_str, i := rng.randint(1, kc)), i) for _ in range(pkn)]
+    if pkn <= kc:
+        # Distinct ids make every window of consecutive keys a batch takes
+        # distinct too, wraparound included (see _distinct_ids for why).
+        ids = rng.sample(range(1, kc + 1), pkn)
+    else:
+        ids = [rng.randint(1, kc) for _ in range(pkn)]
+    return [(key_from_int(ns_str, set_str, i), i) for i in ids]
 
 
 def _build_op_async(
@@ -669,10 +697,14 @@ def _build_op_async(
             i = _pk_counter[0]
             _pk_counter[0] = (i + 1) & 0x7FFFFFFF
             return _pk_pairs[i % pkn]
+        def pick_batch_keys(rng):
+            return [pick_key(rng)[0] for _ in range(bsz)]
     else:
         def pick_key(rng):
             kid = rng.randint(1, kc)
             return (key_from_int(ns_str, set_str, kid), kid)
+        def pick_batch_keys(rng):
+            return [key_from_int(ns_str, set_str, kid) for kid in _distinct_ids(rng, kc, bsz)]
 
     # Window API (--mode async-many) — usable on any loop the caller drives,
     # including each AsyncPool loop. One op issues a get_many/put_many window of
@@ -793,7 +825,7 @@ def _build_op_async(
 
         # batch RU
         async def op(rng):
-            keys = [pick_key(rng)[0] for _ in range(bsz)]
+            keys = pick_batch_keys(rng)
             if rng.randint(1, 100) > (100 - read_pct):
                 decision[0] = True
                 stream = await session.query(keys).execute(on_error=ErrorStrategy.IN_STREAM)

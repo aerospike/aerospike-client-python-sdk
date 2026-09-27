@@ -512,6 +512,17 @@ def config_from_args(ns: argparse.Namespace) -> WorkloadConfig:
     auth_password = getattr(ns, "password", None)
     if auth_user and not auth_mode:
         auth_mode = "INTERNAL"
+    batch_size = int(ns.batch_size)
+    prebuilt = int(getattr(ns, "prebuilt_keys", 0) or 0)
+    # Batches hold distinct keys, so a batch cannot exceed the key space, and
+    # a prebuilt list feeding batches must itself be distinct and batch-sized.
+    if batch_size > max(1, ns.keys):
+        raise SystemExit(f"--batch-size {batch_size} exceeds --keys {ns.keys}")
+    if batch_size > 1 and prebuilt > 0 and not batch_size <= prebuilt <= ns.keys:
+        raise SystemExit(
+            f"--prebuilt-keys {prebuilt} must be between --batch-size {batch_size} "
+            f"and --keys {ns.keys} for batch runs"
+        )
     return WorkloadConfig(
         seeds=ns.hosts,
         namespace=ns.namespace,
