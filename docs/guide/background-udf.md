@@ -32,6 +32,35 @@ task = await (
 await task.wait_till_complete()
 ```
 
+### Narrowing with an Index and a Predicate
+
+`where()` filters every record the job reaches. `index_filters()` changes *which*
+records it reaches at all, by sending the job through a secondary index instead of
+a scan of the set. They combine: the index selects the candidates, and the
+predicate decides which of those the job writes.
+
+```python
+from aerospike_async import Filter
+
+task = await (
+    session.background_task()
+    .update(donors)
+    .index_filters(Filter.range("age", 30, 65))     # reached through the index
+    .where("not($.update_pass.exists()) or $.update_pass < 5")   # and filtered
+    .bin("campaign1").add(50)
+    .bin("update_pass").set_to(5)
+    .execute()
+)
+await task.wait_till_complete()
+```
+
+The predicate makes the job re-runnable: it excludes the records an earlier run
+already processed, so running the job a second time changes nothing. The index keeps
+the server off a full scan.
+
+Either narrowing works alone. With only `where()`, the server scans the set; with
+only `index_filters()`, every record in the index range is written.
+
 ### Bulk Touch (Reset TTL)
 
 ```python

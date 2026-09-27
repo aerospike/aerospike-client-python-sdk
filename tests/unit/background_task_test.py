@@ -140,22 +140,55 @@ def test_index_filters_empty_raises():
         b.index_filters()
 
 
-def test_where_mutex_with_index_filters():
+def test_where_after_index_filters_keeps_both():
+    """The index narrows through the index; the predicate filters what it returns."""
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
     b.index_filters(Filter.range("bgval", 9, 10))
-    with pytest.raises(ValueError, match="index_filters"):
-        b.where("$.bgval > 8")
+    b.where("$.bgval > 8")
+    assert len(b._index_filters) == 1
+    assert b._filter_expression is not None
 
 
-def test_index_filters_mutex_with_where():
+def test_index_filters_after_where_keeps_both():
+    """Declaration order must not matter."""
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
     b.where("$.bgval > 8")
-    with pytest.raises(ValueError, match="where"):
-        b.index_filters(Filter.range("bgval", 9, 10))
+    b.index_filters(Filter.range("bgval", 9, 10))
+    assert len(b._index_filters) == 1
+    assert b._filter_expression is not None
+
+
+async def test_execute_sends_index_filters_and_filter_expression_together():
+    """Both channels reach PAC: statement filters and the write policy's expression."""
+    s = _session_mock()
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    b.bin("x").set_to(1)
+    await b.index_filters(Filter.range("n", 1, 3)).where("$.n > 1").execute()
+    stmt, _ops = s._client._client.query_operate.call_args[0]
+    wp = s._client._client.query_operate.call_args.kwargs["write_policy"]
+    assert stmt.filters is not None
+    assert wp.filter_expression is not None
+
+
+def test_blocking_execute_sends_index_filters_and_filter_expression_together():
+    """The sync tree drives this terminal, so it needs its own arm."""
+    s = _session_mock()
+    s._client._client.query_operate_blocking = MagicMock(return_value=MagicMock())
+    s._resolve_namespace_mode_blocking = MagicMock(return_value=Mode.AP)
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    b.bin("x").set_to(1)
+    b.index_filters(Filter.range("n", 1, 3)).where("$.n > 1")._execute_blocking()
+    call = s._client._client.query_operate_blocking.call_args
+    stmt, _ops = call[0]
+    assert stmt.filters is not None
+    assert call.kwargs["write_policy"].filter_expression is not None
 
 
 async def test_delete_execute_passes_statement_index_filters():
@@ -247,12 +280,21 @@ def test_udf_rejects_empty_function():
         fb.function("pkg", "")
 
 
-def test_fail_on_filtered_out_raises():
+@pytest.mark.parametrize("builder", ["operation", "udf"])
+@pytest.mark.parametrize("verb", ["fail_on_filtered_out", "include_missing_keys"])
+def test_foreground_read_verbs_are_rejected_on_background_tasks(builder, verb):
+    """Both verbs shape a foreground read's result rows; a background job has none.
+
+    All four combinations are live code, so all four are pinned here.
+    """
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
-    b = BackgroundTaskSession(s).update(ds)
-    with pytest.raises(TypeError, match="fail_on_filtered_out"):
-        b.fail_on_filtered_out()
+    b = (
+        BackgroundTaskSession(s).update(ds) if builder == "operation"
+        else BackgroundUdfFunctionBuilder(s, ds).function("pkg", "fn")
+    )
+    with pytest.raises(TypeError, match="background tasks"):
+        getattr(b, verb)()
 
 
 async def test_execute_background_task_requires_write_ops():
