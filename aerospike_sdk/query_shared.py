@@ -1583,22 +1583,21 @@ class _QueryBuilderBase:
         ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
 
         # Hand off the current operations list directly; allocate a fresh
-        # one for the next spec instead of copying.
+        # one for the next spec instead of copying. Arguments are positional
+        # (in field order) because this runs once per chain segment and a
+        # keyword call costs about twice as much.
         self._specs.append(_OperationSpec(
-            keys=keys,
-            op_list=self._operations,
-            put_bins=self._put_bins,
-            bins=self._bins,
-            filter_expression=filt,
-            op_type=self._op_type,
-            generation=self._generation,
-            ttl_seconds=ttl,
-            durable_delete=self._durable_delete,
-            durable_delete_command_default=self._durable_delete_command_default,
-            contains_record_delete_op=self._record_delete_in_operations,
-            udf_package=None,
-            udf_function=None,
-            udf_args=None,
+            keys,
+            self._operations,
+            self._put_bins,
+            self._bins,
+            filt,
+            self._op_type,
+            self._generation,
+            ttl,
+            self._durable_delete,
+            self._durable_delete_command_default,
+            self._record_delete_in_operations,
         ))
 
         self._single_key = None
@@ -1698,9 +1697,13 @@ class _QueryBuilderBase:
         """
         if len(self._specs) < 2:
             return False
-        # Identity is namespace + digest: the digest already folds in the set
-        # name and user key. One membership probe per key keeps the common
-        # many-single-key-segment chain free of per-segment set allocations.
+        # Keys hash and compare by digest, so the common no-repeat chain is
+        # cleared by one set build with no per-key string allocation.
+        keys = [key for spec in self._specs for key in spec.keys]
+        if len(set(keys)) == len(keys):
+            return False
+        # The digest folds in the set name and user key but not the
+        # namespace, so confirm a match on namespace + digest.
         seen: set[tuple[str, str]] = set()
         add = seen.add
         for spec in self._specs:

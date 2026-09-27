@@ -483,6 +483,34 @@ class TestPerSpecSettings:
         assert qb._specs[2].ttl_seconds is None
         assert qb._specs[2].generation is None
 
+    def test_every_segment_field_lands_in_its_spec_field(self):
+        # A distinct sentinel per field makes any argument-order slip fail.
+        state_to_spec = {
+            "_operations": "op_list",
+            "_put_bins": "put_bins",
+            "_bins": "bins",
+            "_filter_expression": "filter_expression",
+            "_op_type": "op_type",
+            "_generation": "generation",
+            "_ttl_seconds": "ttl_seconds",
+            "_durable_delete": "durable_delete",
+            "_durable_delete_command_default": "durable_delete_command_default",
+            "_record_delete_in_operations": "contains_record_delete_op",
+        }
+        qb = _make_builder()
+        key = _make_key(1)
+        qb._single_key = key
+        sentinels = {state: object() for state in state_to_spec}
+        for state, sentinel in sentinels.items():
+            setattr(qb, state, sentinel)
+        qb._finalize_current_spec()
+
+        spec = qb._specs[0]
+        assert spec.keys == [key]
+        for state, spec_field in state_to_spec.items():
+            assert getattr(spec, spec_field) is sentinels[state], spec_field
+        assert (spec.udf_package, spec.udf_function, spec.udf_args) == (None, None, None)
+
 
 class TestChainLevelDefaults:
     def test_default_where_applied(self):

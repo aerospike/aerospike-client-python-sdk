@@ -527,6 +527,15 @@ class TestSameKeyChainFolding:
         assert len(pac.batch_mixed_calls) == 1
         assert pac.batch_operate_calls == []
 
+    def test_same_user_key_in_two_namespaces_keeps_the_fold(self):
+        # The digest omits the namespace, so these keys share one; they are
+        # still different records and must not split the chain.
+        assert _k_ap(1).digest == _k_sc(1).digest
+        builder = _builder(_RecordingClient())
+        builder.upsert(_k_ap(1)).bin("a").set_to(1).upsert(_k_sc(1)).bin("a").set_to(2)
+        builder._finalize_current_spec()
+        assert builder._specs_overlap_on_a_key() is False
+
     def test_single_segment_never_pays_the_overlap_scan(self):
         # The common high-volume shape is one segment; the check short-circuits
         # before touching any key.
