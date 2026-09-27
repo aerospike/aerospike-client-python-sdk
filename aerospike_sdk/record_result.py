@@ -33,7 +33,7 @@ if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotation
     from aerospike_sdk.exceptions import AerospikeError
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class RecordResult:
     """One row from a batch, query stream, or single-key SDK call.
 
@@ -93,6 +93,33 @@ class RecordResult:
     sub_code: int | None = None
     server_message: str | None = None
     exp_trace: ExpressionTrace | None = None
+
+    def __init__(
+        self,
+        key: Key,
+        record: Record | None,
+        result_code: ResultCode,
+        in_doubt: bool = False,
+        index: int = -1,
+        exception: AerospikeError | None = None,
+        udf_result: Any | None = None,
+        sub_code: int | None = None,
+        server_message: str | None = None,
+        exp_trace: ExpressionTrace | None = None,
+    ) -> None:
+        # The generated frozen __init__ assigns through object.__setattr__,
+        # the generic slow path; storing via the slot descriptors halves the
+        # cost of a result, which every batch row and stream record pays.
+        _set_key(self, key)
+        _set_record(self, record)
+        _set_result_code(self, result_code)
+        _set_in_doubt(self, in_doubt)
+        _set_index(self, index)
+        _set_exception(self, exception)
+        _set_udf_result(self, udf_result)
+        _set_sub_code(self, sub_code)
+        _set_server_message(self, server_message)
+        _set_exp_trace(self, exp_trace)
 
     def __repr__(self) -> str:
         # Compact, log-friendly summary. The default dataclass repr embeds the
@@ -316,6 +343,18 @@ class RecordResult:
         return False  # unreachable
 
 
+_set_key = RecordResult.key.__set__
+_set_record = RecordResult.record.__set__
+_set_result_code = RecordResult.result_code.__set__
+_set_in_doubt = RecordResult.in_doubt.__set__
+_set_index = RecordResult.index.__set__
+_set_exception = RecordResult.exception.__set__
+_set_udf_result = RecordResult.udf_result.__set__
+_set_sub_code = RecordResult.sub_code.__set__
+_set_server_message = RecordResult.server_message.__set__
+_set_exp_trace = RecordResult.exp_trace.__set__
+
+
 def batch_failure_records_to_results(
     batch_records: list[BatchRecord] | tuple[BatchRecord, ...],
     aggregate_exc: AerospikeError,
@@ -392,17 +431,20 @@ def batch_records_to_results(
     """
     # The message and trace share the subcode's per-row detail slot, so a row
     # without a subcode has neither; skipping their getters keeps successful
-    # rows to one detail lookup.
+    # rows to one detail lookup. Arguments are positional because a keyword
+    # call takes about 1.5x as long per row.
     return [
         RecordResult(
-            key=key,
-            record=br.record,
-            result_code=rc if (rc := br.result_code) is not None else ResultCode.OK,
-            in_doubt=br.in_doubt,
-            index=i,
-            sub_code=(sc := br.sub_code),
-            server_message=None if sc is None else br.server_message,
-            exp_trace=None if sc is None else br.exp_trace,
+            key,
+            br.record,
+            rc if (rc := br.result_code) is not None else ResultCode.OK,
+            br.in_doubt,
+            i,
+            None,
+            None,
+            (sc := br.sub_code),
+            None if sc is None else br.server_message,
+            None if sc is None else br.exp_trace,
         )
         for i, (key, br) in enumerate(zip(keys, batch_records, strict=True))
     ]

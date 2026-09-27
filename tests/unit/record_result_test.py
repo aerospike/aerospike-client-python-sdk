@@ -15,6 +15,8 @@
 
 """Tests for RecordResult."""
 
+import dataclasses
+import inspect
 import pytest
 from types import SimpleNamespace
 
@@ -163,6 +165,29 @@ class TestDefaults:
     def test_index_defaults_minus_one(self):
         rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK)
         assert rr.index == -1
+
+    def test_constructor_defaults_match_field_defaults(self):
+        params = inspect.signature(RecordResult).parameters
+        for f in dataclasses.fields(RecordResult):
+            assert params[f.name].default == (
+                inspect.Parameter.empty if f.default is dataclasses.MISSING else f.default
+            ), f.name
+        assert list(params) == [f.name for f in dataclasses.fields(RecordResult)]
+
+    def test_positional_and_keyword_construction_agree(self):
+        key, record = _key(), _record()
+        positional = RecordResult(key, record, ResultCode.OK, True, 3, None, None, 7, "msg", None)
+        keyword = RecordResult(
+            key=key, record=record, result_code=ResultCode.OK, in_doubt=True, index=3,
+            sub_code=7, server_message="msg",
+        )
+        assert positional == keyword
+
+    def test_replace_builds_a_new_result(self):
+        rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK, index=2)
+        moved = dataclasses.replace(rr, index=5)
+        assert (moved.index, rr.index) == (5, 2)
+        assert moved.key == rr.key
 
 
 # ---------------------------------------------------------------------------
