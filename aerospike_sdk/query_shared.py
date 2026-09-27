@@ -453,6 +453,10 @@ class _QueryBuilderBase:
     # lookup behind each would otherwise repeat for every segment.
     _batch_commit_level_ap: Any = _UNRESOLVED
     _batch_commit_level_sc: Any = _UNRESOLVED
+    # Row policies for plain write segments, keyed by (verb, TTL, mode). A
+    # chain of many single-key segments would otherwise allocate an identical
+    # policy per segment.
+    _plain_batch_write_policies: Optional[Dict[tuple, Optional[BatchWritePolicy]]] = None
     # Feature-usage counters. `_usage_on` stays False unless the app enabled
     # the usage group, which keeps every hook point on this path down to one
     # attribute load. `_usage_features` accumulates across chained segments
@@ -2665,6 +2669,28 @@ class _QueryBuilderBase:
 
         *mode* scopes the durable-delete default to the row's namespace mode.
         """
+        if (
+            spec.filter_expression is None
+            and spec.generation is None
+            and spec.durable_delete is None
+            and spec.durable_delete_command_default is None
+            and not spec.contains_record_delete_op
+        ):
+            cache = self._plain_batch_write_policies
+            if cache is None:
+                cache = self._plain_batch_write_policies = {}
+            cache_key = (spec.op_type, spec.ttl_seconds, mode)
+            if cache_key in cache:
+                return cache[cache_key]
+            bwp = cache[cache_key] = self._build_batch_write_policy(spec, mode)
+            return bwp
+        return self._build_batch_write_policy(spec, mode)
+
+    def _build_batch_write_policy(
+        self,
+        spec: _OperationSpec,
+        mode: Optional[Mode],
+    ) -> Optional[BatchWritePolicy]:
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
         eff = (

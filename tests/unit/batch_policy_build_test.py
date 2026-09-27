@@ -47,6 +47,7 @@ from aerospike_async import (
     Expiration,
     GenerationPolicy,
     Key,
+    RecordExistsAction,
 )
 
 import aerospike_sdk.query_shared as query_shared
@@ -352,6 +353,40 @@ class TestCommitLevel:
         _builder(pac, namespace=AP_NS).delete(_k_ap(1), _k_ap(2)).execute()
         _, _, bdp = pac.batch_delete_calls[0]
         assert bdp is None
+
+
+class TestPlainWritePolicyReuse:
+    """Plain write segments with identical settings share one row policy."""
+
+    def test_identical_segments_share_one_policy(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac, behavior=_commit_master())
+            .insert(_k_ap(1)).put({"b": 1})
+            .insert(_k_ap(2)).put({"b": 2})
+            .insert(_k_ap(3)).put({"b": 3})
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].policy is ops[1].policy is ops[2].policy
+        assert ops[0].policy.record_exists_action == RecordExistsAction.CREATE_ONLY
+        assert ops[0].policy.commit_level == CommitLevel.COMMIT_MASTER
+
+    def test_segments_differing_in_verb_or_ttl_get_their_own_policy(self):
+        pac = _RecordingClient()
+        (
+            _builder(pac)
+            .insert(_k_ap(1)).put({"b": 1})
+            .update(_k_ap(2)).put({"b": 2})
+            .insert(_k_ap(3)).put({"b": 3}).expire_record_after_seconds(600)
+            .execute()
+        )
+        ops, _ = pac.batch_mixed_calls[0]
+        assert ops[0].policy.record_exists_action == RecordExistsAction.CREATE_ONLY
+        assert ops[1].policy.record_exists_action == RecordExistsAction.UPDATE_ONLY
+        assert ops[2].policy.expiration == Expiration.seconds(600)
+        assert ops[0].policy.expiration != Expiration.seconds(600)
+        assert len({id(op.policy) for op in ops}) == 3
 
 
 class TestGenerationPolicy:
