@@ -20,7 +20,7 @@ import pytest
 from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 from aerospike_sdk import UDFLang
-from aerospike_async import Operation
+from aerospike_async import Filter, Operation
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -30,6 +30,7 @@ SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
+BG_INDEX = "pfc_bg_idx"
 MARKER = "bg_marker"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
@@ -357,3 +358,52 @@ async def test_background_update_with_records_per_second(cluster):
         rr = await rs.first_or_raise()
         assert rr.record is not None
         assert rr.record.bins.get(BG_BIN2) == "throttled"
+
+@requires_server_compiled_ael
+async def test_background_update_with_index_filter_and_where(cluster):
+    """The index selects the candidates; the predicate decides which get written.
+
+    The predicate excludes the records an earlier run already processed, so a
+    second run must change nothing.
+    """
+    session = cluster.create_session()
+    index_task = await session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
+    assert await index_task.wait_till_complete()
+    for i in range(1, 11):
+        await (
+            session.upsert(DS.id(f"bgif_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+
+    task = await (
+        session.background_task()
+        .update(DS)
+        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
+        .bin(BG_BIN2).set_to("touched")
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    async def marker(i):
+        rs = await session.query(DS.id(f"bgif_{i}")).bins([BG_BIN2]).execute()
+        return (await rs.first_or_raise()).record.bins.get(BG_BIN2)
+
+    # Only the index range was written; neither narrowing alone would do this.
+    for i in range(1, 11):
+        assert await marker(i) == ("touched" if 4 <= i <= 8 else "original")
+
+    # The predicate reached the server: a second run finds nothing left to do.
+    task = await (
+        session.background_task()
+        .update(DS)
+        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
+        .bin(BG_BIN2).set_to("second_pass")
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(4, 9):
+        assert await marker(i) == "touched"

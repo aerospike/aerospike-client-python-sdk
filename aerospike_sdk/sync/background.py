@@ -99,12 +99,22 @@ class BackgroundOperationBuilder:
         expression: Union[str, FilterExpression],
         *params: Any,
     ) -> BackgroundOperationBuilder:
-        """Restrict the scan with an AEL or filter predicate."""
+        """Restrict the job with an AEL or filter predicate.
+
+        Combines with :meth:`index_filters`; see
+        :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.where`
+        for the full contract.
+        """
         self._inner.where(expression, *params)
         return self
 
     def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
-        """Restrict the job using secondary-index ``Filter`` objects (sync)."""
+        """Restrict the job using secondary-index ``Filter`` objects (sync).
+
+        Combines with :meth:`where`; see
+        :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.index_filters`
+        for the full contract.
+        """
         self._inner.index_filters(*filters)
         return self
 

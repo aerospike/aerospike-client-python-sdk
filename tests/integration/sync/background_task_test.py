@@ -17,7 +17,7 @@
 
 import pytest
 from aerospike_sdk import UDFLang
-from aerospike_async import Operation
+from aerospike_async import Filter, Operation
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -28,6 +28,7 @@ SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
+BG_INDEX = "pfc_bg_idx"
 MARKER = "bg_marker"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
@@ -211,3 +212,38 @@ def test_sync_point_query_rejects_background_task(cluster):
             .with_write_operations([Operation.put(MARKER, 1)])
             .execute_background_task()
         )
+
+@requires_server_compiled_ael
+def test_sync_background_update_with_index_filter_and_where(cluster):
+    """One case per terminal: the sync builder is a facade over the async one.
+
+    Async coverage cannot catch a wiring break here, because the sync tree
+    forwards ``index_filters`` and ``where`` through its own methods before the
+    shared blocking terminal ever sees them.
+    """
+    session = cluster.create_session()
+    assert _wait_task(
+        cluster, session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
+    )
+    for i in range(1, 11):
+        (
+            session.upsert(DS.id(f"sbgif_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+
+    task = (
+        session.background_task()
+        .update(DS)
+        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
+        .bin(BG_BIN2).set_to("touched")
+        .execute()
+    )
+    assert _wait_task(cluster, task)
+
+    for i in range(1, 11):
+        rs = session.query(DS.id(f"sbgif_{i}")).bins([BG_BIN2]).execute()
+        bins = next(iter(rs)).record.bins
+        assert bins.get(BG_BIN2) == ("touched" if 4 <= i <= 8 else "original")

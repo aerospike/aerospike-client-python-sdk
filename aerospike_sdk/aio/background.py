@@ -238,7 +238,12 @@ class _BackgroundOperationBuilderBase:
         expression: Union[str, FilterExpression],
         *params: Any,
     ) -> BackgroundOperationBuilder:
-        """Restrict the scan with an AEL or ``FilterExpression`` predicate.
+        """Restrict the job with an AEL or ``FilterExpression`` predicate.
+
+        The predicate travels as the write policy's filter expression and decides
+        which records the job writes. It combines with :meth:`index_filters`, which
+        selects the candidates through a secondary index; without one, the server
+        reaches the records by scanning the set.
 
         Args:
             expression: AEL string or ``FilterExpression``.
@@ -253,11 +258,6 @@ class _BackgroundOperationBuilderBase:
             builder.where("$.status == 'inactive'")
             builder.where("$.status == '%s'", status)
         """
-        if self._index_filters:
-            raise ValueError(
-                "where(...) cannot be combined with index_filters(...); "
-                "use one narrowing mechanism.",
-            )
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
@@ -271,8 +271,12 @@ class _BackgroundOperationBuilderBase:
     def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
         """Restrict the job using secondary-index :class:`~aerospike_async.Filter` objects.
 
-        These attach to the query ``Statement`` (partition pruning). They cannot be
-        combined with :meth:`where`, which uses a policy filter expression instead.
+        These attach to the query ``Statement``, so the server reaches the records
+        through the index instead of scanning the set. They combine with
+        :meth:`where`, which travels separately as the write policy's filter
+        expression: the index selects the candidates and the predicate decides
+        which of them the job writes. Use both when the index covers part of the
+        condition and an expression covers the rest.
 
         Args:
             *filters: One or more ``Filter`` instances (for example ``Filter.range``).
@@ -281,16 +285,22 @@ class _BackgroundOperationBuilderBase:
             This builder for chaining.
 
         Raises:
-            ValueError: If :meth:`where` was already called on this builder.
+            ValueError: If no filter is supplied.
+
+        Example::
+
+            task = await (
+                session.background_task()
+                    .update(DataSet.of("test", "donor"))
+                    .index_filters(Filter.range("age", 30, 65))
+                    .where("not($.update_pass.exists()) or $.update_pass < 5")
+                    .bin("campaign1").add(50)
+                    .execute()
+            )
 
         See Also:
             :meth:`where`
         """
-        if self._filter_expression is not None:
-            raise ValueError(
-                "index_filters(...) cannot be combined with where(...); "
-                "use one narrowing mechanism.",
-            )
         if not filters:
             raise ValueError("index_filters requires at least one Filter")
         self._index_filters.extend(filters)
@@ -399,10 +409,9 @@ class _BackgroundOperationBuilderBase:
         reject_unsupported_background_write_ops(ops)
         self._record_background_usage()
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
-        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
-            policy_filter,
+            self._filter_expression,
             self._ttl_seconds,
             self._record_exists_action(),
             namespace_mode=mode,
@@ -446,23 +455,6 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
         "_durable_delete_override",
     )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     async def execute(self) -> ExecuteTask:
         """Start the server job and return an :class:`~aerospike_async.ExecuteTask`.
 
@@ -491,10 +483,9 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             self._dataset.namespace, self._dataset.set_name, len(ops),
         )
         mode = await self._session._resolve_namespace_mode(self._dataset.namespace)
-        policy_filter = None if self._index_filters else self._filter_expression
         wp = make_background_write_policy(
             self._session.behavior,
-            policy_filter,
+            self._filter_expression,
             self._ttl_seconds,
             self._record_exists_action(),
             namespace_mode=mode,
