@@ -68,11 +68,11 @@ aerospike-client-python-sdk/
 |   |__ guide/            15 hand-written guides - start here
 |   |__ api/              Sphinx autodoc stubs, one per class (+ sync/ mirror)
 |   |__ conf.py           Sphinx config; Read the Docs builds from this
-|__ examples/             23 runnable programs
+|__ examples/             25 runnable programs
 |__ tests/
 |   |__ README.md         which suite is authoritative for what
-|   |__ unit/             69 files - no server required
-|   |__ integration/      94 files - needs a running server
+|   |__ unit/             77 files - no server required
+|   |__ integration/      104 files - needs a running server
 |__ benchmarks/
 |__ Makefile              test, test-unit, test-int, coverage, docs targets
 ```
@@ -100,8 +100,7 @@ A guide that contradicts a docstring is stale, not authoritative. Report it.
 * **Do not mix legacy `aerospike` idioms into SDK code.** No `aerospike.client(...)`,
   no policy dicts, no `aerospike_helpers` operation functions. This SDK uses verbs
   on a session, `Behavior` for configuration, and AEL strings for filters.
-* **Path expressions are not in the AEL string grammar yet, but they are fully
-  SDK-surfaced.** Use `CdtOperation.select_by_path` / `modify_by_path` /
+* **Path expressions are fully SDK-surfaced.** Use `CdtOperation.select_by_path` / `modify_by_path` /
   `remove`, the flag enums, `CTX.all_children()`, and the loop-variable family
   from `aerospike_sdk` directly - see `docs/guide/expression-ael.md`. Removal
   of matching elements is supported (`CdtOperation.remove`); do not conclude
@@ -151,7 +150,7 @@ pip install aerospike-sdk
 Pin to a specific release if you need reproducible builds:
 
 ```bash
-pip install aerospike-sdk==0.9.0a2
+pip install aerospike-sdk==0.9.0a5
 ```
 
 This installs the SDK plus its dependency on the Aerospike Python Async Client
@@ -382,8 +381,8 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
   floor rises in minor releases as versions reach end-of-life.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
-  Free-threaded wheels (`cp314t`) ship across the same platform matrix as
-  the regular CPython wheels. (PyO3 0.29 dropped 3.13t support; PSDK's
+  Free-threaded PAC wheels (`cp314t`) ship for Linux (x86_64, aarch64) and
+  macOS arm64. (PyO3 0.29 dropped 3.13t support; PSDK's
   free-threaded build starts at 3.14t.)
 - **Aerospike server** — required for integration tests
 - **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
@@ -394,9 +393,9 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 pip install -e ".[dev]"    # install with dev extras
 ```
 
-On the `dev` branch, the pinned `aerospike-async` (PAC) version is a
+On the `dev` branch, the pinned `aerospike-async` (PAC) version may be a
 pre-release build published to Aerospike's internal package index rather
-than public PyPI, so the plain install above needs one extra step that
+than public PyPI. When it is, the plain install above needs one extra step that
 depends on who you are:
 
 **External contributors:** the internal index requires Aerospike
@@ -504,48 +503,32 @@ bin/get-version    # prints 0.9.0-alpha.2
 
 ### Bumping the PAC pin
 
-PSDK depends on a published release of the
+PSDK pins an exact
 [Aerospike Python Async Client](https://github.com/aerospike/aerospike-client-python-async)
-on PyPI as `aerospike-async`. On `dev` and downstream release branches the pin
-**must** be a published PyPI version. The pin lives in `pyproject.toml` under
-`[project] dependencies`:
+(`aerospike-async`) version in `pyproject.toml` under `[project] dependencies`.
+Releases **must** pin a public PyPI version:
 
 ```toml
 [project]
 dependencies = [
-    "aerospike-async==0.5.0a1",
+    "aerospike-async==0.6.0a6",
     # ...other deps
 ]
 ```
 
-To bump: change the version to the new release on PyPI, then reinstall:
+Between releases, `dev` may instead pin a dev-channel build from the internal
+index (e.g. `aerospike-async==0.6.0a7.dev75`) to pick up unreleased PAC work.
+
+To bump: change the version, reinstall, and confirm the environment matches:
 
 ```bash
-pip install --upgrade "aerospike-async==0.5.0aN"
+pip install "aerospike-async==<new version>"
+make check-pin
 ```
 
 Open the PR against `dev`. PSDK's own `VERSION` does not need to change for a
 PAC pin bump unless the underlying API contract has shifted enough to warrant
 it.
-
-#### Mid-cycle: pinning a tagged but unpublished PAC
-
-During a breaking-change cycle, the new PAC may be git-tagged on GitHub before
-its PyPI wheel is published. Feature branches (not `dev`) may temporarily pin
-to the git ref to validate against the new PAC before publish:
-
-```toml
-[project]
-dependencies = [
-    #"aerospike-async==0.5.0a1",   # ← restore this form before merging to dev
-    "aerospike-async @ git+ssh://git@github.com/aerospike/aerospike-client-python-async.git@v0.5.0-alpha.1",
-    # ...other deps
-]
-```
-
-Use git refs only on feature branches; switch back to the `==X.Y.ZaN` form
-before opening a PR against `dev`. CI reads the PAC ref out of `pyproject.toml`
-at job start, so both forms work transparently for the build matrix.
 
 ### Reading the version programmatically
 
