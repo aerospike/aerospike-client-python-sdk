@@ -512,12 +512,12 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         """Run a background write against all records matching this dataset query.
 
         Returns a server task handle; poll with ``wait_till_complete`` or
-        ``query_status``. Requires :meth:`with_write_operations`; only scalar
-        ``Operation`` / expression writes are allowed.
+        ``query_status``. Requires :meth:`with_write_operations`.
 
         Raises:
             ValueError: If the builder targets keys or has no write operations.
-            AerospikeError: If unsupported operation types are present.
+            AerospikeError: If the server rejects the job, for example because
+                it contains a read operation.
         """
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
@@ -529,7 +529,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             raise ValueError(
                 "At least one write operation is required; use with_write_operations(...).",
             )
-        self._reject_unsupported_background_write_ops(self._operations)
         self._flush_background_usage(usage.BACKGROUND_OPERATE)
         log.debug(
             "background task: %s.%s ops=%d",

@@ -32,6 +32,42 @@ task = await (
 await task.wait_till_complete()
 ```
 
+`bin()` offers the same steps as a key-scoped write: scalar and expression
+writes, and list, map, bit, HyperLogLog and string operations, including nested
+navigation. This job removes every segment whose value list sorts before a
+cutoff, and appends a tag to the list stored under a map key:
+
+```python
+profiles = DataSet.of("test", "profiles")
+
+task = await (
+    session.background_task()
+    .update(profiles)
+    .bin("segments").on_map_value_range(None, [1704067200]).remove()
+    .bin("prefs").on_map_key("tags").list_append_items(["sports"])
+    .execute()
+)
+await task.wait_till_complete()
+```
+
+To send an operation you already built, pass it to `add_operation()`:
+
+```python
+from aerospike_async import MapOperation, MapReturnType
+
+task = await (
+    session.background_task()
+    .update(profiles)
+    .add_operation(MapOperation.remove_by_value_range(
+        "segments", None, [1704067200], MapReturnType.NONE,
+    ))
+    .execute()
+)
+```
+
+A background job can only write. The server rejects the job if it contains a
+read operation, such as `get()` or `select_from()`.
+
 ### Narrowing with an Index and a Predicate
 
 `where()` filters every record the job reaches. `index_filters()` changes *which*

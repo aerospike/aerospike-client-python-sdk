@@ -19,8 +19,8 @@ import pytest
 
 from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
-from aerospike_sdk import UDFLang
-from aerospike_async import Filter, Operation
+from aerospike_sdk import HllConfig, UDFLang
+from aerospike_async import Filter, MapOperation, MapReturnType, Operation
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -28,6 +28,10 @@ from tests.integration.namespace import general_namespace
 NS = general_namespace()
 SET = "pfc_bg_task"
 DS = DataSet.of(NS, SET)
+# Background jobs touch every record in their set; collection tests get their own.
+CDT_DS = DataSet.of(NS, "pfc_bg_cdt")
+CDT_KEYS = 3
+CUTOFF = [1704067200]
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
 BG_INDEX = "pfc_bg_idx"
@@ -81,6 +85,20 @@ async def cluster(aerospike_host, make_cluster_definition):
             except Exception:
                 pass
         yield c
+
+
+async def _seed_profiles(session):
+    for i in range(CDT_KEYS):
+        await session.replace(CDT_DS.id(i)).put({
+            "segments": {"expired": [1700000000], "active": [1800000000]},
+            "prefs": {"tags": ["news"]},
+            "score": 10,
+        }).execute()
+
+
+async def _bins(session, i, *names):
+    rs = await session.query(CDT_DS.id(i)).bins(list(names)).execute()
+    return (await rs.first_or_raise()).record_or_raise().bins
 
 
 async def test_background_update(cluster):
@@ -407,3 +425,77 @@ async def test_background_update_with_index_filter_and_where(cluster):
     assert await task.wait_till_complete()
     for i in range(4, 9):
         assert await marker(i) == "touched"
+
+
+async def test_background_update_map_value_range_remove(cluster):
+    session = cluster.create_session()
+    await _seed_profiles(session)
+    task = await (
+        session.background_task()
+        .update(CDT_DS)
+        .bin("segments").on_map_value_range(None, CUTOFF).remove()
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(CDT_KEYS):
+        assert (await _bins(session, i, "segments"))["segments"] == {"active": [1800000000]}
+
+
+async def test_background_update_nested_list_append(cluster):
+    """The write lands in the list under the map key, not on the bin itself."""
+    session = cluster.create_session()
+    await _seed_profiles(session)
+    task = await (
+        session.background_task()
+        .update(CDT_DS)
+        .bin("prefs").on_map_key("tags").list_append_items(["sports"])
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(CDT_KEYS):
+        assert (await _bins(session, i, "prefs"))["prefs"] == {"tags": ["news", "sports"]}
+
+
+async def test_background_update_hll_add(cluster):
+    session = cluster.create_session()
+    await _seed_profiles(session)
+    task = await (
+        session.background_task()
+        .update(CDT_DS)
+        .bin("visitors").hll_add(["alice", "bob", "carol"], config=HllConfig.of(8))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(CDT_KEYS):
+        rs = await session.query(CDT_DS.id(i)).bin("visitors").hll_get_count().execute()
+        assert (await rs.first_or_raise()).record_or_raise().bins["visitors"] == 3
+
+
+@requires_server_compiled_ael
+async def test_background_update_expression_write(cluster):
+    session = cluster.create_session()
+    await _seed_profiles(session)
+    task = await (
+        session.background_task()
+        .update(CDT_DS)
+        .bin("doubled").upsert_from("$.score * 2")
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in range(CDT_KEYS):
+        assert (await _bins(session, i, "doubled"))["doubled"] == 20
+
+
+async def test_query_builder_background_task_with_map_operation(cluster):
+    session = cluster.create_session()
+    await _seed_profiles(session)
+    task = await (
+        session.query(CDT_DS)
+        .with_write_operations([MapOperation.remove_by_value_range(
+            "segments", None, CUTOFF, MapReturnType.NONE,
+        )])
+        .execute_background_task()
+    )
+    assert await task.wait_till_complete()
+    for i in range(CDT_KEYS):
+        assert (await _bins(session, i, "segments"))["segments"] == {"active": [1800000000]}

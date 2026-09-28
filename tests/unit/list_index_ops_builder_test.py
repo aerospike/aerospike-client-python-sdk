@@ -174,7 +174,7 @@ class TestSyncWriteBinBuilderIndexListOps:
         result = swb.list_insert(0, 1)
         # SyncWriteBinBuilder is just WriteBinBuilder; methods return the
         # parent segment for chaining.
-        assert result is swb._segment
+        assert result is swb._parent
         assert len(qb._operations) == 1
         assert isinstance(qb._operations[0], ListOperation)
 

@@ -104,6 +104,29 @@ def test_sync_background_update(cluster):
         assert rr.record.bins.get(BG_BIN2) == "sync_updated"
 
 
+def test_sync_background_update_nested_collection_steps(cluster):
+    """Collection steps chain back to the sync builder and reach the server."""
+    session = cluster.create_session()
+    cdt_ds = DataSet.of(NS, "pfc_bg_cdt_sync")
+    for i in range(3):
+        session.replace(cdt_ds.id(i)).put({
+            "segments": {"expired": [1700000000], "active": [1800000000]},
+            "prefs": {"tags": ["news"]},
+        }).execute()
+    task = (
+        session.background_task()
+        .update(cdt_ds)
+        .bin("segments").on_map_value_range(None, [1704067200]).remove()
+        .bin("prefs").on_map_key("tags").list_append_items(["sports"])
+        .execute()
+    )
+    assert _wait_task(cluster, task)
+    for i in range(3):
+        bins = session.query(cdt_ds.id(i)).execute().first_or_raise().record_or_raise().bins
+        assert bins["segments"] == {"active": [1800000000]}
+        assert bins["prefs"] == {"tags": ["news", "sports"]}
+
+
 @requires_server_compiled_ael
 def test_sync_background_delete(cluster):
     session = cluster.create_session()

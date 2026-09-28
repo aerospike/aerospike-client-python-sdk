@@ -68,6 +68,7 @@ from aerospike_async import (
     CommitLevel,
     ExpOperation,
     ExpReadFlags,
+    ExpWriteFlags,
     Filter,
     FilterExpression,
     GenerationPolicy,
@@ -124,6 +125,7 @@ from aerospike_sdk.operations_shared import (
     _TTL_NEVER_EXPIRE,
     _TTL_SERVER_DEFAULT,
     _WriteSegmentBuilderBase,
+    _build_exp_write_flags,
     _seconds_from_timedelta,
     _seconds_until,
     _to_expiration,
@@ -135,10 +137,7 @@ from aerospike_sdk.policy.policy_mapper import (
     to_read_policy,
     to_write_policy,
 )
-from aerospike_sdk.background_shared import (
-    make_background_write_policy,
-    reject_unsupported_background_write_ops,
-)
+from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
@@ -388,6 +387,24 @@ class _SupportsAddOperation(Protocol):
 
 
 _T = TypeVar("_T", bound=_SupportsAddOperation)
+
+
+class _SupportsBinWrites(Protocol):
+    """Structural type for builders that collect per-bin write operations.
+
+    Used as the bound for :data:`_W` in :class:`_BinWriteSteps`. Concrete
+    implementers: ``_WriteSegmentBuilderBase`` and the background operation
+    builders.
+    """
+
+    def add_operation(self, op: Any) -> Self: ...
+    def _add_op(self, op: Any) -> Self: ...
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression: ...
+
+
+_W = TypeVar("_W", bound=_SupportsBinWrites)
 
 
 _UNRESOLVED = object()
@@ -2288,17 +2305,17 @@ class _QueryBuilderBase:
     def with_write_operations(
         self, operations: Sequence[Any],
     ) -> Self:
-        """Attach scalar write operations for a background dataset task.
+        """Attach write operations for a background dataset task.
 
         Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
         chained bin writes. Use with :meth:`execute_background_task` on a dataset
-        query (no keys).
-        Only ``Operation`` and ``ExpOperation.write``-style writes are valid;
-        list, map, bit, and HLL operations are rejected before calling the client.
+        query (no keys). Any write operation is valid, including list, map,
+        bit, HLL and string operations; the server rejects read operations in a
+        background job.
 
         Args:
             operations: Sequence of write operations (e.g. ``Operation.put``,
-                ``Operation.touch``).
+                ``MapOperation.remove_by_value_range``).
 
         Returns:
             self for method chaining.
@@ -2452,12 +2469,6 @@ class _QueryBuilderBase:
             projection = list(self._op_projection) if self._op_projection else []
             statement.set_operations(projection + list(self._operations))
         return statement
-
-    @staticmethod
-    def _reject_unsupported_background_write_ops(
-        operations: Sequence[Any],
-    ) -> None:
-        reject_unsupported_background_write_ops(operations)
 
     def _make_background_write_policy(self) -> WritePolicy:
         return make_background_write_policy(
@@ -2752,43 +2763,26 @@ class _QueryBuilderBase:
             bwp.durable_delete = eff
         return bwp
 
-class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
-    """Per-bin write builder inside a :class:`WriteSegmentBuilder`.
 
-    Start with :meth:`WriteSegmentBuilder.bin`. Scalar methods delegate to the
-    segment; ``map_*`` and ``list_*`` append collection operations; ``hll_*``
-    and ``bit_*`` append HyperLogLog and blob bit operations; nested CDT
-    builders capture context for maps and lists. Write verbs on this class
-    finalize the segment and start a new one on new keys.
+class _BinWriteSteps(Generic[_W]):
+    """Per-bin write steps shared by :class:`WriteBinBuilder` and the background bin builder.
 
-    Example::
-
-        Set a map key and append to a list within the same write::
-
-            await (
-                session.upsert(key)
-                    .bin("config").on_map_key("level").set_to(5)
-                    .bin("tags").list_append(value="new_tag")
-                    .execute()
-            )
-
-    See Also:
-        :class:`QueryBinBuilder`: Read-side analogue for queries.
+    Each step appends an operation on ``_bin`` to the parent builder and
+    returns the parent, which must satisfy :class:`_SupportsBinWrites`.
     """
 
-    __slots__ = ("_segment", "_bin")
+    __slots__ = ()
 
-    def __init__(self, segment: WriteSegmentBuilder, bin_name: str) -> None:
-        self._segment = segment
-        self._bin = bin_name
+    _parent: _W
+    _bin: str
 
     # -- Scalar writes --------------------------------------------------------
 
-    def set_to(self, value: Any) -> WriteSegmentBuilder:
+    def set_to(self, value: Any) -> _W:
         """Set the bin to *value* (``Operation.put``)."""
-        return self._segment.set_to(self._bin, value)
+        return self._parent._add_op(Operation.put(self._bin, value))
 
-    def set_to_geo_json(self, geo_json: str) -> WriteSegmentBuilder:
+    def set_to_geo_json(self, geo_json: str) -> _W:
         """Set the bin to a GeoJSON value from its string form.
 
         The bin's server-side particle type is GEOJSON, not STRING. Equivalent
@@ -2798,29 +2792,29 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             geo_json: A GeoJSON string (e.g. a Point, Polygon, or AeroCircle).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment.set_to(self._bin, GeoJSON(geo_json))
+        return self._parent._add_op(Operation.put(self._bin, GeoJSON(geo_json)))
 
-    def add(self, value: Any) -> WriteSegmentBuilder:
+    def add(self, value: Any) -> _W:
         """Add a numeric *value* to the bin (``Operation.add``)."""
-        return self._segment.add(self._bin, value)
+        return self._parent._add_op(Operation.add(self._bin, value))
 
-    def append(self, value: str) -> WriteSegmentBuilder:
+    def append(self, value: str) -> _W:
         """String append (``Operation.append``)."""
-        return self._segment.append(self._bin, value)
+        return self._parent._add_op(Operation.append(self._bin, value))
 
-    def prepend(self, value: str) -> WriteSegmentBuilder:
+    def prepend(self, value: str) -> _W:
         """String prepend (``Operation.prepend``)."""
-        return self._segment.prepend(self._bin, value)
+        return self._parent._add_op(Operation.prepend(self._bin, value))
 
-    def remove(self) -> WriteSegmentBuilder:
+    def remove(self) -> _W:
         """Drop the bin (write ``None``)."""
-        return self._segment.remove_bin(self._bin)
+        return self._parent._add_op(Operation.put(self._bin, None))
 
-    def get(self) -> WriteSegmentBuilder:
+    def get(self) -> _W:
         """Return the bin value after writes complete (``Operation.get_bin``)."""
-        return self._segment.get(self._bin)
+        return self._parent._add_op(Operation.get_bin(self._bin))
 
     # -- CDT list structural operations ---------------------------------------
 
@@ -2830,7 +2824,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         unique: bool = False,
         bounded: bool = False,
         no_fail: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Add *value* to an ordered list (sorted insert).
 
         Args:
@@ -2840,13 +2834,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             no_fail: Do not raise on write failures.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
         policy = _resolve_list_policy(
             ListOrderType.ORDERED, unique=unique, bounded=bounded,
             no_fail=no_fail,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.append(self._bin, value, policy),
         )
 
@@ -2856,7 +2850,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         unique: bool = False,
         bounded: bool = False,
         no_fail: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Append *value* to the end of an unordered list.
 
         Args:
@@ -2871,27 +2865,27 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         policy = _resolve_list_policy(
             None, unique=unique, bounded=bounded, no_fail=no_fail,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.append(self._bin, value, policy),
         )
 
     # -- Collection-level map -------------------------------------------------
 
-    def map_clear(self) -> WriteSegmentBuilder:
+    def map_clear(self) -> _W:
         """Remove all entries from the map bin.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(MapOperation.clear(self._bin))
+        return self._parent._add_op(MapOperation.clear(self._bin))
 
-    def map_size(self) -> WriteSegmentBuilder:
+    def map_size(self) -> _W:
         """Return the map element count (read within operate).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(MapOperation.size(self._bin))
+        return self._parent._add_op(MapOperation.size(self._bin))
 
     def map_upsert_items(
         self, items: Any,
@@ -2900,7 +2894,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         persist_index: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Put multiple map entries (create or update each key).
 
         Args:
@@ -2919,7 +2913,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
@@ -2930,7 +2924,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         persist_index: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Put map entries only for keys that do not yet exist.
 
         Args:
@@ -2946,7 +2940,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
@@ -2957,7 +2951,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         persist_index: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Update existing map entries only (no new keys).
 
         Args:
@@ -2968,7 +2962,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             partial: Allow partial success for bulk operations.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
         pairs = _map_item_pairs(items)
         policy = _resolve_map_policy(
@@ -2976,66 +2970,66 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
-    def map_create(self, order: MapOrder) -> WriteSegmentBuilder:
+    def map_create(self, order: MapOrder) -> _W:
         """Create an empty map with the given key order.
 
         Args:
             order: Map key sort order.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(MapOperation.create(self._bin, order))
+        return self._parent._add_op(MapOperation.create(self._bin, order))
 
-    def map_set_policy(self, order: MapOrder) -> WriteSegmentBuilder:
+    def map_set_policy(self, order: MapOrder) -> _W:
         """Set map sort order policy without changing entries.
 
         Args:
             order: Map key sort order policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             MapOperation.set_map_policy(self._bin, MapPolicy(order, None)),
         )
 
     # -- Collection-level list ------------------------------------------------
 
-    def list_clear(self) -> WriteSegmentBuilder:
+    def list_clear(self) -> _W:
         """Remove all elements from the list bin.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(ListOperation.clear(self._bin))
+        return self._parent._add_op(ListOperation.clear(self._bin))
 
     def list_sort(
         self, flags: ListSortFlags = ListSortFlags.DEFAULT,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Sort the list bin.
 
         Args:
             flags: Sort behavior flags.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(ListOperation.sort(self._bin, flags))
+        return self._parent._add_op(ListOperation.sort(self._bin, flags))
 
-    def list_size(self) -> WriteSegmentBuilder:
+    def list_size(self) -> _W:
         """Return the list element count (read within operate).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(ListOperation.size(self._bin))
+        return self._parent._add_op(ListOperation.size(self._bin))
 
-    def list_join(self, separator: Optional[str] = None) -> WriteSegmentBuilder:
+    def list_join(self, separator: Optional[str] = None) -> _W:
         """Concatenate the string items of the list (read within operate).
 
         The list must hold only strings; any other element type fails with
@@ -3047,9 +3041,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
                 separator.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(ListOperation.join(self._bin, separator))
+        return self._parent._add_op(ListOperation.join(self._bin, separator))
 
     def list_append_items(
         self, items: Any,
@@ -3058,7 +3052,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bounded: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Append values to an unordered list.
 
         Args:
@@ -3072,7 +3066,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             None, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.append_items(self._bin, items, policy),
         )
 
@@ -3083,7 +3077,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bounded: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Insert values into an ordered list (sorted positions).
 
         Args:
@@ -3094,19 +3088,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             partial: Allow partial success for bulk operations.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
         policy = _resolve_list_policy(
             ListOrderType.ORDERED, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.append_items(self._bin, items, policy),
         )
 
     def list_create(
         self, order: ListOrderType, *, pad: bool = True, persist_index: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Create an empty list with the given order.
 
         Args:
@@ -3118,22 +3112,22 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             persist_index: Whether to persist element indices.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.create(self._bin, order, pad, persist_index),
         )
 
-    def list_set_order(self, order: ListOrderType) -> WriteSegmentBuilder:
+    def list_set_order(self, order: ListOrderType) -> _W:
         """Set list sort order without changing elements.
 
         Args:
             order: List element order.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(ListOperation.set_order(self._bin, order))
+        return self._parent._add_op(ListOperation.set_order(self._bin, order))
 
     # -- Index-based list (whole-bin) ----------------------------------------
 
@@ -3143,7 +3137,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         unique: bool = False,
         bounded: bool = False,
         no_fail: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Insert *value* at *index* in an unordered list.
 
         Args:
@@ -3154,7 +3148,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             no_fail: Do not raise on write failures.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_append`, :meth:`QueryBinBuilder.list_get`
@@ -3162,7 +3156,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         policy = _resolve_list_policy(
             None, unique=unique, bounded=bounded, no_fail=no_fail,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.insert(self._bin, index, value, policy),
         )
 
@@ -3173,7 +3167,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bounded: bool = False,
         no_fail: bool = False,
         partial: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Insert a sequence of values starting at *index*.
 
         Args:
@@ -3185,7 +3179,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             partial: Allow partial success for bulk operations.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_insert`, :meth:`list_append_items`
@@ -3194,11 +3188,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             None, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.insert_items(self._bin, index, items, policy),
         )
 
-    def list_set(self, index: int, value: Any) -> WriteSegmentBuilder:
+    def list_set(self, index: int, value: Any) -> _W:
         """Replace the element at *index* with *value*.
 
         Args:
@@ -3206,14 +3200,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             value: New element value.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_get`
         """
-        return self._segment._add_op(ListOperation.set(self._bin, index, value))
+        return self._parent._add_op(ListOperation.set(self._bin, index, value))
 
-    def list_increment(self, index: int, value: int = 1) -> WriteSegmentBuilder:
+    def list_increment(self, index: int, value: int = 1) -> _W:
         """Add *value* to the numeric element at *index* (default increment is ``1``).
 
         Args:
@@ -3221,38 +3215,38 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             value: Amount to add; ``1`` uses a dedicated server path.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_set`
         """
         if value == 1:
-            return self._segment._add_op(
+            return self._parent._add_op(
                 ListOperation.increment_by_one(self._bin, index),
             )
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.increment(
                 self._bin, index, value, _UNORDERED_LIST_POLICY,
             ),
         )
 
-    def list_remove(self, index: int) -> WriteSegmentBuilder:
+    def list_remove(self, index: int) -> _W:
         """Remove the element at *index*.
 
         Args:
             index: List index (0-based; negative counts from the end).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_remove_range`
         """
-        return self._segment._add_op(ListOperation.remove(self._bin, index))
+        return self._parent._add_op(ListOperation.remove(self._bin, index))
 
     def list_remove_range(
         self, index: int, count: Optional[int] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Remove *count* elements starting at *index*, or all from *index* onward.
 
         Args:
@@ -3260,7 +3254,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             count: Number of elements to remove; ``None`` removes through the end.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_remove`
@@ -3269,25 +3263,25 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             op = ListOperation.remove_range_from(self._bin, index)
         else:
             op = ListOperation.remove_range(self._bin, index, count)
-        return self._segment._add_op(op)
+        return self._parent._add_op(op)
 
-    def list_pop(self, index: int) -> WriteSegmentBuilder:
+    def list_pop(self, index: int) -> _W:
         """Remove and return the element at *index* (read in the operate result).
 
         Args:
             index: List index (0-based; negative counts from the end).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_pop_range`
         """
-        return self._segment._add_op(ListOperation.pop(self._bin, index))
+        return self._parent._add_op(ListOperation.pop(self._bin, index))
 
     def list_pop_range(
         self, index: int, count: Optional[int] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Pop *count* elements from *index*, or from *index* through the end.
 
         Args:
@@ -3295,7 +3289,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             count: Number of elements; ``None`` pops through the end.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_pop`
@@ -3304,9 +3298,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             op = ListOperation.pop_range_from(self._bin, index)
         else:
             op = ListOperation.pop_range(self._bin, index, count)
-        return self._segment._add_op(op)
+        return self._parent._add_op(op)
 
-    def list_trim(self, index: int, count: int) -> WriteSegmentBuilder:
+    def list_trim(self, index: int, count: int) -> _W:
         """Keep only *count* elements starting at *index*; remove the rest.
 
         Args:
@@ -3314,12 +3308,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             count: Number of elements to keep.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder`.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`list_remove_range`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             ListOperation.trim(self._bin, index, count),
         )
 
@@ -3333,7 +3327,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         update_only: bool = False,
         no_fail: bool = False,
         allow_fold: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Initialize an empty HyperLogLog sketch in this bin.
 
         Use before :meth:`hll_add` on a new bin. ``create_only`` and
@@ -3356,7 +3350,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         Raises:
             ValueError: If ``create_only`` and ``update_only`` are both true.
@@ -3369,7 +3363,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             create_only=create_only, update_only=update_only,
             no_fail=no_fail, allow_fold=allow_fold,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.init(
                 self._bin,
                 config.index_bit_count,
@@ -3387,7 +3381,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         update_only: bool = False,
         no_fail: bool = False,
         allow_fold: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Add distinct values to the HyperLogLog sketch in this bin.
 
         The server hashes each element into the sketch. Pass ``config=...`` to
@@ -3412,7 +3406,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         Raises:
             ValueError: If ``create_only`` and ``update_only`` are both true.
@@ -3427,7 +3421,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         )
         index_bit_count = config.index_bit_count if config is not None else -1
         min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.add(
                 self._bin,
                 list(values),
@@ -3445,7 +3439,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         update_only: bool = False,
         no_fail: bool = False,
         allow_fold: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Merge other HyperLogLog sketches into this bin (destructive union).
 
         Each entry in ``hll_list`` is typically another HLL blob (``bytes``)
@@ -3467,7 +3461,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             allow_fold: Allow folding so unions tolerate mismatched precisions.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         Raises:
             ValueError: If ``create_only`` and ``update_only`` are both true.
@@ -3480,11 +3474,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             create_only=create_only, update_only=update_only,
             no_fail=no_fail, allow_fold=allow_fold,
         )
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.set_union(self._bin, list(hll_list), flags),
         )
 
-    def hll_fold(self, index_bit_count: int) -> WriteSegmentBuilder:
+    def hll_fold(self, index_bit_count: int) -> _W:
         """Reduce sketch precision to a lower ``index_bit_count`` (merge registers).
 
         Example::
@@ -3494,28 +3488,28 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             index_bit_count: New (smaller) index bit width after folding.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`hll_init`: Initial precision when creating a sketch.
         """
-        return self._segment._add_op(HllOperation.fold(self._bin, index_bit_count))
+        return self._parent._add_op(HllOperation.fold(self._bin, index_bit_count))
 
-    def hll_refresh_count(self) -> WriteSegmentBuilder:
+    def hll_refresh_count(self) -> _W:
         """Refresh the cached cardinality estimate stored with the sketch.
 
         Example::
             await session.update(key).bin("hll").hll_refresh_count().execute()
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`hll_get_count`: Read the estimate in the same batch.
         """
-        return self._segment._add_op(HllOperation.refresh_count(self._bin))
+        return self._parent._add_op(HllOperation.refresh_count(self._bin))
 
-    def hll_get_count(self) -> WriteSegmentBuilder:
+    def hll_get_count(self) -> _W:
         """Read the estimated cardinality in a multi-operation write (``operate``).
 
         The result is returned for this bin when the write completes. For a
@@ -3525,29 +3519,29 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             stream = await ( session.update(key) .bin("hll") .hll_get_count() .execute() )
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_get_count`: Same read on a query builder.
             :meth:`hll_add`: Populate the sketch before counting.
         """
-        return self._segment._add_op(HllOperation.get_count(self._bin))
+        return self._parent._add_op(HllOperation.get_count(self._bin))
 
-    def hll_describe(self) -> WriteSegmentBuilder:
+    def hll_describe(self) -> _W:
         """Read index and min-hash bit counts describing the stored sketch.
 
         Example::
             await session.update(key).bin("hll").hll_describe().execute()
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_describe`: Same read on a query builder.
         """
-        return self._segment._add_op(HllOperation.describe(self._bin))
+        return self._parent._add_op(HllOperation.describe(self._bin))
 
-    def hll_get_union(self, hll_list: Sequence[Any]) -> WriteSegmentBuilder:
+    def hll_get_union(self, hll_list: Sequence[Any]) -> _W:
         """Read the union sketch without modifying the stored bin.
 
         Example::
@@ -3557,17 +3551,17 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             hll_list: Other sketches (blobs) to include in the union result.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_get_union`: Same read on a query builder.
             :meth:`hll_set_union`: Persist a union into the bin.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.get_union(self._bin, list(hll_list)),
         )
 
-    def hll_get_union_count(self, hll_list: Sequence[Any]) -> WriteSegmentBuilder:
+    def hll_get_union_count(self, hll_list: Sequence[Any]) -> _W:
         """Read the estimated cardinality of the union with other sketches.
 
         Example::
@@ -3577,16 +3571,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             hll_list: Other sketches to union for the estimate.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_get_union_count`: Same read on a query.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.get_union_count(self._bin, list(hll_list)),
         )
 
-    def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> WriteSegmentBuilder:
+    def hll_get_intersect_count(self, hll_list: Sequence[Any]) -> _W:
         """Read the estimated intersection cardinality with other sketches.
 
         Example::
@@ -3596,16 +3590,16 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             hll_list: Other sketches included in the intersection estimate.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_get_intersect_count`: Same read on a query.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.get_intersect_count(self._bin, list(hll_list)),
         )
 
-    def hll_get_similarity(self, hll_list: Sequence[Any]) -> WriteSegmentBuilder:
+    def hll_get_similarity(self, hll_list: Sequence[Any]) -> _W:
         """Read Jaccard similarity between this sketch and other sketches.
 
         Example::
@@ -3615,12 +3609,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             hll_list: Other sketches to compare.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.hll_get_similarity`: Same read on a query.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             HllOperation.get_similarity(self._bin, list(hll_list)),
         )
 
@@ -3631,7 +3625,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         byte_size: int,
         resize_flags: Optional[Any] = None,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Grow or shrink the raw bytes backing this bin.
 
         When ``resize_flags`` is ``None``, :attr:`~aerospike_sdk.BitwiseResizeFlags.DEFAULT`
@@ -3647,13 +3641,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_insert`: Insert raw bytes at an offset.
             :meth:`QueryBinBuilder.bit_get`: Read bits in a query.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.resize(
                 self._bin,
                 byte_size,
@@ -3667,7 +3661,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         byte_offset: int,
         value: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Insert ``value`` (bytes) at a byte offset in the blob bin.
 
         Example::
@@ -3679,12 +3673,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_remove`: Remove a byte range.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.insert(
                 self._bin,
                 byte_offset,
@@ -3698,7 +3692,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         byte_offset: int,
         byte_size: int,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Remove ``byte_size`` bytes starting at ``byte_offset``.
 
         Example::
@@ -3710,12 +3704,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_insert`: Insert bytes at an offset.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.remove(
                 self._bin,
                 byte_offset,
@@ -3730,7 +3724,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         value: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Overwrite ``bit_size`` bits at ``bit_offset`` with ``value``.
 
         ``value`` is typically a small ``bytes`` object whose bits replace the
@@ -3746,13 +3740,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_get`: Read the same range in an operate or query.
             :meth:`bit_or`, :meth:`bit_xor`, :meth:`bit_and`, :meth:`bit_not`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.set(
                 self._bin,
                 bit_offset,
@@ -3768,7 +3762,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         value: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Bitwise OR ``value`` into the ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -3781,14 +3775,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_and`
             :meth:`bit_xor`
             :meth:`bit_not`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             _bitwise_or(
                 self._bin,
                 bit_offset,
@@ -3804,7 +3798,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         value: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Bitwise XOR ``value`` into the ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -3817,14 +3811,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_or`
             :meth:`bit_and`
             :meth:`bit_not`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.xor(
                 self._bin,
                 bit_offset,
@@ -3840,7 +3834,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         value: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Bitwise AND ``value`` into the ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -3853,14 +3847,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_or`
             :meth:`bit_xor`
             :meth:`bit_not`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             _bitwise_and(
                 self._bin,
                 bit_offset,
@@ -3875,7 +3869,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_offset: int,
         bit_size: int,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Invert every bit in the range ``[bit_offset, bit_offset + bit_size)``.
 
         Example::
@@ -3887,14 +3881,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_or`
             :meth:`bit_xor`
             :meth:`bit_and`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             _bitwise_not(
                 self._bin,
                 bit_offset,
@@ -3909,7 +3903,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         shift: int,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Left-shift the ``bit_size`` bits at ``bit_offset`` by ``shift`` bits.
 
         Example::
@@ -3922,12 +3916,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_rshift`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.lshift(
                 self._bin,
                 bit_offset,
@@ -3943,7 +3937,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         shift: int,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Right-shift the ``bit_size`` bits at ``bit_offset`` by ``shift`` bits.
 
         Example::
@@ -3956,12 +3950,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_lshift`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.rshift(
                 self._bin,
                 bit_offset,
@@ -3979,7 +3973,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         signed: bool,
         action: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Add ``value`` to the integer encoded in ``bit_size`` bits at ``bit_offset``.
 
         ``action`` selects overflow behavior (for example :attr:`~aerospike_sdk.BitwiseOverflowActions.WRAP`).
@@ -3997,14 +3991,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_subtract`
             :meth:`bit_set_int`
             :meth:`bit_get_int`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.add(
                 self._bin,
                 bit_offset,
@@ -4024,7 +4018,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         signed: bool,
         action: Any,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Subtract ``value`` from the integer in ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -4040,13 +4034,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_add`
             :meth:`bit_set_int`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.subtract(
                 self._bin,
                 bit_offset,
@@ -4064,7 +4058,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         bit_size: int,
         value: int,
         policy: Optional[Any] = None,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Write integer ``value`` into ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -4077,13 +4071,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             policy: Optional :class:`~aerospike_sdk.BitPolicy`; ``None`` selects a default policy.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_get_int`
             :meth:`bit_add`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.set_int(
                 self._bin,
                 bit_offset,
@@ -4093,7 +4087,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             ),
         )
 
-    def bit_get(self, bit_offset: int, bit_size: int) -> WriteSegmentBuilder:
+    def bit_get(self, bit_offset: int, bit_size: int) -> _W:
         """Read ``bit_size`` bits at ``bit_offset`` as raw bytes in a write operate.
 
         For read-only access, use :meth:`QueryBinBuilder.bit_get`.
@@ -4106,15 +4100,15 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             bit_size: Number of bits to read.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.bit_get`
             :meth:`bit_set`
         """
-        return self._segment._add_op(BitOperation.get(self._bin, bit_offset, bit_size))
+        return self._parent._add_op(BitOperation.get(self._bin, bit_offset, bit_size))
 
-    def bit_count(self, bit_offset: int, bit_size: int) -> WriteSegmentBuilder:
+    def bit_count(self, bit_offset: int, bit_size: int) -> _W:
         """Count bits set to ``1`` in ``bit_size`` bits starting at ``bit_offset``.
 
         Example::
@@ -4125,14 +4119,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             bit_size: Number of bits to scan.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.bit_count`
         """
-        return self._segment._add_op(BitOperation.count(self._bin, bit_offset, bit_size))
+        return self._parent._add_op(BitOperation.count(self._bin, bit_offset, bit_size))
 
-    def bit_lscan(self, bit_offset: int, bit_size: int, value: bool) -> WriteSegmentBuilder:
+    def bit_lscan(self, bit_offset: int, bit_size: int, value: bool) -> _W:
         """Return the leftmost bit index in the range matching ``value``.
 
         ``value`` is ``True`` to search for a set bit (``1``) or ``False`` for
@@ -4147,17 +4141,17 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             value: ``True`` for set bits, ``False`` for unset bits.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_rscan`
             :meth:`QueryBinBuilder.bit_lscan`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.lscan(self._bin, bit_offset, bit_size, value),
         )
 
-    def bit_rscan(self, bit_offset: int, bit_size: int, value: bool) -> WriteSegmentBuilder:
+    def bit_rscan(self, bit_offset: int, bit_size: int, value: bool) -> _W:
         """Return the rightmost bit index in the range matching ``value``.
 
         Example::
@@ -4169,19 +4163,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             value: ``True`` for set bits, ``False`` for unset bits.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`bit_lscan`
             :meth:`QueryBinBuilder.bit_rscan`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.rscan(self._bin, bit_offset, bit_size, value),
         )
 
     def bit_get_int(
         self, bit_offset: int, bit_size: int, signed: bool,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Decode an integer from ``bit_size`` bits at ``bit_offset``.
 
         Example::
@@ -4193,13 +4187,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             signed: ``True`` to interpret as two's-complement signed.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.bit_get_int`
             :meth:`bit_set_int`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
@@ -4208,7 +4202,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         byte_offset: Optional[int] = None,
         byte_size: Optional[int] = None,
         invert_size: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Read this blob bin as base64 text, whole or by byte range.
 
         Without a range the whole blob is encoded. With ``byte_offset`` and
@@ -4237,7 +4231,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
                 end of the blob.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         Raises:
             ValueError: If only one of ``byte_offset`` / ``byte_size`` is
@@ -4247,7 +4241,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             :meth:`QueryBinBuilder.bit_b64_encode`
             :meth:`str_b64_decode`
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
         )
 
@@ -4266,7 +4260,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     # ---- String reads -------------------------------------------------------
 
-    def str_strlen(self) -> WriteSegmentBuilder:
+    def str_strlen(self) -> _W:
         """Register a strlen read: Unicode codepoint count of this string bin.
 
         Returns the codepoint count under this bin's name (NOT the UTF-8
@@ -4282,15 +4276,15 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             )
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
 
         See Also:
             :meth:`QueryBinBuilder.str_strlen`: Same read on a query builder.
             :meth:`str_byte_length`: UTF-8 byte length instead of codepoint count.
         """
-        return self._segment._add_op(StringOperation.strlen(self._bin))
+        return self._parent._add_op(StringOperation.strlen(self._bin))
 
-    def str_substr(self, start: int, end: Optional[int] = None) -> WriteSegmentBuilder:
+    def str_substr(self, start: int, end: Optional[int] = None) -> _W:
         """Register a substr read.
 
         With ``end`` omitted, returns codepoints from ``start`` to the end of
@@ -4316,11 +4310,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             end: End-exclusive codepoint index. ``None`` means run to end.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.substr(self._bin, start, end))
+        return self._parent._add_op(StringOperation.substr(self._bin, start, end))
 
-    def str_char_at(self, index: int) -> WriteSegmentBuilder:
+    def str_char_at(self, index: int) -> _W:
         """Register a char-at read: returns the codepoint at ``index`` as a
         one-codepoint string. Negative ``index`` counts from the end.
 
@@ -4328,11 +4322,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             stream = await session.upsert(key).bin("s").str_char_at(1).execute()
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.char_at(self._bin, index))
+        return self._parent._add_op(StringOperation.char_at(self._bin, index))
 
-    def str_find(self, needle: str, occurrence: Optional[int] = None) -> WriteSegmentBuilder:
+    def str_find(self, needle: str, occurrence: Optional[int] = None) -> _W:
         """Register a find read: codepoint index of the first occurrence of
         ``needle``, or the N-th occurrence when ``occurrence`` is given.
 
@@ -4347,13 +4341,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             occurrence: 1-based match index. ``None`` means first occurrence.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.find(self._bin, needle, occurrence),
         )
 
-    def str_contains(self, needle: str) -> WriteSegmentBuilder:
+    def str_contains(self, needle: str) -> _W:
         """Register a contains read: ``True`` iff this bin contains ``needle``.
 
         Result is a Python ``bool`` (the server returns a native msgpack
@@ -4363,27 +4357,27 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             stream = await session.upsert(key).bin("s").str_contains("hello").execute()
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.contains(self._bin, needle))
+        return self._parent._add_op(StringOperation.contains(self._bin, needle))
 
-    def str_starts_with(self, prefix: str) -> WriteSegmentBuilder:
+    def str_starts_with(self, prefix: str) -> _W:
         """Register a starts-with read: ``True`` iff this bin starts with ``prefix``.
 
         Matching is Unicode canonical, not byte-exact: a prefix in a different
         normalization form than the stored value still matches.
         """
-        return self._segment._add_op(StringOperation.starts_with(self._bin, prefix))
+        return self._parent._add_op(StringOperation.starts_with(self._bin, prefix))
 
-    def str_ends_with(self, suffix: str) -> WriteSegmentBuilder:
+    def str_ends_with(self, suffix: str) -> _W:
         """Register an ends-with read: ``True`` iff this bin ends with ``suffix``.
 
         Matching is Unicode canonical, not byte-exact: a suffix in a different
         normalization form than the stored value still matches.
         """
-        return self._segment._add_op(StringOperation.ends_with(self._bin, suffix))
+        return self._parent._add_op(StringOperation.ends_with(self._bin, suffix))
 
-    def str_to_integer(self) -> WriteSegmentBuilder:
+    def str_to_integer(self) -> _W:
         """Register a to-integer read: parses this bin as ``int64``.
 
         Server returns ``OP_NOT_APPLICABLE`` (subcode
@@ -4391,11 +4385,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         as an integer.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.to_integer(self._bin))
+        return self._parent._add_op(StringOperation.to_integer(self._bin))
 
-    def str_to_double(self) -> WriteSegmentBuilder:
+    def str_to_double(self) -> _W:
         """Register a to-double read: parses this bin as ``float64``.
 
         Server returns ``OP_NOT_APPLICABLE`` (subcode
@@ -4403,19 +4397,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         as a double.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.to_double(self._bin))
+        return self._parent._add_op(StringOperation.to_double(self._bin))
 
-    def str_byte_length(self) -> WriteSegmentBuilder:
+    def str_byte_length(self) -> _W:
         """Register a byte-length read: UTF-8 byte count of this string bin.
 
         Differs from :meth:`str_strlen` for non-ASCII content (where one
         codepoint can encode to multiple bytes).
         """
-        return self._segment._add_op(StringOperation.byte_length(self._bin))
+        return self._parent._add_op(StringOperation.byte_length(self._bin))
 
-    def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> WriteSegmentBuilder:
+    def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> _W:
         """Register an is-numeric read: ``True`` iff this bin parses as a number.
 
         Pass ``numeric_type`` to restrict to ``StringNumericType.INT`` or
@@ -4433,25 +4427,25 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             numeric_type: Restrict to one numeric class. ``None`` = either.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.is_numeric(self._bin, numeric_type),
         )
 
-    def str_is_upper(self) -> WriteSegmentBuilder:
+    def str_is_upper(self) -> _W:
         """Register an is-upper read: ``True`` iff every cased codepoint is uppercase."""
-        return self._segment._add_op(StringOperation.is_upper(self._bin))
+        return self._parent._add_op(StringOperation.is_upper(self._bin))
 
-    def str_is_lower(self) -> WriteSegmentBuilder:
+    def str_is_lower(self) -> _W:
         """Register an is-lower read: ``True`` iff every cased codepoint is lowercase."""
-        return self._segment._add_op(StringOperation.is_lower(self._bin))
+        return self._parent._add_op(StringOperation.is_lower(self._bin))
 
-    def str_to_blob(self) -> WriteSegmentBuilder:
+    def str_to_blob(self) -> _W:
         """Register a to-blob read: UTF-8 bytes of this string bin as a blob."""
-        return self._segment._add_op(StringOperation.to_blob(self._bin))
+        return self._parent._add_op(StringOperation.to_blob(self._bin))
 
-    def str_split(self, separator: Optional[str] = None) -> WriteSegmentBuilder:
+    def str_split(self, separator: Optional[str] = None) -> _W:
         """Register a split read.
 
         With ``separator`` omitted, returns one element per Unicode codepoint
@@ -4462,19 +4456,19 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             separator: Substring to split on. ``None`` = codepoint-wise.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.split(self._bin, separator))
+        return self._parent._add_op(StringOperation.split(self._bin, separator))
 
-    def str_b64_decode(self) -> WriteSegmentBuilder:
+    def str_b64_decode(self) -> _W:
         """Register a base64-decode read: treats the bin as base64 text, returns bytes.
 
         Server returns ``OP_NOT_APPLICABLE`` (subcode
         ``SubCode.OPNOT_STRING_B64_INVALID``) if the bin is not valid base64.
         """
-        return self._segment._add_op(StringOperation.b64_decode(self._bin))
+        return self._parent._add_op(StringOperation.b64_decode(self._bin))
 
-    def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a regex-compare read: ``True`` iff ``pattern`` matches this bin.
 
         Uses ICU regex syntax. Combine ``StringRegexFlags`` constants with
@@ -4493,15 +4487,15 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             flags: OR-combined :class:`StringRegexFlags` bitmask. Defaults to 0.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.regex_compare(self._bin, pattern, int(flags)),
         )
 
     # ---- String modifies ----------------------------------------------------
 
-    def str_insert(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_insert(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register an insert modify: splice ``value`` into this bin at codepoint ``index``.
 
         Negative ``index`` counts from the end of the string. Out-of-bounds
@@ -4514,25 +4508,25 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
                 (``NO_FAIL`` suppresses the op on missing-bin error).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.insert(self._bin, index, value, flags=int(flags)),
         )
 
-    def str_overwrite(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_overwrite(self, index: int, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register an overwrite modify: overwrite codepoints starting at ``index`` with ``value``.
 
         May extend the bin's length when ``value`` runs past the end.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.overwrite(self._bin, index, value, flags=int(flags)),
         )
 
-    def str_concat(self, value: Union[str, List[str]], *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_concat(self, value: Union[str, List[str]], *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a concat modify: append ``value`` (single string or list of strings).
 
         The wire format is always list-of-strings — passing a single
@@ -4543,13 +4537,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.concat(self._bin, value, flags=int(flags)),
         )
 
-    def str_append(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_append(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register an append modify: add ``value`` to the end of the bin.
 
         The single-value form (server sub-op 67). Use :meth:`str_concat` for
@@ -4560,13 +4554,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.append(self._bin, value, flags=int(flags)),
         )
 
-    def str_prepend(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_prepend(self, value: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a prepend modify: add ``value`` to the start of the bin.
 
         Distinct from :meth:`str_insert` at index 0 — this is the server's
@@ -4577,15 +4571,15 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.prepend(self._bin, value, flags=int(flags)),
         )
 
     def str_snip(
         self, start: int, end: int | None = None, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Register a snip modify: remove the half-open codepoint range ``[start, end)``.
 
         When ``end`` is omitted, everything from ``start`` through the end of
@@ -4604,38 +4598,38 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             flags: OR-combined :class:`StringWriteFlags` bitmask.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.snip(self._bin, start, end, flags=int(flags)),
         )
 
     def str_replace(
         self, needle: str, replacement: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Register a replace modify: replace the first occurrence of ``needle``.
 
         Use :meth:`str_replace_all` to replace every occurrence.
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.replace(self._bin, needle, replacement, flags=int(flags)),
         )
 
     def str_replace_all(
         self, needle: str, replacement: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Register a replace-all modify: replace every occurrence of ``needle``."""
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.replace_all(self._bin, needle, replacement, flags=int(flags)),
         )
 
     def str_regex_replace(
         self, pattern: str, replacement: str, flags: int | StringRegexFlags = 0,
         *, write_flags: int | StringWriteFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         r"""Register a regex-replace modify.
 
         Replaces the first match of ``pattern`` with ``replacement``. Set
@@ -4666,77 +4660,77 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
                 (``UPDATE_ONLY`` / ``NO_FAIL``).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.regex_replace(
                 self._bin, pattern, replacement, int(flags), write_flags=int(write_flags),
             ),
         )
 
-    def str_upper(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_upper(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register an upper modify: uppercase the bin in place."""
-        return self._segment._add_op(StringOperation.upper(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.upper(self._bin, flags=int(flags)))
 
-    def str_lower(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_lower(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a lower modify: lowercase the bin in place."""
-        return self._segment._add_op(StringOperation.lower(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.lower(self._bin, flags=int(flags)))
 
-    def str_case_fold(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_case_fold(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a case-fold modify: locale-independent lowercase, useful for comparison keys."""
-        return self._segment._add_op(StringOperation.case_fold(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.case_fold(self._bin, flags=int(flags)))
 
-    def str_normalize_nfc(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_normalize_nfc(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a normalize-NFC modify: Unicode NFC normalization in place.
 
         Already-normalized strings are unchanged.
         """
-        return self._segment._add_op(StringOperation.normalize_nfc(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.normalize_nfc(self._bin, flags=int(flags)))
 
-    def str_trim_start(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_trim_start(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim-start modify: strip whitespace from the start of the bin."""
-        return self._segment._add_op(StringOperation.trim_start(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.trim_start(self._bin, flags=int(flags)))
 
-    def str_trim_end(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_trim_end(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim-end modify: strip whitespace from the end of the bin."""
-        return self._segment._add_op(StringOperation.trim_end(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.trim_end(self._bin, flags=int(flags)))
 
-    def str_trim(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_trim(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim modify: strip whitespace from both ends of the bin."""
-        return self._segment._add_op(StringOperation.trim(self._bin, flags=int(flags)))
+        return self._parent._add_op(StringOperation.trim(self._bin, flags=int(flags)))
 
     def str_pad_start(
         self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Register a pad-start modify: left-pad with ``pad_string`` to ``target_length`` codepoints.
 
         No-op when the bin is already at or above ``target_length``.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.pad_start(self._bin, target_length, pad_string, flags=int(flags)),
         )
 
     def str_pad_end(
         self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Register a pad-end modify: right-pad with ``pad_string`` to ``target_length`` codepoints.
 
         No-op when the bin is already at or above ``target_length``.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.pad_end(self._bin, target_length, pad_string, flags=int(flags)),
         )
 
-    def str_repeat(self, count: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
+    def str_repeat(self, count: int, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a repeat modify: repeat the bin contents ``count`` times.
 
         ``count`` must be non-negative.
         """
-        return self._segment._add_op(
+        return self._parent._add_op(
             StringOperation.repeat(self._bin, count, flags=int(flags)),
         )
 
-    def read_as_string(self) -> WriteSegmentBuilder:
+    def read_as_string(self) -> _W:
         """Register a to-string read: convert any bin to its string representation.
 
         Type-agnostic — the source bin need not be a string, which is why
@@ -4750,9 +4744,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         carry a CTX wrapper).
 
         Returns:
-            The parent :class:`WriteSegmentBuilder` for chaining.
+            The parent builder, for chaining.
         """
-        return self._segment._add_op(StringOperation.to_string(self._bin))
+        return self._parent._add_op(StringOperation.to_string(self._bin))
 
     # -- Expression operations ------------------------------------------------
 
@@ -4761,11 +4755,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         expression: Union[str, FilterExpression],
         *,
         ignore_eval_failure: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Read a computed value into this bin using an AEL expression."""
-        return self._segment.select_from(
-            self._bin, expression, ignore_eval_failure=ignore_eval_failure,
-        )
+        parent = self._parent
+        flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
+        expr = parent._expression_from_ael_string_for_ops(expression)
+        return parent._add_op(ExpOperation.read(self._bin, expr, flags))
 
     def insert_from(
         self,
@@ -4774,13 +4769,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Write expression result only if bin does not already exist."""
-        return self._segment.insert_from(
-            self._bin, expression,
-            ignore_op_failure=ignore_op_failure,
-            ignore_eval_failure=ignore_eval_failure,
-            delete_if_null=delete_if_null,
+        return self._exp_write(
+            expression, ExpWriteFlags.CREATE_ONLY,
+            ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
 
     def update_from(
@@ -4790,13 +4783,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Write expression result only if bin already exists."""
-        return self._segment.update_from(
-            self._bin, expression,
-            ignore_op_failure=ignore_op_failure,
-            ignore_eval_failure=ignore_eval_failure,
-            delete_if_null=delete_if_null,
+        return self._exp_write(
+            expression, ExpWriteFlags.UPDATE_ONLY,
+            ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
 
     def upsert_from(
@@ -4806,18 +4797,31 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
-    ) -> WriteSegmentBuilder:
+    ) -> _W:
         """Write expression result, creating or overwriting the bin."""
-        return self._segment.upsert_from(
-            self._bin, expression,
-            ignore_op_failure=ignore_op_failure,
-            ignore_eval_failure=ignore_eval_failure,
-            delete_if_null=delete_if_null,
+        return self._exp_write(
+            expression, ExpWriteFlags.DEFAULT,
+            ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
+
+    def _exp_write(
+        self,
+        expression: Union[str, FilterExpression],
+        base_flags: int,
+        ignore_op_failure: bool,
+        ignore_eval_failure: bool,
+        delete_if_null: bool,
+    ) -> _W:
+        parent = self._parent
+        flags = _build_exp_write_flags(
+            base_flags, ignore_op_failure, ignore_eval_failure, delete_if_null,
+        )
+        expr = parent._expression_from_ael_string_for_ops(expression)
+        return parent._add_op(ExpOperation.write(self._bin, expr, flags))
 
     # -- Map navigation (singular -> CdtWriteBuilder) --------------------------
 
-    def on_map_index(self, index: int) -> CdtWriteBuilder[WriteSegmentBuilder]:
+    def on_map_index(self, index: int) -> CdtWriteBuilder[_W]:
         """Navigate to a map element by index.
 
         Args:
@@ -4828,14 +4832,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_index(b, index, rt),
             lambda rt: MapOperation.remove_by_index(b, index, rt),
             MapReturnType, is_map=True,
             bin_name=b, to_ctx=lambda: CTX.map_index(index), filterable=False,
         )
 
-    def on_each_child(self) -> CdtPathBuilder[WriteSegmentBuilder]:
+    def on_each_child(self) -> CdtPathBuilder[_W]:
         """Select every child of this bin, for a path read or modify.
 
         Walks a whole level instead of one element, so the terminal applies
@@ -4851,9 +4855,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         Returns:
             :class:`CdtPathBuilder` for further navigation or a terminal.
         """
-        return CdtPathBuilder(self._segment, self._bin, [CTX.all_children()])
+        return CdtPathBuilder(self._parent, self._bin, [CTX.all_children()])
 
-    def on_each_child_where(self, predicate: Any) -> CdtPathBuilder[WriteSegmentBuilder]:
+    def on_each_child_where(self, predicate: Any) -> CdtPathBuilder[_W]:
         """Select the children matching *predicate*.
 
         Args:
@@ -4864,10 +4868,10 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             :class:`CdtPathBuilder` for further navigation or a terminal.
         """
         return CdtPathBuilder(
-            self._segment, self._bin, [CTX.all_children_with_filter(predicate)],
+            self._parent, self._bin, [CTX.all_children_with_filter(predicate)],
         )
 
-    def on_map_keys_in(self, keys: Iterable[Any]) -> CdtPathBuilder[WriteSegmentBuilder]:
+    def on_map_keys_in(self, keys: Iterable[Any]) -> CdtPathBuilder[_W]:
         """Select the map entries whose key is in *keys*, for a path read or modify.
 
         Args:
@@ -4885,12 +4889,12 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             )
         """
         return CdtPathBuilder(
-            self._segment, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
         )
 
     def on_map_key(
         self, key: Any, *, create_type: Optional[MapOrder] = None,
-    ) -> CdtWriteBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteBuilder[_W]:
         """Navigate to a map element by key.
 
         Args:
@@ -4908,7 +4912,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         else:
             to_ctx = lambda: CTX.map_key(key)
         return CdtWriteBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_key(b, key, rt),
             lambda rt: MapOperation.remove_by_key(b, key, rt),
             MapReturnType, is_map=True,
@@ -4917,11 +4921,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             add_factory=lambda v: MapOperation.increment_value(b, key, v, _mp),
         )
 
-    def on_map_rank(self, rank: int) -> CdtWriteBuilder[WriteSegmentBuilder]:
+    def on_map_rank(self, rank: int) -> CdtWriteBuilder[_W]:
         """Navigate to a map element by rank (0 = lowest value)."""
         b = self._bin
         return CdtWriteBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_rank(b, rank, rt),
             lambda rt: MapOperation.remove_by_rank(b, rank, rt),
             MapReturnType, is_map=True,
@@ -4930,7 +4934,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     # -- Map navigation (invertable -> CdtWriteInvertableBuilder) -------------
 
-    def on_map_value(self, value: Any) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    def on_map_value(self, value: Any) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements matching a value.
 
         Args:
@@ -4941,7 +4945,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_value(b, value, rt),
             lambda rt: MapOperation.remove_by_value(b, value, rt),
             MapReturnType, is_map=True,
@@ -4950,7 +4954,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_map_index_range(
         self, index: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements by index range.
 
         Args:
@@ -4968,13 +4972,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             get_f = lambda rt: MapOperation.get_by_index_range(b, index, count, rt)
             rm_f = lambda rt: MapOperation.remove_by_index_range(b, index, count, rt)
         return CdtWriteInvertableBuilder(
-            self._segment, get_f, rm_f, MapReturnType, is_map=True,
+            self._parent, get_f, rm_f, MapReturnType, is_map=True,
             bin_name=b, to_ctx=None,
         )
 
     def on_map_key_range(
         self, start: Any, end: Any,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements by key range [start, end).
 
         Args:
@@ -4986,7 +4990,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_key_range(b, start, end, rt),
             lambda rt: MapOperation.remove_by_key_range(b, start, end, rt),
             MapReturnType, is_map=True,
@@ -4995,7 +4999,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_map_rank_range(
         self, rank: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements by rank range.
 
         Args:
@@ -5013,13 +5017,13 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             get_f = lambda rt: MapOperation.get_by_rank_range(b, rank, count, rt)
             rm_f = lambda rt: MapOperation.remove_by_rank_range(b, rank, count, rt)
         return CdtWriteInvertableBuilder(
-            self._segment, get_f, rm_f, MapReturnType, is_map=True,
+            self._parent, get_f, rm_f, MapReturnType, is_map=True,
             bin_name=b, to_ctx=None,
         )
 
     def on_map_value_range(
         self, start: Any, end: Any,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements by value range [start, end).
 
         Args:
@@ -5031,7 +5035,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_value_range(b, start, end, rt),
             lambda rt: MapOperation.remove_by_value_range(b, start, end, rt),
             MapReturnType, is_map=True,
@@ -5040,7 +5044,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_map_key_relative_index_range(
         self, key: Any, index: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map entries by index range relative to an anchor key.
 
         Args:
@@ -5053,7 +5057,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_key_relative_index_range(
                 b, key, index, count, rt,
             ),
@@ -5066,7 +5070,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_map_value_relative_rank_range(
         self, value: Any, rank: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map entries by value rank range relative to an anchor value.
 
         Args:
@@ -5079,7 +5083,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_value_relative_rank_range(
                 b, value, rank, count, rt,
             ),
@@ -5090,7 +5094,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             bin_name=b, to_ctx=None,
         )
 
-    def on_map_key_list(self, keys: List[Any]) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    def on_map_key_list(self, keys: List[Any]) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements matching a list of keys.
 
         Args:
@@ -5101,14 +5105,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_key_list(b, keys, rt),
             lambda rt: MapOperation.remove_by_key_list(b, keys, rt),
             MapReturnType, is_map=True,
             bin_name=b, to_ctx=None,
         )
 
-    def on_map_value_list(self, values: List[Any]) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    def on_map_value_list(self, values: List[Any]) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to map elements matching a list of values.
 
         Args:
@@ -5119,7 +5123,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: MapOperation.get_by_value_list(b, values, rt),
             lambda rt: MapOperation.remove_by_value_list(b, values, rt),
             MapReturnType, is_map=True,
@@ -5133,7 +5137,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         *,
         order: Optional[ListOrderType] = None,
         pad: bool = False,
-    ) -> CdtWriteBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteBuilder[_W]:
         """Navigate to a list element by index.
 
         Args:
@@ -5157,14 +5161,14 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         else:
             to_ctx = lambda: CTX.list_index(index)
         return CdtWriteBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_index(b, index, rt),
             lambda rt: ListOperation.remove_by_index(b, index, rt),
             ListReturnType, is_map=False,
             bin_name=b, to_ctx=to_ctx,
         )
 
-    def on_list_rank(self, rank: int) -> CdtWriteBuilder[WriteSegmentBuilder]:
+    def on_list_rank(self, rank: int) -> CdtWriteBuilder[_W]:
         """Navigate to a list element by rank (0 = lowest value).
 
         Args:
@@ -5175,7 +5179,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_rank(b, rank, rt),
             lambda rt: ListOperation.remove_by_rank(b, rank, rt),
             ListReturnType, is_map=False,
@@ -5184,7 +5188,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     # -- List navigation (invertable -> CdtWriteInvertableBuilder) ------------
 
-    def on_list_value(self, value: Any) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    def on_list_value(self, value: Any) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements matching a value.
 
         Args:
@@ -5195,7 +5199,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_value(b, value, rt),
             lambda rt: ListOperation.remove_by_value(b, value, rt),
             ListReturnType, is_map=False,
@@ -5204,7 +5208,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_list_index_range(
         self, index: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements by index range.
 
         Args:
@@ -5216,7 +5220,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_index_range(b, index, count, rt),
             lambda rt: ListOperation.remove_by_index_range(b, index, count, rt),
             ListReturnType, is_map=False,
@@ -5225,7 +5229,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_list_rank_range(
         self, rank: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements by rank range.
 
         Args:
@@ -5237,7 +5241,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_rank_range(b, rank, count, rt),
             lambda rt: ListOperation.remove_by_rank_range(b, rank, count, rt),
             ListReturnType, is_map=False,
@@ -5246,7 +5250,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_list_value_range(
         self, start: Any, end: Any,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements by value range [start, end).
 
         Args:
@@ -5258,7 +5262,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_value_range(b, start, end, rt),
             lambda rt: ListOperation.remove_by_value_range(b, start, end, rt),
             ListReturnType, is_map=False,
@@ -5267,7 +5271,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
     def on_list_value_relative_rank_range(
         self, value: Any, rank: int, count: Optional[int] = None,
-    ) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    ) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements by value rank range relative to an anchor value.
 
         Args:
@@ -5280,7 +5284,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_value_relative_rank_range(
                 b, value, rank, count, rt,
             ),
@@ -5291,7 +5295,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             bin_name=b, to_ctx=None,
         )
 
-    def on_list_value_list(self, values: List[Any]) -> CdtWriteInvertableBuilder[WriteSegmentBuilder]:
+    def on_list_value_list(self, values: List[Any]) -> CdtWriteInvertableBuilder[_W]:
         """Navigate to list elements matching a list of values.
 
         Args:
@@ -5302,24 +5306,57 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         """
         b = self._bin
         return CdtWriteInvertableBuilder(
-            self._segment,
+            self._parent,
             lambda rt: ListOperation.get_by_value_list(b, values, rt),
             lambda rt: ListOperation.remove_by_value_list(b, values, rt),
             ListReturnType, is_map=False,
             bin_name=b, to_ctx=None,
         )
 
+
+class WriteBinBuilder(
+    _BinWriteSteps["WriteSegmentBuilder"], _WriteVerbs[_WriteSegmentBuilderBase],
+):
+    """Per-bin write builder inside a :class:`WriteSegmentBuilder`.
+
+    Start with :meth:`WriteSegmentBuilder.bin`. Scalar methods append to the
+    segment; ``map_*`` and ``list_*`` append collection operations; ``hll_*``
+    and ``bit_*`` append HyperLogLog and blob bit operations; nested CDT
+    builders capture context for maps and lists. Write verbs on this class
+    finalize the segment and start a new one on new keys.
+
+    Example::
+
+        Set a map key and append to a list within the same write::
+
+            await (
+                session.upsert(key)
+                    .bin("config").on_map_key("level").set_to(5)
+                    .bin("tags").list_append(value="new_tag")
+                    .execute()
+            )
+
+    See Also:
+        :class:`QueryBinBuilder`: Read-side analogue for queries.
+    """
+
+    __slots__ = ("_parent", "_bin")
+
+    def __init__(self, segment: WriteSegmentBuilder, bin_name: str) -> None:
+        self._parent = segment
+        self._bin = bin_name
+
     # -- Convenience transitions (delegate to segment) ------------------------
 
     def bin(self, bin_name: str) -> WriteBinBuilder:
         """Start the next bin operation without leaving the write segment."""
-        return WriteBinBuilder(self._segment, bin_name)
+        return WriteBinBuilder(self._parent, bin_name)
 
     def query(
         self, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> QueryBuilder:
         """Shortcut: finalize write segment and start a read segment."""
-        return self._segment.query(arg1, *more_keys)
+        return self._parent.query(arg1, *more_keys)
 
     def execute_udf(self, *keys: Key) -> "UdfFunctionBuilder":
         """Shortcut: finalize the write segment and chain a UDF on *keys*.
@@ -5327,24 +5364,24 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         See :meth:`QueryBuilder.execute_udf` for semantics; the whole
         chain still executes as one batch.
         """
-        return self._segment.execute_udf(*keys)
+        return self._parent.execute_udf(*keys)
 
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
-        return self._segment._start_write_verb(op_type, arg1, *more_keys)
+        return self._parent._start_write_verb(op_type, arg1, *more_keys)
 
     async def execute(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
         """Shortcut: execute all accumulated specs."""
-        return await self._segment.execute(on_error)
+        return await self._parent.execute(on_error)
 
     async def stream(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
         """Lazy streaming variant — see :meth:`QueryBuilder.stream`."""
-        return await self._segment.stream(on_error)
+        return await self._parent.stream(on_error)
 
 
 # Bind the bin-builder factory hook now that WriteBinBuilder is defined.
