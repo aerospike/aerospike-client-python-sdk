@@ -936,18 +936,40 @@ class TestFilterAfterIndexStep:
         "the cursors and are correct"
     )
 
-    @pytest.mark.xfail(strict=True, raises=AerospikeError, reason=_DEFECT)
-    async def test_operation_filter_after_map_index(self, cluster):
-        session = cluster.create_session()
-        k = _key(44)
+    _CORE_DEFECT = (
+        "the core's msgpack decoder panics on the truncated bin payload the "
+        "server returns here, instead of failing with a parse error"
+    )
+
+    @staticmethod
+    async def _select_after_map_index(session, n):
+        k = _key(n)
         await session.delete(k).execute()
         await session.upsert(k).put({"m": {"x": 15, "y": 5}}).execute()
 
         select = CdtOperation.select_by_path(
             "m", SelectFlags.VALUE, [CTX.map_index(0), CTX.and_filter(_value_over(10))],
         )
-        result = await (await session.query(k).add_operation(select).execute()).first_or_raise()
+        return await (await session.query(k).add_operation(select).execute()).first_or_raise()
+
+    @pytest.mark.xfail(strict=True, raises=AerospikeError, reason=_DEFECT)
+    async def test_operation_filter_after_map_index(self, cluster):
+        result = await self._select_after_map_index(cluster.create_session(), 44)
         assert result.record.bins["m"] == [15]
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_CORE_DEFECT)
+    async def test_truncated_reply_is_not_a_panic(self, cluster):
+        """The server's truncated reply fails as a typed error, not a caught panic.
+
+        PAC surfaces a core panic as a bare ``RuntimeError``; a parse error
+        arrives as one of PAC's typed exceptions.
+        """
+        try:
+            await self._select_after_map_index(cluster.create_session(), 51)
+        except AerospikeError as e:
+            assert not isinstance(e.__cause__, RuntimeError), str(e)
+        else:
+            pytest.skip("server no longer returns the truncated reply")
 
     @requires_server_compiled_ael
     @pytest.mark.xfail(strict=True, reason=_DEFECT)
