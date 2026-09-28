@@ -294,7 +294,7 @@ modify is a silent no-op. ``NO_FAIL`` also does **not** suppress
 ## Type Conversion: ``read_as_string``
 
 Convert any scalar bin into its string representation server-side. Accepts
-integer, float, string, and blob source types. Because the source bin need
+bool, integer, float, string, and blob source types. Because the source bin need
 not be a string, the builder method carries no ``str_`` prefix — the
 ``str_to_integer`` / ``str_to_double`` / ``str_to_blob`` conversions keep
 theirs because they genuinely require a string source. The op has no CTX

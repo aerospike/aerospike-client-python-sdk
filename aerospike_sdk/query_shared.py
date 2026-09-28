@@ -4386,8 +4386,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     def str_to_integer(self) -> WriteSegmentBuilder:
         """Register a to-integer read: parses this bin as ``int64``.
 
-        Server returns ``PARAMETER_ERROR`` if the bin doesn't parse as an
-        integer.
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) if the bin doesn't parse
+        as an integer.
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
@@ -4397,8 +4398,9 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
     def str_to_double(self) -> WriteSegmentBuilder:
         """Register a to-double read: parses this bin as ``float64``.
 
-        Server returns ``PARAMETER_ERROR`` if the bin doesn't parse as a
-        double.
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) if the bin doesn't parse
+        as a double.
 
         Returns:
             The parent :class:`WriteSegmentBuilder` for chaining.
@@ -4465,7 +4467,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
         return self._segment._add_op(StringOperation.split(self._bin, separator))
 
     def str_b64_decode(self) -> WriteSegmentBuilder:
-        """Register a base64-decode read: treats the bin as base64 text, returns bytes."""
+        """Register a base64-decode read: treats the bin as base64 text, returns bytes.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_B64_INVALID``) if the bin is not valid base64.
+        """
         return self._segment._add_op(StringOperation.b64_decode(self._bin))
 
     def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> WriteSegmentBuilder:
@@ -4735,9 +4741,11 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
 
         Type-agnostic — the source bin need not be a string, which is why
         this method carries no ``str_`` prefix (``str_to_integer`` and
-        friends genuinely require a string source). Accepts ``int``,
-        ``float``, ``string``, or ``blob`` source types; any other type
-        returns ``BIN_TYPE_ERROR`` from the server. Has no ``flags``
+        friends genuinely require a string source). Accepts ``bool``,
+        ``int``, ``float``, ``string``, or ``blob`` source types; any other
+        type returns ``BIN_TYPE_ERROR`` from the server, and a blob that is
+        not valid UTF-8 returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_UTF8_INVALID``). Has no ``flags``
         argument and no CDT-context support (the wire op has no payload to
         carry a CTX wrapper).
 
@@ -5787,12 +5795,20 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         return self._parent
 
     def str_to_integer(self) -> _T:
-        """Parse this bin as an ``int64``. Server returns PARAMETER_ERROR on bad input."""
+        """Parse this bin as an ``int64``.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) on bad input.
+        """
         self._parent.add_operation(StringOperation.to_integer(self._bin))  # type: ignore[union-attr]
         return self._parent
 
     def str_to_double(self) -> _T:
-        """Parse this bin as a ``float64``. Server returns PARAMETER_ERROR on bad input."""
+        """Parse this bin as a ``float64``.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) on bad input.
+        """
         self._parent.add_operation(StringOperation.to_double(self._bin))  # type: ignore[union-attr]
         return self._parent
 
@@ -5838,7 +5854,11 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         return self._parent
 
     def str_b64_decode(self) -> _T:
-        """Treat this bin as base64-encoded text; return the decoded bytes as a blob."""
+        """Treat this bin as base64-encoded text; return the decoded bytes as a blob.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_B64_INVALID``) if the bin is not valid base64.
+        """
         self._parent.add_operation(StringOperation.b64_decode(self._bin))  # type: ignore[union-attr]
         return self._parent
 
@@ -5857,9 +5877,11 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
 
         Type-agnostic — the source bin need not be a string, which is why
         this method carries no ``str_`` prefix (``str_to_integer`` and
-        friends genuinely require a string source). Accepts ``int`` /
-        ``float`` / ``string`` / ``blob`` source types; any other type
-        returns ``BIN_TYPE_ERROR`` from the server.
+        friends genuinely require a string source). Accepts ``bool`` /
+        ``int`` / ``float`` / ``string`` / ``blob`` source types; any other
+        type returns ``BIN_TYPE_ERROR`` from the server, and a blob that is
+        not valid UTF-8 returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_UTF8_INVALID``).
         """
         self._parent.add_operation(StringOperation.to_string(self._bin))  # type: ignore[union-attr]
         return self._parent

@@ -778,7 +778,10 @@ class CdtReadBuilder(Generic[T]):
         ))
 
     def str_to_integer(self) -> T:
-        """Parse the string at this CDT path as ``int64`` (``PARAMETER_ERROR`` if not numeric).
+        """Parse the string at this CDT path as ``int64``.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) if it is not numeric.
 
         Returns:
             The parent builder for chaining.
@@ -788,7 +791,10 @@ class CdtReadBuilder(Generic[T]):
         ))
 
     def str_to_double(self) -> T:
-        """Parse the string at this CDT path as ``float64`` (``PARAMETER_ERROR`` if not numeric).
+        """Parse the string at this CDT path as ``float64``.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_CONVERSION_FAILED``) if it is not numeric.
 
         Returns:
             The parent builder for chaining.
@@ -866,6 +872,9 @@ class CdtReadBuilder(Generic[T]):
 
     def str_b64_decode(self) -> T:
         """Base64-decode the string at this CDT path, returning bytes.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_B64_INVALID``) if it is not valid base64.
 
         Returns:
             The parent builder for chaining.
