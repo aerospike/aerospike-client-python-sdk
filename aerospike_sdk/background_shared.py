@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Optional
 
 from aerospike_async import (
     Expiration,
@@ -26,9 +26,7 @@ from aerospike_async import (
     Statement,
     WritePolicy,
 )
-from aerospike_async.exceptions import ResultCode
 
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import resolve_durable_delete, to_write_policy
@@ -47,19 +45,6 @@ def ttl_to_expiration(ttl: int) -> Expiration:
     if ttl == _TTL_SERVER_DEFAULT:
         return Expiration.NAMESPACE_DEFAULT
     return Expiration.seconds(ttl)
-
-
-def reject_unsupported_background_write_ops(operations: Sequence[Any]) -> None:
-    """Raise if *operations* contain CDT/HLL types unsupported for background query_operate."""
-    for op in operations:
-        name = type(op).__name__
-        if name in (
-            "MapOperation", "ListOperation", "BitOperation", "HllOperation",
-        ):
-            raise AerospikeError(
-                "Collection and HLL operations are not supported for background task execution.",
-                result_code=ResultCode.OP_NOT_APPLICABLE,
-            )
 
 
 def make_background_write_policy(

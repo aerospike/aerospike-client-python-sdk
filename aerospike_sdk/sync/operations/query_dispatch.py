@@ -141,7 +141,6 @@ class _BlockingQueryDispatch:
             raise ValueError(
                 "At least one write operation is required; use with_write_operations(...).",
             )
-        self._reject_unsupported_background_write_ops(self._operations)
         self._flush_background_usage(usage.BACKGROUND_OPERATE)
         wp = self._make_background_write_policy()
         statement = self._build_statement()

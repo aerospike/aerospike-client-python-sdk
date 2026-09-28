@@ -36,9 +36,9 @@ from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.background_shared import (
     dataset_statement,
     make_background_write_policy,
-    reject_unsupported_background_write_ops,
 )
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.query_shared import _BinWriteSteps, _W
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.metrics import usage
@@ -139,47 +139,42 @@ class BackgroundTaskSession:
         return BackgroundUdfFunctionBuilder(self._session, dataset)
 
 
-class BackgroundWriteBinBuilder:
-    """Per-bin write helper for background updates (``put`` / ``add`` only).
+class BackgroundWriteBinBuilder(_BinWriteSteps[_W]):
+    """Per-bin write steps for a background update job.
 
-    Obtained from :meth:`BackgroundOperationBuilder.bin`. Call :meth:`set_to`
-    or :meth:`add`, which return the parent builder for further chaining.
+    Obtained from :meth:`BackgroundOperationBuilder.bin` (or its sync
+    counterpart). Offers the same steps as
+    :class:`~aerospike_sdk.aio.operations.query.WriteBinBuilder`: scalar and
+    expression writes, and list, map, bit, HyperLogLog and string operations,
+    including nested ``on_map_*`` / ``on_list_*`` navigation. Each step
+    returns the parent builder for further chaining.
+
+    The server applies the operations to every record the job matches. It
+    rejects read operations in a background job, so read steps such as
+    :meth:`get` fail when the job is submitted.
 
     Example::
 
-        builder.bin("score").add(10)
+        Remove every segment whose value list sorts before a cutoff::
+
+            task = await (
+                session.background_task()
+                    .update(DataSet.of("test", "profiles"))
+                    .bin("segments").on_map_value_range(None, [1704067200]).remove()
+                    .execute()
+            )
+            await task.wait_till_complete()
+
+    See Also:
+        :meth:`BackgroundOperationBuilder.add_operation`: Append a prebuilt operation.
     """
 
     __slots__ = ("_parent", "_bin")
 
-    def __init__(self, parent: BackgroundOperationBuilder, bin_name: str) -> None:
+    def __init__(self, parent: _W, bin_name: str) -> None:
         """Capture the bin name; prefer :meth:`BackgroundOperationBuilder.bin`."""
         self._parent = parent
         self._bin = bin_name
-
-    def set_to(self, value: Any) -> BackgroundOperationBuilder:
-        """Set the bin to *value* (``Operation.put``).
-
-        Args:
-            value: The value to write.
-
-        Returns:
-            The parent :class:`BackgroundOperationBuilder`.
-        """
-        self._parent._operations.append(Operation.put(self._bin, value))
-        return self._parent
-
-    def add(self, value: Any) -> BackgroundOperationBuilder:
-        """Add a numeric *value* to the bin (``Operation.add``).
-
-        Args:
-            value: Numeric amount to add (may be negative).
-
-        Returns:
-            The parent :class:`BackgroundOperationBuilder`.
-        """
-        self._parent._operations.append(Operation.add(self._bin, value))
-        return self._parent
 
 
 class _BackgroundOperationBuilderBase:
@@ -306,13 +301,68 @@ class _BackgroundOperationBuilderBase:
         self._index_filters.extend(filters)
         return self
 
-    def bin(self, name: str) -> BackgroundWriteBinBuilder:
-        """Start a scalar write on *name* (update jobs only).
+    def bin(self, name: str) -> BackgroundWriteBinBuilder[BackgroundOperationBuilder]:
+        """Start a write on bin *name* (update jobs only).
 
         Example::
+
             builder.bin("score").add(10)
+            builder.bin("prefs").on_map_key("tags").list_append_items(["sports"])
+
+        Args:
+            name: The bin to write.
+
+        Returns:
+            A :class:`BackgroundWriteBinBuilder` whose steps return this builder.
+
+        See Also:
+            :meth:`add_operation`: Append a prebuilt operation instead.
         """
         return BackgroundWriteBinBuilder(self, name)
+
+    def add_operation(self, op: Any) -> BackgroundOperationBuilder:
+        """Append a prebuilt write operation to apply to each matching record.
+
+        Accepts any write operation from ``aerospike_async``: ``Operation``,
+        ``ExpOperation``, ``ListOperation``, ``MapOperation``,
+        ``BitOperation``, ``HllOperation`` or ``StringOperation``, including
+        ones built with a nested CDT context. The server rejects read
+        operations in a background job.
+
+        Example::
+
+            task = await (
+                session.background_task()
+                    .update(DataSet.of("test", "profiles"))
+                    .add_operation(MapOperation.remove_by_value_range(
+                        "segments", None, [1704067200], MapReturnType.NONE,
+                    ))
+                    .execute()
+            )
+
+        Args:
+            op: The operation to append.
+
+        Returns:
+            This builder, for chaining.
+
+        See Also:
+            :meth:`bin`: Build the operation with chained steps.
+        """
+        self._operations.append(op)
+        return self
+
+    _add_op = add_operation
+
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        if isinstance(expression, str):
+            return filter_expression_from_ael_string(
+                expression,
+                supports_server_compiled_ael=self._supports_server_compiled_ael,
+            )
+        return expression
 
     def expire_record_after_seconds(self, seconds: int) -> BackgroundOperationBuilder:
         """Set record TTL in seconds for touches/updates when supported by policy."""
@@ -377,7 +427,7 @@ class _BackgroundOperationBuilderBase:
             if not ops:
                 raise ValueError(
                     "Background update requires at least one bin operation; "
-                    "use .bin(name).set_to(...) or .add(...).",
+                    "use .bin(name) steps or .add_operation(...).",
                 )
         return ops
 
@@ -406,7 +456,6 @@ class _BackgroundOperationBuilderBase:
         :meth:`execute`.
         """
         ops = self._final_operations()
-        reject_unsupported_background_write_ops(ops)
         self._record_background_usage()
         mode = self._session._resolve_namespace_mode_blocking(self._dataset.namespace)
         wp = make_background_write_policy(
@@ -475,7 +524,6 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
 
         """
         ops = self._final_operations()
-        reject_unsupported_background_write_ops(ops)
         self._record_background_usage()
         log.debug(
             "background %s: %s.%s ops=%d",

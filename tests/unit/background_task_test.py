@@ -19,8 +19,16 @@ from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
 
 import pytest
-from aerospike_sdk import Filter, Key
-from aerospike_async import Expiration, MapOperation, MapPolicy, Operation
+from aerospike_sdk import Filter, HllConfig, Key
+from aerospike_async import (
+    ExpOperation,
+    Expiration,
+    HllOperation,
+    ListOperation,
+    MapOperation,
+    MapPolicy,
+    Operation,
+)
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder,
@@ -31,7 +39,6 @@ from aerospike_sdk.aio.background import (
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -246,15 +253,46 @@ async def test_records_per_second_reaches_the_policy_pac_receives():
     assert wp.records_per_second == 2500
 
 
-async def test_rejects_cdt_operations():
+async def test_update_sends_collection_steps_to_pac():
+    s = _session_mock()
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    parent = b.bin("segments").on_map_value_range(None, [1704067200]).remove()
+    assert parent is b
+    b.bin("prefs").on_map_key("tags").list_append_items(["sports"])
+    b.bin("visitors").hll_add(["u1"], config=HllConfig.of(8))
+    await b.execute()
+    _stmt, ops = s._client._client.query_operate.call_args[0]
+    assert [type(op) for op in ops] == [MapOperation, ListOperation, HllOperation]
+
+
+def test_update_expression_step_appends_exp_operation():
+    s = _session_mock()
+    s._client.supports_server_compiled_ael = True
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    assert b.bin("tier").update_from("$.score * 2") is b
+    assert type(b._operations[0]) is ExpOperation
+
+
+def test_add_operation_appends_prebuilt_operation():
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
-    mp = MapPolicy(None, None)
+    op = MapOperation.put("m", "k", 1, MapPolicy(None, None))
     b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
-    b.bin("k").set_to(1)
-    b._operations.append(MapOperation.put("m", "k", 1, mp))
-    with pytest.raises(AerospikeError):
-        await b.execute()
+    assert b.add_operation(op) is b
+    assert b._operations == [op]
+
+
+def test_sync_bin_steps_return_the_sync_builder():
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    inner = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
+    b = SyncBackgroundOperationBuilder(inner)
+    assert b.bin("prefs").on_map_key("tags").list_append_items(["sports"]) is b
+    assert b.bin("score").add(1) is b
+    assert [type(op) for op in inner._operations] == [ListOperation, Operation]
 
 
 def test_udf_function_builder_has_no_execute():
@@ -313,14 +351,15 @@ async def test_execute_background_task_rejects_key_chain():
         await qb.execute_background_task()
 
 
-async def test_execute_background_task_rejects_map_operation():
+async def test_execute_background_task_sends_map_operation():
     client = MagicMock()
+    client.query_operate = AsyncMock(return_value=MagicMock())
     qb = QueryBuilder(client, "test", "bgset")
-    mp = MapPolicy(None, None)
-    qb.with_write_operations([MapOperation.put("m", "k", 1, mp)])
-    with pytest.raises(AerospikeError) as ei:
-        await qb.execute_background_task()
-    assert ei.value.result_code is not None
+    op = MapOperation.put("m", "k", 1, MapPolicy(None, None))
+    qb.with_write_operations([op])
+    await qb.execute_background_task()
+    _stmt, ops = client.query_operate.call_args[0]
+    assert ops == [op]
 
 
 async def test_execute_udf_background_task_rejects_with_write_ops():

@@ -8,6 +8,7 @@
 
 .. autoclass:: aerospike_sdk.aio.operations.query.WriteBinBuilder
    :members:
+   :inherited-members:
    :show-inheritance:
 
 .. autoclass:: aerospike_sdk.aio.operations.query.QueryBinBuilder

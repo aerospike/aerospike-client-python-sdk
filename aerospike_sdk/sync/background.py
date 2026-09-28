@@ -28,32 +28,9 @@ from aerospike_sdk.aio.background import (
     BackgroundTaskSession as AsyncBackgroundTaskSession,
     BackgroundUdfBuilder as AsyncBackgroundUdfBuilder,
     BackgroundUdfFunctionBuilder as AsyncBackgroundUdfFunctionBuilder,
-    BackgroundWriteBinBuilder as AsyncBackgroundWriteBinBuilder,
+    BackgroundWriteBinBuilder,
 )
 from aerospike_sdk.dataset import DataSet
-
-
-class BackgroundWriteBinBuilder:
-    """Per-bin scalar write inside a background operation (sync).
-
-    See Also:
-        :class:`~aerospike_sdk.aio.background.BackgroundWriteBinBuilder`
-    """
-
-    __slots__ = ("_inner",)
-
-    def __init__(self, inner: AsyncBackgroundWriteBinBuilder) -> None:
-        self._inner = inner
-
-    def set_to(self, value: Any) -> BackgroundOperationBuilder:
-        """Set the bin to *value* (sync wrapper)."""
-        self._inner.set_to(value)
-        return BackgroundOperationBuilder(self._inner._parent)
-
-    def add(self, value: Any) -> BackgroundOperationBuilder:
-        """Numeric increment (sync wrapper)."""
-        self._inner.add(value)
-        return BackgroundOperationBuilder(self._inner._parent)
 
 
 class BackgroundOperationBuilder:
@@ -118,8 +95,33 @@ class BackgroundOperationBuilder:
         self._inner.index_filters(*filters)
         return self
 
-    def bin(self, name: str) -> BackgroundWriteBinBuilder:
-        return BackgroundWriteBinBuilder(self._inner.bin(name))
+    def bin(self, name: str) -> BackgroundWriteBinBuilder[BackgroundOperationBuilder]:
+        """Start a write on bin *name* (update jobs only).
+
+        Example::
+
+            builder.bin("prefs").on_map_key("tags").list_append_items(["sports"])
+
+        See Also:
+            :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.bin`
+        """
+        return BackgroundWriteBinBuilder(self, name)
+
+    def add_operation(self, op: Any) -> BackgroundOperationBuilder:
+        """Append a prebuilt write operation to apply to each matching record.
+
+        See Also:
+            :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.add_operation`
+        """
+        self._inner.add_operation(op)
+        return self
+
+    _add_op = add_operation
+
+    def _expression_from_ael_string_for_ops(
+        self, expression: Union[str, FilterExpression],
+    ) -> FilterExpression:
+        return self._inner._expression_from_ael_string_for_ops(expression)
 
     def expire_record_after_seconds(self, seconds: int) -> BackgroundOperationBuilder:
         """Set record TTL for the background job."""
