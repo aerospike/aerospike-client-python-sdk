@@ -191,10 +191,11 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         to_ctx: Callable[[], Any] | None = None,
         set_to_factory: Callable[[Any], Any] | None = None,
         add_factory: Callable[[Any], Any] | None = None,
+        filterable: bool = True,
     ) -> None:
         super().__init__(
             parent, op_factory, return_type_cls, is_map=is_map,
-            bin_name=bin_name, ctx=ctx, to_ctx=to_ctx,
+            bin_name=bin_name, ctx=ctx, to_ctx=to_ctx, filterable=filterable,
         )
         self._remove_factory = remove_factory
         self._set_to_factory = set_to_factory
@@ -204,6 +205,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         self, *, op_factory: Callable[[Any], Any],
         rt_cls: _ReturnTypeCls, is_map: bool,
         ctx: Sequence[Any], to_ctx: Callable[[], Any],
+        filterable: bool = True,
         **extra: Any,
     ) -> CdtWriteBuilder[T]:
         return CdtWriteBuilder(
@@ -213,6 +215,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
             bin_name=self._bin_name, ctx=ctx, to_ctx=to_ctx,
             set_to_factory=extra.get("set_to_factory"),
             add_factory=extra.get("add_factory"),
+            filterable=filterable,
         )
 
     def on_map_key(

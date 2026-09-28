@@ -90,7 +90,7 @@ class CdtReadBuilder(Generic[T]):
 
     __slots__ = (
         "_parent", "_op_factory", "_rt", "_is_map",
-        "_bin_name", "_ctx", "_to_ctx",
+        "_bin_name", "_ctx", "_to_ctx", "_filterable",
     )
 
     def __init__(
@@ -103,6 +103,7 @@ class CdtReadBuilder(Generic[T]):
         bin_name: str = "",
         ctx: Sequence[Any] = (),
         to_ctx: Callable[[], Any] | None = None,
+        filterable: bool = True,
     ) -> None:
         self._parent = parent
         self._op_factory = op_factory
@@ -111,6 +112,9 @@ class CdtReadBuilder(Generic[T]):
         self._bin_name = bin_name
         self._ctx: tuple[Any, ...] = tuple(ctx)
         self._to_ctx = to_ctx
+        # The server returns a corrupted value for an and-filter after a map
+        # index or rank context, so those steps pass False.
+        self._filterable = filterable
 
     def on_each_child(self) -> "CdtPathBuilder[T]":
         """Continue from this selection as a path over every child.
@@ -158,6 +162,53 @@ class CdtReadBuilder(Generic[T]):
             self._parent, bin_name, new_ctx + (CTX.map_keys_in(list(keys)),), filterable=True,
         )
 
+    def and_filter(self, predicate: Any) -> "CdtPathBuilder[T]":
+        """Continue as a path that keeps this selection only if it matches *predicate*.
+
+        The server evaluates *predicate* against the element this step
+        selected: a match continues the path with it, a miss selects nothing.
+
+        Example::
+
+            over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
+            stream = await (
+                session.query(key)
+                    .bin("prices").on_map_key("book").and_filter(over_10).collect_values()
+                    .execute()
+            )
+
+        Args:
+            predicate: An :class:`~aerospike_sdk.Exp` over the element's loop
+                variable.
+
+        Returns:
+            A :class:`CdtPathBuilder` over the filtered selection.
+
+        Raises:
+            TypeError: If this step is a range or multi-element selection,
+                which has no single element to filter, or a map index or rank step,
+                where the server does not return the filtered value correctly.
+
+        See Also:
+            :meth:`CdtPathBuilder.and_filter`: the same filter after
+            :meth:`on_map_keys_in` or a step inside a path.
+        """
+        if self._to_ctx is None:
+            raise TypeError(
+                "and_filter() must follow a single-element step such as "
+                "on_map_key(); a range or multi-element selection has no single "
+                "element to filter"
+            )
+        if not self._filterable:
+            raise TypeError(
+                "and_filter() is not supported after on_map_index() or "
+                "on_map_rank(); select by key with on_map_key() or on_map_keys_in()"
+            )
+        return CdtPathBuilder(
+            self._parent, self._bin_name,
+            self._ctx + (self._to_ctx(), CTX.and_filter(predicate)),
+        )
+
     # -- Internal helpers -----------------------------------------------------
 
     def _emit(self, return_type: Any) -> T:
@@ -196,6 +247,7 @@ class CdtReadBuilder(Generic[T]):
         self, *, op_factory: Callable[[Any], Any],
         rt_cls: _ReturnTypeCls, is_map: bool,
         ctx: Sequence[Any], to_ctx: Callable[[], Any],
+        filterable: bool = True,
         **_extra: Any,
     ) -> CdtReadBuilder[T]:
         """Create a navigated builder of the same flavor.
@@ -205,7 +257,7 @@ class CdtReadBuilder(Generic[T]):
         """
         return CdtReadBuilder(
             self._parent, op_factory, rt_cls, is_map=is_map,
-            bin_name=self._bin_name, ctx=ctx, to_ctx=to_ctx,
+            bin_name=self._bin_name, ctx=ctx, to_ctx=to_ctx, filterable=filterable,
         )
 
     def _build_invertable(
@@ -267,7 +319,7 @@ class CdtReadBuilder(Generic[T]):
             op_factory=lambda rt: MapOperation.get_by_index(b, index, rt).set_context(ctx_l),
             remove_factory=lambda rt: MapOperation.remove_by_index(b, index, rt).set_context(ctx_l),
             rt_cls=MapReturnType, is_map=True,
-            ctx=new_ctx, to_ctx=lambda: CTX.map_index(index),
+            ctx=new_ctx, to_ctx=lambda: CTX.map_index(index), filterable=False,
         )
 
     def on_map_rank(self, rank: int) -> CdtReadBuilder[T]:
@@ -284,7 +336,7 @@ class CdtReadBuilder(Generic[T]):
             op_factory=lambda rt: MapOperation.get_by_rank(b, rank, rt).set_context(ctx_l),
             remove_factory=lambda rt: MapOperation.remove_by_rank(b, rank, rt).set_context(ctx_l),
             rt_cls=MapReturnType, is_map=True,
-            ctx=new_ctx, to_ctx=lambda: CTX.map_rank(rank),
+            ctx=new_ctx, to_ctx=lambda: CTX.map_rank(rank), filterable=False,
         )
 
     def on_list_index(
@@ -912,22 +964,6 @@ class CdtReadInvertableBuilder(CdtReadBuilder[T]):
 
             .bin("m").on_map_key_range("a", "d").get_all_other_values()
     """
-
-    def __init__(
-        self,
-        parent: T,
-        op_factory: Callable[[Any], Any],
-        return_type_cls: _ReturnTypeCls,
-        *,
-        is_map: bool,
-        bin_name: str = "",
-        ctx: Sequence[Any] = (),
-        to_ctx: Callable[[], Any] | None = None,
-    ) -> None:
-        super().__init__(
-            parent, op_factory, return_type_cls, is_map=is_map,
-            bin_name=bin_name, ctx=ctx, to_ctx=to_ctx,
-        )
 
     # -- Inverted terminal methods --------------------------------------------
 

@@ -360,10 +360,21 @@ await session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).
 ```
 
 `and_filter` refines the step before it, so it follows `on_map_keys_in` or a
-single-element step such as `on_map_key`, once per level. The builder raises
-`TypeError` where the server would reject it: as the first step, after
-`on_each_child` / `on_each_child_where` (put the predicate there instead), or
-after another `and_filter` (combine conditions with `Exp.and_` in one call).
+single-element step such as `on_map_key`, once per level. After a
+single-element step it keeps that element only if it matches, and opens a path
+there:
+
+```python
+# the "book" price, only if it is over 10
+.bin("prices").on_map_key("book").and_filter(over_10).collect_values()
+```
+
+The builder raises `TypeError` where the server would reject it: as the first
+step, after `on_each_child` / `on_each_child_where` (put the predicate there
+instead), or after another `and_filter` (combine conditions with `Exp.and_` in
+one call). It also refuses a range or multi-element selection, which has no
+single element to filter, and `on_map_index` / `on_map_rank`, where the server
+does not return the filtered value correctly.
 
 Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elements
 the expression cannot be applied to — and `remove_matches()`. For explicit

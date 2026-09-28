@@ -4832,7 +4832,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             lambda rt: MapOperation.get_by_index(b, index, rt),
             lambda rt: MapOperation.remove_by_index(b, index, rt),
             MapReturnType, is_map=True,
-            bin_name=b, to_ctx=lambda: CTX.map_index(index),
+            bin_name=b, to_ctx=lambda: CTX.map_index(index), filterable=False,
         )
 
     def on_each_child(self) -> CdtPathBuilder[WriteSegmentBuilder]:
@@ -4925,7 +4925,7 @@ class WriteBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase]):
             lambda rt: MapOperation.get_by_rank(b, rank, rt),
             lambda rt: MapOperation.remove_by_rank(b, rank, rt),
             MapReturnType, is_map=True,
-            bin_name=b, to_ctx=lambda: CTX.map_rank(rank),
+            bin_name=b, to_ctx=lambda: CTX.map_rank(rank), filterable=False,
         )
 
     # -- Map navigation (invertable -> CdtWriteInvertableBuilder) -------------
@@ -5937,7 +5937,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             self._parent,
             lambda rt: MapOperation.get_by_index(b, index, rt),
             MapReturnType, is_map=True,
-            bin_name=b, to_ctx=lambda: CTX.map_index(index),
+            bin_name=b, to_ctx=lambda: CTX.map_index(index), filterable=False,
         )
 
     def on_each_child(self) -> CdtPathBuilder[_T]:
@@ -6027,7 +6027,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             self._parent,
             lambda rt: MapOperation.get_by_rank(b, rank, rt),
             MapReturnType, is_map=True,
-            bin_name=b, to_ctx=lambda: CTX.map_rank(rank),
+            bin_name=b, to_ctx=lambda: CTX.map_rank(rank), filterable=False,
         )
 
     # -- Map navigation (singular invertable -> CdtReadInvertableBuilder) -----
