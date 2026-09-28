@@ -22,7 +22,7 @@ tests pin the entries each step emits and the client-side rules for
 
 import pytest
 
-from aerospike_sdk import CTX, Exp, LoopVarPart
+from aerospike_sdk import CTX, Exp, LoopVarPart, MapOrder
 from aerospike_sdk.aio.operations.cdt_read import CdtPathBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -129,3 +129,46 @@ class TestAndFilter:
                 QueryBinBuilder(_OpCollector(), "m")
                 .on_map_keys_in(["a"]).and_filter(_over(10)).and_filter(_over(20))
             )
+
+    @pytest.mark.parametrize(("step", "expected"), [
+        (lambda b: b.on_map_key("b"), CTX.map_key("b")),
+        (lambda b: b.on_map_key("b", create_type=MapOrder.KEY_ORDERED),
+         CTX.map_key_create("b", MapOrder.KEY_ORDERED)),
+        (lambda b: b.on_map_value(15), CTX.map_value(15)),
+        (lambda b: b.on_list_index(1), CTX.list_index(1)),
+        (lambda b: b.on_list_rank(1), CTX.list_rank(1)),
+        (lambda b: b.on_list_value(15), CTX.list_value(15)),
+    ], ids=["map_key", "map_key_create", "map_value", "list_index", "list_rank", "list_value"])
+    def test_refines_a_first_element_step(self, step, expected):
+        path = step(QueryBinBuilder(_OpCollector(), "m")).and_filter(_over(10))
+        assert isinstance(path, CdtPathBuilder)
+        assert path._ctx == (expected, CTX.and_filter(_over(10)))
+
+    def test_refines_chained_element_steps(self):
+        path = QueryBinBuilder(_OpCollector(), "m").on_map_key("a").on_list_index(0).and_filter(_over(10))
+        assert path._ctx == (CTX.map_key("a"), CTX.list_index(0), CTX.and_filter(_over(10)))
+
+    def test_refines_a_write_bin_element_step(self):
+        wbb, segment = _write_bin()
+        add_1 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(1)])
+        assert wbb.on_map_key("b").and_filter(_over(10)).modify_by(add_1) is segment
+        assert len(segment._qb._operations) == 1
+
+    @pytest.mark.parametrize("step", [
+        lambda b: b.on_map_index(0),
+        lambda b: b.on_map_rank(0),
+        lambda b: b.on_map_key("a").on_map_index(0),
+        lambda b: b.on_map_key("a").on_map_rank(0),
+    ], ids=["map_index", "map_rank", "nested_map_index", "nested_map_rank"])
+    def test_rejected_after_a_map_index_or_rank_step(self, step):
+        with pytest.raises(TypeError, match="and_filter"):
+            step(QueryBinBuilder(_OpCollector(), "m")).and_filter(_over(10))
+
+    def test_rejected_after_a_write_bin_map_index_step(self):
+        wbb, _ = _write_bin()
+        with pytest.raises(TypeError, match="and_filter"):
+            wbb.on_map_index(0).and_filter(_over(10))
+
+    def test_rejected_after_a_range_selection(self):
+        with pytest.raises(TypeError, match="and_filter"):
+            QueryBinBuilder(_OpCollector(), "m").on_map_key_range("a", "d").and_filter(_over(10))

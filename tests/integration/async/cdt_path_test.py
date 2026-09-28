@@ -845,6 +845,41 @@ class TestMapKeysIn:
             .collect_values(),
         ) == []
 
+    @pytest.mark.parametrize(("bin_value", "step"), [
+        ({"a": 5, "b": 15}, lambda b: b.on_map_key("b")),
+        ({"a": 5, "b": 15}, lambda b: b.on_map_value(15)),
+        ([5, 15, 25], lambda b: b.on_list_index(1)),
+        ([5, 15, 25], lambda b: b.on_list_rank(1)),
+        ([5, 15, 25], lambda b: b.on_list_value(15)),
+    ], ids=["map_key", "map_value", "list_index", "list_rank", "list_value"])
+    async def test_and_filter_refines_a_first_element_step(self, cluster, bin_value, step):
+        """The step selects 15; the filter keeps it over 10 and drops it over 20."""
+        session = cluster.create_session()
+        k = _key(49)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": bin_value}).execute()
+
+        assert await _collect(
+            session, k, "m", lambda b: step(b).and_filter(_value_over(10)).collect_values(),
+        ) == [15]
+        assert await _collect(
+            session, k, "m", lambda b: step(b).and_filter(_value_over(20)).collect_values(),
+        ) == []
+
+    async def test_modify_through_a_filtered_element_step(self, cluster):
+        session = cluster.create_session()
+        k = _key(50)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"a": 5, "b": 15}}).execute()
+
+        add_100 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(100)])
+        for map_key in ("a", "b"):
+            await (
+                session.update(k).bin("m").on_map_key(map_key)
+                .and_filter(_value_over(10)).modify_by(add_100).execute()
+            )
+        assert (await _bins(session, k))["m"] == {"a": 5, "b": 115}
+
     async def test_keys_in_below_element_navigation(self, cluster):
         session = cluster.create_session()
         k = _key(40)
