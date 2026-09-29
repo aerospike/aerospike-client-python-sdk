@@ -208,8 +208,8 @@ from aerospike_sdk.policy import SystemSettings, TransactionSettings
 settings = SystemSettings(
     transactions=TransactionSettings(
         implicit_batch_write_transactions=False,   # default True
-        # number_of_attempts=5,                    # retry attempts
-        # sleep_between_attempts=timedelta(seconds=1),
+        # number_of_attempts=10,                   # attempts, first try included
+        # sleep_between_attempts=timedelta(milliseconds=20),
     ),
 )
 ```
@@ -241,17 +241,24 @@ await session.do_in_transaction(transfer)
 ```
 
 Retry counts and the pause between attempts come from the cluster's
-`TransactionSettings` unless `do_in_transaction` is given explicit
-`max_attempts` / `sleep_between_retries`. The same settings drive the implicit
-transactions the SDK opens for batch writes, so both get identical treatment.
+`TransactionSettings` (10 attempts, 20 ms apart, by default) unless
+`do_in_transaction` is given explicit `max_attempts` /
+`sleep_between_retries`. The same settings drive the implicit transactions the
+SDK opens for batch writes, so both get identical treatment.
+
+A version mismatch is retried immediately: the record changed, but nothing is
+left locked. A blocked record or a failed commit waits first, for the
+configured pause +/- 50% (5 ms becomes anywhere from 3 ms to 7 ms), so
+transactions that collided do not retry in lockstep. A pause of `0` never
+waits.
 
 ## Errors
 
 | Error | Meaning |
 |-------|---------|
 | `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries verify and mark-roll-forward failures automatically. An abandoned roll-forward (`commit_error_type` `ROLL_FORWARD_ABANDONED`) is **not** retried: those writes are still provisional and the server will eventually commit them. Retrying would open a second transaction on the same keys. `CLOSE_ABANDONED` is still a successful `CommitStatus` — the writes are durable and only monitor cleanup was left to the server. |
-| `MRT_BLOCKED` | Another transaction has one of the records locked. Retry. |
-| `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry. |
+| `MRT_BLOCKED` | Another transaction has one of the records locked. Retry after a pause. |
+| `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry immediately. |
 | `MRT_EXPIRED` | Transaction monitor TTL elapsed before commit. |
 | `MRT_TOO_MANY_WRITES` | Exceeded the per-transaction write limit. |
 

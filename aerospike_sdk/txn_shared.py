@@ -23,6 +23,7 @@ entry point the caller used.
 
 from __future__ import annotations
 
+import random
 from datetime import timedelta
 from typing import Any, Optional, Union
 
@@ -80,10 +81,47 @@ def is_retryable_txn_error(exc: BaseException) -> bool:
     return getattr(exc, "result_code", None) in RETRYABLE_TXN_CODES
 
 
+def retry_delay_seconds(exc: BaseException, sleep_seconds: float) -> float:
+    """Return how long to pause before retrying after a retryable failure.
+
+    A version mismatch means the record changed under the transaction, not
+    that anything is still locked, so the next attempt can start right away.
+    Every other retryable failure (a record blocked by another transaction, a
+    failed commit) waits for the conflicting transaction to finish, with
+    jitter so transactions that collided do not retry in lockstep.
+
+    Args:
+        exc: The retryable exception that ended the attempt.
+        sleep_seconds: The configured pause between attempts.
+
+    Returns:
+        Seconds to sleep; ``0.0`` means retry immediately.
+    """
+    if getattr(exc, "result_code", None) == ResultCode.MRT_VERSION_MISMATCH:
+        return 0.0
+    return _jittered(sleep_seconds)
+
+
+def _jittered(sleep_seconds: float) -> float:
+    """Spread ``sleep_seconds`` uniformly by +/- ``floor(ms / 2)`` milliseconds.
+
+    The offset is symmetric, so the mean pause stays at the configured value;
+    5 ms lands anywhere from 3 ms to 7 ms. A pause too short to have a whole
+    millisecond of jitter is returned unchanged.
+    """
+    if sleep_seconds <= 0:
+        return 0.0
+    millis = sleep_seconds * 1000.0
+    jitter = int(millis // 2)
+    if jitter == 0:
+        return sleep_seconds
+    return (millis + random.randint(-jitter, jitter)) / 1000.0
+
+
 # Fallbacks when TransactionSettings fields are None (e.g. constructed raw
 # instead of through fill_hard_defaults, which supplies the same values).
-DEFAULT_ATTEMPTS = 5
-DEFAULT_SLEEP_SECONDS = 1.0
+DEFAULT_ATTEMPTS = 10
+DEFAULT_SLEEP_SECONDS = 0.020
 
 
 def resolve_retry_plan(

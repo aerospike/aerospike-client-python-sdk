@@ -23,6 +23,8 @@ real PAC types (``WritePolicy``, ``ReadPolicy``, ``QueryPolicy``,
 network I/O.
 """
 
+import asyncio
+
 import pytest
 
 from aerospike_sdk import Key, ResultCode, Txn
@@ -593,3 +595,27 @@ async def test_sleep_between_retries_accepts_a_timedelta() -> None:
             always_blocked, max_attempts=2, sleep_between_retries=timedelta(0),
         )
     assert attempts == 2
+
+
+async def test_only_a_blocked_record_waits_before_retrying(monkeypatch) -> None:
+    """A version mismatch retries at once; a blocked record pauses first."""
+    session = _make_session_for_retry()
+    sleeps: list = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    codes = [ResultCode.MRT_VERSION_MISMATCH, ResultCode.MRT_BLOCKED]
+
+    async def op(tx):
+        if codes:
+            raise AerospikeError("conflict", result_code=codes.pop(0))
+        return "done"
+
+    result = await session.do_in_transaction(
+        op, max_attempts=3, sleep_between_retries=0.010,
+    )
+    assert result == "done"
+    assert len(sleeps) == 1
+    assert 0.005 <= sleeps[0] <= 0.015

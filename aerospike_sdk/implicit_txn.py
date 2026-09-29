@@ -43,7 +43,11 @@ from aerospike_async import BatchPolicy, Txn
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode
-from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
+from aerospike_sdk.txn_shared import (
+    is_retryable_txn_error,
+    resolve_retry_plan,
+    retry_delay_seconds,
+)
 
 log = logging.getLogger(SdkLoggers.COMMAND)
 
@@ -96,8 +100,9 @@ async def run_in_implicit_txn(
     ``MRT_VERSION_MISMATCH``) and failed commits
     (:class:`~aerospike_async.exceptions.CommitFailedError`) restart the
     whole attempt with a new transaction, up to
-    ``transactions.number_of_attempts`` times with
-    ``transactions.sleep_between_attempts`` between tries.
+    ``transactions.number_of_attempts`` times. A version mismatch retries
+    immediately; anything else waits a jittered
+    ``transactions.sleep_between_attempts`` first.
     """
     attempts, sleep_seconds = resolve_retry_plan(transactions)
     for attempt in range(attempts):
@@ -117,8 +122,9 @@ async def run_in_implicit_txn(
                 "implicit txn attempt %d/%d hit retryable %r; retrying",
                 attempt + 1, attempts, getattr(exc, "result_code", None),
             )
-            if sleep_seconds > 0:
-                await asyncio.sleep(sleep_seconds)
+            delay = retry_delay_seconds(exc, sleep_seconds)
+            if delay > 0:
+                await asyncio.sleep(delay)
     raise AssertionError("unreachable: retry loop exits by return or raise")
 
 
@@ -146,6 +152,7 @@ def run_in_implicit_txn_blocking(
                 "implicit txn attempt %d/%d hit retryable %r; retrying",
                 attempt + 1, attempts, getattr(exc, "result_code", None),
             )
-            if sleep_seconds > 0:
-                time.sleep(sleep_seconds)
+            delay = retry_delay_seconds(exc, sleep_seconds)
+            if delay > 0:
+                time.sleep(delay)
     raise AssertionError("unreachable: retry loop exits by return or raise")

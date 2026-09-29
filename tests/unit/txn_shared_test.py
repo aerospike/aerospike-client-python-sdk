@@ -19,9 +19,14 @@
 from aerospike_sdk import ResultCode
 from aerospike_async import CommitErrorType
 from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.policy.system_settings import TransactionSettings
 from aerospike_sdk.txn_shared import (
     is_retryable_txn_error,
+    resolve_retry_plan,
+    retry_delay_seconds,
 )
+
+_BLOCKED = AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
 
 
 def test_verify_fail_commit_error_is_retryable() -> None:
@@ -80,5 +85,31 @@ def test_mrt_blocked_is_retryable() -> None:
 
 def test_unrelated_error_is_not_retryable() -> None:
     assert is_retryable_txn_error(AerospikeError("nope")) is False
+
+
+def test_default_retry_plan() -> None:
+    assert resolve_retry_plan(TransactionSettings()) == (10, 0.020)
+
+
+def test_version_mismatch_retries_immediately() -> None:
+    """Nothing is left locked, so waiting would only add latency."""
+    err = AerospikeError("changed", result_code=ResultCode.MRT_VERSION_MISMATCH)
+    assert retry_delay_seconds(err, 0.020) == 0.0
+
+
+def test_blocked_and_failed_commit_sleep_with_jitter() -> None:
+    """5 ms spreads by +/- floor(5 / 2) = 2 ms, landing in 3..7 ms."""
+    for err in (_BLOCKED, CommitError("verify failed")):
+        millis = {round(retry_delay_seconds(err, 0.005) * 1000, 6) for _ in range(200)}
+        assert millis <= {3.0, 4.0, 5.0, 6.0, 7.0}, err
+        assert len(millis) > 1, err
+
+
+def test_zero_sleep_never_waits() -> None:
+    assert retry_delay_seconds(_BLOCKED, 0.0) == 0.0
+
+
+def test_sleep_too_short_to_jitter_is_unchanged() -> None:
+    assert retry_delay_seconds(_BLOCKED, 0.001) == 0.001
 
 
