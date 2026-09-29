@@ -32,8 +32,8 @@ system:
       tend_interval: 1s
     transactions:
       implicit_batch_write_transactions: true
-      sleep_between_attempts: 1000ms
-      number_of_attempts: 5
+      sleep_between_attempts: 20ms
+      number_of_attempts: 10
 ```
 
 The `system:` section holds named profiles. `DEFAULT` applies to every
@@ -72,8 +72,8 @@ time — hot-reloaded changes take effect on the next operation.
 `implicit_batch_write_transactions` (default `true`) controls whether
 multi-key write batches on strong-consistency namespaces are wrapped in
 [implicit transactions](transactions.md);
-`number_of_attempts` (default `5`) and `sleep_between_attempts` (default
-`1000ms`) drive their retry loop on transient conflicts. See
+`number_of_attempts` (default `10`) and `sleep_between_attempts` (default
+`20ms`) drive their retry loop on transient conflicts. See
 [`SystemSettings`](../api/system-settings.md) for the programmatic
 equivalents.
 

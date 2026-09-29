@@ -38,7 +38,11 @@ if TYPE_CHECKING:
 
 from aerospike_async import Key, Record, Txn, UDFLang
 
-from aerospike_sdk.txn_shared import is_retryable_txn_error, resolve_retry_plan
+from aerospike_sdk.txn_shared import (
+    is_retryable_txn_error,
+    resolve_retry_plan,
+    retry_delay_seconds,
+)
 from aerospike_sdk.aio.background import BackgroundTaskSession
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
@@ -1235,10 +1239,11 @@ class Session(
             max_attempts: Maximum total attempts (initial + retries). Must
                 be ``>= 1``. Omit to use the cluster's
                 :class:`~aerospike_sdk.policy.system_settings.TransactionSettings`.
-            sleep_between_retries: How long to wait between retries, as
-                seconds or a :class:`datetime.timedelta`. Omit to use the
-                cluster's transaction settings; pass ``0`` to retry
-                immediately.
+            sleep_between_retries: How long to wait before retrying a
+                blocked record or failed commit, as seconds or a
+                :class:`datetime.timedelta`; each wait is jittered +/- 50%.
+                A version mismatch always retries immediately. Omit to use
+                the cluster's transaction settings; pass ``0`` to never wait.
 
         Returns:
             Whatever ``operation`` returns on the successful attempt.
@@ -1270,11 +1275,6 @@ class Session(
             sleep_between_retries,
         )
 
-        import asyncio
-        from aerospike_sdk.exceptions import AerospikeError
-
-        # Transient MRT conflicts that are safe to retry automatically.
-
         last_exc: Optional[BaseException] = None
         for attempt in range(attempts):
             try:
@@ -1286,8 +1286,9 @@ class Session(
                     raise
                 if attempt + 1 >= attempts:
                     raise
-                if sleep_seconds > 0:
-                    await asyncio.sleep(sleep_seconds)
+                delay = retry_delay_seconds(exc, sleep_seconds)
+                if delay > 0:
+                    await asyncio.sleep(delay)
         # Unreachable — last iteration always raises — but keep mypy happy.
         assert last_exc is not None
         raise last_exc

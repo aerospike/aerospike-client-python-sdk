@@ -34,15 +34,19 @@ class TransactionSettings:
     ``None`` means "not set" — the value falls through to the next
     configuration layer (see :class:`SystemSettings` for layering), ending
     at the hard defaults: ``implicit_batch_write_transactions`` ``True``,
-    ``number_of_attempts`` ``5``, ``sleep_between_attempts`` one second.
+    ``number_of_attempts`` ``10``, ``sleep_between_attempts`` 20 ms.
 
     ``implicit_batch_write_transactions`` controls whether a multi-key
     write batch on a strong-consistency namespace (MRT-capable cluster,
     no explicit transaction active) is wrapped in an implicit
     multi-record transaction so its writes commit atomically.
     ``number_of_attempts`` and ``sleep_between_attempts`` drive the retry
-    loop for those implicit transactions when the server reports a
-    transient conflict.
+    loop for those implicit transactions, and for
+    :meth:`~aerospike_sdk.aio.session.Session.do_in_transaction`, when an
+    attempt ends in a transient conflict. ``number_of_attempts`` counts the
+    first try. A version mismatch retries immediately; a blocked record or
+    failed commit sleeps ``sleep_between_attempts`` +/- 50% (jittered, so the
+    mean is unchanged) first.
 
     Example::
 

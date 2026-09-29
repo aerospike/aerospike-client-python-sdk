@@ -298,8 +298,8 @@ class TestFillHardDefaults:
 
     def test_retry_defaults(self):
         resolved = fill_hard_defaults(SystemSettings())
-        assert resolved.transactions.number_of_attempts == 5
-        assert resolved.transactions.sleep_between_attempts == timedelta(seconds=1)
+        assert resolved.transactions.number_of_attempts == 10
+        assert resolved.transactions.sleep_between_attempts == timedelta(milliseconds=20)
 
     def test_explicit_retry_values_preserved(self):
         settings = SystemSettings(

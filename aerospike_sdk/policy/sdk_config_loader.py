@@ -98,8 +98,8 @@ DEFAULT_PROFILE = "DEFAULT"
 
 # Hard defaults — the bottom precedence layer, applied after all merging.
 _HARD_DEFAULT_IMPLICIT_BATCH_WRITE_TXNS = True
-_HARD_DEFAULT_TXN_SLEEP_BETWEEN_ATTEMPTS = timedelta(seconds=1)
-_HARD_DEFAULT_TXN_NUMBER_OF_ATTEMPTS = 5
+_HARD_DEFAULT_TXN_SLEEP_BETWEEN_ATTEMPTS = timedelta(milliseconds=20)
+_HARD_DEFAULT_TXN_NUMBER_OF_ATTEMPTS = 10
 
 # Multi-character alternatives listed before their single-character prefixes
 # so e.g. "ms" is never consumed as "m".

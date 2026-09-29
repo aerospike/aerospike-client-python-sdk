@@ -15,6 +15,7 @@
 
 """Implicit batch-write transaction gate + runner tests (no server needed)."""
 
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -211,7 +212,23 @@ class TestBlockingRunner:
 
         with pytest.raises(_MrtError):
             run_in_implicit_txn_blocking(pac, raw, attempt)
-        assert len(attempts) == 5
+        assert len(attempts) == 10
+
+    def test_only_a_blocked_record_waits_before_retrying(self, monkeypatch):
+        """A version mismatch retries at once; a blocked record pauses first."""
+        sleeps: list = []
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+        codes = [ResultCode.MRT_VERSION_MISMATCH, ResultCode.MRT_BLOCKED]
+
+        def attempt(txn):
+            if codes:
+                raise _MrtError(codes.pop(0))
+            return "ok"
+
+        settings = _settings(sleep=timedelta(milliseconds=10))
+        assert run_in_implicit_txn_blocking(_FakePacClient(), settings, attempt) == "ok"
+        assert len(sleeps) == 1
+        assert 0.005 <= sleeps[0] <= 0.015
 
 
 class TestAsyncRunner:
