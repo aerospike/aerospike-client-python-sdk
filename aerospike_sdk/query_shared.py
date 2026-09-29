@@ -1935,13 +1935,19 @@ class _QueryBuilderBase:
 
         Raises (THROW), dispatches and returns ``[]`` (HANDLER), or returns
         one error :class:`RecordResult` per key (IN_STREAM).
+
+        Inside an explicit transaction, a failure that left no per-key
+        outcome raises whatever the disposition: the batch never ran (for
+        example, its keys span namespaces), and the caller asked for the
+        whole call to succeed or fail as one.
         """
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.OK
         in_doubt = pfc_exc.in_doubt
         _cmd_failed("batch", rc, pfc_exc, self._client)
+        records = getattr(exc, "records", None)
 
-        if disp is _ErrorDisposition.THROW:
+        if disp is _ErrorDisposition.THROW or (self._txn is not None and not records):
             raise pfc_exc from exc
 
         if disp is _ErrorDisposition.HANDLER and handler is not None:
@@ -1953,7 +1959,6 @@ class _QueryBuilderBase:
         # already knows (answered rows keep their result; unanswered rows
         # are stamped — TIMEOUT + in-doubt on client timeouts). Report
         # those instead of fanning the aggregate onto every key.
-        records = getattr(exc, "records", None)
         if records:
             return batch_failure_records_to_results(records, pfc_exc)
 

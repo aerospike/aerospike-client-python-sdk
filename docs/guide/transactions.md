@@ -170,6 +170,41 @@ to explicit transactions (``transaction()`` sessions and
 ``do_in_transaction``). Implicit batch-write transactions (below) run on the
 built-in defaults.
 
+## One Transaction, One Namespace
+
+A transaction is scoped to a single namespace: the first command binds it, and
+every later command must use the same one. The client checks this before
+sending anything, and the two shapes differ because the intent does:
+
+```python
+# Explicit transaction: the whole call is rejected.
+async def op(tx):
+    await tx.upsert([users.id(1), orders.id(2)]).put({"v": 1}).execute()
+
+await session.do_in_transaction(op)      # raises AerospikeError
+# Error -1: Namespace must be the same for all commands in the Transaction.
+# orig: users_ns new: orders_ns
+```
+
+You asked for atomicity, and a batch spanning namespaces cannot provide it, so
+the constraint fails the submitted call rather than reporting row by row. The
+error carries ``ResultCode.CLIENT_ERROR`` and is raised whatever ``on_error``
+strategy the call was given: there are no per-key outcomes to report, because
+nothing was sent. Nothing is written — there is no partial commit.
+
+``execute()`` raises at the call. ``stream()`` returns first and raises on the
+first iteration, the same place any batch-wide failure surfaces for a lazy
+stream.
+
+An **implicit** batch-write transaction is different: you did not ask for one,
+so a mixed-namespace batch simply does not get wrapped, and each key is judged
+on its own.
+
+```python
+# No explicit transaction: no MRT is applied, and each key reports separately.
+stream = await session.upsert([users.id(1), orders.id(2)]).put({"v": 1}).execute()
+```
+
 ## Implicit Batch-Write Transactions
 
 A multi-key write batch against a strong-consistency namespace is
