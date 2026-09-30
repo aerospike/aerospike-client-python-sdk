@@ -34,8 +34,9 @@ runs:
       env:
         JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
         JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
+        JF_PROJECT: ${{ vars.JFROG_PROJECT }}
       run: |
         set -euo pipefail
         user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
         pip install ".[dev]" --only-binary aerospike-async \
-          --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
+          --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${JF_PROJECT}-pypi-dev-local/simple/"
