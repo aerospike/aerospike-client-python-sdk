@@ -1,0 +1,41 @@
+name: Install SDK
+description: >
+  Set up CPython and install this SDK with dev extras. The pinned
+  aerospike-async wheel is resolved from the internal index.
+
+inputs:
+  python-version:
+    description: CPython version for actions/setup-python
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python ${{ inputs.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Setup JFrog CLI
+      id: jfrog
+      uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+      env:
+        JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+      with:
+        oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+        oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+    # The pinned aerospike-async dev version resolves from the internal
+    # PyPI index (OIDC-minted credentials); everything else comes from
+    # public PyPI. --only-binary keeps a missing wheel from degrading
+    # into a confusing source build of the Rust extension.
+    - name: Install SDK and dev dependencies
+      shell: bash
+      env:
+        JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+        JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
+      run: |
+        set -euo pipefail
+        user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+        pip install ".[dev]" --only-binary aerospike-async \
+          --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"

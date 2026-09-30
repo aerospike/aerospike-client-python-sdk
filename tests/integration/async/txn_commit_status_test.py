@@ -30,6 +30,7 @@ The two outcomes are not the same severity, and that is the point of the pair:
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import pytest
@@ -41,7 +42,10 @@ from aerospike_sdk.exceptions import CommitError, ResultCode, TransactionError
 from integration.tcp_gate import TcpGate
 
 BIN_NAME = "bin"
-NAMESPACE = "test_sc"
+# The local single-node rig names this namespace ``test_sc``. The shared server
+# action's strong-consistency mode configures ``test`` instead, so nightly sets
+# AEROSPIKE_SC_NAMESPACE. Unset keeps the local name.
+NAMESPACE = os.environ.get("AEROSPIKE_SC_NAMESPACE", "test_sc").strip() or "test_sc"
 
 # Cut before mark-roll-forward, so the commit's first command is the one that
 # fails and the transaction's outcome is left in doubt.
