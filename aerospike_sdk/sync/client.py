@@ -38,7 +38,6 @@ from aerospike_async import (
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
-from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
@@ -49,6 +48,10 @@ from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
+from aerospike_sdk.session_shared import (
+    _namespace_mode_from_partition_map,
+    _probe_namespace_mode_blocking,
+)
 from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.session import Session
@@ -277,19 +280,15 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     def _resolve_namespace_mode_blocking(self, namespace: str) -> Mode:
         """Resolve AP vs SC for ``namespace`` synchronously; caches per-client."""
-        cached = self._namespace_mode_cache.get(namespace)
-        if cached is not None:
-            return cached
-        try:
-            result = self.underlying_client.info_blocking(f"namespace/{namespace}")
-        except Exception:
-            mode = Mode.AP
-            self._namespace_mode_cache[namespace] = mode
+        cache = self._namespace_mode_cache
+        mode = cache.get(namespace)
+        if mode is not None:
             return mode
-        detail = NamespaceDetail.from_response(result, namespace)
-        mode = Mode.SC if detail is not None and detail.strong_consistency else Mode.AP
-        self._namespace_mode_cache[namespace] = mode
-        return mode
+        pac = self.underlying_client
+        mode = _namespace_mode_from_partition_map(pac, cache, namespace)
+        if mode is not None:
+            return mode
+        return _probe_namespace_mode_blocking(pac, namespace)
 
     # -- Factories: query / index / session ------------------------------------
 
