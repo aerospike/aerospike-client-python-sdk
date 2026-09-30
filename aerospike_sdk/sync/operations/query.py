@@ -226,7 +226,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         if self._record_on:
             # The dispatchers finalize internally; doing it here first makes
             # the shape readable and leaves their own call a no-op.
-            self._finalize_current_spec()
+            self._finalize_chain()
             self._record_call(usage.API_BLOCKING, self._usage_shape())
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self._execute_blocking_fast_path(on_error)
@@ -345,7 +345,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         Returns:
             A lazy :class:`~aerospike_sdk.sync.record_stream.RecordStream`.
         """
-        self._finalize_current_spec()
+        self._finalize_chain()
         self._ensure_namespace_mode_blocking()
         self._ensure_batch_namespace_modes_blocking()
 

@@ -41,7 +41,7 @@ def _builder(op_type: str = "upsert") -> DataSetWriteBuilder:
 
 
 def _specs(rows: RowWriteBuilder):
-    rows._qb._finalize_current_spec()
+    rows._qb._finalize_chain()
     return rows._qb._specs
 
 
@@ -117,6 +117,10 @@ class TestPerRowVerbs:
             .row(2, 2).expire_record_after_seconds(60)
         )
         assert [s.ttl_seconds for s in _specs(rows)] == [300, 60]
+
+    def test_default_ttl_set_after_the_rows_covers_every_row(self):
+        rows = _builder().bins("v").row(1, 1).row(2, 2).row(3, 3).default_never_expire()
+        assert [s.ttl_seconds for s in _specs(rows)] == [-1, -1, -1]
 
 
 class TestExecuteGuards:

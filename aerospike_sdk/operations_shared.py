@@ -433,7 +433,77 @@ class _ExpirationVerbs(Generic[_QB]):
         return self
 
 
-class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
+class _ChainVerbs(Generic[_QB]):
+    """Chain-wide settings shared by write-segment and UDF builders.
+
+    Defined on the query builder, which both wrap, so these forward rather
+    than reimplement: the derivations (timedelta and datetime to seconds, the
+    TTL sentinels, AEL binding) stay in one place. `_SingleKeyWriteSegmentBase`
+    overrides them -- it has no builder until `_promote()`.
+    """
+
+    __slots__ = ()
+
+    _qb: _QB
+
+    def with_txn(self, txn: Optional[Txn]) -> Self:
+        """Opt the chain into (or out of) a specific transaction.
+
+        Args:
+            txn: The :class:`~aerospike_async.Txn` to participate in, or
+                ``None`` to run without a transaction, including an implicit
+                batch-write one.
+
+        Returns:
+            This builder for chaining.
+        """
+        self._qb.with_txn(txn)
+        return self
+
+    def default_where(
+        self, expression: Union[str, FilterExpression], *params: Any,
+    ) -> Self:
+        """Filter applied to chained operations that do not call ``where``."""
+        self._qb.default_where(expression, *params)
+        return self
+
+    def default_expire_record_after_seconds(self, seconds: int) -> Self:
+        """Default TTL, in seconds, for chained operations without their own."""
+        self._qb.default_expire_record_after_seconds(seconds)
+        return self
+
+    def default_expire_record_after(self, duration: timedelta) -> Self:
+        """Default TTL from a :class:`datetime.timedelta`."""
+        self._qb.default_expire_record_after(duration)
+        return self
+
+    def default_expire_record_at(self, when: datetime) -> Self:
+        """Default TTL expressed as an absolute expiry instant."""
+        self._qb.default_expire_record_at(when)
+        return self
+
+    def default_never_expire(self) -> Self:
+        """Default chained operations to never expire."""
+        self._qb.default_never_expire()
+        return self
+
+    def default_with_no_change_in_expiration(self) -> Self:
+        """Default chained operations to leave the existing TTL untouched."""
+        self._qb.default_with_no_change_in_expiration()
+        return self
+
+    def default_expiry_from_server_default(self) -> Self:
+        """Default chained operations to the namespace's configured TTL."""
+        self._qb.default_expiry_from_server_default()
+        return self
+
+    def fail_on_filtered_out(self) -> Self:
+        """Mark filtered-out records with ``FILTERED_OUT`` result code."""
+        self._qb._fail_on_filtered_out = True
+        return self
+
+
+class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
     """State + chaining shared by async and sync write-segment builders.
 
     Holds the wrapped query-builder reference (``_qb``) and the chaining
@@ -493,21 +563,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
             expression,
             supports_server_compiled_ael=self._resolve_ssael_flag(),
         )
-
-    def with_txn(self, txn: Optional[Txn]) -> Self:
-        """Opt this write into (or out of) a specific transaction.
-
-        Delegates to the underlying query builder.
-
-        Args:
-            txn: The :class:`~aerospike_async.Txn` to participate in, or
-                ``None`` to run without a transaction.
-
-        Returns:
-            This segment for chaining.
-        """
-        self._qb.with_txn(txn)
-        return self
 
     @overload
     def where(self, expression: str, *params: Any) -> Self: ...
@@ -569,50 +624,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
         self._qb._durable_delete_command_default = False
         return self
 
-    # -- Chain-level defaults -------------------------------------------------
-    # Defined on the query builder, which every multi-key segment wraps, so
-    # these forward rather than reimplement: the derivations (timedelta and
-    # datetime to seconds, the TTL sentinels, AEL binding) stay in one place.
-    # `_SingleKeyWriteSegmentBase` overrides them -- it has no builder until
-    # `_promote()`.
-
-    def default_where(
-        self, expression: Union[str, FilterExpression], *params: Any,
-    ) -> Self:
-        """Filter applied to chained operations that do not call ``where``."""
-        self._qb.default_where(expression, *params)
-        return self
-
-    def default_expire_record_after_seconds(self, seconds: int) -> Self:
-        """Default TTL, in seconds, for chained operations without their own."""
-        self._qb.default_expire_record_after_seconds(seconds)
-        return self
-
-    def default_expire_record_after(self, duration: timedelta) -> Self:
-        """Default TTL from a :class:`datetime.timedelta`."""
-        self._qb.default_expire_record_after(duration)
-        return self
-
-    def default_expire_record_at(self, when: datetime) -> Self:
-        """Default TTL expressed as an absolute expiry instant."""
-        self._qb.default_expire_record_at(when)
-        return self
-
-    def default_never_expire(self) -> Self:
-        """Default chained operations to never expire."""
-        self._qb.default_never_expire()
-        return self
-
-    def default_with_no_change_in_expiration(self) -> Self:
-        """Default chained operations to leave the existing TTL untouched."""
-        self._qb.default_with_no_change_in_expiration()
-        return self
-
-    def default_expiry_from_server_default(self) -> Self:
-        """Default chained operations to the namespace's configured TTL."""
-        self._qb.default_expiry_from_server_default()
-        return self
-
     def without_durable_delete(self) -> Self:
         """Force a non-durable delete for this segment (may be rejected on SC)."""
         self._qb._durable_delete = False
@@ -621,11 +632,6 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB]):
     def include_missing_keys(self) -> Self:
         """Include results for missing keys in the stream."""
         self._qb._respond_all_keys = True
-        return self
-
-    def fail_on_filtered_out(self) -> Self:
-        """Mark filtered-out records with ``FILTERED_OUT`` result code."""
-        self._qb._fail_on_filtered_out = True
         return self
 
     def replace_only(self) -> Self:

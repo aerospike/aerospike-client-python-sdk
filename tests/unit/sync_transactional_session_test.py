@@ -109,6 +109,17 @@ def test_txn_attribute_raises_before_enter(
     assert sync_tx.active is False
 
 
+def test_background_task_is_refused_inside_the_transaction(
+    sync_tx: SyncTransactionalSession,
+) -> None:
+    # The sync session reaches the check through the async task session it
+    # wraps, so this pins that the sync side exposes what the check reads.
+    with sync_tx as tx:
+        with pytest.raises(RuntimeError, match="inside a transaction"):
+            tx.background_task()
+    assert sync_tx.background_task() is not None
+
+
 def test_enter_allocates_txn(sync_tx: SyncTransactionalSession) -> None:
     with sync_tx as tx:
         assert tx is sync_tx

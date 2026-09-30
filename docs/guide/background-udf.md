@@ -100,14 +100,24 @@ only `index_filters()`, every record in the index range is written.
 ### Bulk Touch (Reset TTL)
 
 ```python
+from datetime import timedelta
+
 task = await (
     session.background_task()
     .touch(users)
     .where("$.active == true")
+    .expire_record_after(timedelta(days=30))
     .execute()
 )
 await task.wait_till_complete()
 ```
+
+The TTL verbs are the same as on single-record writes: `expire_record_after`,
+`expire_record_after_seconds`, `expire_record_at`, `never_expire`,
+`with_no_change_in_expiration`, and `expiry_from_server_default`.
+
+Background tasks cannot run inside a transaction; see
+{ref}`Transactions <txn-background-tasks>`.
 
 ### Background UDF
 
@@ -151,6 +161,21 @@ stream = await (
 )
 async for result in stream:
     print(result.record.key, result.udf_result)
+```
+
+A UDF segment takes the same chain-wide verbs as a write segment:
+`default_where`, the `default_expire*` family, `fail_on_filtered_out`, and
+`with_txn`. `with_txn(None)` also opts a multi-key UDF out of the
+{ref}`implicit batch-write transaction <txn-implicit-batch-write>`
+on a strong-consistency namespace:
+
+```python
+stream = await (
+    session.execute_udf(*users.ids(1, 2, 3))
+    .function("my_module", "process_record")
+    .with_txn(None)
+    .execute()
+)
 ```
 
 ### Chaining with Reads and Writes

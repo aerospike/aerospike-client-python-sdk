@@ -38,11 +38,17 @@ from aerospike_sdk.background_shared import (
     make_background_write_policy,
 )
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.query_shared import _BinWriteSteps, _W
+from aerospike_sdk.query_shared import _BACKGROUND_IN_TXN_ERROR, _BinWriteSteps, _W
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.metrics import usage
-from aerospike_sdk.operations_shared import _seconds_from_timedelta, _seconds_until
+from aerospike_sdk.operations_shared import (
+    _TTL_DONT_UPDATE,
+    _TTL_NEVER_EXPIRE,
+    _TTL_SERVER_DEFAULT,
+    _seconds_from_timedelta,
+    _seconds_until,
+)
 
 if TYPE_CHECKING:  # Not unused — avoids circular import; used in type annotations only.
     from aerospike_sdk.aio.session import Session
@@ -81,12 +87,21 @@ class BackgroundTaskSession:
                 .execute()
             )
 
+    Background tasks cannot join a transaction: the server applies them outside
+    any transaction, so their writes would escape its commit and abort.
+
     See Also:
         :meth:`~aerospike_sdk.aio.session.Session.execute_udf`: Foreground UDF on keys.
     """
 
     def __init__(self, session: Session) -> None:
-        """Bind to *session*; prefer :meth:`Session.background_task`."""
+        """Bind to *session*; prefer :meth:`Session.background_task`.
+
+        Raises:
+            RuntimeError: If *session* has an active transaction.
+        """
+        if session.current_transaction is not None:
+            raise RuntimeError(_BACKGROUND_IN_TXN_ERROR)
         self._session = session
 
     def update(self, dataset: DataSet) -> BackgroundOperationBuilder:
@@ -382,6 +397,21 @@ class _BackgroundOperationBuilderBase:
         if ``when`` is not strictly in the future.
         """
         self._ttl_seconds = _seconds_until(when)
+        return self
+
+    def never_expire(self) -> BackgroundOperationBuilder:
+        """Make every record the job writes never expire (TTL = -1)."""
+        self._ttl_seconds = _TTL_NEVER_EXPIRE
+        return self
+
+    def with_no_change_in_expiration(self) -> BackgroundOperationBuilder:
+        """Keep each record's existing TTL (TTL = -2)."""
+        self._ttl_seconds = _TTL_DONT_UPDATE
+        return self
+
+    def expiry_from_server_default(self) -> BackgroundOperationBuilder:
+        """Give each record the namespace's default TTL (TTL = 0)."""
+        self._ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
     def records_per_second(self, rps: int) -> BackgroundOperationBuilder:

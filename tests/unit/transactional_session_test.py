@@ -95,6 +95,15 @@ async def test_txn_attribute_raises_before_enter(
     assert tx_session.active is False
 
 
+async def test_background_task_is_refused_inside_the_transaction(
+    tx_session: TransactionalSession,
+) -> None:
+    async with tx_session as tx:
+        with pytest.raises(RuntimeError, match="inside a transaction"):
+            tx.background_task()
+    assert tx_session.background_task() is not None
+
+
 async def test_aenter_allocates_txn(
     tx_session: TransactionalSession,
 ) -> None:

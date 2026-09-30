@@ -32,7 +32,7 @@ from typing import Self
 
 from aerospike_async import FilterExpression, Key
 
-from aerospike_sdk.operations_shared import _ExpirationVerbs
+from aerospike_sdk.operations_shared import _ChainVerbs, _ExpirationVerbs
 from aerospike_sdk.server_filter import bind_ael_params
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
@@ -113,7 +113,7 @@ class _UdfFunctionBuilderBase(Generic[_QB]):
         return type(self)._udf_builder_cls(self._qb)
 
 
-class _UdfBuilderBase(_ExpirationVerbs[_QB]):
+class _UdfBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
     """State + chaining shared by the async and sync UdfBuilder.
 
     Subclasses inject their tier-appropriate ``UdfFunctionBuilder`` class
@@ -124,7 +124,9 @@ class _UdfBuilderBase(_ExpirationVerbs[_QB]):
 
     Inherits the record-expiration verbs (:meth:`expire_record_after_seconds`
     and siblings) so a UDF apply can set the record TTL, which is carried into
-    the batch/point apply policy's ``expiration``.
+    the batch/point apply policy's ``expiration``, and the chain-wide verbs
+    (:meth:`with_txn`, :meth:`default_where`, the ``default_expire*`` family,
+    :meth:`fail_on_filtered_out`) the write segments carry.
     """
 
     __slots__ = ("_qb",)

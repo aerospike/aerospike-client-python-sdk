@@ -397,10 +397,10 @@ batch in a transaction:
 ```python
 await (
     session.insert(users).bins("name", "age")
-    .default_expire_record_after(timedelta(days=30))
     .row(1, "Tim", 312)
     .row(2, "Bob", 25).expire_record_after(timedelta(hours=1))
     .row(3, "Jane", 46).ensure_generation_is(4)
+    .default_expire_record_after(timedelta(days=30))
     .execute()
 )
 ```

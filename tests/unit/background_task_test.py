@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
 
 import pytest
-from aerospike_sdk import Filter, HllConfig, Key
+from aerospike_sdk import Filter, HllConfig, Key, Txn
 from aerospike_async import (
     ExpOperation,
     Expiration,
@@ -39,6 +39,7 @@ from aerospike_sdk.aio.background import (
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -52,6 +53,7 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 def _session_mock() -> MagicMock:
     s = MagicMock()
     s.behavior = Behavior.DEFAULT
+    s.current_transaction = None
     fc = MagicMock()
     fc._client = MagicMock()
     s._client = fc
@@ -218,6 +220,139 @@ def test_expire_record_after_seconds_wired():
         None,
     )
     assert wp.expiration == Expiration.seconds(3600)
+
+
+_EXPIRY_VERBS = [
+    ("never_expire", -1, Expiration.NEVER_EXPIRE),
+    ("with_no_change_in_expiration", -2, Expiration.DONT_UPDATE),
+    ("expiry_from_server_default", 0, Expiration.NAMESPACE_DEFAULT),
+]
+
+
+@pytest.mark.parametrize("verb, _ttl, expected", _EXPIRY_VERBS)
+async def test_expiry_verbs_reach_the_policy_pac_receives(verb, _ttl, expected):
+    s = _session_mock()
+    s._client._client.query_operate = AsyncMock(return_value=MagicMock())
+    b = BackgroundOperationBuilder(s, DataSet.of("test", "bgset"), _OpType.TOUCH)
+    assert getattr(b, verb)() is b
+    await b.execute()
+    wp = s._client._client.query_operate.call_args.kwargs["write_policy"]
+    assert wp.expiration == expected
+
+
+@pytest.mark.parametrize("verb, ttl, _expected", _EXPIRY_VERBS)
+def test_sync_expiry_verbs_forward_to_the_async_builder(verb, ttl, _expected):
+    inner = BackgroundOperationBuilder(
+        _session_mock(), DataSet.of("test", "bgset"), _OpType.TOUCH)
+    b = SyncBackgroundOperationBuilder(inner)
+    assert getattr(b, verb)() is b
+    assert inner._ttl_seconds == ttl
+
+
+def test_background_task_session_refuses_an_active_transaction():
+    s = _session_mock()
+    s.current_transaction = Txn()
+    with pytest.raises(RuntimeError, match="inside a transaction"):
+        BackgroundTaskSession(s)
+
+
+@pytest.mark.parametrize("start", [
+    lambda qb: qb.with_write_operations([Operation.put("x", 1)]).execute_background_task(),
+    lambda qb: qb.execute_udf_background_task("pkg", "fn"),
+], ids=["operate", "udf"])
+async def test_query_background_task_refuses_a_bound_transaction(start):
+    qb = QueryBuilder(MagicMock(), "test", "bgset", txn=Txn())
+    with pytest.raises(RuntimeError, match="inside a transaction"):
+        await start(qb)
+
+
+async def test_query_background_task_runs_once_opted_out_of_the_transaction():
+    client = MagicMock()
+    client.query_operate = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(client, "test", "bgset", txn=Txn())
+    qb.with_txn(None).with_write_operations([Operation.put("x", 1)])
+    await qb.execute_background_task()
+    client.query_operate.assert_awaited_once()
+
+
+def _start_operate(qb):
+    return qb.with_write_operations([Operation.put("x", 1)]).execute_background_task()
+
+
+def _start_udf(qb):
+    return qb.execute_udf_background_task("pkg", "fn")
+
+
+_ASYNC_BACKGROUND_STARTS = pytest.mark.parametrize("start, pac_call", [
+    (_start_operate, "query_operate"),
+    (_start_udf, "query_execute_udf"),
+], ids=["operate", "udf"])
+
+_SYNC_BACKGROUND_STARTS = pytest.mark.parametrize("start, pac_call", [
+    (_start_operate, "query_operate_blocking"),
+    (_start_udf, "query_execute_udf_blocking"),
+], ids=["operate", "udf"])
+
+
+def _async_where_qb(pac_call, *, server_ael):
+    client = MagicMock()
+    setattr(client, pac_call, AsyncMock(return_value=MagicMock()))
+    qb = QueryBuilder(client, "test", "bgset", supports_server_compiled_ael=server_ael)
+    return qb.where("$.age > 20"), client
+
+
+def _sync_where_qb(*, server_ael):
+    client = MagicMock()
+    qb = SyncQueryBuilder(
+        client=client, namespace="test", set_name="bgset",
+        supports_server_compiled_ael=server_ael,
+    )
+    return qb.where("$.age > 20"), client
+
+
+@_ASYNC_BACKGROUND_STARTS
+async def test_query_background_task_applies_a_string_where(start, pac_call):
+    qb, client = _async_where_qb(pac_call, server_ael=True)
+    await start(qb)
+    assert getattr(client, pac_call).await_args.kwargs["write_policy"].filter_expression is not None
+
+
+@_ASYNC_BACKGROUND_STARTS
+async def test_query_background_task_refuses_a_string_where_the_cluster_cannot_compile(
+    start, pac_call,
+):
+    qb, client = _async_where_qb(pac_call, server_ael=False)
+    with pytest.raises(AerospikeError) as exc_info:
+        await start(qb)
+    assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+    getattr(client, pac_call).assert_not_called()
+
+
+@_SYNC_BACKGROUND_STARTS
+def test_sync_query_background_task_applies_a_string_where(start, pac_call):
+    qb, client = _sync_where_qb(server_ael=True)
+    start(qb)
+    assert getattr(client, pac_call).call_args.kwargs["write_policy"].filter_expression is not None
+
+
+@_SYNC_BACKGROUND_STARTS
+def test_sync_query_background_task_refuses_a_string_where_the_cluster_cannot_compile(
+    start, pac_call,
+):
+    qb, client = _sync_where_qb(server_ael=False)
+    with pytest.raises(AerospikeError) as exc_info:
+        start(qb)
+    assert exc_info.value.result_code == ResultCode.OP_NOT_APPLICABLE
+    getattr(client, pac_call).assert_not_called()
+
+
+def test_sync_query_background_task_refuses_a_bound_transaction():
+    qb = SyncQueryBuilder(
+        client=MagicMock(), namespace="test", set_name="bgset", txn=Txn(),
+    )
+    qb.with_write_operations([Operation.put("x", 1)])
+    with pytest.raises(RuntimeError, match="inside a transaction"):
+        qb.execute_background_task()
 
 
 def test_records_per_second_reaches_the_write_policy():

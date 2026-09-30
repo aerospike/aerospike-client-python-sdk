@@ -143,6 +143,21 @@ class BackgroundOperationBuilder:
         self._inner.expire_record_at(when)
         return self
 
+    def never_expire(self) -> BackgroundOperationBuilder:
+        """Make every record the job writes never expire (TTL = -1)."""
+        self._inner.never_expire()
+        return self
+
+    def with_no_change_in_expiration(self) -> BackgroundOperationBuilder:
+        """Keep each record's existing TTL (TTL = -2)."""
+        self._inner.with_no_change_in_expiration()
+        return self
+
+    def expiry_from_server_default(self) -> BackgroundOperationBuilder:
+        """Give each record the namespace's default TTL (TTL = 0)."""
+        self._inner.expiry_from_server_default()
+        return self
+
     def records_per_second(self, rps: int) -> BackgroundOperationBuilder:
         """Throttle the background job to *rps* records per second.
 

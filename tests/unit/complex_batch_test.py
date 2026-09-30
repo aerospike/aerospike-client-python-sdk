@@ -520,7 +520,7 @@ class TestChainLevelDefaults:
 
         wsb = qb.upsert(_make_key(2))
         wsb.bin("x").set_to(1)
-        qb._finalize_current_spec()
+        qb._finalize_chain()
 
         assert qb._specs[0].filter_expression is not None
         assert qb._specs[1].filter_expression is not None
@@ -532,7 +532,7 @@ class TestChainLevelDefaults:
 
         wsb = qb.upsert(_make_key(2))
         wsb.where("$.status == 'VIP'")
-        qb._finalize_current_spec()
+        qb._finalize_chain()
 
         spec0_filter = qb._specs[0].filter_expression
         spec1_filter = qb._specs[1].filter_expression
@@ -546,7 +546,7 @@ class TestChainLevelDefaults:
         qb.default_expire_record_after_seconds(600)
 
         qb.upsert(_make_key(2))
-        qb._finalize_current_spec()
+        qb._finalize_chain()
 
         assert qb._specs[1].ttl_seconds == 600
 
@@ -557,7 +557,7 @@ class TestChainLevelDefaults:
 
         wsb = qb.upsert(_make_key(2))
         wsb.expire_record_after_seconds(120)
-        qb._finalize_current_spec()
+        qb._finalize_chain()
 
         assert qb._specs[1].ttl_seconds == 120
 

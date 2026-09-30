@@ -335,6 +335,29 @@ async def test_legacy_query_builder_background_scan(cluster):
     assert rec.record.bins.get(MARKER) == 1
 
 
+@requires_server_compiled_ael
+async def test_query_builder_background_task_honors_a_string_where(cluster):
+    session = cluster.create_session()
+    for i in range(1, 11):
+        await (
+            session.upsert(DS.id(f"bg_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+    task = await (
+        session.query(DS)
+        .where("$.bgval > 5")
+        .with_write_operations([Operation.put(BG_BIN2, "filtered")])
+        .execute_background_task()
+    )
+    assert await task.wait_till_complete()
+    for i in range(1, 11):
+        rs = await session.query(DS.id(f"bg_{i}")).bins([BG_BIN2]).execute()
+        rr = await rs.first_or_raise()
+        assert rr.record.bins.get(BG_BIN2) == ("filtered" if i > 5 else "original")
+
+
 async def test_point_query_rejects_background_task(cluster):
     session = cluster.create_session()
     k = DS.id(40)
