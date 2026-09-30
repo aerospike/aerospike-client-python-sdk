@@ -151,22 +151,6 @@ class SyncClient(RoutingCapabilitiesMixin):
         # namespace-mode cache).
         self._supports_mrt_cache: Optional[bool] = None
 
-    def _supports_mrt_blocking(self) -> bool:
-        """Whether every cluster node supports multi-record transactions.
-
-        An MRT spans the cluster, so the aggregate is all-nodes: a single
-        node below the MRT server version makes the answer ``False``. The
-        ``current_thread_runtime`` proxy has no node-listing surface, so
-        MRT support cannot be verified there and this reports ``False``
-        (implicit batch-write transactions stay off on that path).
-        """
-        if self._supports_mrt_cache is None:
-            versions = self._cluster_versions_blocking()
-            self._supports_mrt_cache = bool(versions) and all(
-                version.supports_mrt() for version in versions
-            )
-        return self._supports_mrt_cache
-
     def _apply_sdk_settings(self, settings: SystemSettings) -> None:
         """Adopt reloaded settings, applying the ones that act on a live client.
 
@@ -224,7 +208,7 @@ class SyncClient(RoutingCapabilitiesMixin):
         except PacAerospikeError as exc:
             raise _convert_pac_exception(exc) from exc
         self._connected = True
-        self._warm_routing_capabilities_blocking()
+        self._warm_routing_capabilities()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},

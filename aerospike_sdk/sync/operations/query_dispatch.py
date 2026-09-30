@@ -87,7 +87,7 @@ class _BlockingQueryDispatch:
         """Full gate for blocking dispatchers (precheck + MRT capability)."""
         return (
             self._implicit_txn_precheck(keys)
-            and self._sdk_client._supports_mrt_blocking()
+            and self._sdk_client._supports_mrt()
         )
 
     def _ensure_namespace_mode_blocking(self) -> None:
@@ -624,7 +624,7 @@ class _BlockingQueryDispatch:
             if (
                 self._implicit_txn_precheck(all_keys)
                 and any(not isinstance(op, BatchReadOp) for op in all_ops)
-                and self._sdk_client._supports_mrt_blocking()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = run_in_implicit_txn_blocking(
                     self._client, self._implicit_txn_settings(),

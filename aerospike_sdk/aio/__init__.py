@@ -18,6 +18,7 @@
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.aio.info import InfoCommands
+from aerospike_sdk.aio.node import Node
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.aio.pool import AsyncPool
@@ -31,6 +32,7 @@ __all__ = [
     "Host",
     "InfoCommands",
     "NamespaceScStatus",
+    "Node",
     "IndexBuilder",
     "QueryBuilder",
     "Session",

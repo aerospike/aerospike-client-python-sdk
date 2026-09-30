@@ -156,10 +156,10 @@ def _node_attr(node: Any, attr: str) -> Any:
         return f"<{type(exc).__name__}: {exc}>"
 
 
-async def _node_rows(pac: Any) -> List[Dict[str, Any]]:
+def _node_rows(pac: Any) -> List[Dict[str, Any]]:
     """Per-node identity and generation state from a connected PAC client."""
     rows: List[Dict[str, Any]] = []
-    for node in await pac.nodes():
+    for node in pac.nodes():
         rows.append({
             attr: _node_attr(node, attr)
             for attr in ("name", "host", "partition_generation", "failures", "is_active")
@@ -170,7 +170,7 @@ async def _node_rows(pac: Any) -> List[Dict[str, Any]]:
 async def _node_info(pac: Any) -> Dict[str, Dict[str, str]]:
     """Raw discovery-relevant info responses, per node."""
     out: Dict[str, Dict[str, str]] = {}
-    for node in await pac.nodes():
+    for node in pac.nodes():
         answers: Dict[str, str] = {}
         for cmd in _NODE_INFO_CMDS:
             try:
@@ -212,7 +212,7 @@ async def _report(
     show_info: bool,
 ) -> int:
     """Print one client's discovery state; return its node count."""
-    rows = await _node_rows(pac)
+    rows = _node_rows(pac)
     tally = await _routing_probe(cluster_or_client, dataset, keys)
     routable = keys - tally["routing"]
     pct = (100.0 * tally["routing"] / keys) if keys else 0.0

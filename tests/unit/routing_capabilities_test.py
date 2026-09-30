@@ -12,7 +12,6 @@
 
 """Unit tests for the connect-time routing capability cache."""
 
-import asyncio
 import threading
 import time
 from datetime import timedelta
@@ -44,19 +43,13 @@ class _FakeNode:
 
 
 class _FakePacClient:
-    """Stands in for PAC ``Client``: exposes ``nodes_blocking`` on the class."""
+    """Stands in for PAC ``Client``: exposes ``nodes`` on the class."""
 
     def __init__(self, *versions: _FakeVersion) -> None:
         self._nodes = [_FakeNode(v) for v in versions]
         self.list_calls = 0
-        self.blocking_calls = 0
 
-    def nodes_blocking(self):
-        self.list_calls += 1
-        self.blocking_calls += 1
-        return list(self._nodes)
-
-    async def nodes(self):
+    def nodes(self):
         self.list_calls += 1
         return list(self._nodes)
 
@@ -71,7 +64,7 @@ class _FakePacClient:
 class _FakeThreadLocalProxy:
     """Stands in for ``_ThreadLocalLocalClient``.
 
-    No ``nodes_blocking`` on the class, and any *instance* attribute miss falls
+    No ``nodes`` on the class, and any *instance* attribute miss falls
     through ``__getattr__`` — which in the real proxy builds a per-thread PAC
     client. Misses are recorded so a test can assert none happened.
     """
@@ -113,7 +106,7 @@ def clock(monkeypatch):
 
 def test_capable_nodes_open_both_gates():
     client = _Client(_FakePacClient(_FakeVersion(), _FakeVersion()))
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     assert client.supports_server_compiled_ael is True
     assert client.supports_query_selection is True
 
@@ -125,7 +118,7 @@ def test_one_lagging_node_closes_both_gates():
             _FakeVersion(ael=False, query_selection=False),
         ),
     )
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     assert client.supports_server_compiled_ael is False
     assert client.supports_query_selection is False
 
@@ -137,14 +130,14 @@ def test_unlistable_nodes_keep_string_ael_open():
     "cluster below 8.2.0" and rejected string AEL against a capable cluster.
     """
     client = _Client(_FakeThreadLocalProxy())
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     assert client.supports_server_compiled_ael is True
 
 
 def test_unlistable_nodes_close_query_selection():
     """Field 44 has a working field-43 fallback, so it stays conservative."""
     client = _Client(_FakeThreadLocalProxy())
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     assert client.supports_query_selection is False
 
 
@@ -152,13 +145,13 @@ def test_probe_never_touches_the_proxy_instance():
     """The node-listing probe must not build a per-thread client to answer."""
     proxy = _FakeThreadLocalProxy()
     client = _Client(proxy)
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     assert proxy.attribute_misses == []
 
 
 def test_disconnected_client_reports_no_capabilities():
     client = _Client(_FakePacClient(_FakeVersion()))
-    client._warm_routing_capabilities_blocking()
+    client._warm_routing_capabilities()
     client._connected = False
     assert client.supports_server_compiled_ael is False
     assert client.supports_query_selection is False
@@ -170,7 +163,7 @@ class TestTendIntervalRefresh:
     def test_lagging_node_joining_after_connect_closes_the_gates(self, clock):
         pac = _FakePacClient(_FakeVersion())
         client = _Client(pac, tend_interval=timedelta(seconds=1))
-        client._warm_routing_capabilities_blocking()
+        client._warm_routing_capabilities()
         assert client.supports_server_compiled_ael is True
 
         pac.join(_FakeVersion(ael=False, query_selection=False))
@@ -186,7 +179,7 @@ class TestTendIntervalRefresh:
             _FakeVersion(ael=False, query_selection=False),
         )
         client = _Client(pac, tend_interval=timedelta(seconds=1))
-        client._warm_routing_capabilities_blocking()
+        client._warm_routing_capabilities()
         assert client.supports_server_compiled_ael is False
 
         pac.leave()
@@ -199,7 +192,7 @@ class TestTendIntervalRefresh:
         """Hot-path reads must stay a cached-boolean lookup between tends."""
         pac = _FakePacClient(_FakeVersion())
         client = _Client(pac, tend_interval=timedelta(seconds=1))
-        client._warm_routing_capabilities_blocking()
+        client._warm_routing_capabilities()
         calls_after_warm = pac.list_calls
 
         clock.advance(0.9)
@@ -212,7 +205,7 @@ class TestTendIntervalRefresh:
     def test_a_configured_interval_sets_the_refresh_window(self, clock):
         pac = _FakePacClient(_FakeVersion())
         client = _Client(pac, tend_interval=timedelta(seconds=30))
-        client._warm_routing_capabilities_blocking()
+        client._warm_routing_capabilities()
         pac.join(_FakeVersion(ael=False, query_selection=False))
 
         clock.advance(29.0)
@@ -231,7 +224,7 @@ class TestTendIntervalRefresh:
         """The periodic re-derive must not build a per-thread client either."""
         proxy = _FakeThreadLocalProxy()
         client = _Client(proxy, tend_interval=timedelta(seconds=1))
-        client._warm_routing_capabilities_blocking()
+        client._warm_routing_capabilities()
 
         clock.advance(5.0)
         assert client.supports_server_compiled_ael is True
@@ -282,69 +275,30 @@ class TestTendIntervalRefresh:
 
 
 class TestRefreshUnderARunningLoop:
-    """PAC rejects a blocking node read inside a loop, so the async refresh defers."""
+    """The node read is in-memory, so an async caller refreshes inline too."""
 
     @pytest.mark.asyncio
-    async def test_a_stale_read_never_blocks_on_the_node_list(self, clock):
+    async def test_a_stale_read_refreshes_before_answering(self, clock):
         pac = _FakePacClient(_FakeVersion())
         client = _Client(pac, tend_interval=timedelta(seconds=1))
-        await client._warm_routing_capabilities()
-        blocking_calls_after_warm = pac.blocking_calls
+        client._warm_routing_capabilities()
 
         pac.join(_FakeVersion(ael=False, query_selection=False))
         clock.advance(1.0)
 
-        # The stale read returns the value it has and schedules the re-derive.
-        assert client.supports_server_compiled_ael is True
-        assert pac.blocking_calls == blocking_calls_after_warm
-
-        await asyncio.sleep(0)
         assert client.supports_server_compiled_ael is False
+        assert client.supports_query_selection is False
 
-    @pytest.mark.asyncio
-    async def test_a_burst_of_stale_reads_schedules_one_refresh(self, clock):
+    def test_a_failed_refresh_keeps_the_previous_gates(self, clock):
         pac = _FakePacClient(_FakeVersion())
         client = _Client(pac, tend_interval=timedelta(seconds=1))
-        await client._warm_routing_capabilities()
-        calls_after_warm = pac.list_calls
+        client._warm_routing_capabilities()
 
-        clock.advance(1.0)
-        for _ in range(50):
-            client.supports_server_compiled_ael  # noqa: B018
-            client.supports_query_selection  # noqa: B018
-        await asyncio.sleep(0)
-
-        assert pac.list_calls == calls_after_warm + 1
-
-    @pytest.mark.asyncio
-    async def test_a_failed_refresh_keeps_the_previous_gates(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
-        await client._warm_routing_capabilities()
-
-        async def _unreachable():
+        def _unreachable():
             raise ConnectionError("cluster unreachable")
 
         pac.nodes = _unreachable
         clock.advance(1.0)
-        client.supports_server_compiled_ael  # noqa: B018
-        await asyncio.sleep(0)
 
         assert client.supports_server_compiled_ael is True
-        assert client._routing_capability_refresh is None
-
-    @pytest.mark.asyncio
-    async def test_close_cancels_an_in_flight_refresh(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
-        await client._warm_routing_capabilities()
-
-        clock.advance(1.0)
-        client.supports_server_compiled_ael  # noqa: B018
-        in_flight = client._routing_capability_refresh
-        assert in_flight is not None
-
-        client._clear_routing_capability_cache()
-        await asyncio.sleep(0)
-        assert in_flight.cancelled()
-        assert client._routing_capability_refresh is None
+        assert client.supports_query_selection is True

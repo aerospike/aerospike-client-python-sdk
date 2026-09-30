@@ -205,7 +205,7 @@ def test_server_reported_name_selects_its_block(aerospike_host, tmp_path):
     """
     host, port = _host_port(aerospike_host)
     with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        reported = probe._sdk_client.underlying_client.server_cluster_name
+        reported = probe.cluster_name
     if not reported:
         pytest.skip("cluster reports no name")
 
@@ -229,7 +229,7 @@ def test_connect_time_settings_in_a_discovered_block_are_reported(
     """Selection lands after connect, so connection settings are already spent."""
     host, port = _host_port(aerospike_host)
     with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        reported = probe._sdk_client.underlying_client.server_cluster_name
+        reported = probe.cluster_name
 
     profile = reported or "some-other-cluster"
     yaml_text = (

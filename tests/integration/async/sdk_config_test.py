@@ -241,11 +241,9 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
     """
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        by_node = await probe._sdk_client.underlying_client.info("cluster-name")
-    names = {v for v in by_node.values() if v and v != "null"}
-    if not names:
+        cluster_name = probe.cluster_name
+    if not cluster_name:
         pytest.skip("server has no cluster-name configured")
-    cluster_name = names.pop()
 
     yaml_text = (
         "system:\n"
@@ -275,7 +273,7 @@ async def test_server_reported_name_selects_its_block(aerospike_host, tmp_path):
     """
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        reported = probe._sdk_client.underlying_client.server_cluster_name
+        reported = probe.cluster_name
     if not reported:
         pytest.skip("cluster reports no name")
 
@@ -326,7 +324,7 @@ async def test_connect_time_settings_in_a_discovered_block_are_reported(
 
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
-        reported = probe._sdk_client.underlying_client.server_cluster_name
+        reported = probe.cluster_name
 
     profile = reported or "some-other-cluster"
     yaml_text = (

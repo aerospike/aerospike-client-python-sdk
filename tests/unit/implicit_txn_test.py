@@ -324,7 +324,7 @@ class TestMultiKeyWriteChainWrap:
 
     def _sdk_client(self, implicit=True, supports_mrt=True):
         client = _sdk_client(implicit=implicit)
-        client._supports_mrt_blocking = lambda: supports_mrt
+        client._supports_mrt = lambda: supports_mrt
         return client
 
     def _keys(self):

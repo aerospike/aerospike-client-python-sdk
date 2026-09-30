@@ -38,7 +38,7 @@ async def cluster(aerospike_host, make_cluster_definition):
 class TestCapabilityProbes:
 
     async def test_server_version_is_reported(self, cluster):
-        v = await cluster.server_version()
+        v = cluster.server_version()
         assert isinstance(v, Version)
         # A real cluster reports a positive major version.
         assert v.major >= 1
@@ -47,7 +47,7 @@ class TestCapabilityProbes:
         for probe in (cluster.supports_ael, cluster.supports_query_operations,
                       cluster.supports_string_operations,
                       cluster.supports_query_selection):
-            assert isinstance(await probe(), bool)
+            assert isinstance(probe(), bool)
 
     async def test_probes_agree_with_pac_version_predicates(self, cluster):
         """Wiring: cluster probe → ``capabilities.supports_*`` over live node versions.
@@ -55,16 +55,16 @@ class TestCapabilityProbes:
         This alone is tautological (same fold on both sides); pair with
         :meth:`test_probes_match_reported_version_floors` to catch a bad mapping.
         """
-        versions = await cluster._sdk_client._cluster_versions()
+        versions = cluster._sdk_client._cluster_versions()
         assert versions, "connected cluster should report at least one node"
-        assert await cluster.supports_query_operations() == (
+        assert cluster.supports_query_operations() == (
             capabilities.supports_query_operations(versions)
         )
-        assert await cluster.supports_string_operations() == (
+        assert cluster.supports_string_operations() == (
             capabilities.supports_string_operations(versions)
         )
-        assert await cluster.supports_ael() == capabilities.supports_ael(versions)
-        assert await cluster.supports_query_selection() == (
+        assert cluster.supports_ael() == capabilities.supports_ael(versions)
+        assert cluster.supports_query_selection() == (
             capabilities.supports_query_selection(versions)
         )
 
@@ -74,10 +74,10 @@ class TestCapabilityProbes:
         Catches a wrong ``capabilities.supports_*`` mapping that the delegation
         check above would miss on a homogeneous CI cluster.
         """
-        v = await cluster.server_version()
+        v = cluster.server_version()
         assert v is not None
         vt = (v.major, v.minor, v.patch)
-        assert await cluster.supports_query_operations() == (vt >= (8, 1, 2))
-        assert await cluster.supports_string_operations() == (vt >= (8, 2, 0))
-        assert await cluster.supports_ael() == (vt >= (8, 2, 0))
-        assert await cluster.supports_query_selection() == (vt >= (8, 2, 0))
+        assert cluster.supports_query_operations() == (vt >= (8, 1, 2))
+        assert cluster.supports_string_operations() == (vt >= (8, 2, 0))
+        assert cluster.supports_ael() == (vt >= (8, 2, 0))
+        assert cluster.supports_query_selection() == (vt >= (8, 2, 0))

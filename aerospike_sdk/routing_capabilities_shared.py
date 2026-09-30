@@ -25,9 +25,8 @@ so a node joining with an older version closes the gates and the client reports
 a clean ``OP_NOT_APPLICABLE`` instead of letting that node reject the filter
 mid-stream. It reopens once that node leaves. PAC exposes no tend callback, so
 this reads the node list PAC's own tend loop already publishes — an in-memory
-walk, not a round trip. See :meth:`RoutingCapabilitiesMixin._routing_capability_ttl_seconds`
-for the window and :meth:`RoutingCapabilitiesMixin._refresh_routing_capabilities_if_stale`
-for why an async caller schedules that walk instead of waiting on it.
+walk, not a round trip, so it runs inline on both runtimes. See
+:meth:`RoutingCapabilitiesMixin._routing_capability_ttl_seconds` for the window.
 
 Not every client can read node versions: the ``current_thread_runtime`` proxy has
 no node-listing surface, so the cluster version there is *undeterminable* rather
@@ -37,7 +36,6 @@ for how the two gates resolve in that case.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any, List, Optional, Protocol, Tuple
@@ -67,17 +65,16 @@ class _RoutingCapabilitiesClient(Protocol):
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
-    _routing_capability_refresh: Optional[asyncio.Task[None]]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
+    _supports_mrt_cache: Optional[bool]
 
     # Declared so the mixin's own ``self``-annotated methods may call each other.
     def _client_can_list_nodes(self) -> bool: ...
-    def _cluster_versions_blocking(self) -> List[Any]: ...
-    async def _cluster_versions(self) -> List[Any]: ...
+    def _cluster_versions(self) -> List[Any]: ...
     def _apply_routing_capabilities_from_versions(self, versions: List[Any]) -> None: ...
     def _apply_undeterminable_routing_capabilities(self) -> None: ...
     def _routing_capability_ttl_seconds(self) -> float: ...
-    def _resolve_routing_capabilities_blocking(self) -> None: ...
+    def _resolve_routing_capabilities(self) -> None: ...
     def _refresh_routing_capabilities_if_stale(self) -> None: ...
 
 
@@ -87,22 +84,18 @@ class RoutingCapabilitiesMixin:
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
     _routing_capability_stamp: Optional[float]
-    _routing_capability_refresh: Optional[asyncio.Task[None]]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
+    _supports_mrt_cache: Optional[bool]
 
     def _init_routing_capability_cache(self) -> None:
         """Initialize routing caches; call from client ``__init__``."""
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
-        self._routing_capability_refresh = None
         self._routing_capability_ttl = None
 
     def _clear_routing_capability_cache(self) -> None:
         """Drop routing caches; call from client close paths."""
-        if self._routing_capability_refresh is not None:
-            self._routing_capability_refresh.cancel()
-            self._routing_capability_refresh = None
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
         self._routing_capability_stamp = None
@@ -119,21 +112,10 @@ class RoutingCapabilitiesMixin:
         pac = self._client
         if pac is None:
             return False
-        return hasattr(type(pac), "nodes_blocking")
+        return hasattr(type(pac), "nodes")
 
-    def _cluster_versions_blocking(self: _RoutingCapabilitiesClient) -> List[Any]:
-        """Blocking node versions, or ``[]`` when this client cannot list nodes.
-
-        PAC refuses ``nodes_blocking`` from inside a running event loop, so this
-        is the sync client's reader; the async client uses
-        :meth:`_cluster_versions`.
-        """
-        if not self._client_can_list_nodes():
-            return []
-        return [node.version for node in self._client.nodes_blocking()]
-
-    async def _cluster_versions(self: _RoutingCapabilitiesClient) -> List[Any]:
-        """Awaitable sibling of :meth:`_cluster_versions_blocking`.
+    def _cluster_versions(self: _RoutingCapabilitiesClient) -> List[Any]:
+        """Live node versions, or ``[]`` when this client cannot list nodes.
 
         Read live rather than from the routing cache: capability probes are a
         cold introspection path, and a caller asking outright deserves the
@@ -141,7 +123,24 @@ class RoutingCapabilitiesMixin:
         """
         if not self._client_can_list_nodes():
             return []
-        return [node.version for node in await self._client.nodes()]
+        return [node.version for node in self._client.nodes()]
+
+    def _supports_mrt(self: _RoutingCapabilitiesClient) -> bool:
+        """Whether every cluster node supports multi-record transactions.
+
+        An MRT spans the cluster, so the aggregate is all-nodes: a single
+        node below the MRT server version makes the answer ``False``. A
+        client that cannot list nodes (the ``current_thread_runtime`` proxy)
+        reports ``False``, so implicit batch-write transactions stay off
+        there. Cached for the client's lifetime; the client clears it on
+        close.
+        """
+        if self._supports_mrt_cache is None:
+            versions = self._cluster_versions()
+            self._supports_mrt_cache = bool(versions) and all(
+                version.supports_mrt() for version in versions
+            )
+        return self._supports_mrt_cache
 
     def _apply_routing_capabilities_from_versions(
         self: _RoutingCapabilitiesClient,
@@ -189,23 +188,10 @@ class RoutingCapabilitiesMixin:
         self._routing_capability_ttl = (settings, ttl)
         return ttl
 
-    def _resolve_routing_capabilities_blocking(
-        self: _RoutingCapabilitiesClient,
-    ) -> None:
-        """Derive both gates from the current node list, blocking on the read."""
+    def _resolve_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
+        """Derive both gates from the current node list."""
         if self._client_can_list_nodes():
-            self._apply_routing_capabilities_from_versions(
-                self._cluster_versions_blocking(),
-            )
-        else:
-            self._apply_undeterminable_routing_capabilities()
-
-    async def _resolve_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
-        """Awaitable sibling of :meth:`_resolve_routing_capabilities_blocking`."""
-        if self._client_can_list_nodes():
-            self._apply_routing_capabilities_from_versions(
-                await self._cluster_versions(),
-            )
+            self._apply_routing_capabilities_from_versions(self._cluster_versions())
         else:
             self._apply_undeterminable_routing_capabilities()
 
@@ -214,15 +200,9 @@ class RoutingCapabilitiesMixin:
     ) -> None:
         """Re-derive the gates once the last result is a tend interval old.
 
-        The gates are read from sync properties on builder hot paths, including
-        under a running loop where PAC refuses a blocking node read. So an async
-        caller schedules the re-derive and keeps the value it has: the point is
-        to bound staleness, not to stall an operation on a refresh, and the
-        answer lands a loop turn later.
-
-        The stamp moves before the work starts, so a burst of reads schedules one
-        refresh rather than one per read, and a failed read simply retries after
-        the next interval instead of hammering an unreachable cluster.
+        The stamp moves before the work starts, so a failed read keeps the
+        previous gates and retries after the next interval instead of failing
+        the operation that happened to trigger it.
         """
         stamp = self._routing_capability_stamp
         if stamp is not None:
@@ -230,39 +210,15 @@ class RoutingCapabilitiesMixin:
                 return
         self._routing_capability_stamp = time.monotonic()
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self._resolve_routing_capabilities_blocking()
-            return
-        if self._routing_capability_refresh is not None:
-            return
-        self._routing_capability_refresh = loop.create_task(
-            self._refresh_routing_capabilities_async(),
-        )
-
-    async def _refresh_routing_capabilities_async(
-        self: _RoutingCapabilitiesClient,
-    ) -> None:
-        """Background re-derive; keeps the previous gates if the read fails."""
-        try:
-            await self._resolve_routing_capabilities()
+            self._resolve_routing_capabilities()
         except Exception as exc:
             log.debug("Routing capability refresh failed: %s", exc, exc_info=True)
-        finally:
-            self._routing_capability_refresh = None
 
-    def _warm_routing_capabilities_blocking(self: _RoutingCapabilitiesClient) -> None:
+    def _warm_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
         """Resolve both gates at connect so the first operation pays nothing."""
         if not self._connected or self._client is None:
             return
-        self._resolve_routing_capabilities_blocking()
-        self._routing_capability_stamp = time.monotonic()
-
-    async def _warm_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
-        """Awaitable sibling of :meth:`_warm_routing_capabilities_blocking`."""
-        if not self._connected or self._client is None:
-            return
-        await self._resolve_routing_capabilities()
+        self._resolve_routing_capabilities()
         self._routing_capability_stamp = time.monotonic()
 
     @property

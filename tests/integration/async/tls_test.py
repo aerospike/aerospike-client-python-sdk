@@ -364,7 +364,7 @@ class TestTlsForLoginOnly:
         hostname, tls_port = host_port
         cluster = await self._definition(ClusterDefinition, hostname, tls_port, True).connect()
         try:
-            nodes = await cluster._sdk_client.underlying_client.nodes()
+            nodes = cluster.nodes()
             assert len(nodes) == 1
             assert nodes[0].host[1] != tls_port, f"node still on the TLS port {tls_port}"
             key = DataSet.of("test", "tls_login").id("k")
@@ -380,7 +380,7 @@ class TestTlsForLoginOnly:
         hostname, tls_port = host_port
         cluster = await self._definition(ClusterDefinition, hostname, tls_port, False).connect()
         try:
-            nodes = await cluster._sdk_client.underlying_client.nodes()
+            nodes = cluster.nodes()
             assert nodes[0].host[1] == tls_port
         finally:
             await cluster.close()
@@ -388,7 +388,7 @@ class TestTlsForLoginOnly:
     def test_sync_data_connections_move_to_the_cleartext_port(self, host_port):
         hostname, tls_port = host_port
         with self._definition(SyncClusterDefinition, hostname, tls_port, True).connect() as cluster:
-            nodes = cluster._sdk_client.underlying_client.nodes_blocking()
+            nodes = cluster.nodes()
             assert len(nodes) == 1
             assert nodes[0].host[1] != tls_port, f"node still on the TLS port {tls_port}"
             key = DataSet.of("test", "tls_login").id("k_sync")
@@ -400,5 +400,5 @@ class TestTlsForLoginOnly:
     def test_sync_without_the_flag_the_node_stays_on_the_tls_port(self, host_port):
         hostname, tls_port = host_port
         with self._definition(SyncClusterDefinition, hostname, tls_port, False).connect() as cluster:
-            nodes = cluster._sdk_client.underlying_client.nodes_blocking()
+            nodes = cluster.nodes()
             assert nodes[0].host[1] == tls_port

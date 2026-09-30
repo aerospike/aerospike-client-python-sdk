@@ -82,7 +82,7 @@ def _sdk_client():
         _record_on=False,
         _cmd_count_on=False,
     )
-    client._supports_mrt_blocking = lambda: False
+    client._supports_mrt = lambda: False
     return client
 
 

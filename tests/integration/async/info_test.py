@@ -255,7 +255,7 @@ async def test_secondary_index_details_nonexistent(session):
 async def test_get_cluster_size(session):
     """Test getting cluster size."""
     info = session.info()
-    cluster_size = await info.get_cluster_size()
+    cluster_size = info.get_cluster_size()
 
     assert isinstance(cluster_size, int)
     assert cluster_size > 0, "Should have at least one node"

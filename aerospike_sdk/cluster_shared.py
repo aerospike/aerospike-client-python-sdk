@@ -29,8 +29,11 @@ from typing import Any, Generic, List, Optional, Protocol, TypeVar, Union
 
 from typing import Self
 
-from aerospike_async import AuthMode, ClientPolicy
+from aerospike_async import AuthMode, ClientPolicy, Version
 
+from aerospike_sdk import capabilities
+from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.node_shared import NodeBase
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import SystemSettings
 
@@ -63,6 +66,8 @@ _TB = TypeVar("_TB", bound=_TlsBuilderLike)
 # the runtime-appropriate type.
 _S = TypeVar("_S")
 _TS = TypeVar("_TS")
+# The tree's node view: the two differ only in how ``info`` dispatches.
+_N = TypeVar("_N", bound=NodeBase)
 
 
 class Host:
@@ -697,16 +702,17 @@ class ClusterDefinitionBase(Generic[_TB]):
                 )
 
 
-class ClusterBase(Generic[_S, _TS]):
+class ClusterBase(Generic[_S, _TS, _N]):
     """Runtime-agnostic cluster behavior shared by the async and sync clusters.
 
-    Holds the session / transaction factories, which are pure delegation to the
-    owned SDK client and therefore identical across trees. Everything that
-    touches the event loop — connect/close, the context-manager protocol, and
-    the UDF / index terminals — stays per-leaf (async ``await`` vs blocking).
+    Holds the session / transaction factories and the cluster-membership reads,
+    which are pure delegation to the owned SDK client (or reads of its tended
+    node list) and therefore identical across trees. Everything that touches
+    the event loop — connect/close, the context-manager protocol, and the
+    UDF / index terminals — stays per-leaf (async ``await`` vs blocking).
 
-    Defining the factories once means the two trees cannot drift on how a
-    session or transaction is opened from a cluster.
+    Defining these once means the two trees cannot drift on how a session or
+    transaction is opened from a cluster, or on what membership it reports.
     """
 
     # Narrowed to ``Client`` / ``SyncClient`` by each leaf's ``__init__``;
@@ -714,6 +720,7 @@ class ClusterBase(Generic[_S, _TS]):
     # flagging the per-tree client's methods. The base only ever delegates to
     # it, so ``Any`` costs no precision on the surfaces users touch.
     _sdk_client: Any
+    _node_cls: type[_N]
 
     def create_session(self, behavior: Optional[Behavior] = None) -> _S:
         """Open a session on this cluster with optional behavior.
@@ -762,6 +769,152 @@ class ClusterBase(Generic[_S, _TS]):
             :meth:`create_session`: Non-transactional session.
         """
         return self._sdk_client.transaction(behavior)
+
+    # -- Cluster membership ----------------------------------------------------
+    # Read from the client's tended node list: no server round trip, so plain
+    # methods even on the async surface. They track membership as of the last
+    # tend.
+
+    @property
+    def cluster_name(self) -> Optional[str]:
+        """The cluster name the servers report.
+
+        When the connection was built with ``validate_cluster_name_is``, nodes
+        reporting any other name were rejected, so this equals the validated
+        name.
+
+        Example::
+
+            print(f"connected to {cluster.cluster_name}")   # connected to prod-east
+
+        Returns:
+            The server's ``cluster-name``, or ``None`` when the servers are
+            configured without one.
+
+        See Also:
+            :meth:`nodes`: The nodes making up this cluster.
+        """
+        return self._sdk_client.underlying_client.server_cluster_name
+
+    def nodes(self) -> list[_N]:
+        """The nodes currently in the cluster.
+
+        Example::
+
+            versions = {node.name: str(node.version) for node in cluster.nodes()}
+            if len(set(versions.values())) > 1:
+                print(f"rolling upgrade in progress: {versions}")
+
+        Returns:
+            One node view per active node.
+
+        Raises:
+            RuntimeError: If not connected.
+
+        See Also:
+            :meth:`get_node`: Look up one node by name.
+            :meth:`node_names`: Just the names.
+        """
+        node_cls = self._node_cls
+        return [node_cls(pac) for pac in self._sdk_client.underlying_client.nodes()]
+
+    def get_node(self, name: str) -> _N:
+        """Look up one node by its name.
+
+        Example::
+
+            node = cluster.get_node("BB9D4EB574A8DA6")
+            print(node.version, node.address)
+
+        Args:
+            name: The node name, as reported by a node's ``name`` or the
+                ``*_per_node`` info helpers.
+
+        Returns:
+            The matching node view.
+
+        Raises:
+            InvalidNodeError: If no active node has that name.
+            RuntimeError: If not connected.
+
+        See Also:
+            :meth:`nodes`: Every node at once.
+        """
+        try:
+            return self._node_cls(self._sdk_client.underlying_client.get_node(name))
+        except PacAerospikeError as e:
+            raise _convert_pac_exception(e) from e
+
+    def node_names(self) -> list[str]:
+        """The names of the nodes currently in the cluster.
+
+        Example::
+
+            names = cluster.node_names()
+            print(f"{len(names)} nodes: {', '.join(names)}")
+
+        Returns:
+            One name per active node.
+
+        Raises:
+            RuntimeError: If not connected.
+
+        See Also:
+            :meth:`nodes`: The nodes themselves.
+        """
+        return self._sdk_client.underlying_client.node_names()
+
+    # -- Server-capability probes ---------------------------------------------
+    # Guard feature use against the cluster's least-capable node before
+    # calling a feature that a mixed-version cluster may not fully support.
+    # Each folds the per-node version, so a single lagging node reports the
+    # feature unsupported. Read live from the tended node list, so the answer
+    # tracks current membership without a round trip.
+
+    def server_version(self) -> Optional[Version]:
+        """The minimum server version across connected nodes.
+
+        Returns:
+            The least-capable node's :class:`~aerospike_async.Version`, or
+            ``None`` when the cluster reports no nodes. Guarding against the
+            *minimum* is what makes a feature check safe on a mixed-version
+            or mid-upgrade cluster.
+
+        Example::
+
+            v = cluster.server_version()
+            if v is not None and (v.major, v.minor, v.patch) >= (8, 2, 0):
+                ...
+
+        See Also:
+            :meth:`nodes`: Each node's own version.
+        """
+        return capabilities.min_version(self._sdk_client._cluster_versions())
+
+    def supports_ael(self) -> bool:
+        """Whether every node parses server-compiled AEL (filters, exp reads/writes)."""
+        return capabilities.supports_ael(self._sdk_client._cluster_versions())
+
+    def supports_query_operations(self) -> bool:
+        """Whether every node supports read operations inside an index query."""
+        return capabilities.supports_query_operations(
+            self._sdk_client._cluster_versions())
+
+    def supports_string_operations(self) -> bool:
+        """Whether every node supports the server-side string operations.
+
+        Example::
+
+            if cluster.supports_string_operations():
+                await session.upsert(key).bin("s").str_append("!").execute()
+        """
+        return capabilities.supports_string_operations(
+            self._sdk_client._cluster_versions())
+
+    def supports_query_selection(self) -> bool:
+        """Whether every node supports server-led index selection (>= 8.2.0)."""
+        return capabilities.supports_query_selection(
+            self._sdk_client._cluster_versions())
 
     @property
     def is_connected(self) -> bool:

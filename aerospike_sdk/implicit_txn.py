@@ -61,8 +61,8 @@ def implicit_txn_enabled(sdk_client: Any, txn: Optional[Txn], mode: Optional[Mod
     explicit transaction active, and the
     ``implicit_batch_write_transactions`` setting enabled on the owning
     client. Callers must additionally confirm the batch contains writes
-    and that the cluster supports MRT (``_supports_mrt`` /
-    ``_supports_mrt_blocking`` on the SDK client) before wrapping.
+    and that the cluster supports MRT (``_supports_mrt`` on the SDK client)
+    before wrapping.
     """
     if txn is not None or mode is not Mode.SC or sdk_client is None:
         return False

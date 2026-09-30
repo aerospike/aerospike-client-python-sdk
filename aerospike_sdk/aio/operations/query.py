@@ -612,7 +612,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             if (
                 self._implicit_txn_precheck(all_keys)
                 and any(not isinstance(op, BatchReadOp) for op in all_ops)
-                and await self._sdk_client._supports_mrt()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
@@ -744,7 +744,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         try:
             if (
                 self._implicit_txn_precheck(spec.keys)
-                and await self._sdk_client._supports_mrt()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
@@ -1011,7 +1011,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         try:
             if (
                 self._implicit_txn_precheck(spec.keys)
-                and await self._sdk_client._supports_mrt()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
@@ -1039,7 +1039,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         try:
             if (
                 self._implicit_txn_precheck(spec.keys)
-                and await self._sdk_client._supports_mrt()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),
@@ -1081,7 +1081,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         try:
             if (
                 self._implicit_txn_precheck(spec.keys)
-                and await self._sdk_client._supports_mrt()
+                and self._sdk_client._supports_mrt()
             ):
                 batch_records = await run_in_implicit_txn(
                     self._client, self._implicit_txn_settings(),

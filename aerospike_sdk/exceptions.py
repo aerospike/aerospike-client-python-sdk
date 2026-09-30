@@ -208,7 +208,7 @@ class InvalidNodeError(AerospikeError):
     application-level data errors.
 
     Attributes:
-        result_code: Usually ``None``.
+        result_code: ``ResultCode.INVALID_NODE_ERROR`` (``-3``).
     """
 
 

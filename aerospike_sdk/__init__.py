@@ -58,7 +58,7 @@ from aerospike_async import (
     Version,
 )
 
-from aerospike_sdk.aio import AsyncPool, Cluster, Session, TransactionalSession, ClusterDefinition, Host
+from aerospike_sdk.aio import AsyncPool, Cluster, Session, TransactionalSession, ClusterDefinition, Host, Node
 from aerospike_sdk.aio.operations.query import QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import (
@@ -174,6 +174,7 @@ __all__ = [
     "MapWriteFlags",
     "MaxErrorRateError",
     "ModifyFlags",
+    "Node",
     "OperationResult",
     "QueryDuration",
     "QueryHint",

@@ -232,12 +232,12 @@ cluster's least-capable node.
 
 ```python
 async with ClusterDefinition("localhost", 3000).connect() as cluster:
-    if await cluster.supports_string_operations():
+    if cluster.supports_string_operations():
         await session.upsert(key).bin("s").str_append("!").execute()
     else:
         ...  # fall back
 
-    version = await cluster.server_version()   # minimum Version across the cluster
+    version = cluster.server_version()   # minimum Version across the cluster
     if version is not None and (version.major, version.minor, version.patch) >= (8, 2, 0):
         ...
 ```
@@ -245,9 +245,40 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
 The probes are `supports_ael()`, `supports_query_operations()`,
 `supports_string_operations()`, `supports_query_selection()`, and
 `server_version()` (the minimum version across all nodes, or `None` if the
-cluster reports no nodes). They are `async` on the async `Cluster` and plain
-methods on the sync
-`Cluster`; each reads live, so the answer reflects current cluster membership.
+cluster reports no nodes). They read the client's own view of the cluster, so
+they are plain methods on both the async and sync `Cluster`, and the answer
+reflects current cluster membership.
+
+## Inspecting Cluster Nodes
+
+`server_version()` gives the cluster minimum. To see each node, list them with
+`nodes()`, or look one up by name with `get_node()`. Each
+[`Node`](../api/node.md) reports its name, address, and version, and can run an
+info command against that node alone:
+
+```python
+async with ClusterDefinition("localhost", 3000).connect() as cluster:
+    print(f"{cluster.cluster_name}: {cluster.node_names()}")
+
+    versions = {node.name: str(node.version) for node in cluster.nodes()}
+    if len(set(versions.values())) > 1:
+        print(f"rolling upgrade in progress: {versions}")
+
+    node = cluster.get_node("BB9D4EB574A8DA6")
+    print(await node.info("statistics"))
+```
+
+`cluster_name` is the name the servers report, or `None` when they have none
+configured. If you connected with `validate_cluster_name_is(...)`, it is the
+same name, since nodes reporting any other name are rejected. Unknown names
+passed to `get_node()` raise `InvalidNodeError`.
+
+These reads come from the client's own view of the cluster, so they are plain
+methods on both the async and sync `Cluster`. Only `Node.info()` goes to the
+server, and it is the one you `await` on the async side.
+
+For an info command on every node at once, with parsed results, use
+[`InfoCommands`](../api/info.md) and its `*_per_node` variants.
 
 ## Sessions
 

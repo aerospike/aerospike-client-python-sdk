@@ -34,7 +34,7 @@ AEL. Check capability at runtime:
 
 ```python
 async with ClusterDefinition("localhost", 3000).connect() as cluster:
-    if await cluster.supports_ael():
+    if cluster.supports_ael():
         stream = await session.query(users).where("$.age > 18").execute()
     else:
         from aerospike_sdk import Exp

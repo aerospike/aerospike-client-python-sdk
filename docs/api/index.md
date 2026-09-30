@@ -11,6 +11,7 @@ The primary API. All operations are `async`/`await`.
 | [`ClusterDefinition`](cluster-definition.md) | Entry point — configure seeds/auth/TLS, then `connect()` |
 | [`AsyncPool`](async-pool.md) | Multi-loop async pool — N event loops × N cluster members for parallel async work (free-threaded Python) |
 | [`Cluster`](cluster.md) | Live cluster connection returned by `ClusterDefinition.connect()` |
+| [`Node`](node.md) | One server node: address, version, and per-node info commands |
 | [`Session`](session.md) | Scoped reads and writes with a fixed `Behavior` |
 | [`QueryBuilder`](query.md) | Build and execute read queries (point, set, batch) |
 | [`WriteSegmentBuilder`](write-segment.md) | Build and execute writes (upsert, insert, update, replace, delete) |
@@ -32,6 +33,7 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 |-------|-------------|
 | [`ClusterDefinition`](sync/cluster-definition.md) | Sync entry point — configure, then `connect()` |
 | [`Cluster`](sync/cluster.md) | Sync cluster handle |
+| [`Node`](sync/node.md) | Sync server node view |
 | [`Session`](sync/session.md) | Sync session |
 | [`QueryBuilder`](sync/query.md) | Sync query builder |
 | [`WriteSegmentBuilder`](sync/write-segment.md) | Sync write builder (upsert, insert, update, replace, delete) |
@@ -82,6 +84,7 @@ supports it — see the [AEL guide](../guide/expression-ael.md).
 
 async-pool
 cluster
+node
 session
 query
 write-segment
@@ -95,6 +98,7 @@ udf
 info
 transactional-session
 sync/cluster
+sync/node
 sync/session
 sync/query
 sync/write-segment

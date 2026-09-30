@@ -138,32 +138,6 @@ class Client(RoutingCapabilitiesMixin):
         # namespace-mode cache).
         self._supports_mrt_cache: Optional[bool] = None
 
-    async def _supports_mrt(self) -> bool:
-        """Whether every cluster node supports multi-record transactions.
-
-        An MRT spans the cluster, so the aggregate is all-nodes: a single
-        node below the MRT server version makes the answer ``False``.
-        """
-        if self._supports_mrt_cache is None:
-            if self._client is None:
-                return False
-            nodes = await self._client.nodes()
-            self._supports_mrt_cache = bool(nodes) and all(
-                node.version.supports_mrt() for node in nodes
-            )
-        return self._supports_mrt_cache
-
-    def _supports_mrt_blocking(self) -> bool:
-        """Sync sibling of :meth:`_supports_mrt`."""
-        if self._supports_mrt_cache is None:
-            if self._client is None:
-                return False
-            nodes = self._client.nodes_blocking()
-            self._supports_mrt_cache = bool(nodes) and all(
-                node.version.supports_mrt() for node in nodes
-            )
-        return self._supports_mrt_cache
-
     def _apply_sdk_settings(self, settings: SystemSettings) -> None:
         """Adopt reloaded settings, applying the ones that act on a live client.
 
@@ -218,7 +192,7 @@ class Client(RoutingCapabilitiesMixin):
         except PacAerospikeError as exc:
             raise _convert_pac_exception(exc) from exc
         self._connected = True
-        await self._warm_routing_capabilities()
+        self._warm_routing_capabilities()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -290,7 +264,7 @@ class Client(RoutingCapabilitiesMixin):
         except PacAerospikeError as exc:
             raise _convert_pac_exception(exc) from exc
         self._connected = True
-        self._warm_routing_capabilities_blocking()
+        self._warm_routing_capabilities()
         log.info(
             "Connected seeds=%r", self._seeds,
             extra={"aerospike.cluster": self._policy.cluster_name},
@@ -359,8 +333,8 @@ class Client(RoutingCapabilitiesMixin):
             async with Client("localhost:3000") as client:
                 pac = client.underlying_client
                 response = await pac.info("sindex-list")
-                nodes = await pac.nodes()
-                node = await pac.get_node(nodes[0].name)
+                nodes = pac.nodes()
+                node = pac.get_node(nodes[0].name)
                 response = await node.info("build")
 
         Returns:

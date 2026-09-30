@@ -75,7 +75,7 @@ def sc_namespace(cluster_sc):
 @pytest.fixture
 def session(cluster_sc, sc_namespace):
     # MRT support probe has no Cluster surface; reach through to the client.
-    if not cluster_sc._client._supports_mrt_blocking():
+    if not cluster_sc._client._supports_mrt():
         pytest.skip("cluster does not support multi-record transactions")
     sess = cluster_sc.create_session()
     try:

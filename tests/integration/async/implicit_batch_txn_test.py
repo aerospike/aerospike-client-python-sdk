@@ -71,7 +71,7 @@ async def sc_namespace(cluster_sc):
 @pytest_asyncio.fixture(loop_scope="session")
 async def session(cluster_sc, sc_namespace):
     """Session on the SC cluster; skips when the cluster cannot run MRTs."""
-    if not await cluster_sc._client._supports_mrt():
+    if not cluster_sc._client._supports_mrt():
         pytest.skip("cluster does not support multi-record transactions")
     sess = cluster_sc.create_session()
     try:

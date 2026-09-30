@@ -329,14 +329,14 @@ class InfoCommands(InfoCommandsBase):
         all_responses = await self._session._client._client.info_on_all_nodes("cluster-stable")
         return self._all_nodes_stable(all_responses)
 
-    async def get_cluster_size(self) -> int:
+    def get_cluster_size(self) -> int:
         """
         Get the number of nodes in the cluster.
 
         Returns:
             The number of nodes in the cluster.
         """
-        node_names = await self._session._client._client.node_names()
+        node_names = self._session._client._client.node_names()
         return len(node_names)
 
     async def info(self, command: str) -> Dict[str, str]:

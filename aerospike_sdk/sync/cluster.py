@@ -23,9 +23,8 @@ import types
 import typing
 from typing import Any, Optional
 
-from aerospike_async import ClientPolicy, UDFLang, Version
+from aerospike_async import ClientPolicy, UDFLang
 
-from aerospike_sdk import capabilities
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import ConnectionError, ResultCode
 from aerospike_sdk.metrics.export import (
@@ -44,6 +43,7 @@ from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 from aerospike_sdk.sync.client import SyncClient
+from aerospike_sdk.sync.node import Node
 
 if typing.TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
@@ -53,7 +53,7 @@ if typing.TYPE_CHECKING:
     from aerospike_sdk.sync.transactional_session import TransactionalSession  # noqa: F401
 
 
-class Cluster(ClusterBase["Session", "TransactionalSession"]):
+class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     """Synchronous cluster handle from ``sync.cluster_definition.ClusterDefinition.connect``.
 
     Mirrors :class:`~aerospike_sdk.aio.cluster.Cluster` but uses
@@ -71,7 +71,9 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
     See Also:
         :class:`~aerospike_sdk.aio.cluster.Cluster`
     """
-    
+
+    _node_cls = Node
+
     def __init__(self, sdk_client: SyncClient) -> None:
         """
         Initialize a Cluster instance.
@@ -269,44 +271,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         """
         return self._sdk_client._list_indexes()
 
-    # -- Server-capability probes ---------------------------------------------
-    # Guard feature use against the cluster's least-capable node. Sync
-    # counterparts of the async Cluster probes; see there for detail.
-
-    def server_version(self) -> Optional[Version]:
-        """The minimum server version across connected nodes.
-
-        Returns:
-            The least-capable node's :class:`~aerospike_async.Version`, or
-            ``None`` when the cluster reports no nodes.
-
-        Example::
-
-            v = cluster.server_version()
-            if v is not None and (v.major, v.minor, v.patch) >= (8, 2, 0):
-                ...
-        """
-        return capabilities.min_version(self._sdk_client._cluster_versions_blocking())
-
-    def supports_ael(self) -> bool:
-        """Whether every node parses server-compiled AEL (filters, exp reads/writes)."""
-        return capabilities.supports_ael(self._sdk_client._cluster_versions_blocking())
-
-    def supports_query_operations(self) -> bool:
-        """Whether every node supports read operations inside an index query."""
-        return capabilities.supports_query_operations(
-            self._sdk_client._cluster_versions_blocking())
-
-    def supports_string_operations(self) -> bool:
-        """Whether every node supports the server-side string operations."""
-        return capabilities.supports_string_operations(
-            self._sdk_client._cluster_versions_blocking())
-
-    def supports_query_selection(self) -> bool:
-        """Whether every node supports server-led index selection (>= 8.2.0)."""
-        return capabilities.supports_query_selection(
-            self._sdk_client._cluster_versions_blocking())
-
     # -- Metrics ---------------------------------------------------------------
     # Collection lives in the client core and is cluster-scoped; these
     # configure it and pull snapshots.
@@ -494,7 +458,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession"]):
         return MetricsSnapshot(
             pac.metrics(),
             policy=self._metrics_policy,
-            nodes=pac.nodes_blocking(),
+            nodes=pac.nodes(),
             usage=client._usage_counters.totals(),
             command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
             # With no application identity of its own, the snapshot reports the

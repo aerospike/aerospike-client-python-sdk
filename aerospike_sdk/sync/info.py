@@ -231,7 +231,7 @@ class InfoCommands(InfoCommandsBase):
 
     def get_cluster_size(self) -> int:
         """Number of cluster nodes."""
-        return len(self._pac.node_names_blocking())
+        return len(self._pac.node_names())
 
     def info(self, command: str) -> Dict[str, str]:
         """Raw info command against one random node."""

@@ -94,20 +94,33 @@ async def test_create_index_with_collection_type(cluster):
     except Exception:
         pass
 
+async def _index_exists_per_node(cluster, index_name):
+    """``{node name: "true" | "false"}`` from each node's own ``sindex-exists``."""
+    result = {}
+    command = f"sindex-exists:namespace={general_namespace()};indexname={index_name}"
+    for node in cluster.nodes():
+        result[node.name] = (await node.info(command))[command]
+    return result
+
 async def test_drop_index(cluster):
-    """Test dropping an index."""
+    """Create and drop both reach every node once their tasks complete."""
     index_name = "test_drop_idx"
+    session = cluster.create_session()
     # Clean up any existing index
     try:
-        await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
+        await session.index(general_namespace(), "test").named(index_name).drop()
     except Exception:
         pass
 
-    # Create index first
-    await cluster.create_session().index(general_namespace(), "test").on_bin("age").named(index_name).integer().create()
+    task = await session.index(general_namespace(), "test").on_bin("age").named(index_name).integer().create()
+    await task.wait_till_complete()
+    exists = await _index_exists_per_node(cluster, index_name)
+    assert set(exists.values()) == {"true"}, exists
 
-    # Drop the index
-    await cluster.create_session().index(general_namespace(), "test").named(index_name).drop()
+    task = await session.index(general_namespace(), "test").named(index_name).drop()
+    await task.wait_till_complete()
+    exists = await _index_exists_per_node(cluster, index_name)
+    assert set(exists.values()) == {"false"}, exists
 
 async def test_drop_nonexistent_index(cluster):
     """Test dropping a non-existent index (should not raise error)."""

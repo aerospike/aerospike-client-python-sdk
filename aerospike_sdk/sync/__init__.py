@@ -18,6 +18,7 @@
 from aerospike_sdk.sync.cluster import Cluster
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition, Host
 from aerospike_sdk.sync.info import InfoCommands
+from aerospike_sdk.sync.node import Node
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder
 from aerospike_sdk.sync.record_stream import RecordStream
@@ -35,6 +36,7 @@ __all__ = [
     "Host",
     "IndexBuilder",
     "InfoCommands",
+    "Node",
     "QueryBuilder",
     "RecordStream",
     "Session",

@@ -660,9 +660,9 @@ class _QueryBuilderBase:
         the has-writes condition is implied; this checks SC namespace, no
         explicit txn (and no ``with_txn(None)`` opt-out), the setting, and
         that every key shares the builder's namespace. Callers confirm
-        cluster MRT capability afterward — async paths via
-        ``await sdk_client._supports_mrt()``, so the coroutine is only
-        created once the cheap conditions pass.
+        cluster MRT capability afterward via ``sdk_client._supports_mrt()``,
+        a cached node-list read, so it only runs once the cheap conditions
+        pass.
         """
         if self._txn_opted_out or not implicit_txn_enabled(
             self._sdk_client, self._txn, self._namespace_mode
