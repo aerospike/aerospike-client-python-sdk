@@ -24,6 +24,7 @@ from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 from aerospike_sdk.error_strategy import (
     ErrorStrategy,
     _ErrorDisposition,
@@ -225,9 +226,8 @@ class TestRecordResultException:
             rr.record_or_raise()
 
     def test_client_side_error_row_is_not_ok(self):
-        # A failure attached to a row leaves the row's own code at OK: the
-        # attached exception is what makes the row a failure, and reporting
-        # it as success would claim a write that never happened.
+        # An attached exception makes the row a failure whatever its code
+        # says: reporting it as success would claim a write that never happened.
         exc = AerospikeError("client rejected the command")
         assert exc.result_code is None
         rr = RecordResult(
@@ -253,6 +253,42 @@ class TestRecordResultException:
         )
         with pytest.raises(TimeoutError, match="client deadline"):
             rr.as_bool()
+
+
+# ---------------------------------------------------------------------------
+# Error funnels: a failure without a result code
+# ---------------------------------------------------------------------------
+
+class TestCodeLessFailureRows:
+    """A failure the client cannot attribute to a code (here a plain
+    ``ValueError`` escaping PAC) reports ``CLIENT_ERROR``, never ``OK``."""
+
+    async def test_single_key_in_stream_row(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        stream = qb._handle_error(
+            _key(), ValueError("bad argument"), _ErrorDisposition.IN_STREAM, None,
+        )
+        [row] = await stream.collect()
+        assert row.result_code == ResultCode.CLIENT_ERROR
+        assert isinstance(row.exception, AerospikeError)
+
+    def test_batch_in_stream_rows(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        rows = qb._handle_batch_error_list(
+            [_key(1), _key(2)], ValueError("bad argument"),
+            _ErrorDisposition.IN_STREAM, None,
+        )
+        assert [r.result_code for r in rows] == [ResultCode.CLIENT_ERROR] * 2
+        assert all(not r.is_ok for r in rows)
+
+    def test_blocking_single_key_in_stream_row(self):
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        [row] = qb._handle_error_blocking_singlekey(
+            _key(), ValueError("bad argument"), "upsert",
+            _ErrorDisposition.IN_STREAM, None,
+        )
+        assert row.result_code == ResultCode.CLIENT_ERROR
+        assert isinstance(row.exception, AerospikeError)
 
 
 # ---------------------------------------------------------------------------

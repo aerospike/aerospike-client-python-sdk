@@ -1394,7 +1394,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             else None
         )
         pfc_exc = _convert_pac_exception(exc, hint=hint)
-        rc = pfc_exc.result_code or ResultCode.OK
+        rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:
             if op_type in _FAST_WRITES_REQUIRING_KEY:

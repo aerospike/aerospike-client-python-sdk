@@ -77,11 +77,12 @@ async for result in stream:
         print(f"Key failed: {result.exception or result.result_code}")
 ```
 
-Always branch on `is_ok`, not on `result_code`. A row that failed client-side —
-before the request reached the server — has no server result code, so its
-`result_code` reads `OK` and the failure is carried by `exception` instead.
-`is_ok` accounts for both, which is why the snippet above reports `exception`
-first.
+Branch on `is_ok`: it checks both `result_code` and `exception`. A row that
+failed client-side — before the server answered — carries a negative client
+code such as `ResultCode.CLIENT_ERROR` or `ResultCode.SERVER_NOT_AVAILABLE`
+(a client-side deadline reports `ResultCode.TIMEOUT`, the same code a server
+timeout uses) alongside the `exception`, which holds the detail. That is why the
+snippet above reports `exception` first.
 
 Or raise on any failure:
 

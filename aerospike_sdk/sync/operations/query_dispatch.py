@@ -903,7 +903,7 @@ class _BlockingQueryDispatch:
         :class:`RecordResult`.
         """
         pfc_exc = _convert_pac_exception(exc)
-        rc = pfc_exc.result_code or ResultCode.OK
+        rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         in_doubt = pfc_exc.in_doubt
         _cmd_failed(op_type, rc, pfc_exc, self._client)
 

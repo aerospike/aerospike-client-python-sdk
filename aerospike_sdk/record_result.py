@@ -46,10 +46,9 @@ class RecordResult:
         key: Target :class:`~aerospike_async.Key` for this row.
         record: :class:`~aerospike_async.Record` payload, or ``None`` if not
             returned (errors, not found, or UDF error rows).
-        result_code: Server :class:`~aerospike_async.exceptions.ResultCode`.
-            Reads ``OK`` on client-side failure rows too, since those never
-            reach the server to earn a code — test :attr:`is_ok` rather than
-            this field when deciding whether a row succeeded.
+        result_code: The row's :class:`~aerospike_async.exceptions.ResultCode`:
+            the server's code, or a client code (such as ``CLIENT_ERROR``) for
+            a row that failed before the server answered.
         in_doubt: ``True`` when a write may have completed despite an error.
         index: Batch position, or ``0`` / ``-1`` depending on origin.
         exception: Embedded :class:`~aerospike_sdk.exceptions.AerospikeError`
@@ -154,13 +153,11 @@ class RecordResult:
         """Whether this row succeeded.
 
         ``True`` only when :attr:`result_code` is ``ResultCode.OK`` *and* no
-        :attr:`exception` is attached. Client-side failures carry no server
-        result code, so a row reporting one is a failure even though its
-        code reads ``OK``.
+        :attr:`exception` is attached.
 
         Returns:
             ``True`` on success; ``False`` for any other result code, and for
-            client-side failures carrying an :attr:`exception`.
+            any row carrying an :attr:`exception`.
 
         Example::
 
@@ -383,7 +380,7 @@ def batch_failure_records_to_results(
             results.append(RecordResult(
                 key=br.key,
                 record=None,
-                result_code=aggregate_exc.result_code or ResultCode.OK,
+                result_code=aggregate_exc.result_code or ResultCode.CLIENT_ERROR,
                 in_doubt=br.in_doubt or aggregate_exc.in_doubt,
                 index=i,
                 exception=aggregate_exc,

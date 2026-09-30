@@ -245,6 +245,7 @@ class TestBatchFailureRecordsToResults:
         results = batch_failure_records_to_results([br], agg)
         row = results[0]
         assert not row.is_ok
+        assert row.result_code == ResultCode.CLIENT_ERROR
         assert row.exception is agg
         assert row.in_doubt is True  # inherited from the aggregate
 
