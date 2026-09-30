@@ -62,7 +62,7 @@ class TestMetricsLifecycle:
         assert metrics_cluster.metrics_enabled() is False
 
     async def test_snapshot_before_enable_is_empty(self, metrics_cluster):
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         assert snapshot.total_nodes >= 1
         assert snapshot.latency(LatencyType.READ).count == 0
 
@@ -73,7 +73,7 @@ class TestMetricsSnapshot:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         await _do_some_ops(metrics_cluster, count=5)
 
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         assert snapshot.total_nodes >= 1
         assert snapshot.open_connections >= 1
         assert len(snapshot.nodes) == snapshot.total_nodes
@@ -113,7 +113,7 @@ class TestMetricsSnapshot:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         await _do_some_ops(metrics_cluster, count=2)
 
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         host = next(iter(snapshot.nodes))
         node_reads = snapshot.latency(LatencyType.READ, node=host)
         assert node_reads.count >= 0  # single node clusters: same as aggregate
@@ -134,7 +134,7 @@ class TestMetricsSnapshot:
         await _do_some_ops(metrics_cluster, count=5)
 
         hist = (
-            await metrics_cluster.metrics()
+            metrics_cluster.metrics()
         ).cluster_aggregated.command_histogram(CommandType.GET)
         assert hist.count >= 5
         # Local round trips are sub-millisecond; at least the fastest op
@@ -154,7 +154,7 @@ class TestMetricsSnapshot:
         await _do_some_ops(metrics_cluster, count=5)
 
         hist = (
-            await metrics_cluster.metrics()
+            metrics_cluster.metrics()
         ).cluster_aggregated.command_histogram(CommandType.GET)
         assert hist.count >= 5
         # A network round trip is never <= 1 microsecond: everything the
@@ -174,10 +174,10 @@ class TestMetricsSnapshot:
         # Baseline after enabling: a histogram-shape change on enable resets
         # the accumulated counts, so capture from the post-reshape state.
         metrics_cluster.enable_metrics(policy)
-        before = (await metrics_cluster.metrics()).latency(LatencyType.READ).count
+        before = metrics_cluster.metrics().latency(LatencyType.READ).count
         await _do_some_ops(metrics_cluster, count=3)
 
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         assert snapshot.latency(LatencyType.READ).count == before
         metrics_cluster.disable_metrics()
 
@@ -185,7 +185,7 @@ class TestMetricsSnapshot:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         await _do_some_ops(metrics_cluster, count=1)
 
-        d = (await metrics_cluster.metrics()).to_dict()
+        d = metrics_cluster.metrics().to_dict()
         assert d["total_nodes"] >= 1
         agg = d["cluster_aggregated_metrics"]
         assert agg["latency_unit"] == "us"
@@ -200,7 +200,7 @@ class TestMetricsSnapshot:
             c.enable_metrics(MetricsPolicy())
             await _do_some_ops(c, count=3)
 
-            snapshot = await c.metrics()
+            snapshot = c.metrics()
             agg = snapshot.cluster_aggregated
             assert agg.command_histogram(CommandType.GET).count == 0
             assert agg.detailed_metric(general_namespace(), CommandType.GET) is None
@@ -221,7 +221,7 @@ class TestMetricsSnapshot:
             key = DataSet.of(general_namespace(), "sdk_metrics_udf").id("k")
             await session.upsert(key).put({"n": 1}).execute()
             await session.execute_udf(key).function("record_example", "readBin").passing("n").execute()
-            snapshot = await cluster.metrics()
+            snapshot = cluster.metrics()
             counts = snapshot.usage
             assert counts.get("feature.udf.record", 0) == 1, counts
             assert counts.get("feature.api.deferred", 0) == 2, counts
@@ -238,7 +238,7 @@ class TestMetricsSnapshot:
             c.enable_metrics(MetricsPolicy(operational_enabled=True))
             await _do_some_ops(c, count=3)
 
-            snapshot = await c.metrics()
+            snapshot = c.metrics()
             detail = snapshot.cluster_aggregated.detailed_metric(
                 general_namespace(), CommandType.GET
             )
@@ -255,7 +255,7 @@ class TestMetricsSnapshot:
         )
         await _do_some_ops(metrics_cluster, count=2)
 
-        document = (await metrics_cluster.metrics()).to_canonical_dict()
+        document = metrics_cluster.metrics().to_canonical_dict()
         assert document["labels"]["team"] == "billing"
         assert document["labels"]["region"] == "us-west"
         # Node identity is promoted to its own fields rather than left in the
@@ -277,7 +277,7 @@ class TestMetricsSnapshot:
         rows = [row async for row in result]
         assert len(rows) == 5
 
-        agg = (await metrics_cluster.metrics()).cluster_aggregated
+        agg = metrics_cluster.metrics().cluster_aggregated
         batch_reads = agg.command_histogram(CommandType.BATCH_READ)
         assert batch_reads.count >= 1, "a multi-key read should record as BATCH_READ"
         # One batch call is one measurement, not one per key.
@@ -302,7 +302,7 @@ class TestMetricsSnapshot:
         for _ in range(reads):
             await session.get(key)
 
-        document = (await metrics_cluster.metrics()).to_canonical_dict()
+        document = metrics_cluster.metrics().to_canonical_dict()
         namespaces = [
             ns
             for node in document["nodes"]
@@ -363,7 +363,7 @@ class TestMetricsExport:
             await session.upsert(ds.id(i)).put({"n": i}).execute()
             await (await session.query(ds.id(i)).execute()).first()
 
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         agg = snapshot.cluster_aggregated
         namespaces = agg.detailed_namespaces()
         assert general_namespace() in namespaces
@@ -416,7 +416,7 @@ class TestMetricsExport:
             await session.upsert(ds.id(i)).put({"n": i}).execute()
             await (await session.query(ds.id(i)).execute()).first()
 
-        document = (await metrics_cluster.metrics()).to_canonical_dict()
+        document = metrics_cluster.metrics().to_canonical_dict()
         nodes = document["nodes"]
         if len(nodes) < 2:
             pytest.skip(f"cluster has {len(nodes)} node(s); needs 2+")
@@ -470,7 +470,7 @@ class TestMetricsExport:
         for i in range(5):
             await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-        snapshot = await metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics()
         hosts = [
             f"{n['address']}:{n['port']}"
             for n in snapshot.to_canonical_dict().get("nodes", [])
@@ -493,8 +493,8 @@ class TestMetricsExport:
                 self._real = real
                 self._exporters = [recorder]
 
-            async def metrics(self):
-                real = await self._real.metrics()
+            def metrics(self):
+                real = self._real.metrics()
                 return MetricsSnapshot(real._pac, policy=real._policy, nodes=[])
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
@@ -533,7 +533,7 @@ class TestMetricsExport:
         try:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             await _do_some_ops(metrics_cluster, count=3)
-            exporter.export(await metrics_cluster.metrics())
+            exporter.export(metrics_cluster.metrics())
         finally:
             exporter.close()
             metrics_cluster.disable_metrics()
@@ -558,7 +558,7 @@ class TestCommandCount:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         session = metrics_cluster.create_session()
         ds = DataSet.of(general_namespace(), "cmd_count")
-        base = (await metrics_cluster.metrics()).command_count
+        base = metrics_cluster.metrics().command_count
 
         for i in range(3):
             await session.upsert(ds.id(i)).put({"n": i}).execute()
@@ -567,12 +567,12 @@ class TestCommandCount:
         batch = await session.query(ds.id(0), ds.id(1), ds.id(2)).execute()
         assert len(await batch.collect()) == 3
 
-        after = (await metrics_cluster.metrics()).command_count
+        after = metrics_cluster.metrics().command_count
         # Three writes, one point read, one batch read: the batch is one
         # call however many keys it carries.
         assert after - base == 5
 
-        doc = (await metrics_cluster.metrics()).to_canonical_dict()
+        doc = metrics_cluster.metrics().to_canonical_dict()
         assert doc["cluster"]["command_count"] == after
         # Derived from the per-node counters the client core keeps.
         assert doc["cluster"]["command_retries"] >= 0
@@ -586,6 +586,6 @@ class TestCommandCount:
         await session.upsert(ds.id(1)).put({"n": 1}).execute()
         metrics_cluster.disable_metrics()
 
-        frozen = (await metrics_cluster.metrics()).command_count
+        frozen = metrics_cluster.metrics().command_count
         await session.upsert(ds.id(2)).put({"n": 2}).execute()
-        assert (await metrics_cluster.metrics()).command_count == frozen
+        assert metrics_cluster.metrics().command_count == frozen

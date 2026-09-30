@@ -38,7 +38,7 @@ cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
 
 # ... application traffic ...
 
-snapshot = await cluster.metrics()   # sync: cluster.metrics()
+snapshot = cluster.metrics()   # plain on both the async and sync Cluster
 reads = snapshot.latency(LatencyType.READ)
 print(f"{reads.count} reads, avg {reads.average:.1f} ms")
 ```
@@ -173,7 +173,7 @@ entry of `nodes` for one node; both expose the same methods:
 ```python
 from aerospike_sdk.metrics import CommandType
 
-snapshot = await cluster.metrics()
+snapshot = cluster.metrics()
 
 agg = snapshot.cluster_aggregated
 for namespace in agg.detailed_namespaces():
@@ -238,7 +238,7 @@ cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
 
 # ... application traffic ...
 
-snapshot = await cluster.metrics()
+snapshot = cluster.metrics()
 print(snapshot.usage)
 # {'feature.api.deferred': 1042, 'feature.shape.point': 900,
 #  'feature.shape.batch': 142, 'feature.filter.ael': 37}

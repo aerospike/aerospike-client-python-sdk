@@ -43,7 +43,7 @@ async def part1_collect_and_read(cluster) -> None:
     )
     await _traffic(cluster, 25)
 
-    snapshot = await cluster.metrics()
+    snapshot = cluster.metrics()
     print(f"  nodes={snapshot.total_nodes} open_connections={snapshot.open_connections}")
 
     for kind in (LatencyType.READ, LatencyType.WRITE):
@@ -79,7 +79,7 @@ async def part2_feature_usage(cluster) -> None:
     cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
     await _traffic(cluster, 10)
 
-    snapshot = await cluster.metrics()
+    snapshot = cluster.metrics()
     for name, count in sorted(snapshot.usage.items()):
         print(f"  {name:32s} {count}")
     if not snapshot.usage:
@@ -116,7 +116,7 @@ async def part3_export(cluster) -> None:
     # exporter would have been handed.
     cluster.enable_metrics(MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS))
     await _traffic(cluster, 5)
-    await exporter.export(await cluster.metrics())
+    await exporter.export(cluster.metrics())
 
     cluster.disable_metrics()
     cluster.remove_exporter(exporter)

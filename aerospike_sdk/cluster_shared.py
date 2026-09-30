@@ -33,6 +33,9 @@ from aerospike_async import AuthMode, ClientPolicy, Version
 
 from aerospike_sdk import capabilities
 from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
+from aerospike_sdk.metrics.snapshot import ProcessSampler
+from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.node_shared import NodeBase
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import SystemSettings
@@ -721,6 +724,9 @@ class ClusterBase(Generic[_S, _TS, _N]):
     # it, so ``Any`` costs no precision on the surfaces users touch.
     _sdk_client: Any
     _node_cls: type[_N]
+    # Set by each leaf's ``__init__`` / ``enable_metrics``; read by :meth:`metrics`.
+    _metrics_policy: Optional[MetricsPolicy]
+    _process_sampler: ProcessSampler
 
     def create_session(self, behavior: Optional[Behavior] = None) -> _S:
         """Open a session on this cluster with optional behavior.
@@ -915,6 +921,44 @@ class ClusterBase(Generic[_S, _TS, _N]):
         """Whether every node supports server-led index selection (>= 8.2.0)."""
         return capabilities.supports_query_selection(
             self._sdk_client._cluster_versions())
+
+    # -- Metrics snapshot -------------------------------------------------------
+    # The core assembles the snapshot from in-memory per-node state: no socket
+    # is touched, so this is a plain call on both surfaces. PAC releases the
+    # GIL for the copy.
+
+    def metrics(self) -> MetricsSnapshot:
+        """Snapshot the accumulated cluster metrics.
+
+        Values are cumulative since metrics were enabled (connection gauges
+        are point-in-time). Snapshotting drains and aggregates per-node
+        state, so poll at an export interval rather than per operation.
+
+        Returns:
+            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; empty (zeroed) if
+            metrics were never enabled.
+
+        Example::
+
+            snapshot = cluster.metrics()
+            reads = snapshot.latency(LatencyType.READ)
+            print(f"{reads.count} reads, avg {reads.average:.1f}")
+        """
+        client = self._sdk_client
+        pac = client.underlying_client
+        client_policy = client._policy
+        return MetricsSnapshot(
+            pac.metrics(),
+            policy=self._metrics_policy,
+            nodes=pac.nodes(),
+            usage=client._usage_counters.totals(),
+            command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
+            # With no application identity of its own, the snapshot reports the
+            # authenticated user -- the identity the server already knows this
+            # connection by, and so the one that joins the two views.
+            app_id=client_policy.application_id or client_policy.user,
+            process=self._process_sampler.sample(),
+        )
 
     @property
     def is_connected(self) -> bool:

@@ -471,7 +471,7 @@ class TestAsyncExportTimer:
             def __init__(self):
                 self._exporters = [Bad(), Good()]
 
-            async def metrics(self):
+            def metrics(self):
                 return _StubSnapshot(_DOC)
 
         timer = AsyncMetricsExportTimer(Cluster(), 3600.0)

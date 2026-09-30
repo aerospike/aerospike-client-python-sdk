@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import weakref
 
-import asyncio
 import types
 import typing
 from typing import Any, Optional
@@ -38,11 +37,9 @@ from aerospike_sdk.metrics.export import (
 )
 from aerospike_sdk.metrics import (
     MetricsPolicy,
-    MetricsSnapshot,
     policy_from_settings,
 )
 from aerospike_sdk.metrics.snapshot import ProcessSampler
-from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 
@@ -155,7 +152,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         """
         await sdk_client.connect()
 
-        if not await sdk_client.underlying_client.is_connected():
+        if not sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
                 f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected",
@@ -450,39 +447,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
         return self._sdk_client.underlying_client.metrics_enabled()
-
-    async def metrics(self) -> MetricsSnapshot:
-        """Snapshot the accumulated cluster metrics.
-
-        Values are cumulative since metrics were enabled (connection gauges
-        are point-in-time). Snapshotting drains and aggregates per-node
-        state, so poll at an export interval rather than per operation.
-
-        Returns:
-            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; empty (zeroed) if
-            metrics were never enabled.
-
-        Example::
-
-            snapshot = await cluster.metrics()
-            reads = snapshot.latency(LatencyType.READ)
-            print(f"{reads.count} reads, avg {reads.average:.1f}")
-        """
-        pac = self._sdk_client.underlying_client
-        raw = await asyncio.to_thread(pac.metrics)
-        nodes = pac.nodes()
-        client = self._sdk_client
-        client_policy = client._policy
-        return MetricsSnapshot(
-            raw, policy=self._metrics_policy, nodes=nodes,
-            usage=client._usage_counters.totals(),
-            command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
-            # With no application identity of its own, the snapshot reports the
-            # authenticated user -- the identity the server already knows this
-            # connection by, and so the one that joins the two views.
-            app_id=client_policy.application_id or client_policy.user,
-            process=self._process_sampler.sample(),
-        )
 
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.

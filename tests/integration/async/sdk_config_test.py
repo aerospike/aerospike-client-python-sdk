@@ -154,7 +154,7 @@ async def test_metrics_hot_reload_applies_the_whole_policy(aerospike_host, tmp_p
             for i in range(3):
                 await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-            document = (await cluster.metrics()).to_canonical_dict()
+            document = cluster.metrics().to_canonical_dict()
             # Present only if the cluster took the policy, not just the flag.
             assert document["latency_columns"] == 24
             assert document["latency_unit"] == "microseconds"
@@ -179,7 +179,7 @@ async def test_usage_counters_enable_from_the_config_file(aerospike_host, tmp_pa
             for i in range(3):
                 await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-            usage = (await cluster.metrics()).usage
+            usage = cluster.metrics().usage
             assert usage, "usage counters should be populated"
             assert any(name.startswith("feature.") for name in usage)
 

@@ -472,7 +472,7 @@ class TestConnectValidationCarriesACode:
         from aerospike_sdk.exceptions import ConnectionError, ResultCode
 
         class _Pac:
-            async def is_connected(self):
+            def is_connected(self):
                 return False
 
         class _Client:
@@ -494,7 +494,7 @@ class TestConnectValidationCarriesACode:
         from aerospike_sdk.exceptions import ConnectionError, ResultCode
 
         class _Pac:
-            def is_connected_blocking(self):
+            def is_connected(self):
                 return False
 
         class _Client:

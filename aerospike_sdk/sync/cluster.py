@@ -35,11 +35,9 @@ from aerospike_sdk.metrics.export import (
 )
 from aerospike_sdk.metrics import (
     MetricsPolicy,
-    MetricsSnapshot,
     policy_from_settings,
 )
 from aerospike_sdk.metrics.snapshot import ProcessSampler
-from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 from aerospike_sdk.sync.client import SyncClient
@@ -125,9 +123,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
             sdk_client._sdk_settings = sdk_settings
         sdk_client.connect()
 
-        # Bypass asyncio for the post-connect sanity check — `is_connected`
-        # on PAC is a non-blocking synchronous probe (no I/O).
-        if not sdk_client._pac_client().is_connected_blocking():
+        if not sdk_client._pac_client().is_connected():
             sdk_client.close()
             raise ConnectionError(
                 f"Connected to seeds '{seeds}' but cluster reports not connected",
@@ -434,39 +430,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
         return self._sdk_client.underlying_client.metrics_enabled()
-
-    def metrics(self) -> MetricsSnapshot:
-        """Snapshot the accumulated cluster metrics.
-
-        Values are cumulative since metrics were enabled (connection gauges
-        are point-in-time). Snapshotting drains and aggregates per-node
-        state, so poll at an export interval rather than per operation.
-
-        Returns:
-            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; empty (zeroed) if
-            metrics were never enabled.
-
-        Example::
-
-            snapshot = cluster.metrics()
-            reads = snapshot.latency(LatencyType.READ)
-            print(f"{reads.count} reads, avg {reads.average:.1f}")
-        """
-        client = self._sdk_client
-        pac = client.underlying_client
-        client_policy = client._policy
-        return MetricsSnapshot(
-            pac.metrics(),
-            policy=self._metrics_policy,
-            nodes=pac.nodes(),
-            usage=client._usage_counters.totals(),
-            command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
-            # With no application identity of its own, the snapshot reports the
-            # authenticated user -- the identity the server already knows this
-            # connection by, and so the one that joins the two views.
-            app_id=client_policy.application_id or client_policy.user,
-            process=self._process_sampler.sample(),
-        )
 
     def close(self) -> None:
         """

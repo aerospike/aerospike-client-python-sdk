@@ -154,7 +154,7 @@ class MetricsSnapshot:
 
         cluster.enable_metrics()
         ...
-        snapshot = await cluster.metrics()
+        snapshot = cluster.metrics()
         reads = snapshot.latency(LatencyType.READ)
         print(f"{reads.count} reads, avg {reads.average:.1f} {reads.latency_unit}")
         for host, node in snapshot.nodes.items():
@@ -263,7 +263,7 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = await cluster.metrics()
+            snapshot = cluster.metrics()
             retries_per_call = snapshot.command_retries / max(snapshot.command_count, 1)
         """
         aggregated = self._pac.cluster_aggregated
@@ -323,7 +323,7 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = await cluster.metrics()
+            snapshot = cluster.metrics()
             print(snapshot.usage.get("feature.filter.ael", 0))
         """
         return dict(self._usage)
@@ -340,7 +340,7 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = await cluster.metrics()
+            snapshot = cluster.metrics()
             errors_per_call = errors / max(snapshot.command_count, 1)
         """
         return self._command_count or 0
@@ -389,7 +389,7 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = await cluster.metrics()
+            snapshot = cluster.metrics()
             payload = json.dumps(snapshot.to_canonical_dict())
 
         See Also:

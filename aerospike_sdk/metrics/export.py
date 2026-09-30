@@ -498,7 +498,7 @@ class AsyncMetricsExportTimer:
             # Taking a snapshot drains and aggregates per-node state in the
             # client core; skip that work when nothing would consume it.
             return
-        snapshot = await state.cluster.metrics()
+        snapshot = state.cluster.metrics()
         snapshot._mark_departed(state.tracker)
         for exporter in runnable:
             try:
