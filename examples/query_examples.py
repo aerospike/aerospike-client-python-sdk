@@ -133,7 +133,8 @@ async def seed_data(session) -> None:
     )
 
     # One batched insert: one row sets its own TTL, and a chain-level default
-    # covers the rest. The "state" bin feeds the background-query section later.
+    # covers the rest. The "state" and "value" bins feed the background-query
+    # section later.
     await session.delete(SET.ids(900, 901, 902, 903, 904, 905)).execute()
     stream = await (
         session.insert(SET.id(900))
@@ -145,10 +146,10 @@ async def seed_data(session) -> None:
         .expire_record_after(timedelta(days=5))
         .insert(SET.id(903))
         .bin("name").set_to("Jordan").bin("age").set_to(45).bin("hair").set_to("red")
-        .bin("state").set_to("nsw")
+        .bin("state").set_to("nsw").bin("value").set_to(100)
         .insert(SET.id(904))
         .bin("name").set_to("Alex").bin("age").set_to(67).bin("hair").set_to("blonde")
-        .bin("state").set_to("nsw")
+        .bin("state").set_to("nsw").bin("value").set_to(200)
         .insert(SET.id(905))
         .bin("name").set_to("Sam").bin("age").set_to(24).bin("hair").set_to("brown")
         .bin("state").set_to("qld")
@@ -615,10 +616,17 @@ async def demonstrate_background_query(session) -> None:
         session.background_task()
         .update(SET)
         .bin("age").add(1)
+        # ":INT" pins the bin type. Two bare bin paths give the server nothing to
+        # infer from, and it rejects the expression rather than guessing.
+        .bin("bob").upsert_from("$.age:INT + $.value")
         .where("$.state == 'nsw'")
         .execute()
     )
     await task.wait_till_complete()
+    stream = await session.query(SET.ids(903, 904, 905)).bins(["state", "age", "bob"]).execute()
+    print("After the background update:")
+    await _print_stream(stream)
+    stream.close()
 
 
 async def demonstrate_multi_operation_batches(session) -> None:
