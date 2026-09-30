@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union, overload
+from typing import Any, Callable, Dict, Optional, Union, overload
 
 from aerospike_async import (
     AdminPolicy,
@@ -49,11 +49,10 @@ from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
-
-if TYPE_CHECKING:  # avoid circular imports — type-only annotations
-    from aerospike_sdk.sync.operations.index import IndexBuilder
-    from aerospike_sdk.sync.session import Session
-    from aerospike_sdk.sync.transactional_session import TransactionalSession
+from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
+from aerospike_sdk.sync.operations.index import IndexBuilder
+from aerospike_sdk.sync.session import Session
+from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 
@@ -200,7 +199,6 @@ class SyncClient(RoutingCapabilitiesMixin):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         try:
             if self._current_thread_runtime:
-                from aerospike_sdk.sync._threadlocal_client import _ThreadLocalLocalClient
                 # type: ignore[assignment] — proxy duck-types as PAC Client.
                 self._client = _ThreadLocalLocalClient(self._policy, self._seeds)  # type: ignore[assignment]
             else:
@@ -317,8 +315,6 @@ class SyncClient(RoutingCapabilitiesMixin):
         behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create a secondary-index builder (synchronous)."""
-        from aerospike_sdk.sync.operations.index import IndexBuilder
-
         self._ensure_connected()
         if isinstance(namespace, DataSet):
             dataset = namespace
@@ -419,8 +415,6 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     def create_session(self, behavior: Optional[Behavior] = None) -> Session:
         """Create a synchronous session with the specified behavior."""
-        from aerospike_sdk.sync.session import Session
-
         self._ensure_connected()
         return Session(client=self, behavior=behavior or Behavior.DEFAULT)
 
@@ -428,7 +422,5 @@ class SyncClient(RoutingCapabilitiesMixin):
         self, behavior: Optional[Behavior] = None,
     ) -> TransactionalSession:
         """Create a synchronous multi-record transaction session."""
-        from aerospike_sdk.sync.transactional_session import TransactionalSession
-
         self._ensure_connected()
         return TransactionalSession(client=self, behavior=behavior or Behavior.DEFAULT)

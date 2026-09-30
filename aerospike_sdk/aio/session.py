@@ -34,6 +34,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
+    from aerospike_sdk.aio.client import Client
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
 from aerospike_async import Key, Record, Txn, UDFLang
@@ -44,7 +45,6 @@ from aerospike_sdk.txn_shared import (
     retry_delay_seconds,
 )
 from aerospike_sdk.aio.background import BackgroundTaskSession
-from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.info import InfoCommands
 from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.operations.query import (

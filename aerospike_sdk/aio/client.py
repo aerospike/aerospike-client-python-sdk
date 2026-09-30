@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import types
-import typing
 from importlib import resources
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union, overload
 
@@ -49,10 +48,8 @@ from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import AsyncSdkConfigMonitor, SdkConfigSource
-
-if typing.TYPE_CHECKING:
-    from aerospike_sdk.aio.session import Session
-    from aerospike_sdk.aio.transactional_session import TransactionalSession
+from aerospike_sdk.aio.session import Session
+from aerospike_sdk.aio.transactional_session import TransactionalSession
 
 from aerospike_sdk.loggers import SdkLoggers, refresh_log_levels
 
@@ -626,10 +623,6 @@ class Client(RoutingCapabilitiesMixin):
                 await tx.upsert(accounts.id("A")).bin("balance").set_to(100).execute()
                 await tx.upsert(accounts.id("B")).bin("balance").set_to(200).execute()
         """
-        # Late import breaks the client -> transactional_session -> session ->
-        # client cycle (TransactionalSession subclasses Session, and Session
-        # imports Client at module level).
-        from aerospike_sdk.aio.transactional_session import TransactionalSession
         return TransactionalSession(client=self, behavior=behavior)
 
     def create_session(self, behavior: Optional[Behavior] = None) -> Session:
@@ -666,8 +659,6 @@ class Client(RoutingCapabilitiesMixin):
         See Also:
             :class:`~aerospike_sdk.policy.behavior.Behavior`: Available presets.
         """
-        from aerospike_sdk.aio.session import Session
-
         if behavior is None:
             behavior = Behavior.DEFAULT
 

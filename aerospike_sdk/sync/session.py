@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
 from aerospike_async import Key, Record, Txn, UDFLang
 
+from aerospike_sdk.aio.background import BackgroundTaskSession as AsyncBackgroundTaskSession
 from aerospike_sdk.txn_shared import (
     is_retryable_txn_error,
     resolve_retry_plan,
@@ -54,7 +55,7 @@ from aerospike_sdk.sync.background import BackgroundTaskSession
 from aerospike_sdk.sync.info import InfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import (
-    DataSetWriteBuilder, QueryBuilder, WriteSegmentBuilder,
+    DataSetWriteBuilder, QueryBuilder, WriteSegmentBuilder, _SingleKeyWriteSegment,
 )
 from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
@@ -356,12 +357,10 @@ class Session(
 
     def background_task(self) -> BackgroundTaskSession:
         """Start a background dataset task chain (synchronous)."""
-        from aerospike_sdk.aio.background import BackgroundTaskSession as _BTS
-
         # BackgroundTaskSession needs a session-like parent for behavior etc.
         # The aio variant accepts our sync session via duck typing; if not,
         # we'd need a thin proxy. The aio constructor only reads state, no IO.
-        inner = _BTS(self)  # type: ignore[arg-type]
+        inner = AsyncBackgroundTaskSession(self)  # type: ignore[arg-type]
         return BackgroundTaskSession(inner)
 
     def execute_udf(self, *keys: Key) -> UdfFunctionBuilder:
@@ -583,8 +582,6 @@ class Session(
 
     def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
         """Single-key fast-path write segment (sync)."""
-        from aerospike_sdk.sync.operations.query import _SingleKeyWriteSegment
-
         return _SingleKeyWriteSegment(
             client=self._pac_client,
             key=key,

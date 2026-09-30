@@ -26,12 +26,12 @@ from aerospike_async import AbortStatus, CommitStatus, Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
-    from aerospike_sdk.policy.behavior import Behavior
 
 
 class TransactionalSession(TransactionalSessionBase, Session):
@@ -81,8 +81,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             :meth:`aerospike_sdk.aio.session.Session.transaction`
         """
         if behavior is None:
-            from aerospike_sdk.policy.behavior import Behavior as _Behavior
-            behavior = _Behavior.DEFAULT
+            behavior = Behavior.DEFAULT
         super().__init__(client, behavior)
         # _txn is inherited from Session (initially None); __aenter__ sets it.
         # txn / active come from TransactionalSessionBase.

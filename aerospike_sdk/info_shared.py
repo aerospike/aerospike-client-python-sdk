@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, TYPE_CHECKING
 
+from aerospike_sdk.index_list import parse_index_list
+
 if TYPE_CHECKING:  # info_types imports this module; annotation only.
     from aerospike_sdk.info_types import (
         NamespaceDetail,
@@ -186,7 +188,6 @@ class InfoCommandsBase:
         A node mid-rebuild reports an index in a different state than its peers,
         which the deduplicated cluster-wide list cannot show.
         """
-        from aerospike_sdk.index_list import parse_index_list
         from aerospike_sdk.info_types import Sindex
 
         return {

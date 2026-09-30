@@ -23,11 +23,15 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Seque
 from aerospike_async import Key, PartitionFilter, Record
 from aerospike_async.exceptions import ResultCode
 
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    _convert_pac_exception,
+    _result_code_to_exception,
+)
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
     from aerospike_sdk.error_strategy import ErrorHandler
-    from aerospike_sdk.exceptions import AerospikeError
 
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -155,8 +159,6 @@ class RecordStream:
                 and excluded from the returned stream; cluster-level
                 errors still raise from ``__anext__``.
         """
-        from aerospike_sdk.exceptions import _convert_pac_exception, _result_code_to_exception
-
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
                 async for idx, br in pac_stream:

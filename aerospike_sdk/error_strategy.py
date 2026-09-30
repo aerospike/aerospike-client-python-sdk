@@ -32,7 +32,7 @@ from typing import Callable, Union
 
 from aerospike_async import Key
 
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, _result_code_to_exception
 
 
 class ErrorStrategy(Enum):
@@ -104,7 +104,6 @@ def _filter_records_with_handler(
     otherwise constructed from the result code via
     :func:`_result_code_to_exception`.
     """
-    from aerospike_sdk.exceptions import _result_code_to_exception
     out: list = []
     for r in results:
         if not r.is_ok:

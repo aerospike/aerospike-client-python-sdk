@@ -33,6 +33,11 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 
 from aerospike_async import Key, ResultCode
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    _convert_pac_exception,
+    _result_code_to_exception,
+)
 from aerospike_sdk.record_result import RecordResult, batch_records_to_results
 
 from aerospike_sdk.loggers import SdkLoggers
@@ -42,7 +47,6 @@ log = logging.getLogger(SdkLoggers.RECORD_STREAM)
 if TYPE_CHECKING:
     from aerospike_async import Record
     from aerospike_sdk.error_strategy import ErrorHandler
-    from aerospike_sdk.exceptions import AerospikeError
 
 
 class RecordStream:
@@ -115,8 +119,6 @@ class RecordStream:
                 and excluded from the returned stream; cluster-level errors
                 still raise from ``__next__``.
         """
-        from aerospike_sdk.exceptions import _convert_pac_exception, _result_code_to_exception
-
         def _gen() -> Iterator[RecordResult]:
             try:
                 for idx, br in pac_stream:

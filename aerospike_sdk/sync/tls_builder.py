@@ -20,6 +20,8 @@ from __future__ import annotations
 import typing
 from typing import Optional, Any
 
+from aerospike_async import TlsConfig
+
 if typing.TYPE_CHECKING:
     from aerospike_sdk.sync.cluster_definition import ClusterDefinition
 
@@ -208,9 +210,6 @@ class TlsBuilder:
         Raises:
             ValueError: An unrecognized protocol or cipher-suite name.
         """
-
-        from aerospike_async import TlsConfig
-
         if self._client_cert_file and self._client_key_file:
             return TlsConfig.with_client_auth(
                 self._ca_file,
