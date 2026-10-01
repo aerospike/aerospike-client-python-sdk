@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
-"""Roster and recluster test_sc on the single-node SC cluster.
+"""Read the observed roster, set it, and recluster.
 
-Simpler than the three-node sibling: security is off here, so no role grants
-are needed, and there is exactly one node, so it is always the principal and
-the roster is just its own id.
+Defaults match the local single-node rig: ``127.0.0.1:3130``, namespace
+``test_sc``, no credentials. Nightly's 3-node job overrides those with
+``AEROSPIKE_HOST``, ``AEROSPIKE_SC_NAMESPACE``, and ``AEROSPIKE_AUTH_*``.
 
 An SC namespace serves nothing until its roster is set -- without this the
 node answers every read and write with "partition unavailable".
 """
 import asyncio
+import os
 import sys
 
 from aerospike_async import ClientPolicy, new_client
 
-SEED = "127.0.0.1:3130"
-NAMESPACE = "test_sc"
+SEED = os.environ.get("AEROSPIKE_HOST", "127.0.0.1:3130").strip() or "127.0.0.1:3130"
+NAMESPACE = os.environ.get("AEROSPIKE_SC_NAMESPACE", "test_sc").strip() or "test_sc"
 
 
 def _fields(body: str, sep: str) -> dict:
     return dict(kv.split("=", 1) for kv in body.split(sep) if "=" in kv)
 
 
+def _policy() -> ClientPolicy:
+    policy = ClientPolicy()
+    alternate = os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower()
+    policy.use_services_alternate = alternate in ("true", "1", "yes")
+    user = os.environ.get("AEROSPIKE_AUTH_USER", "").strip()
+    if user:
+        policy.user = user
+        policy.password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "")
+    return policy
+
+
 async def main() -> int:
-    client = await new_client(ClientPolicy(), SEED)
+    client = await new_client(_policy(), SEED)
     try:
         observed = await client.info(f"roster:namespace={NAMESPACE}")
         body = next(iter(observed.values()))

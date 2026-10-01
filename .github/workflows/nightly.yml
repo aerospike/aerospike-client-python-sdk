@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/install-sdk
         with:
@@ -92,8 +92,8 @@ jobs:
 
       # General suites authenticate and land on namespace test, which this
       # config runs as strong consistency, so transaction and durable-delete
-      # tests run instead of skipping. There is no roster pytest module; the
-      # roster example below is that coverage. AEROSPIKE_HOST_SEC turns on
+      # tests run instead of skipping. roster.py is the roster test; this
+      # step's env points it at this cluster. AEROSPIKE_HOST_SEC turns on
       # the masking tests, which need security.
       - name: Run integration tests and strong-consistency examples
         env:
@@ -118,6 +118,7 @@ jobs:
             tests/integration/sync/durable_delete_sc_test.py \
             tests/integration/async/implicit_batch_txn_test.py \
             tests/integration/sync/implicit_batch_txn_test.py
+          python tests/integration/clusters/sc-single-node/roster.py
 
           run_example() {
             local file="$1"
@@ -163,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/install-sdk
         with:
@@ -227,7 +228,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/install-sdk
         with:
@@ -300,7 +301,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/install-sdk
         with:
