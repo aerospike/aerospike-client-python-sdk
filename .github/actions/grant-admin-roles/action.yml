@@ -20,7 +20,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        roles="read-write-udf,sys-admin,user-admin,data-admin,service-ctrl,masking-admin,write-masked,read-masked"
+        roles="read-write-udf sys-admin user-admin data-admin service-ctrl masking-admin write-masked read-masked"
         image="${{ inputs.tools-image }}"
         port="${{ inputs.port }}"
         for attempt in $(seq 1 15); do
