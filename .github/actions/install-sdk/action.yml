@@ -7,6 +7,19 @@ inputs:
   python-version:
     description: CPython version for actions/setup-python
     required: true
+  jf-project:
+    description: >
+      JFrog project key. Composite actions cannot read vars, so the caller
+      passes vars.JFROG_PROJECT.
+    required: true
+  oidc-provider-name:
+    description: OIDC provider name for the JFrog CLI. Caller passes vars.OIDC_PROVIDER_NAME.
+    required: false
+    default: gh-aerospike
+  oidc-audience:
+    description: OIDC audience for the JFrog CLI. Caller passes vars.OIDC_AUDIENCE.
+    required: false
+    default: aerospike
 
 runs:
   using: composite
@@ -20,10 +33,10 @@ runs:
       id: jfrog
       uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
       env:
-        JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        JF_PROJECT: ${{ inputs.jf-project }}
       with:
-        oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
-        oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+        oidc-provider-name: ${{ inputs.oidc-provider-name }}
+        oidc-audience: ${{ inputs.oidc-audience }}
 
     # The pinned aerospike-async dev version resolves from the internal
     # PyPI index (OIDC-minted credentials); everything else comes from
@@ -34,7 +47,7 @@ runs:
       env:
         JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
         JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
-        JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        JF_PROJECT: ${{ inputs.jf-project }}
       run: |
         set -euo pipefail
         user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")

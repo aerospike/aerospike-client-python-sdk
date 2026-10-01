@@ -45,6 +45,9 @@ jobs:
       - uses: ./.github/actions/install-sdk
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
       # Custom config names the key file, so the basename has to be stable.
       # features-content would land under a random temp name.
@@ -169,6 +172,9 @@ jobs:
       - uses: ./.github/actions/install-sdk
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
       # Security stays off: the gate counts client data messages, and an auth
       # handshake would spend allowances the tests are counting. One node owns
@@ -233,6 +239,9 @@ jobs:
       - uses: ./.github/actions/install-sdk
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
       # Generated TLS config: cleartext 3000, TLS 4333, tls-name aerospike-tls,
       # certs under the tls-cert-dir output. Security is on so the login-only
@@ -306,6 +315,9 @@ jobs:
       - uses: ./.github/actions/install-sdk
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
       # server-tag, server-container-repo, and num-nodes stay at the action
       # defaults (latest, database-docker-virtual/aerospike-server-enterprise,
