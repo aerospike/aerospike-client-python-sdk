@@ -50,6 +50,10 @@ jobs:
       - name: Check the pinned PAC version exists in the dev repo
         run: |
           set -euo pipefail
+          if grep -q 'aerospike-async @ git+' pyproject.toml; then
+            echo "PAC pin is a git source; skipping the dev-repo wheel lookup"
+            exit 0
+          fi
           version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
           echo "Pinned PAC version: $version"
           count=$(jf rt search "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*.whl" --count || echo 0)
@@ -101,10 +105,23 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
-      # PyPI index (OIDC-minted credentials); everything else comes from
-      # public PyPI. --only-binary keeps a missing wheel from degrading
-      # into a confusing source build of the Rust extension.
+      - name: Detect PAC git pin
+        id: pac
+        run: |
+          if grep -q 'aerospike-async @ git+' pyproject.toml; then
+            echo "source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust
+        if: steps.pac.outputs.source == 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: "1.90.0"
+
+      # Wheel pins resolve aerospike-async from the internal index.
+      # A git pin is built from that branch, so --only-binary is omitted.
       - name: Install SDK and dev dependencies
         env:
           JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
@@ -112,7 +129,11 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip_args=( ".[dev]" )
+          if ! grep -q 'aerospike-async @ git+' pyproject.toml; then
+            pip_args+=( --only-binary aerospike-async )
+          fi
+          pip install "${pip_args[@]}" \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       # The fail-under floor sits below the current unit-only figure so churn
@@ -170,10 +191,23 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
-      # PyPI index (OIDC-minted credentials); everything else comes from
-      # public PyPI. --only-binary keeps a missing wheel from degrading
-      # into a confusing source build of the Rust extension.
+      - name: Detect PAC git pin
+        id: pac
+        run: |
+          if grep -q 'aerospike-async @ git+' pyproject.toml; then
+            echo "source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust
+        if: steps.pac.outputs.source == 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: "1.90.0"
+
+      # Wheel pins resolve aerospike-async from the internal index.
+      # A git pin is built from that branch, so --only-binary is omitted.
       - name: Install SDK and dev dependencies
         env:
           JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
@@ -181,7 +215,11 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip_args=( ".[dev]" )
+          if ! grep -q 'aerospike-async @ git+' pyproject.toml; then
+            pip_args+=( --only-binary aerospike-async )
+          fi
+          pip install "${pip_args[@]}" \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Run canonical code examples
@@ -234,10 +272,23 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
-      # PyPI index (OIDC-minted credentials); everything else comes from
-      # public PyPI. --only-binary keeps a missing wheel from degrading
-      # into a confusing source build of the Rust extension.
+      - name: Detect PAC git pin
+        id: pac
+        run: |
+          if grep -q 'aerospike-async @ git+' pyproject.toml; then
+            echo "source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust
+        if: steps.pac.outputs.source == 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: "1.90.0"
+
+      # Wheel pins resolve aerospike-async from the internal index.
+      # A git pin is built from that branch, so --only-binary is omitted.
       - name: Install SDK and dev dependencies
         env:
           JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
@@ -245,7 +296,11 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip_args=( ".[dev]" )
+          if ! grep -q 'aerospike-async @ git+' pyproject.toml; then
+            pip_args+=( --only-binary aerospike-async )
+          fi
+          pip install "${pip_args[@]}" \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Verify GIL stays disabled after import
@@ -294,10 +349,23 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
-      # PyPI index (OIDC-minted credentials); everything else comes from
-      # public PyPI. --only-binary keeps a missing wheel from degrading
-      # into a confusing source build of the Rust extension.
+      - name: Detect PAC git pin
+        id: pac
+        run: |
+          if grep -q 'aerospike-async @ git+' pyproject.toml; then
+            echo "source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust
+        if: steps.pac.outputs.source == 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: "1.90.0"
+
+      # Wheel pins resolve aerospike-async from the internal index.
+      # A git pin is built from that branch, so --only-binary is omitted.
       - name: Install SDK and dev dependencies
         env:
           JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
@@ -305,7 +373,11 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip_args=( ".[dev]" )
+          if ! grep -q 'aerospike-async @ git+' pyproject.toml; then
+            pip_args+=( --only-binary aerospike-async )
+          fi
+          pip install "${pip_args[@]}" \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Verify GIL stays disabled after import
