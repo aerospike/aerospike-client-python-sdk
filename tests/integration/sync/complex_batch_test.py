@@ -437,7 +437,7 @@ class TestChainLevelDefaults:
 
         for k in (k1, k2):
             rec = session.query(k).execute().first_or_raise().record
-            assert 0 < rec.ttl <= 3600
+            assert 3590 <= rec.ttl <= 3605
 
         _cleanup(session, k1, k2)
 

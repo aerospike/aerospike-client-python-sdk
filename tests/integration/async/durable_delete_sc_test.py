@@ -399,7 +399,7 @@ async def seed_background_task_rows(session_sc, ds_bg):
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestDurableDeleteBackgroundUdf:
-    @requires_server_compiled_ael
+    @requires_server_compiled_ael(host="aerospike_host_sc")
     async def test_background_udf_remove_uses_default_durable_delete_on_strong_consistency(
         self, session_sc, ds_sc, enterprise_sc, prepare_dd_udf_background,
     ):
@@ -736,7 +736,7 @@ class TestDurableDeleteDefaultPointDelete:
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestQueryExecuteDurableDelete:
-    @requires_server_compiled_ael
+    @requires_server_compiled_ael(host="aerospike_host_sc")
     async def test_query_execute(
         self, session_sc, ds_sc, enterprise_sc, prepare_query_execute,
     ):

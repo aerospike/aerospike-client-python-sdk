@@ -16,9 +16,10 @@
 """PAC capability markers and skip helpers shared by unit and integration tests.
 
 Integration tests declare requirements with :data:`requires_server_compiled_ael`
-or :data:`requires_query_selection`; ``tests/integration/conftest.py`` resolves
-a connected SDK client from fixtures and calls the matching skip helper
-(``Client.supports_*``, computed from PAC ``Version.supports_*`` at connect).
+or :data:`requires_query_selection`; ``tests/integration/conftest.py`` probes the
+marker's seed (``host=``, default ``aerospike_host``) once per session and calls
+the matching skip helper (the same ``supports_*`` flags the client derives from
+PAC ``Version.supports_*``).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
 class SupportsPacCapabilities(Protocol):
-    """Connected SDK client that reports PAC/cluster capability flags."""
+    """Anything reporting the cluster capability flags: a connected client or a probe result."""
 
     @property
     def supports_server_compiled_ael(self) -> bool:
@@ -49,46 +50,38 @@ def _capability_bool(client: object, attr: str) -> bool:
     value = getattr(client, attr, None)
     if not isinstance(value, bool):
         pytest.fail(
-            f"{attr!r} must be a bool property on the resolved SDK client, "
+            f"{attr!r} must be a bool on {type(client).__name__}, "
             f"got {type(value).__name__}",
             pytrace=False,
         )
     return value
 
 
-def has_sdk_capability_properties(candidate: object) -> bool:
-    """True when *candidate* exposes both ``supports_*`` bool properties."""
-    return (
-        isinstance(getattr(candidate, "supports_server_compiled_ael", None), bool)
-        and isinstance(getattr(candidate, "supports_query_selection", None), bool)
-    )
-
-
 def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
-    """Skip when server-compiled AEL is not available for this connection/cluster.
+    """Skip when server-compiled AEL is not available on the probed cluster.
 
-    Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael` (the same
-    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
+    Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael`, which the
+    session probe fills from ``Cluster.supports_ael()``.
     """
     if _capability_bool(client, "supports_server_compiled_ael") is True:
         return
     pytest.skip(
         "Requires server-compiled AEL: Version.supports_server_compiled_ael on all nodes "
-        "(Client.supports_server_compiled_ael)."
+        "(Cluster.supports_ael())."
     )
 
 
 def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
-    """Skip when field ``44`` query selection is not available for this cluster.
+    """Skip when field ``44`` query selection is not available on the probed cluster.
 
-    Reads :attr:`SupportsPacCapabilities.supports_query_selection` (the same
-    public property on :class:`~aerospike_sdk.aio.client.Client` / sync client).
+    Reads :attr:`SupportsPacCapabilities.supports_query_selection`, which the
+    session probe fills from ``Cluster.supports_query_selection()``.
     """
     if _capability_bool(client, "supports_query_selection") is True:
         return
     pytest.skip(
         "Requires query selection: Version.supports_query_selection on all nodes "
-        "(Client.supports_query_selection)."
+        "(Cluster.supports_query_selection())."
     )
 
 
