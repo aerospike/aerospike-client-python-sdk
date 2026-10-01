@@ -64,7 +64,7 @@ jobs:
 
       - name: Start 3-node strong-consistency cluster
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@db895dd65b87af92f88eda924c9e0f55109b287f # server cert SAN includes aerospike-tls
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
@@ -183,7 +183,7 @@ jobs:
       # AEROSPIKE_SC_NAMESPACE.
       - name: Start single-node strong-consistency cluster
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@db895dd65b87af92f88eda924c9e0f55109b287f # server cert SAN includes aerospike-tls
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
@@ -262,7 +262,7 @@ jobs:
       # credential exchange to move off the TLS port.
       - name: Start TLS server
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@db895dd65b87af92f88eda924c9e0f55109b287f # server cert SAN includes aerospike-tls
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
@@ -339,7 +339,7 @@ jobs:
       # one node). config-file is the regular suite's conf.
       - name: Start latest Aerospike server
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@db895dd65b87af92f88eda924c9e0f55109b287f # server cert SAN includes aerospike-tls
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
           config-file: .github/aerospike.conf
           oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
