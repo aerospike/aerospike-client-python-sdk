@@ -243,9 +243,23 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # Generated TLS config: cleartext 3000, TLS 4333, tls-name aerospike-tls,
-      # certs under the tls-cert-dir output. Security is on so the login-only
-      # tests have a credential exchange to move off the TLS port.
+      # features-content would land under a random temp name. The config
+      # below names the key file, so the basename has to be stable.
+      - name: Write feature key
+        env:
+          FEATURES_CONTENT: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FEATURES_CONTENT}" ]; then
+            echo "::error::AEROSPIKE_SERVER_FEATURES_CONF is not set"
+            exit 1
+          fi
+          printf '%s\n' "$FEATURES_CONTENT" > "${{ runner.temp }}/features.conf"
+
+      # Cleartext 3000, TLS 4333, tls-name aerospike-tls. Certs come from the
+      # action. alternate-access-address 127.0.0.1 is what login-only reads
+      # for the cleartext data port. Security is on so that login has a
+      # credential exchange to move off the TLS port.
       - name: Start TLS server
         id: aerospike
         uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@db895dd65b87af92f88eda924c9e0f55109b287f # server cert SAN includes aerospike-tls
@@ -255,7 +269,8 @@ jobs:
           num-nodes: "1"
           enable-tls: "true"
           enable-security: "true"
-          features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
+          features-file: ${{ runner.temp }}/features.conf
+          config-file: .github/aerospike-tls.conf
           container-name-prefix: aerospike-tls
           startup-timeout: "60"
           tools-tag: ${{ env.AEROSPIKE_TOOLS_TAG }}
