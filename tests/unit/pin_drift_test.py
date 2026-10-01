@@ -37,8 +37,6 @@ from pathlib import Path
 import pytest
 
 _PAC_DIST = "aerospike-async"
-_EXACT_PIN = re.compile(rf"{re.escape(_PAC_DIST)}==([A-Za-z0-9._-]+)")
-_GIT_PIN = re.compile(rf'{re.escape(_PAC_DIST)} @ (git\+[^"\s]+)')
 
 
 def _repo_pyproject() -> Path:
@@ -49,17 +47,9 @@ def _repo_pyproject() -> Path:
     raise AssertionError("could not locate pyproject.toml above this test")
 
 
-def _pyproject_text() -> str:
-    return _repo_pyproject().read_text()
-
-
 def _pinned_pac_version() -> str | None:
-    match = _EXACT_PIN.search(_pyproject_text())
-    return match.group(1) if match else None
-
-
-def _pinned_pac_git() -> str | None:
-    match = _GIT_PIN.search(_pyproject_text())
+    text = _repo_pyproject().read_text()
+    match = re.search(rf"{re.escape(_PAC_DIST)}==([A-Za-z0-9._-]+)", text)
     return match.group(1) if match else None
 
 
@@ -84,30 +74,13 @@ def _versions_equal(a: str, b: str) -> bool:
 
 def test_pac_pin_is_exact():
     # A loosened pin (range / unpinned) would let index resolution drift silently.
-    # A git direct URL is exact too: it names one branch until a wheel is published.
     pinned = _pinned_pac_version()
-    git_pin = _pinned_pac_git()
-    assert pinned is not None or git_pin is not None, (
-        f"pyproject.toml must carry an exact '{_PAC_DIST}==<version>' pin "
-        f"or a git direct URL; found neither"
+    assert pinned is not None, (
+        f"pyproject.toml must carry an exact '{_PAC_DIST}==<version>' pin; found none"
     )
 
 
 def test_installed_pac_matches_pin():
-    git_pin = _pinned_pac_git()
-    if git_pin is not None:
-        try:
-            raw = metadata.distribution(_PAC_DIST).read_text("direct_url.json")
-        except Exception:
-            raw = None
-        info = json.loads(raw or "{}")
-        revision = (info.get("vcs_info") or {}).get("requested_revision")
-        assert revision and revision in git_pin, (
-            f"PAC drift: installed {_PAC_DIST} revision {revision!r} "
-            f"is not the git pin {git_pin!r}."
-        )
-        return
-
     if _pac_is_editable():
         pytest.skip(
             f"{_PAC_DIST} installed editable; pin-match applies to index-resolved installs",

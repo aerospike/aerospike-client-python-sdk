@@ -38,25 +38,10 @@ runs:
         oidc-provider-name: ${{ inputs.oidc-provider-name }}
         oidc-audience: ${{ inputs.oidc-audience }}
 
-    - name: Detect PAC git pin
-      id: pac
-      shell: bash
-      run: |
-        if grep -q 'aerospike-async @ git+' pyproject.toml; then
-          echo "source=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "source=false" >> "$GITHUB_OUTPUT"
-        fi
-
-    # A git pin builds the Rust extension. The toolchain matches PAC CI.
-    - name: Setup Rust
-      if: steps.pac.outputs.source == 'true'
-      uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-      with:
-        toolchain: "1.90.0"
-
-    # Wheel pins resolve aerospike-async from the internal index.
-    # A git pin is built from that branch instead, so --only-binary is omitted.
+    # The pinned aerospike-async dev version resolves from the internal
+    # PyPI index (OIDC-minted credentials); everything else comes from
+    # public PyPI. --only-binary keeps a missing wheel from degrading
+    # into a confusing source build of the Rust extension.
     - name: Install SDK and dev dependencies
       shell: bash
       env:
@@ -66,9 +51,5 @@ runs:
       run: |
         set -euo pipefail
         user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-        pip_args=( ".[dev]" )
-        if ! grep -q 'aerospike-async @ git+' pyproject.toml; then
-          pip_args+=( --only-binary aerospike-async )
-        fi
-        pip install "${pip_args[@]}" \
+        pip install ".[dev]" --only-binary aerospike-async \
           --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${JF_PROJECT}-pypi-dev-local/simple/"

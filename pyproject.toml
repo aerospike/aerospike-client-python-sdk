@@ -9,10 +9,11 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # This branch builds PAC from the IndexType.INTEGER feature branch
-    # (https://github.com/aerospike/aerospike-client-python-async/pull/128).
-    # Replace with an exact aerospike-async== pin once that branch is published.
-    "aerospike-async @ git+https://github.com/aerospike/aerospike-client-python-async.git@jnguyen/integer-index-on-pre-8.2",
+    # Dev-channel version published to the internal package index on every
+    # PAC merge; promoted versions land on public PyPI at release. CI
+    # resolves this from the internal index; see README "Local PAC checkout"
+    # for working against a local PAC tree instead.
+    "aerospike-async==0.6.0a7.dev83",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]
