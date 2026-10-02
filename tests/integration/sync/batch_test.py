@@ -598,8 +598,23 @@ class TestSyncBatchFilterExpression:
             rec = session.query(keys[name]).execute().first_or_raise()
             assert rec.record.bins.get("tagged") is expected
 
+    _SC_DELETE_DEFECT = (
+        "server returns a wrong record version for the filtered-out row of a "
+        "multi-row transactional batch delete, so the implicit transaction's "
+        "verify fails"
+    )
+
     @requires_server_compiled_ael
-    def test_batch_delete_removes_only_matching_rows(self, cluster: Cluster, users: DataSet):
+    def test_batch_delete_removes_only_matching_rows(
+        self, cluster: Cluster, users: DataSet, request, general_namespace_is_sc,
+    ):
+        if general_namespace_is_sc:
+            # Not strict: on a multi-node cluster the two keys usually land on
+            # different nodes, and a one-row sub-batch takes the single-record
+            # path, which the defect does not touch.
+            request.node.add_marker(
+                pytest.mark.xfail(reason=self._SC_DELETE_DEFECT, strict=False),
+            )
         session = cluster.create_session()
         keys = self._seed(session, users, "sbfd", {"lo": 1, "hi": 9})
 
