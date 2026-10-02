@@ -147,7 +147,7 @@ jobs:
 
       - name: Start Aerospike server
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@49381314f7afd64afb580b77bab8ac263040c27e # PyPI metadata SIGPIPE fix (post-v5.0.0)
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
@@ -271,7 +271,7 @@ jobs:
 
       - name: Start Aerospike server
         id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@49381314f7afd64afb580b77bab8ac263040c27e # PyPI metadata SIGPIPE fix (post-v5.0.0)
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
