@@ -244,19 +244,8 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # Custom config names the key file, so the basename has to be stable.
-      # features-content would land under a random temp name.
-      - name: Write feature key
-        env:
-          FEATURES_CONTENT: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
-        run: |
-          set -euo pipefail
-          if [ -z "${FEATURES_CONTENT}" ]; then
-            echo "::error::AEROSPIKE_SERVER_FEATURES_CONF is not set"
-            exit 1
-          fi
-          printf '%s\n' "$FEATURES_CONTENT" > "${{ runner.temp }}/features.conf"
-
+      # No config-file: the action renders namespace test at replication-factor 1
+      # and stages its roster. The feature key is still required for SC.
       - name: Start single-node strong-consistency cluster
         id: aerospike
         uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
@@ -265,8 +254,7 @@ jobs:
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
           num-nodes: "1"
           enable-strong-consistency: "true"
-          features-file: ${{ runner.temp }}/features.conf
-          config-file: .github/aerospike-sc-single.conf
+          features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
           container-name-prefix: aerospike-sc-single
           startup-timeout: "60"
           sc-stability-timeout-seconds: "30"
