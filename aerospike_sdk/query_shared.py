@@ -303,33 +303,6 @@ class QueryHint:
             raise ValueError("hard_hint requires index_name")
 
 
-@dataclass
-class _FilterRecord:
-    """Internal: wraps a Filter with optional creation metadata for hint reconstruction."""
-
-    filter: Filter
-    method: Optional[str] = None
-    identifier: Optional[str] = None
-    args: Optional[tuple] = None
-    ctx: Optional[List[CTX]] = None
-
-    def rebuild_for_hint(self, hint: QueryHint) -> Filter:
-        """Reconstruct this filter with the hint's ``index_name`` override."""
-        if self.method is None or self.args is None:
-            raise ValueError(
-                "Cannot apply index_name hint to a pre-built Filter. "
-                "Use Filter.*_by_index() directly."
-            )
-        if hint.index_name is not None:
-            factory = getattr(Filter, f"{self.method}_by_index")
-            f = factory(hint.index_name, *self.args)
-        else:
-            return self.filter
-        if self.ctx:
-            f = f.context(self.ctx)
-        return f
-
-
 if TYPE_CHECKING:
     from aerospike_sdk.policy.behavior import Behavior
 
@@ -557,7 +530,7 @@ class _QueryBuilderBase:
         self._namespace_mode_resolver_blocking = namespace_mode_resolver_blocking
         # Mutable-list fields need per-instance copies (cannot live as
         # class defaults — first mutation would leak across instances).
-        self._filter_records: List[_FilterRecord] = []
+        self._filter: Optional[Filter] = None
         self._operations: List[Any] = []
         self._specs: List[_OperationSpec] = []
         self._single_key: Optional[Key] = None
@@ -916,15 +889,40 @@ class _QueryBuilderBase:
         return self
 
     def filter(self, filter_obj: Filter) -> Self:
-        """Add a secondary index filter to the query.
+        """Attach an explicit secondary-index filter to the query.
+
+        The filter is authoritative: it is sent to the server unchanged as the
+        index access path, bypassing server-side index selection. Any
+        :meth:`where` clause on the same builder travels beside it as a
+        residual filter expression. Index-selection hints
+        (:attr:`QueryHint.index_name`, :attr:`QueryHint.bin_name`) do not
+        rewrite an explicit filter; :attr:`QueryHint.query_duration` still
+        applies. A query carries at most one filter.
+
+        Example::
+
+            stream = await (
+                session.query(customers)
+                    .filter(Filter.range_by_index("idx_customer_age", 30, 65))
+                    .where("$.status == 'active'")
+                    .execute()
+            )
 
         Args:
-            filter_obj: The filter to add.
+            filter_obj: The secondary-index filter to attach.
 
         Returns:
             This builder for method chaining.
+
+        Raises:
+            ValueError: If ``filter`` has already been called on this builder.
+
+        See Also:
+            :meth:`where`, :meth:`with_hint`
         """
-        self._filter_records.append(_FilterRecord(filter=filter_obj))
+        if self._filter is not None:
+            raise ValueError("filter() can only be called once per query builder")
+        self._filter = filter_obj
         return self
 
     def filter_expression(self, expression: FilterExpression) -> Self:
@@ -1553,7 +1551,7 @@ class _QueryBuilderBase:
             features.append(execution_mode)
             features.append(shape)
             self._usage_features = None
-        if self._filter_records:
+        if self._filter is not None:
             features.append(usage.FILTER_SECONDARY_INDEX)
         if self._partition_filter is not None:
             features.append(usage.QUERY_PARTITION_FILTER)
@@ -2194,7 +2192,7 @@ class _QueryBuilderBase:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
         if self._where_ael is None:
             return False
-        if self._filter_records:
+        if self._filter is not None:
             return False
         if hint is not None and hint.bin_name is not None:
             return False
@@ -2471,16 +2469,8 @@ class _QueryBuilderBase:
         """Build a Statement object from the builder configuration."""
         bins = self._bins
         statement = Statement(self._namespace, self._set_name, bins)
-        if self._filter_records:
-            hint = self._query_hint
-            needs_rebuild = hint is not None and hint.index_name is not None
-            filters = []
-            for rec in self._filter_records:
-                if needs_rebuild and hint is not None and rec.method is not None:
-                    filters.append(rec.rebuild_for_hint(hint))
-                else:
-                    filters.append(rec.filter)
-            statement.filters = filters
+        if self._filter is not None:
+            statement.filters = [self._filter]
         if self._op_projection is not None:
             statement.set_operations(self._op_projection)
         return statement
