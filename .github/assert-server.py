@@ -7,15 +7,20 @@ in CI it means a broken image pull, a mistyped tag, or a server that never
 finished starting would produce a green run that tested nothing. This asserts the
 three things a green run has to mean, before any test runs.
 
-Speaks the info protocol directly so it needs no client library and no server
-tooling: the enterprise images ship no asinfo, and the wheel under test is not
-necessarily installed at this point in the job.
+Speaks the info protocol directly so it needs no client library: the enterprise
+images ship no asinfo, and the wheel under test is not necessarily installed
+yet. A security-enabled server rejects that unauthenticated probe, so when
+``SERVER_USER`` is set this asks ``asinfo`` in the tools image instead.
 
 Env:
     SERVER_HOST     default 127.0.0.1
     SERVER_PORT     default 3000
     EXPECTED_BUILD  e.g. "8.2.0.0"; the tag's version prefix must match the
                     server's reported build. Empty disables the check.
+    SERVER_USER     optional. With SERVER_PASSWORD and TOOLS_IMAGE, query
+                    through ``asinfo`` rather than a raw info socket.
+    SERVER_PASSWORD default empty
+    TOOLS_IMAGE     aerospike-tools image reference, required with SERVER_USER
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import subprocess
 import sys
 
 
@@ -50,14 +56,48 @@ def info(host: str, port: int, command: str, timeout: float = 5.0) -> str:
     return body.decode().split("\t", 1)[1].strip()
 
 
+def info_via_asinfo(
+    host: str, port: int, command: str, user: str, password: str, image: str,
+) -> str:
+    """One info command through the tools image, which can authenticate."""
+    cmd = [
+        "docker", "run", "--rm", "--network", "host", image,
+        "asinfo", "-h", host, "-p", str(port),
+        "-U", user, "-P", password,
+        "-v", command,
+    ]
+    try:
+        raw = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+    except subprocess.CalledProcessError as exc:
+        sys.exit(f"::error::asinfo {command} failed: {exc.output}")
+    text = raw.strip()
+    if "\t" in text:
+        text = text.split("\t")[-1].strip()
+    prefix = command + "="
+    if text.startswith(prefix):
+        text = text[len(prefix):].strip()
+    if "\n" in text:
+        text = text.splitlines()[-1].strip()
+    return text
+
+
 def main() -> None:
     host = os.environ.get("SERVER_HOST", "127.0.0.1")
     port = int(os.environ.get("SERVER_PORT", "3000"))
     expected = os.environ.get("EXPECTED_BUILD", "").split("-")[0].strip()
+    user = os.environ.get("SERVER_USER", "").strip()
 
     try:
-        build = info(host, port, "build")
-        edition = info(host, port, "edition")
+        if user:
+            image = os.environ.get("TOOLS_IMAGE", "").strip()
+            if not image:
+                sys.exit("::error::TOOLS_IMAGE is required when SERVER_USER is set")
+            password = os.environ.get("SERVER_PASSWORD", "")
+            build = info_via_asinfo(host, port, "build", user, password, image)
+            edition = info_via_asinfo(host, port, "edition", user, password, image)
+        else:
+            build = info(host, port, "build")
+            edition = info(host, port, "edition")
     except OSError as exc:
         sys.exit(
             f"::error::No Aerospike server answering at {host}:{port} ({exc}). "
