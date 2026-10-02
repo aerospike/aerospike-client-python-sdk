@@ -102,6 +102,16 @@ transaction. Querying for keys and then writing those keys
 transactionally is still a valid pattern; call `.with_txn(None)` on the
 query to confirm that is intended and silence the warning.
 
+(txn-background-tasks)=
+## Background Tasks
+
+Background tasks write, and the server applies them to every matching record
+outside any transaction, so their writes would escape the commit and abort.
+Starting one inside a transaction therefore raises `RuntimeError` instead of
+warning: `tx.background_task()` refuses outright, and a dataset query's
+`execute_background_task()` / `execute_udf_background_task()` refuse unless the
+query opts out with `.with_txn(None)`. Start the task from a regular session.
+
 ## When a Commit Fails In Doubt
 
 Most commit failures end the transaction: it is finalized, and the session
@@ -205,6 +215,7 @@ on its own.
 stream = await session.upsert([users.id(1), orders.id(2)]).put({"v": 1}).execute()
 ```
 
+(txn-implicit-batch-write)=
 ## Implicit Batch-Write Transactions
 
 A multi-key write batch against a strong-consistency namespace is

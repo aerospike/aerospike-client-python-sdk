@@ -132,8 +132,10 @@ $.age <= 65
 ```
 $.age > 18 and $.status == "active"
 $.role == "admin" or $.role == "superadmin"
-not $.deleted
+not($.deleted:BOOL)
 ```
+
+`not` is a call: `not($.age == 30)` parses, a bare `not $.age == 30` does not.
 
 ### Arithmetic
 
@@ -142,8 +144,10 @@ $.price * $.quantity > 1000
 $.score + $.bonus >= 100
 $.total - $.discount > 0
 $.value % 2 == 0
-$.base ** 2 > 100
+$.rate:FLOAT ** 2.0 > 100.0
 ```
+
+`**` takes `FLOAT` operands only; pin the bin and write the exponent as a float.
 
 Arithmetic functions:
 
@@ -151,11 +155,13 @@ Arithmetic functions:
 abs($.balance) > 100
 ceil($.rating)
 floor($.rating)
-log($.value)
-pow($.base, 2)
-max($.a, $.b)
-min($.a, $.b)
+max($.a, $.b) > 10
+min($.a, $.b) < 0
+log(value: $.rating:FLOAT, base: 2.0)
+pow(base: $.rating:FLOAT, exponent: 2.0)
 ```
+
+`log` and `pow` take named arguments only.
 
 ### Bitwise Operators
 
@@ -172,10 +178,14 @@ $.bits >>> 2
 ### Type Casting
 
 ```
-$.count.asFloat() > 3.14
-5.asFloat()
-3.14.asInt()
+$.count:INT.toFloat() > 3.14
+$.rating:FLOAT.toInt()
+$.numstr:STRING.toInt()
+(5).toFloat()
 ```
+
+A cast needs its receiver's type, so pin the bin; a numeric literal receiver goes in
+parentheses.
 
 ### String Values
 
@@ -210,6 +220,29 @@ session.query(users).where("$.id % 100 == 0")             # no params, plain %
 session.query(users).where("$.id %% 100 == 0 and $.age > %d", min_age)
 ```
 
+### String Methods
+
+String methods chain onto a string-typed receiver, and work in `where()` and
+`select_from()` alike:
+
+```
+$.name:STRING.upper() == 'ALICE'
+$.name:STRING.startsWith('Al')
+$.email:STRING.endsWith('@aerospike.com')
+$.name:STRING.contains(needle: 'lic')
+$.name:STRING.strlen() > 3
+$.padded:STRING.trim()
+$.name:STRING.replace(find: 'A', replace: 'a')
+$.name:STRING =~ /^al/i
+```
+
+The `=~` operator matches a regular expression; flags such as `i` follow the
+closing slash. Whether an argument is named is part of each method's signature,
+not a matter of how many it takes: `contains(needle: 'lic')` must name its one
+argument, while `startsWith('Al')` and `repeat(2)` must not, and the server
+rejects the other form. For the builder-side equivalents, including string
+writes, see [String Operations](string-ops.md).
+
 ### List Membership (IN)
 
 ```
@@ -222,10 +255,10 @@ $.status in ["active", "pending", "review"]
 Access nested data with bracket notation:
 
 ```
-$.settings.["theme"] == "dark"
+$.settings.theme == "dark"
 $.scores.[0] > 90
 $.matrix.[0].[1] == 42
-$.users.["alice"].age > 30
+$.users.alice.age > 30
 ```
 
 Map keys can be typed at parse time:
@@ -234,23 +267,34 @@ Map keys can be typed at parse time:
 $.bin.42 == 100        # integer map key (decimal)
 $.bin.0xff == 100      # integer map key (hex)
 $.bin.0b101 == 100     # integer map key (binary)
-$.bin.+5 == 100        # signed integer map key
-$.bin.-3 == 100
+$.bin.-3 == 100        # negative integer map key
 $.bin."42" == "x"      # string map key (quoting forces string type)
-$.bin.{1-5} == 100     # integer key range
-$.bin.{1,2,3} == 100   # integer key list
 ```
 
 A digit-only segment after the dot (`$.bin.42`) becomes an integer map key;
 quote it (`$.bin."42"`) to force string interpretation. The two compile to
 distinct expressions and match different keys at runtime.
 
+Selecting several elements at once returns a list, so these read naturally in
+`select_from()` or under `.count()`:
+
+```
+$.m:MAP.{@alpha,gamma}          # values for a key list
+$.m:MAP.{@alpha:gamma}          # values for a key range (end-exclusive)
+$.l:LIST.[0:2]                  # values for an index range
+$.l:LIST.[#-1]:INT              # element by rank (highest)
+```
+
+See {ref}`ael-path-expressions` for wildcards, filters and writes.
+
 ### CDT Functions
 
 ```
-$.scores.count() > 5
-$.tags.count() == 0
+$.scores:LIST.count() > 5
+$.tags:LIST.count() == 0
 ```
+
+`count()` needs to know whether the bin is a list or a map, so pin it.
 
 ### GeoJSON
 
@@ -303,12 +347,9 @@ inside a composed list. If you need to combine multiple bins in one
 expression without pre-fetching, drop down to the programmatic `Exp.*` API
 or open multiple bin-pair queries.
 
-Write-side AEL (`hllInit`, `hllAdd`) is **not** currently supported — the
-existing grammar allows at most one path function per path, and chained
-write-then-read forms require a grammar refactor that's better aligned with
-the server-side AEL design. Use the builder API
-(`session.upsert(key).bin("h").hll_init(HllConfig.of(14))`) for writes
-today; AEL is read-only for HLL until then.
+Create and update sketches with the builder API
+(`session.upsert(key).bin("h").hll_init(HllConfig.of(14))`, `.hll_add(...)`);
+the server compiler does not accept `hllInit`.
 
 ### Hex and Binary Literals
 
@@ -322,8 +363,10 @@ $.mask == 0b10101010
 Bind intermediate values:
 
 ```
-let $total = $.price * $.qty then $total > 1000
+let (total = $.price * $.qty) then (${total} > 1000)
 ```
+
+Bind in `let (...)`, then refer to each variable as `${name}` inside `then (...)`.
 
 ### Unknown and Error
 
@@ -332,7 +375,7 @@ treats as an evaluator-unknown result — useful as a `when` action when no
 sensible value can be returned:
 
 ```
-when ($.role == "admin" => $.tier, default => unknown)
+when ($.role == "admin" => $.tier:STRING, default => unknown)
 ```
 
 `error` is an alias for `unknown` and produces the same expression. Both
@@ -376,14 +419,56 @@ stream = await session.query(users).where(expr).execute()
 
 Use `Exp` on all clusters; use string AEL when `supports_ael()` is true.
 
+(ael-path-expressions)=
 ## Path Expressions
 
-Path expressions — `select_by_path` / `modify_by_path`, the `SelectFlags` and
-`ModifyFlags` return/modify flag enums, `CTX.all_children()` /
+A path walks into a collection bin, fans out over its elements with `*`, and
+narrows them with a filter `[?(...)]`. Inside the filter, `@` is the current
+element's value, `@key` its map key and `@index` its list index. Paths work in
+all three AEL entry points:
+
+```python
+# select_from: project the matching elements, or a count of them
+stream = await (
+    session.query(key).bin("big").select_from("$.l:LIST.*[?(@:INT > 200)]").execute()
+)
+
+# where: filter records on a path
+stream = await (
+    session.query(users)
+    .where("$.tags:LIST.*[?(@.upper() == 'VIP')].count() > 0")
+    .execute()
+)
+
+# upsert_from: write a modified copy of the collection into another bin
+await (
+    session.upsert(key)
+    .bin("bumped").upsert_from("$.l:LIST.*[?(@:INT > 200)].modify(@:INT + 1)")
+    .execute()
+)
+```
+
+A path write never changes the bin it reads: `upsert_from` stores the modified
+collection in the target bin (`bumped` above) and leaves `$.l` as it was. The
+write methods are `append(...)`, `appendItems([...])`, `setTo(...)` on a
+selected element, and `modify(...)` on filtered elements; flags follow a colon,
+as in `appendItems([600, 700]):ADD_UNIQUE`.
+
+A loop variable carries no type of its own, so pin it before a cast or
+arithmetic: `(@:INT).toString()` and `@:INT + 1` compile and evaluate. Before a
+method call the pinned variable must be parenthesized; unlike the bin form
+`$.rate:FLOAT.toInt()`, `@:INT.toString()` is a syntax error. An
+unpinned `@.toString()` parses but fails at evaluation with
+`ResultCode.OP_NOT_APPLICABLE`. Methods that only make sense on one type, such
+as `@key.upper()`, need no pin.
+
+### Building paths programmatically
+
+The same walks are available as values, for use with `Exp` or when the path is
+assembled at runtime: `select_by_path` / `modify_by_path`, the `SelectFlags`
+and `ModifyFlags` enums, `CTX.all_children()` /
 `CTX.all_children_with_filter()`, and the loop-variable family
-(`Exp.int_loop_var`, `.string_loop_var`, `.map_loop_var`, etc.)
-— are not yet surfaced through the AEL string grammar. Use the corresponding
-`aerospike_sdk` types directly:
+(`Exp.int_loop_var`, `.string_loop_var`, `.map_loop_var`, etc.):
 
 ```python
 from aerospike_sdk import (
@@ -423,6 +508,3 @@ end to end. Mind the name collision: the chainable
 [`.on_map_key(...).remove()`](cdt-operations.md) is the older, unrelated CDT
 removal — only the path-based `CdtOperation.remove` takes a `CTX` path with
 filters.
-
-A dedicated AEL surface is deferred until the DSL shape stabilizes across
-clients.

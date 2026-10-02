@@ -16,6 +16,7 @@
 """Unit tests for metrics export: fan-out, suspension, the file exporter."""
 
 import logging
+import re
 
 import pytest
 
@@ -228,14 +229,14 @@ class TestLearnMetricsFileExporter:
         """Nothing is unavailable any more, so the header names no such segment."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
         assert "unavailable[" not in header
-        assert "retryCount,node[]]" in header
+        assert "retry_count,node[]]" in header
 
     def test_header_declares_the_cluster_columns_in_the_format_order(self, tmp_path):
-        """cpu, mem, recover depth and invalid nodes precede the six usage columns and retryCount."""
+        """cpu, mem, recover depth and invalid nodes precede the six usage columns and retry_count."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
         assert (
-            "label[],cpu,mem,recoverQueueSize,invalidNodeCount,singleCount,batchCount,queryCount,"
-            "blockingCount,deferredCount,backgroundCount,retryCount" in header
+            "label[],cpu,mem,recover_queue_size,invalid_node_count,single_count,batch_count,query_count,"
+            "blocking_count,deferred_count,background_count,retry_count" in header
         )
         # The format has no field for the per-call count.
         assert "commandCount" not in header
@@ -252,7 +253,7 @@ class TestLearnMetricsFileExporter:
         assert "label[owner=platform],12,1048576,2,1," in line
 
     def test_conn_segment_uses_the_legacy_layout(self, tmp_path):
-        """`conn[inUse,inPool,opened,closed]`, the order existing parsers expect."""
+        """`conn[in_use,in_pool,opened,closed]`, the order existing parsers expect."""
         doc = dict(_DOC, cluster={"command_count": 57, "command_retries": 3,
                                   "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1}})
         doc["nodes"] = [dict(_DOC["nodes"][0], connections={
@@ -262,10 +263,10 @@ class TestLearnMetricsFileExporter:
         exporter.export(_StubSnapshot(doc))
         exporter.close()
         header, line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[:2]
-        assert "conn[inUse,inPool,opened,closed]" in header
+        assert "conn[in_use,in_pool,opened,closed]" in header
         assert "conn[1,2,4,1]" in line
-        # cpu and mem (absent here, so 0) then recoverQueueSize and
-        # invalidNodeCount sit after the labels.
+        # cpu and mem (absent here, so 0) then recover_queue_size and
+        # invalid_node_count sit after the labels.
         assert "label[owner=platform],0,0,2,1," in line
 
     def test_cluster_line_carries_identity_and_labels(self, tmp_path):
@@ -273,14 +274,14 @@ class TestLearnMetricsFileExporter:
         assert "python" in line and "9.9.9" in line
         assert "label[owner=platform]" in line
         assert "c1" in line and "billing" in line
-        # The labels follow appId, then the usage columns, per the header.
+        # The labels follow app_id, then the usage columns, per the header.
         assert "billing,label[owner=platform]," in line
 
-    def test_header_field_names_stay_camel_case(self, tmp_path):
-        """The header declares the format's legacy field names, for existing log shippers."""
+    def test_header_field_names_are_snake_case(self, tmp_path):
+        """Every header field name, not just a sample, reads as snake_case."""
         header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
-        assert "keyBusy" in header and "bytesIn" in header
-        assert "key_busy" not in header
+        assert "key_busy" in header and "bytes_in" in header
+        assert not re.search(r"[a-z][A-Z]", header), header
 
     def test_latency_segment_reports_the_shape(self, tmp_path):
         line = self._write_one(tmp_path)[0].read_text().splitlines()[1]

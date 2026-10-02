@@ -68,8 +68,8 @@ asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 addopts = "-s"
 markers = [
-    "requires_server_compiled_ael: needs connected client with server-compiled AEL (see tests/integration/conftest.py)",
-    "requires_query_selection: needs connected client with field 44 query selection (see tests/integration/conftest.py)",
+    "requires_server_compiled_ael(host='aerospike_host'): needs a seed cluster with server-compiled AEL (see tests/integration/conftest.py)",
+    "requires_query_selection(host='aerospike_host'): needs a seed cluster with field 44 query selection (see tests/integration/conftest.py)",
 ]
 testpaths = ["tests"]
 python_files = ["*_test.py"]

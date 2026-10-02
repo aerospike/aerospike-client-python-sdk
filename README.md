@@ -100,7 +100,9 @@ A guide that contradicts a docstring is stale, not authoritative. Report it.
 * **Do not mix legacy `aerospike` idioms into SDK code.** No `aerospike.client(...)`,
   no policy dicts, no `aerospike_helpers` operation functions. This SDK uses verbs
   on a session, `Behavior` for configuration, and AEL strings for filters.
-* **Path expressions are fully SDK-surfaced.** Use `CdtOperation.select_by_path` / `modify_by_path` /
+* **Path expressions are fully SDK-surfaced.** Write them as AEL strings
+  (`"$.l:LIST.*[?(@:INT > 200)]"`) in `where()` / `select_from()` / `upsert_from()`, or
+  build them with `CdtOperation.select_by_path` / `modify_by_path` /
   `remove`, the flag enums, `CTX.all_children()`, and the loop-variable family
   from `aerospike_sdk` directly - see `docs/guide/expression-ael.md`. Removal
   of matching elements is supported (`CdtOperation.remove`); do not conclude

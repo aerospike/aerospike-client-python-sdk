@@ -118,7 +118,7 @@ class TestRowWrites:
         )
         results = await (await session.query(users.ids(30, 31)).execute()).collect()
         ttl = {r.key.value: r.record.ttl for r in results}
-        assert ttl[31] is not None and 3500 < ttl[31] <= 3600
+        assert ttl[31] is not None and 3500 < ttl[31] <= 3605
         assert ttl[30] != ttl[31]
 
     async def test_per_row_generation_check_reaches_only_that_row(self, cluster):

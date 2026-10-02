@@ -131,6 +131,7 @@ class _BlockingQueryDispatch:
 
         Uses PAC ``query_operate_blocking`` — zero asyncio.
         """
+        self._refuse_background_in_txn()
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
         if self._specs:
@@ -160,6 +161,7 @@ class _BlockingQueryDispatch:
 
         Uses PAC ``query_execute_udf_blocking`` — zero asyncio.
         """
+        self._refuse_background_in_txn()
         self._finalize_current_spec()
         self._ensure_namespace_mode_blocking()
         if self._specs:
@@ -474,7 +476,7 @@ class _BlockingQueryDispatch:
             more than one spec, dataset / SI queries, scans, or background
             UDF), so the caller falls back to the async execution path.
         """
-        self._finalize_current_spec()
+        self._finalize_chain()
         self._ensure_namespace_mode_blocking()
         self._ensure_batch_namespace_modes_blocking()
 
@@ -583,7 +585,7 @@ class _BlockingQueryDispatch:
             when the builder has 0 or 1 specs (caller falls back —
             single-spec handled by :meth:`_execute_blocking_fast_path`).
         """
-        self._finalize_current_spec()
+        self._finalize_chain()
         self._ensure_namespace_mode_blocking()
         self._ensure_batch_namespace_modes_blocking()
 
@@ -662,7 +664,7 @@ class _BlockingQueryDispatch:
         del on_error  # dataset queries don't currently honor per-record
                       # dispositions here; PSDK propagates errors at the
                       # iterator boundary.
-        self._finalize_current_spec()
+        self._finalize_chain()
         self._ensure_namespace_mode_blocking()
 
         # Keyless query: either no specs (dataset query, attached at

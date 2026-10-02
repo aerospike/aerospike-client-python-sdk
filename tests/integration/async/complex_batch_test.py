@@ -471,6 +471,26 @@ class TestChainLevelDefaults:
 
         await _cleanup(session, k1, k2)
 
+    async def test_default_ttl_set_last_covers_earlier_segments(self, session, ds):
+        k1 = ds.id("cb_dttl_5")
+        k2 = ds.id("cb_dttl_6")
+        await _cleanup(session, k1, k2)
+
+        rs = await (
+            session
+            .upsert(k1).bin("a").set_to(1)
+            .upsert(k2).bin("b").set_to(2)
+            .default_expire_record_after_seconds(3600)
+            .execute()
+        )
+        await rs.collect()
+
+        for k in (k1, k2):
+            rec = (await (await session.query(k).execute()).first_or_raise()).record
+            assert 3590 <= rec.ttl <= 3605
+
+        await _cleanup(session, k1, k2)
+
 
 BIN_NAME = "bbin"
 BIN_NAME2 = "bbin2"

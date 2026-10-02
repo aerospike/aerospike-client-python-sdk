@@ -188,6 +188,10 @@ async for result in stream:
 stream.close()
 ```
 
+On clusters that compile AEL, the same filter can be written as a string:
+``.where("$.email:STRING.endsWith('@aerospike.com')")``. See
+[AEL Filter Expressions](expression-ael.md) for the string-method syntax.
+
 ### Projecting Computed Values
 
 ``select_from`` lifts an expression result into a synthetic bin on the

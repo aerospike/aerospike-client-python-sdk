@@ -152,12 +152,12 @@ _UNAVAILABLE_FIELDS: tuple = ()
 # Usage counters on the cluster line, in the order and under the names the
 # format defines. Values come from the canonical snapshot's ``usage``.
 _USAGE_FILE_COLUMNS = (
-    ("singleCount", "feature.shape.point"),
-    ("batchCount", "feature.shape.batch"),
-    ("queryCount", "feature.shape.query"),
-    ("blockingCount", "feature.api.blocking"),
-    ("deferredCount", "feature.api.deferred"),
-    ("backgroundCount", "feature.api.background"),
+    ("single_count", "feature.shape.point"),
+    ("batch_count", "feature.shape.batch"),
+    ("query_count", "feature.shape.query"),
+    ("blocking_count", "feature.api.blocking"),
+    ("deferred_count", "feature.api.deferred"),
+    ("background_count", "feature.api.background"),
 )
 
 # Latency segment order, as the legacy format writes it.
@@ -174,9 +174,11 @@ class LearnMetricsFileExporter:
     """Writes the legacy line-oriented metrics log under a report directory.
 
     Kept so existing log shippers keep working. Data lines are positional;
-    the header line declares the schema with the format's legacy camelCase
-    field names (``keyBusy``, ``bytesIn``) because that is what its existing
-    consumers parse -- a compatibility requirement, not a style choice.
+    the header line declares the schema, naming its fields in snake_case
+    (``key_busy``, ``bytes_in``) so they read the same as every other name
+    this SDK emits. Other clients writing this format spell the same fields
+    in camelCase, so a shipper that parses the header by name needs its field
+    map updated to read these files.
 
     An ordinary exporter, not a client lifecycle: the first :meth:`export`
     creates the directory, opens ``metrics-<timestamp>.log`` and writes the
@@ -187,15 +189,15 @@ class LearnMetricsFileExporter:
     repeated failures.
 
     Six fields the format defines cannot be filled: ``cpu`` and ``mem`` (process
-    statistics this client does not sample), ``inUse`` and ``inPool`` (the
+    statistics this client does not sample), ``in_use`` and ``in_pool`` (the
     client keeps a single open-connection gauge, not the split),
-    ``recoverQueueSize`` and ``invalidNodeCount``. They are omitted rather than
+    ``recover_queue_size`` and ``invalid_node_count``. They are omitted rather than
     written as zero, and the header line names them so a downstream parser sees
     why.
 
-    The six feature-usage columns (``singleCount`` through ``backgroundCount``)
+    The six feature-usage columns (``single_count`` through ``background_count``)
     carry the counters of the same name from the canonical snapshot's ``usage``
-    mapping, and ``retryCount`` carries its ``cluster.command_retries``. The
+    mapping, and ``retry_count`` carries its ``cluster.command_retries``. The
     format has no field for the per-call ``command_count``; read that off
     :meth:`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` instead,
     under ``cluster.command_count``.
@@ -275,12 +277,12 @@ class LearnMetricsFileExporter:
         self._written = 0
         usage_names = ",".join(name for name, _ in _USAGE_FILE_COLUMNS)
         header = (
-            "header(3) cluster[name,clientType,clientVersion,appId,label[],"
-            f"cpu,mem,recoverQueueSize,invalidNodeCount,{usage_names},retryCount,node[]] "
+            "header(3) cluster[name,client_type,client_version,app_id,label[],"
+            f"cpu,mem,recover_queue_size,invalid_node_count,{usage_names},retry_count,node[]] "
             "label[name,value] "
             "node[name,address,port,conn,namespace[]] "
-            "conn[inUse,inPool,opened,closed] "
-            "namespace[name,errors,timeouts,keyBusy,bytesIn,bytesOut,latency[]] "
+            "conn[in_use,in_pool,opened,closed] "
+            "namespace[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]] "
             "latency(unit,columns,shift)[type[buckets]]"
             + (f" unavailable[{','.join(_UNAVAILABLE_FIELDS)}]" if _UNAVAILABLE_FIELDS else "")
         )

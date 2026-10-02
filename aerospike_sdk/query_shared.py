@@ -181,6 +181,12 @@ _QUERY_IN_TXN_WARNING = (
     "query to confirm that is intended and silence this warning."
 )
 
+_BACKGROUND_IN_TXN_ERROR = (
+    "Background tasks cannot run inside a transaction: the server applies them "
+    "to every matching record outside any transaction, so none of their writes "
+    "would commit or roll back with it. Start the task from a regular session."
+)
+
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
 _bitwise_or = BitOperation.or_
@@ -619,20 +625,6 @@ class _QueryBuilderBase:
                 self._default_where_ael,
             )
 
-    def _effective_filter_expression(self) -> Optional[FilterExpression]:
-        """Return the active filter, materializing pending AEL strings on demand."""
-        # Hot path: spec finalization calls this once per segment. When no
-        # string AEL is pending (the common case), answer with attribute
-        # reads only — the resolve helpers would each re-check and return.
-        if self._where_ael is None:
-            if self._default_where_ael is None:
-                return self._filter_expression or self._default_filter_expression
-            self._resolve_default_filter_expression()
-            return self._filter_expression or self._default_filter_expression
-        self._resolve_where_filter_expression()
-        self._resolve_default_filter_expression()
-        return self._filter_expression or self._default_filter_expression
-
     def _apply_txn(self, policy: Any) -> Any:
         """Stamp this builder's captured txn on an outer policy in place.
 
@@ -775,6 +767,16 @@ class _QueryBuilderBase:
         """
         if self._txn is not None:
             log.warning(_QUERY_IN_TXN_WARNING)
+
+    def _refuse_background_in_txn(self) -> None:
+        """Raise when a background task would start inside a transaction.
+
+        Unlike a query, whose reads are harmless outside the transaction, a
+        background task writes, and those writes would escape its commit and
+        abort. ``with_txn(None)`` opts out explicitly.
+        """
+        if self._txn is not None:
+            raise RuntimeError(_BACKGROUND_IN_TXN_ERROR)
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
@@ -1589,15 +1591,12 @@ class _QueryBuilderBase:
         if self._usage_on:
             self._collect_segment_usage()
 
-        # Inline the no-AEL fast path: this runs once per segment, and the
-        # resolver chain is only needed when a string ``where()`` is pending.
+        # Only the segment's own filter and TTL; chain defaults are applied by
+        # _finalize_chain once every segment exists.
         filt = self._filter_expression
-        if filt is None:
-            if self._where_ael is None and self._default_where_ael is None:
-                filt = self._default_filter_expression
-            else:
-                filt = self._effective_filter_expression()
-        ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
+        if filt is None and self._where_ael is not None:
+            self._resolve_where_filter_expression()
+            filt = self._filter_expression
 
         # Hand off the current operations list directly; allocate a fresh
         # one for the next spec instead of copying. Arguments are positional
@@ -1611,7 +1610,7 @@ class _QueryBuilderBase:
             filt,
             self._op_type,
             self._generation,
-            ttl,
+            self._ttl_seconds,
             self._durable_delete,
             self._durable_delete_command_default,
             self._record_delete_in_operations,
@@ -1631,6 +1630,31 @@ class _QueryBuilderBase:
         self._durable_delete = None
         self._durable_delete_command_default = None
         self._record_delete_in_operations = False
+
+    def _finalize_chain(self) -> None:
+        """Close the last segment, then give each spec the chain defaults it lacks.
+
+        Called by every terminal that dispatches specs. Defaults resolve here
+        rather than per segment so a ``default_*`` verb also covers segments
+        closed before it was called. Safe to call more than once.
+        """
+        self._finalize_current_spec()
+        if (
+            self._default_filter_expression is not None
+            or self._default_where_ael is not None
+            or self._default_ttl_seconds is not None
+        ):
+            self._apply_chain_defaults()
+
+    def _apply_chain_defaults(self) -> None:
+        self._resolve_default_filter_expression()
+        filt = self._default_filter_expression
+        ttl = self._default_ttl_seconds
+        for spec in self._specs:
+            if spec.filter_expression is None:
+                spec.filter_expression = filt
+            if spec.ttl_seconds is None:
+                spec.ttl_seconds = ttl
 
     def _set_current_keys_from_varargs(self, keys: tuple[Key, ...]) -> None:
         if len(keys) == 1:
@@ -1658,18 +1682,17 @@ class _QueryBuilderBase:
             return
         if self._usage_on:
             self._collect_segment_usage()
-        filt = self._effective_filter_expression()
+        self._resolve_where_filter_expression()
         udf_args: Optional[List[Any]] = (
             list(self._udf_args) if self._udf_args is not None else None
         )
-        ttl = self._ttl_seconds if self._ttl_seconds is not None else self._default_ttl_seconds
         self._specs.append(_OperationSpec(
             keys=keys,
             bins=None,
-            filter_expression=filt,
+            filter_expression=self._filter_expression,
             op_type="udf",
             generation=None,
-            ttl_seconds=ttl,
+            ttl_seconds=self._ttl_seconds,
             durable_delete=self._durable_delete,
             durable_delete_command_default=self._durable_delete_command_default,
             contains_record_delete_op=False,
@@ -1684,6 +1707,7 @@ class _QueryBuilderBase:
         self._bins = None
         self._with_no_bins = False
         self._filter_expression = None
+        self._where_ael = None
         self._op_type = None
         self._generation = None
         self._ttl_seconds = None
@@ -2476,6 +2500,9 @@ class _QueryBuilderBase:
         return statement
 
     def _make_background_write_policy(self) -> WritePolicy:
+        # A keyless query never reaches a segment finalizer, which is where a
+        # string where() is otherwise materialized.
+        self._resolve_where_filter_expression()
         return make_background_write_policy(
             self._behavior,
             self._filter_expression,

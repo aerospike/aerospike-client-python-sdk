@@ -69,7 +69,9 @@ from aerospike_sdk.metrics import usage
 from aerospike_sdk.session_shared import (
     NamespaceScStatus,
     SessionBase,
+    _namespace_mode_from_partition_map,
     _namespace_sc_status,
+    _probe_namespace_mode_blocking,
 )
 
 
@@ -184,37 +186,29 @@ class Session(
     async def _resolve_namespace_mode(self, namespace: str) -> Mode:
         """Return :class:`Mode`.SC or AP for *namespace* (cached on the client)."""
         cache = self._client._namespace_mode_cache
-        if namespace in cache:
-            return cache[namespace]
-        mode = Mode.SC if await self.is_namespace_sc(namespace) else Mode.AP
-        cache[namespace] = mode
-        return mode
+        mode = cache.get(namespace)
+        if mode is not None:
+            return mode
+        mode = _namespace_mode_from_partition_map(self._pac_client, cache, namespace)
+        if mode is not None:
+            return mode
+        return Mode.SC if await self.is_namespace_sc(namespace) else Mode.AP
 
     def _resolve_namespace_mode_blocking(self, namespace: str) -> Mode:
         """Sync equivalent of :meth:`_resolve_namespace_mode`.
 
-        Routes through PAC's :meth:`info_blocking`. Shares the same
-        per-client cache so subsequent calls (sync or async) get the
-        cached value. Used by the ``execute_blocking`` family on builders
-        when the sync builder chain runs without an asyncio loop.
+        Shares the per-client cache, so either resolver primes it for both.
+        Used by the ``execute_blocking`` family on builders when the sync
+        builder chain runs without an asyncio loop.
         """
         cache = self._client._namespace_mode_cache
-        if namespace in cache:
-            return cache[namespace]
-        pac = self._client._async_client
-        is_sc = False
-        try:
-            result = pac.info_blocking(f"namespace/{namespace}")
-            detail = NamespaceDetail.from_response(result, namespace)
-            is_sc = detail is not None and detail.strong_consistency
-        except Exception:
-            # Conservative default: treat as AP. The cache miss path is
-            # rare (cache primes on first use); a transient info error
-            # here doesn't justify falling over the whole sync operation.
-            is_sc = False
-        mode = Mode.SC if is_sc else Mode.AP
-        cache[namespace] = mode
-        return mode
+        mode = cache.get(namespace)
+        if mode is not None:
+            return mode
+        mode = _namespace_mode_from_partition_map(self._pac_client, cache, namespace)
+        if mode is not None:
+            return mode
+        return _probe_namespace_mode_blocking(self._pac_client, namespace)
 
     # -- Fast-path single-key operations ------------------------------------
     # These bypass the QueryBuilder/OperationSpec/RecordStream chain for

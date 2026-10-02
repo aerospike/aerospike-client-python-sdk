@@ -19,9 +19,9 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from aerospike_async import FilterExpression
+from aerospike_async import Expiration, FilterExpression
 
-from aerospike_sdk import Key
+from aerospike_sdk import Key, Txn
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
@@ -29,7 +29,7 @@ from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.policy.behavior import Behavior
 
 
-def _connected_qb() -> QueryBuilder:
+def _connected_qb(txn: Txn | None = None) -> QueryBuilder:
     client = MagicMock()
     client.execute_udf = AsyncMock(return_value="rv")
     client.batch_apply = AsyncMock(return_value=[])
@@ -39,6 +39,7 @@ def _connected_qb() -> QueryBuilder:
         "set",
         Behavior.DEFAULT,
         supports_server_compiled_ael=True,
+        txn=txn,
     )
 
 
@@ -132,6 +133,36 @@ async def test_where_sets_filter_on_builder():
         )
     wp = qb._client.execute_udf.await_args.kwargs["policy"]
     assert wp.filter_expression is not None
+
+
+@pytest.mark.parametrize("opt_out", [False, True])
+async def test_with_txn_none_runs_the_udf_outside_the_transaction(opt_out):
+    qb = _connected_qb(txn=Txn())
+    qb._set_current_keys_from_varargs((Key("test", "set", 1),))
+    b = UdfFunctionBuilder(qb).function("pkg", "fn")
+    if opt_out:
+        assert b.with_txn(None) is b
+    await b.execute()
+    wp = qb._client.execute_udf.await_args.kwargs["policy"]
+    assert (wp.txn is None) is opt_out
+
+
+async def test_chain_defaults_reach_the_udf_policy():
+    qb = _connected_qb()
+    qb._set_current_keys_from_varargs((Key("test", "set", 1),))
+    only_active = FilterExpression.eq(
+        FilterExpression.int_bin("active"), FilterExpression.int_val(1),
+    )
+    await (
+        UdfFunctionBuilder(qb)
+        .function("pkg", "fn")
+        .default_where(only_active)
+        .default_never_expire()
+        .execute()
+    )
+    wp = qb._client.execute_udf.await_args.kwargs["policy"]
+    assert wp.filter_expression is not None
+    assert wp.expiration == Expiration.NEVER_EXPIRE
 
 
 class TestChainToUdfTransition:

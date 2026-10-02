@@ -314,7 +314,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # Fall through when an AP-only policy is cached (e.g. txn nulled
             # them): legacy path with explicit mode resolution.
 
-        self._finalize_current_spec()
+        self._finalize_chain()
         if self._record_on:
             self._record_call(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()
@@ -481,7 +481,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return AwaitableContext(self._stream(on_error))
 
     async def _stream(self, on_error: OnError | None = None) -> RecordStream:
-        self._finalize_current_spec()
+        self._finalize_chain()
         await self._ensure_namespace_mode()
         await self._ensure_batch_namespace_modes()
 
@@ -516,9 +516,12 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         Raises:
             ValueError: If the builder targets keys or has no write operations.
+            RuntimeError: If the builder is bound to a transaction; opt out
+                with ``with_txn(None)``.
             AerospikeError: If the server rejects the job, for example because
                 it contains a read operation.
         """
+        self._refuse_background_in_txn()
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
         if self._specs:
@@ -554,7 +557,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         Raises:
             ValueError: If the builder targets keys or has write operations set.
+            RuntimeError: If the builder is bound to a transaction; opt out
+                with ``with_txn(None)``.
         """
+        self._refuse_background_in_txn()
         self._finalize_current_spec()
         await self._ensure_namespace_mode()
         if self._specs:

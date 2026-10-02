@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import (
     Any,
+    Dict,
     Generic,
     List,
     NamedTuple,
@@ -114,6 +115,38 @@ def _namespace_sc_status(
         "(AP mode). Strong consistency is a server-side namespace setting; "
         "it cannot be enabled from the client.",
     )
+
+
+def _namespace_mode_from_partition_map(
+    pac_client: Any, cache: Dict[str, Mode], namespace: str,
+) -> Optional[Mode]:
+    """Resolve SC or AP from PAC's partition map, caching the answer.
+
+    The partition map answers without I/O. ``None`` means the map does not list
+    the namespace (unknown to the cluster, or not yet tended); callers then ask
+    the server and do not cache, so a failed or premature lookup never pins a
+    namespace's mode for the life of the client. A namespace cannot change mode
+    without a server restart, so a definite answer is safe to keep.
+    """
+    is_sc = pac_client.is_strong_consistency(namespace)
+    if is_sc is None:
+        return None
+    mode = cache[namespace] = Mode.SC if is_sc else Mode.AP
+    return mode
+
+
+def _probe_namespace_mode_blocking(pac_client: Any, namespace: str) -> Mode:
+    """Ask the server for *namespace*'s mode; AP when the probe fails.
+
+    Only reached for a namespace the partition map does not list, where the
+    operation about to run will surface the server's own error.
+    """
+    try:
+        result = pac_client.info_blocking(f"namespace/{namespace}")
+    except Exception:
+        return Mode.AP
+    detail = NamespaceDetail.from_response(result, namespace)
+    return Mode.SC if detail is not None and detail.strong_consistency else Mode.AP
 
 
 class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):

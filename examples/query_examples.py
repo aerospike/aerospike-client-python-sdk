@@ -132,8 +132,9 @@ async def seed_data(session) -> None:
         .execute()
     )
 
-    # One batched insert with a per-record TTL on one row. The "state" bin
-    # feeds the background-query section later.
+    # One batched insert: one row sets its own TTL, and a chain-level default
+    # covers the rest. The "state" and "value" bins feed the background-query
+    # section later.
     await session.delete(SET.ids(900, 901, 902, 903, 904, 905)).execute()
     stream = await (
         session.insert(SET.id(900))
@@ -145,20 +146,24 @@ async def seed_data(session) -> None:
         .expire_record_after(timedelta(days=5))
         .insert(SET.id(903))
         .bin("name").set_to("Jordan").bin("age").set_to(45).bin("hair").set_to("red")
-        .bin("state").set_to("nsw")
+        .bin("state").set_to("nsw").bin("value").set_to(100)
         .insert(SET.id(904))
         .bin("name").set_to("Alex").bin("age").set_to(67).bin("hair").set_to("blonde")
-        .bin("state").set_to("nsw")
+        .bin("state").set_to("nsw").bin("value").set_to(200)
         .insert(SET.id(905))
         .bin("name").set_to("Sam").bin("age").set_to(24).bin("hair").set_to("brown")
         .bin("state").set_to("qld")
+        .default_expire_record_after(timedelta(days=30))
         .execute()
     )
     count = 0
     async for _ in stream:
         count += 1
     stream.close()
-    print(f"Batched insert of ids 900-905 returned {count} rows (902 expires in 5 days)")
+    print(
+        f"Batched insert of ids 900-905 returned {count} rows "
+        "(902 expires in 5 days, the rest in 30)"
+    )
 
     # A second block used by the point-read and multi-operation sections.
     for i in range(15):
@@ -611,26 +616,34 @@ async def demonstrate_background_query(session) -> None:
         session.background_task()
         .update(SET)
         .bin("age").add(1)
+        # ":INT" pins the bin type. Two bare bin paths give the server nothing to
+        # infer from, and it rejects the expression rather than guessing.
+        .bin("bob").upsert_from("$.age:INT + $.value")
         .where("$.state == 'nsw'")
         .execute()
     )
     await task.wait_till_complete()
+    stream = await session.query(SET.ids(903, 904, 905)).bins(["state", "age", "bob"]).execute()
+    print("After the background update:")
+    await _print_stream(stream)
+    stream.close()
 
 
 async def demonstrate_multi_operation_batches(session) -> None:
     print("\n--- Multi operation batches ---")
 
     # Reads, writes, existence checks, and deletes mix freely in one round trip.
-    # Chain-level defaults (like a default TTL) are set where the chain starts.
+    # A chain-level default (like a default TTL) covers every segment that sets
+    # none of its own, wherever it appears in the chain.
     stream = await (
-        session.query(SET.ids(10, 12))
-        .default_expire_record_after(timedelta(minutes=20))
-        .update(SET.ids(1000, 1001))
+        session.update(SET.ids(1000, 1001))
         .bin("age").add(1)
         .expire_record_after(timedelta(minutes=5))
         .exists(SET.ids(1000, 1001))
+        .query(SET.ids(10, 12))
         .delete(SET.id(1003))
         .with_txn(None)
+        .default_expire_record_after(timedelta(minutes=20))
         .execute()
     )
     print("Multi operations:")
@@ -652,15 +665,14 @@ async def demonstrate_multi_operation_batches(session) -> None:
 
     # default_where applies to every segment that has no filter of its own.
     stream = await (
-        session.query(SET.ids(5, 6, 7))
-        .default_where("$.updated == false")
-        .update(SET.ids(1, 2, 3))
+        session.update(SET.ids(1, 2, 3))
         .bin("age").add(1)
         .bin("updated").set_to(True)
         .where("$.age < 21")
         .delete(SET.ids(11, 12, 13, 14, 15))
         .update(SET.ids(5, 6, 7))
         .bin("lucky_winner").set_to("true")
+        .default_where("$.updated == false")
         .execute()
     )
     async for _ in stream:

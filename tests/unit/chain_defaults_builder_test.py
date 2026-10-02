@@ -39,7 +39,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aerospike_sdk import Key
+from aerospike_sdk import Exp, Key
 from aerospike_sdk.aio.operations.query import (
     QueryBuilder,
     WriteSegmentBuilder,
@@ -138,3 +138,35 @@ class TestSingleKeyWriteSegmentPromotes:
         seg._promote()
         assert seg.default_expire_record_after_seconds(TTL_SECONDS) is seg
         assert seg._qb._default_ttl_seconds == TTL_SECONDS
+
+
+@pytest.mark.parametrize("qb_cls", [QueryBuilder, SyncQueryBuilder], ids=["async", "sync"])
+class TestDefaultsResolveAtExecute:
+    """A default covers every segment without its own, wherever it sits in the chain."""
+
+    def test_a_default_set_last_reaches_segments_already_closed(self, qb_cls):
+        own = Exp.eq(Exp.int_bin("tier"), Exp.int_val(1))
+        active = Exp.eq(Exp.int_bin("active"), Exp.int_val(1))
+        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
+        (
+            qb.upsert(_key(1)).bin("v").set_to(1).where(own).expire_record_after_seconds(60)
+            .delete(_key(2), _key(3))
+            .upsert(_key(4)).bin("v").set_to(2)
+            .default_where(active)
+            .default_expire_record_after_seconds(TTL_SECONDS)
+        )
+        qb._finalize_chain()
+        assert [(s.filter_expression, s.ttl_seconds) for s in qb._specs] == [
+            (own, 60), (active, TTL_SECONDS), (active, TTL_SECONDS),
+        ]
+
+    def test_the_last_default_set_wins(self, qb_cls):
+        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
+        (
+            qb.upsert(_key(1)).bin("v").set_to(1)
+            .default_never_expire()
+            .upsert(_key(2)).bin("v").set_to(2)
+            .default_expire_record_after_seconds(TTL_SECONDS)
+        )
+        qb._finalize_chain()
+        assert [s.ttl_seconds for s in qb._specs] == [TTL_SECONDS, TTL_SECONDS]

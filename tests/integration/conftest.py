@@ -17,96 +17,76 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import pytest
 
 from tests.pac_compat import (
-    SupportsPacCapabilities,
-    has_sdk_capability_properties,
     skip_if_lacks_query_selection,
     skip_if_lacks_server_compiled_ael,
 )
 
-_CAPABILITY_MARKERS: tuple[tuple[str, object], ...] = (
+_CAPABILITY_MARKERS = (
     ("requires_server_compiled_ael", skip_if_lacks_server_compiled_ael),
     ("requires_query_selection", skip_if_lacks_query_selection),
 )
 
+# Seed fixtures a capability marker may name with ``host=``, mapped to whether
+# connecting to that seed needs ``AEROSPIKE_AUTH_*``.
+_PROBE_SEEDS = {"aerospike_host": False, "aerospike_host_sc": True}
 
-def pytest_runtest_call(item: pytest.Item) -> None:
-    """Honor PAC capability markers once the test's fixtures are materialized."""
-    skip_checks = [
-        skip_fn
-        for marker_name, skip_fn in _CAPABILITY_MARKERS
-        if item.get_closest_marker(marker_name) is not None
+
+@dataclass(frozen=True)
+class _ClusterCapabilities:
+    supports_server_compiled_ael: bool
+    supports_query_selection: bool
+
+
+@pytest.fixture(scope="session")
+def cluster_capabilities(make_cluster_definition) -> Callable[[str, bool], _ClusterCapabilities]:
+    """Return a probe that reports a seed's capability flags, connecting once per seed."""
+    cache: dict[str, _ClusterCapabilities] = {}
+
+    def _probe(seed: str, auth: bool) -> _ClusterCapabilities:
+        capabilities = cache.get(seed)
+        if capabilities is None:
+            with make_cluster_definition(seed, auth=auth, sync=True).connect() as cluster:
+                capabilities = cache[seed] = _ClusterCapabilities(
+                    supports_server_compiled_ael=cluster.supports_ael(),
+                    supports_query_selection=cluster.supports_query_selection(),
+                )
+        return capabilities
+
+    return _probe
+
+
+@pytest.fixture(autouse=True)
+def _enforce_capability_markers(request):
+    """Skip a capability-marked test when its cluster lacks the capability.
+
+    Marks on a ``pytest.param`` land on the collected item, so one variant can
+    skip while its twin runs. Unmarked tests never pay the probe.
+
+    The probe asks the seed named by the marker's ``host=`` (default
+    ``aerospike_host``), not the test's own connection. A marked test that
+    connects to a different seed must name that seed's fixture, e.g.
+    ``@requires_server_compiled_ael(host="aerospike_host_sc")``.
+    """
+    marked = [
+        (marker, skip)
+        for name, skip in _CAPABILITY_MARKERS
+        if (marker := request.node.get_closest_marker(name)) is not None
     ]
-    if not skip_checks:
+    if not marked:
         return
-
-    client = resolve_sdk_client_from_funcargs(item.funcargs)
-    if client is None:
-        pytest.fail(
-            "PAC capability marker present but no SDK client fixture found — "
-            "name the fixture client / cluster* / session / session_with_* / "
-            "query_selection_cluster (or extend resolve_sdk_client_from_funcargs); skipping "
-            "here would silently drop coverage.",
-            pytrace=False,
-        )
-
-    for skip_fn in skip_checks:
-        skip_fn(client)  # type: ignore[operator]
-
-
-def _is_sdk_capability_client(candidate: object) -> bool:
-    """True when *candidate* exposes the public SDK ``supports_*`` bool properties."""
-    return has_sdk_capability_properties(candidate)
-
-
-def _unwrap_sdk_client(value: object) -> SupportsPacCapabilities | None:
-    """Return an SDK client exposing ``supports_*`` flags, unwrapping facades."""
-    if value is None:
-        return None
-
-    sdk = getattr(value, "_sdk_client", None)
-    if sdk is not None and _is_sdk_capability_client(sdk):
-        return sdk  # type: ignore[return-value]
-
-    for candidate in (
-        value,
-        getattr(value, "_client", None),
-        getattr(getattr(value, "client", None), "_client", None),
-        getattr(value, "client", None),
-    ):
-        if candidate is not None and _is_sdk_capability_client(candidate):
-            return candidate  # type: ignore[return-value]
-
-    return None
-
-
-def resolve_sdk_client_from_funcargs(
-    funcargs: dict[str, object],
-) -> SupportsPacCapabilities | None:
-    """Return a connected SDK client from a test's resolved fixture dict."""
-    if "client" in funcargs:
-        client = _unwrap_sdk_client(funcargs["client"])
-        if client is not None:
-            return client
-
-    for name, value in funcargs.items():
-        if name.endswith("_client"):
-            client = _unwrap_sdk_client(value)
-            if client is not None:
-                return client
-
-    for name, value in funcargs.items():
-        if name == "cluster" or name.startswith("cluster_") or name.endswith("_cluster"):
-            client = _unwrap_sdk_client(value)
-            if client is not None:
-                return client
-
-    for name, value in funcargs.items():
-        if name == "session" or name.startswith("session_with_"):
-            client = _unwrap_sdk_client(value)
-            if client is not None:
-                return client
-
-    return None
+    probe = request.getfixturevalue("cluster_capabilities")
+    for marker, skip in marked:
+        host_fixture = marker.kwargs.get("host", "aerospike_host")
+        if host_fixture not in _PROBE_SEEDS:
+            pytest.fail(
+                f"@{marker.name}(host={host_fixture!r}): unknown seed fixture; "
+                f"add it to _PROBE_SEEDS in tests/integration/conftest.py",
+                pytrace=False,
+            )
+        skip(probe(request.getfixturevalue(host_fixture), _PROBE_SEEDS[host_fixture]))

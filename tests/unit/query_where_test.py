@@ -56,7 +56,8 @@ class TestQueryBuilderWhere:
             assert result is builder
             assert builder._where_ael == "$.age > 20"
             assert builder._filter_expression is None
-            assert builder._effective_filter_expression() is sentinel
+            builder._resolve_where_filter_expression()
+            assert builder._filter_expression is sentinel
         factory.assert_called_once_with(
             "$.age > 20",
             supports_server_compiled_ael=True,
@@ -74,7 +75,8 @@ class TestQueryBuilderWhere:
             result = builder.where(f"$.age > {age}")
             assert result is builder
             assert builder._where_ael == f"$.age > {age}"
-            assert builder._effective_filter_expression() is sentinel
+            builder._resolve_where_filter_expression()
+            assert builder._filter_expression is sentinel
         factory.assert_called_once_with(
             f"$.age > {age}",
             supports_server_compiled_ael=True,
@@ -100,7 +102,8 @@ class TestQueryBuilderWhere:
         """where(str) uses server-compiled path when builder flag is set."""
         builder = _query_builder(supports_server_compiled_ael=True)
         builder.where("$.age > 20")
-        assert builder._effective_filter_expression() == (
+        builder._resolve_where_filter_expression()
+        assert builder._filter_expression == (
             Exp.from_server_compiled_ael("$.age > 20")
         )
 
@@ -128,7 +131,8 @@ class TestSyncQueryBuilderWhere:
             result = builder.where("$.age > 20")
             assert result is builder
             assert builder._where_ael == "$.age > 20"
-            assert builder._effective_filter_expression() is sentinel
+            builder._resolve_where_filter_expression()
+            assert builder._filter_expression is sentinel
         factory.assert_called_once_with(
             "$.age > 20",
             supports_server_compiled_ael=True,

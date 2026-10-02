@@ -147,8 +147,12 @@ def test_touch_single_key_bumps_generation(session, ds):
     assert rr.record.bins["score"] == 1
 
 
-def test_touch_batch_bumps_each_generation(session, ds):
+def test_touch_batch_bumps_each_generation(session, ds, general_namespace_is_sc):
     """session.touch([...]) dispatches one batch and bumps every record."""
+    # On a strong-consistency namespace the batch runs in an implicit
+    # transaction, and the server bumps the generation once for the
+    # provisional write and once more when it rolls the record forward.
+    bump = 2 if general_namespace_is_sc else 1
     keys = [ds.id(f"touch_batch_{i}") for i in range(3)]
     gens = []
     for k in keys:
@@ -159,4 +163,4 @@ def test_touch_batch_bumps_each_generation(session, ds):
 
     for k, gen_before in zip(keys, gens):
         rr = session.query(k).execute().first_or_raise()
-        assert rr.record.generation == gen_before + 1
+        assert rr.record.generation == gen_before + bump

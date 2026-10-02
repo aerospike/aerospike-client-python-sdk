@@ -23,7 +23,7 @@ from datetime import timedelta
 
 import pytest
 from aerospike_sdk import Behavior, UDFLang
-from aerospike_sdk.exceptions import AerospikeError, ResultCode, TimeoutError
+from aerospike_sdk.exceptions import AerospikeError, FilteredOutError, ResultCode, TimeoutError
 from aerospike_sdk import ClusterDefinition, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
 from tests.integration.namespace import general_namespace
@@ -212,6 +212,24 @@ async def test_batch_udf_reports_filtered_out_row_without_opt_in(cluster_with_ud
     r2 = next(r for r in results if r.key == k2)
     assert r1.is_ok
     assert r2.result_code == ResultCode.FILTERED_OUT
+
+@requires_server_compiled_ael
+async def test_fail_on_filtered_out_raises_for_a_single_key_udf(cluster_with_udf):
+    session = cluster_with_udf.create_session()
+    k = DS.id("udf_fofo_1")
+    await session.upsert(k).put({"v": 20}).execute()
+
+    def filtered_udf():
+        return (
+            session.execute_udf(k)
+            .function(MODULE, "writeBin")
+            .passing("tag", "hit")
+            .where("$.v < 10")
+        )
+
+    assert await (await filtered_udf().execute()).collect() == []
+    with pytest.raises(FilteredOutError):
+        await filtered_udf().fail_on_filtered_out().execute()
 
 async def test_get_generation_udf_result(cluster_with_udf):
     session = cluster_with_udf.create_session()

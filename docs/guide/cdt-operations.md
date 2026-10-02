@@ -401,7 +401,7 @@ from aerospike_sdk import QueryHint
 # Filter records where the list has more than 5 items
 stream = await (
     session.query(users)
-    .where("$.scores.count() > 5")
+    .where("$.scores:LIST.count() > 5")
     .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
@@ -409,7 +409,7 @@ stream = await (
 # Filter on a nested map value
 stream = await (
     session.query(users)
-    .where('$.settings.["theme"] == "dark"')
+    .where('$.settings.theme == "dark"')
     .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
