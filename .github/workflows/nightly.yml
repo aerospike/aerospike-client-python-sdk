@@ -127,11 +127,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - storage: persistent
-            config: .github/aerospike-sc.conf
-          - storage: memory
-            config: .github/aerospike-sc-memory.conf
+        storage: [persistent, memory]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -155,6 +151,39 @@ jobs:
           fi
           printf '%s\n' "$FEATURES_CONTENT" > "${{ runner.temp }}/features.conf"
 
+      # Both jobs start from aerospike-sc.conf. Memory rewrites the device
+      # block; persistent uses the file as written.
+      - name: Prepare server config
+        id: config
+        env:
+          STORAGE: ${{ matrix.storage }}
+        run: |
+          set -euo pipefail
+          dest="${{ runner.temp }}/aerospike-sc.conf"
+          cp .github/aerospike-sc.conf "$dest"
+          if [ "$STORAGE" = "memory" ]; then
+            python3 - "$dest" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          old = (
+              "    storage-engine device {\n"
+              "        file /opt/aerospike/data/test.dat\n"
+              "        filesize 1G\n"
+              "    }"
+          )
+          new = (
+              "    storage-engine memory {\n"
+              "        data-size 1G\n"
+              "    }"
+          )
+          if old not in text:
+              raise SystemExit("storage-engine device block not found in aerospike-sc.conf")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          fi
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
       - name: Start 3-node strong-consistency cluster
         id: aerospike
         uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
@@ -164,7 +193,7 @@ jobs:
           num-nodes: "3"
           enable-strong-consistency: "true"
           features-file: ${{ runner.temp }}/features.conf
-          config-file: ${{ matrix.config }}
+          config-file: ${{ steps.config.outputs.path }}
           container-name-prefix: aerospike-sc
           startup-timeout: "90"
           sc-stability-timeout-seconds: "60"
