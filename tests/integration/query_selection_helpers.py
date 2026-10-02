@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from aerospike_async import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
 from aerospike_sdk import ResultCode
+from tests.integration.namespace import general_namespace
 
 if TYPE_CHECKING:
     from aerospike_sdk import QueryHint
 
 
-NS = "test"
+NS = general_namespace()
 SET_NAME = "qselint"
 INDEX_NAME = "qsel_age_idx"
 SCORE_INDEX_NAME = "qsel_score_idx"
