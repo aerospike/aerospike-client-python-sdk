@@ -6,8 +6,7 @@ name: Nightly
 # supported Python. Bump PYTHON_VERSION when 3.15 becomes that interpreter.
 #
 # 1. Floating canary — newest release or RC, resolved when the job runs. A
-#    failure notifies and does not fail this workflow. This is the coverage
-#    above 8.2.0.
+#    failure does not fail this workflow. This is the coverage above 8.2.0.
 # 2. Server matrix — placeholder. Pinned 8.1.2.0 is deferred (CLIENT-5616).
 # 3. Multi-node SC — pinned 8.2.0.0, blocking. Rosters, MRTs, SC across nodes.
 # 4. Security / auth — pinned 8.2.0.0, blocking. string_masking_test.
@@ -42,11 +41,8 @@ jobs:
     name: Floating canary (newest release/RC)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # A red canary must not fail the nightly run. notify-canary posts when
-    # this job records a failure.
+    # A red canary must not fail the nightly run.
     continue-on-error: true
-    outputs:
-      failed: ${{ steps.mark.outputs.failed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -101,27 +97,6 @@ jobs:
           rm -f aerospike.env
           python -m pytest tests/integration -v
 
-      - name: Record outcome
-        id: mark
-        if: always()
-        run: |
-          set -euo pipefail
-          failed=false
-          for outcome in \
-            "${{ steps.resolve.outcome }}" \
-            "${{ steps.aerospike.outcome }}" \
-            "${{ steps.unit.outcome }}" \
-            "${{ steps.integration.outcome }}"
-          do
-            if [ "$outcome" = "failure" ]; then
-              failed=true
-            fi
-          done
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          if [ "$failed" = "true" ]; then
-            echo "::warning::Floating canary failed against ${{ steps.resolve.outputs.tag }}. Nightly is not blocked."
-          fi
-
       - name: Server logs
         if: failure()
         run: |
@@ -131,28 +106,6 @@ jobs:
             echo "=== ${name} (last 100 lines) ==="
             docker logs --tail 100 "$name" || true
           done
-
-  notify-canary:
-    name: Notify floating-canary failure
-    needs: floating-canary
-    if: needs.floating-canary.outputs.failed == 'true'
-    uses: aerospike/shared-workflows/.github/workflows/reusable_notify-slack.yaml@dc2cdd913a4699948fbe024a85a42c354339ac15
-    with:
-      gh-workflows-ref: dc2cdd913a4699948fbe024a85a42c354339ac15
-      message-type: warning
-      title: Nightly floating canary failed
-      subtitle: ${{ github.repository }}
-      slack-channel-id: ${{ vars.SLACK_CHANNEL_ID || '' }}
-      child-blocks: |
-        [
-          {
-            "type": "section",
-            "text": {
-              "type": "mrkdwn",
-              "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
-            }
-          }
-        ]
 
   server-matrix:
     name: Server matrix (8.1.2.0, deferred)
