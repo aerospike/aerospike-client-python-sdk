@@ -26,10 +26,17 @@ from tests.pac_compat import requires_server_compiled_ael
 
 
 async def test_client_policy_use_services_alternate_from_env(client_policy, aerospike_host):
-    """Verify AEROSPIKE_USE_SERVICES_ALTERNATE is loaded and applied to client_policy."""
-    assert client_policy.use_services_alternate is True
+    """The client policy follows AEROSPIKE_USE_SERVICES_ALTERNATE.
+
+    Unset keeps the fixture default, which is on. An explicit false stays off,
+    which a multi-node cluster without alternate-access-address requires.
+    """
     env_val = os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "").strip().lower()
-    assert env_val in ("true", "1", "yes", ""), f"unexpected AEROSPIKE_USE_SERVICES_ALTERNATE={env_val!r}"
+    if env_val in ("", "true", "1", "yes"):
+        assert client_policy.use_services_alternate is True
+    else:
+        assert env_val in ("false", "0", "no"), f"unexpected AEROSPIKE_USE_SERVICES_ALTERNATE={env_val!r}"
+        assert client_policy.use_services_alternate is False
     assert aerospike_host, "AEROSPIKE_HOST should be set (e.g. 127.0.0.1:3100)"
 
 

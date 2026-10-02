@@ -172,11 +172,15 @@ jobs:
       # tests run instead of skipping. The gated commit tests need their own
       # single-node cluster and run in the commit-status job. Security stays
       # on the security job.
+      #
+      # services-alternate stays off. This config publishes no
+      # alternate-access-address, and with the flag on the client keeps only
+      # the seed. Partitions owned by the other two nodes then fail to route.
       - name: Run integration tests and strong-consistency examples
         env:
           AEROSPIKE_HOST: 127.0.0.1:3000
           AEROSPIKE_HOST_SC: 127.0.0.1:3000
-          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "false"
           AEROSPIKE_NAMESPACE: test
           AEROSPIKE_SC_NAMESPACE: test
         run: |
