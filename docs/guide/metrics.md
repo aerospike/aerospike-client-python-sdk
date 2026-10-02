@@ -364,9 +364,10 @@ system:
 The configured install is active only when `report_dir` is set; with no
 directory it installs nothing, and so does `exporter: none`. The file's data
 lines are positional — they carry values, not field names. The one header
-line that declares the schema spells its field names in the format's legacy
-camelCase (`keyBusy`, `bytesIn`), because that is what the format's existing
-consumers parse; nothing else this SDK writes uses camelCase.
+line that declares the schema names its fields in snake_case (`key_busy`,
+`bytes_in`), matching every other name this SDK emits. Other clients writing
+this format spell the same fields in camelCase, so a shipper that parses the
+header by name needs its field map updated to read these files.
 
 This file carries the legacy field list and nothing more: cluster identity,
 per-node connections, per-namespace counters, and the latency histograms.
@@ -454,11 +455,9 @@ The canonical snapshot carries the same two values as `cpu_percent` and
 `memory_bytes`.
 
 What the file does carry, beyond the per-node and per-namespace segments: the
-six feature-usage counters as the `singleCount` … `backgroundCount` columns,
-and `retryCount` for the summed per-node retries described above. Its field
-names are the format's own camelCase (`keyBusy`, `bytesIn`) because that is
-what its existing consumers parse — a compatibility requirement, not a style
-choice. The canonical snapshot uses snake_case throughout.
+six feature-usage counters as the `single_count` … `background_count` columns,
+and `retry_count` for the summed per-node retries described above. Its field
+names are snake_case, as the canonical snapshot's are.
 
 ## What the latencies represent
 
