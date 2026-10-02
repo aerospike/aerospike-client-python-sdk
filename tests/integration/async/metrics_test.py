@@ -41,6 +41,14 @@ _SHAPE_SAFE = MetricsPolicy(
     latency_columns=24,
 )
 
+# The per-node connections block of the canonical snapshot: the gauges plus
+# every reason a connection was opened, refused, or closed.
+_NODE_CONNECTION_KEYS = {
+    "opened", "closed", "open", "in_use", "in_pool", "recovering",
+    "open_failure", "tls_handshake_failure", "auth_failure",
+    "closed_idle", "closed_error", "closed_node_removed", "pool_exhausted",
+}
+
 
 async def _do_some_ops(cluster, count):
     session = cluster.create_session()
@@ -430,7 +438,7 @@ class TestMetricsExport:
         # Every node reports its own namespace block and its own connections.
         for node in nodes:
             assert node["namespaces"], f"node {node['name']} has no namespace block"
-            assert set(node["connections"]) == {"opened", "closed", "open"}
+            assert set(node["connections"]) == _NODE_CONNECTION_KEYS
 
         # Work is spread, not attributed to one node: at least two nodes
         # recorded read latency. A view that aggregated would put it all on one.
