@@ -79,7 +79,7 @@ jobs:
 
       - name: Promote Release Bundle v2 to STAGE
         if: env.DRY_RUN != 'true'
-        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@3737237b6907ccb1f0c9c9669c826631912252d8 # INFRA-723 job names (post-v4.1.0)
+        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@49381314f7afd64afb580b77bab8ac263040c27e # PyPI metadata SIGPIPE fix (post-v5.0.0)
         with:
           bundle-name: aerospike-client-python-sdk
           version: ${{ needs.extract-version.outputs.version }}

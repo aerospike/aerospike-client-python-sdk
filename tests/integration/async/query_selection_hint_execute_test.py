@@ -29,6 +29,7 @@ import pytest
 from aerospike_sdk import QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
+from tests.integration.namespace import requires_mode
 from tests.integration.query_selection_helpers import (
     HINT_BOGUS_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
@@ -131,6 +132,8 @@ class TestRequireIndexAtExecute:
 class TestQueryDurationAtExecute:
     """``LONG`` is covered in ``query_hint_test``; this is the relax-AP variant."""
 
+    # The server rejects the relax-AP duration on a strong-consistency namespace.
+    @requires_mode("ap")
     @requires_query_selection
     async def test_long_relax_ap_returns_rows_on_an_ap_namespace(
         self, query_selection_cluster,
