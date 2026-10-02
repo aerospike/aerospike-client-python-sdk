@@ -8,8 +8,8 @@ name: Nightly
 # 1. Floating canary — newest release or RC, resolved when the job runs. A
 #    failure does not fail this workflow. This is the coverage above 8.2.0.
 # 2. Server matrix — placeholder. Pinned 8.1.2.0 is deferred (CLIENT-5616).
-# 3. Multi-node SC — pinned 8.2.0.0, blocking. Rosters, MRTs, SC across nodes,
-#    once on device storage and again in memory.
+# 3. Multi-node SC — pinned 8.2.0.0, blocking. Rosters, MRTs, SC across nodes.
+#    Persistent storage and memory storage are separate jobs and run together.
 # 4. Commit status — pinned 8.2.0.0, blocking. Single-node SC for the gated
 #    commit tests. roster.py only prepares that cluster; it is not a test.
 # 5. Security / auth — pinned 8.2.0.0, blocking. string_masking_test.
@@ -121,9 +121,17 @@ jobs:
           echo "Tracked by https://aerospike.atlassian.net/browse/CLIENT-5616"
 
   sc-cluster:
-    name: Multi-node SC
+    name: Multi-node SC (${{ matrix.storage }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - storage: persistent
+            config: .github/aerospike-sc.conf
+          - storage: memory
+            config: .github/aerospike-sc-memory.conf
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -147,7 +155,7 @@ jobs:
           fi
           printf '%s\n' "$FEATURES_CONTENT" > "${{ runner.temp }}/features.conf"
 
-      - name: Start 3-node on-device strong-consistency cluster
+      - name: Start 3-node strong-consistency cluster
         id: aerospike
         uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
@@ -156,7 +164,7 @@ jobs:
           num-nodes: "3"
           enable-strong-consistency: "true"
           features-file: ${{ runner.temp }}/features.conf
-          config-file: .github/aerospike-sc.conf
+          config-file: ${{ matrix.config }}
           container-name-prefix: aerospike-sc
           startup-timeout: "90"
           sc-stability-timeout-seconds: "60"
@@ -177,8 +185,7 @@ jobs:
       # services-alternate stays off. This config publishes no
       # alternate-access-address, and with the flag on the client keeps only
       # the seed. Partitions owned by the other two nodes then fail to route.
-      - name: Run integration tests on the on-device cluster
-        id: device-tests
+      - name: Run integration tests and strong-consistency examples
         env:
           AEROSPIKE_HOST: 127.0.0.1:3000
           AEROSPIKE_HOST_SC: 127.0.0.1:3000
@@ -226,97 +233,10 @@ jobs:
           run_example examples/multi_record_transaction_example.py "Overall: SUCCESS"
           run_example examples/roster_example.py "Roster initialization complete."
 
-      # The action names its config volume from the run id, so a second call
-      # reuses that volume. Free the host ports and the container names first.
-      - name: Stop the on-device cluster
+      - name: Server logs
+        if: failure()
         run: |
           IFS=',' read -ra names <<< "${{ steps.aerospike.outputs.container-names }}"
-          docker rm -f "${names[@]}"
-
-      - name: Start 3-node in-memory strong-consistency cluster
-        id: aerospike-memory
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
-        with:
-          server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
-          server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
-          num-nodes: "3"
-          enable-strong-consistency: "true"
-          features-file: ${{ runner.temp }}/features.conf
-          config-file: .github/aerospike-sc-memory.conf
-          container-name-prefix: aerospike-sc
-          startup-timeout: "90"
-          sc-stability-timeout-seconds: "60"
-          tools-tag: ${{ env.AEROSPIKE_TOOLS_TAG }}
-          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
-          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
-
-      - name: Assert the in-memory server is the one we asked for
-        env:
-          EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
-        run: python3 .github/assert-server.py
-
-      - name: Run integration tests on the in-memory cluster
-        env:
-          AEROSPIKE_HOST: 127.0.0.1:3000
-          AEROSPIKE_HOST_SC: 127.0.0.1:3000
-          AEROSPIKE_USE_SERVICES_ALTERNATE: "false"
-          AEROSPIKE_NAMESPACE: test
-          AEROSPIKE_SC_NAMESPACE: test
-        run: |
-          set -euo pipefail
-          rm -f aerospike.env
-          python -m pytest tests/integration -v --junitxml="$RUNNER_TEMP/integration-memory.xml"
-          python3 .github/assert-junit-executed.py "$RUNNER_TEMP/integration-memory.xml" \
-            tests/integration/async/txn_test.py \
-            tests/integration/sync/txn_test.py \
-            tests/integration/async/durable_delete_sc_test.py \
-            tests/integration/sync/durable_delete_sc_test.py \
-            tests/integration/async/implicit_batch_txn_test.py \
-            tests/integration/sync/implicit_batch_txn_test.py
-
-          run_example() {
-            local file="$1"
-            local marker="$2"
-            local out status
-            set +e
-            out=$(python "$file" 2>&1)
-            status=$?
-            set -e
-            printf '%s\n' "$out"
-            if [ "$status" -ne 0 ]; then
-              echo "::error::$file exited $status"
-              exit "$status"
-            fi
-            if grep -q 'Skipped:' <<<"$out"; then
-              echo "::error::$file skipped; the strong-consistency cluster was not used"
-              exit 1
-            fi
-            if grep -q 'ERROR:' <<<"$out"; then
-              echo "::error::$file reported an info error"
-              exit 1
-            fi
-            if ! grep -q "$marker" <<<"$out"; then
-              echo "::error::$file did not report completion ($marker)"
-              exit 1
-            fi
-          }
-          run_example examples/multi_record_transaction_example.py "Overall: SUCCESS"
-          run_example examples/roster_example.py "Roster initialization complete."
-
-      - name: On-device server logs
-        if: failure() && steps.device-tests.outcome == 'failure'
-        run: |
-          IFS=',' read -ra names <<< "${{ steps.aerospike.outputs.container-names }}"
-          for name in "${names[@]}"; do
-            [ -z "$name" ] && continue
-            echo "=== ${name} (last 100 lines) ==="
-            docker logs --tail 100 "$name" || true
-          done
-
-      - name: In-memory server logs
-        if: failure() && steps.aerospike-memory.outcome != 'skipped'
-        run: |
-          IFS=',' read -ra names <<< "${{ steps.aerospike-memory.outputs.container-names }}"
           for name in "${names[@]}"; do
             [ -z "$name" ] && continue
             echo "=== ${name} (last 100 lines) ==="
