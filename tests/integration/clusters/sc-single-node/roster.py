@@ -2,8 +2,9 @@
 """Read the observed roster, set it, and recluster.
 
 Defaults match the local single-node rig: ``127.0.0.1:3130``, namespace
-``test_sc``, no credentials. Nightly's 3-node job overrides those with
-``AEROSPIKE_HOST``, ``AEROSPIKE_SC_NAMESPACE``, and ``AEROSPIKE_AUTH_*``.
+``test_sc``, no credentials. ``AEROSPIKE_HOST``, ``AEROSPIKE_SC_NAMESPACE``,
+and ``AEROSPIKE_AUTH_*`` override those. This prepares the cluster for the
+gated commit tests; it is not a test itself.
 
 An SC namespace serves nothing until its roster is set -- without this the
 node answers every read and write with "partition unavailable".

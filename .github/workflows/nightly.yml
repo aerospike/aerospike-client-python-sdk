@@ -9,8 +9,10 @@ name: Nightly
 #    failure does not fail this workflow. This is the coverage above 8.2.0.
 # 2. Server matrix — placeholder. Pinned 8.1.2.0 is deferred (CLIENT-5616).
 # 3. Multi-node SC — pinned 8.2.0.0, blocking. Rosters, MRTs, SC across nodes.
-# 4. Security / auth — pinned 8.2.0.0, blocking. string_masking_test.
-# 5. TLS — pinned 8.2.0.0, blocking.
+# 4. Commit status — pinned 8.2.0.0, blocking. Single-node SC for the gated
+#    commit tests. roster.py only prepares that cluster; it is not a test.
+# 5. Security / auth — pinned 8.2.0.0, blocking. string_masking_test.
+# 6. TLS — pinned 8.2.0.0, blocking.
 
 on:
   schedule:
@@ -28,7 +30,7 @@ concurrency:
 env:
   JF_URL: https://artifact.aerospike.io
   PYTHON_VERSION: "3.14"
-  # Pinned jobs (SC, security, TLS). The canary resolves its own tag.
+  # Pinned jobs (SC, commit status, security, TLS). The canary resolves its own tag.
   AEROSPIKE_SERVER_TAG: "8.2.0.0"
   AEROSPIKE_SERVER_REPO: database-docker-test-local/aerospike-server-enterprise
   # Keep the tag and the image reference together. The server action pulls the
@@ -167,8 +169,9 @@ jobs:
         run: python3 .github/assert-server.py
 
       # Namespace test is strong consistency, so transaction and durable-delete
-      # tests run instead of skipping. roster.py is the roster test; this
-      # step's env points it at this cluster. Security stays on the security job.
+      # tests run instead of skipping. The gated commit tests need their own
+      # single-node cluster and run in the commit-status job. Security stays
+      # on the security job.
       - name: Run integration tests and strong-consistency examples
         env:
           AEROSPIKE_HOST: 127.0.0.1:3000
@@ -187,7 +190,6 @@ jobs:
             tests/integration/sync/durable_delete_sc_test.py \
             tests/integration/async/implicit_batch_txn_test.py \
             tests/integration/sync/implicit_batch_txn_test.py
-          python tests/integration/clusters/sc-single-node/roster.py
 
           run_example() {
             local file="$1"
@@ -217,6 +219,84 @@ jobs:
           }
           run_example examples/multi_record_transaction_example.py "Overall: SUCCESS"
           run_example examples/roster_example.py "Roster initialization complete."
+
+      - name: Server logs
+        if: failure()
+        run: |
+          IFS=',' read -ra names <<< "${{ steps.aerospike.outputs.container-names }}"
+          for name in "${names[@]}"; do
+            [ -z "$name" ] && continue
+            echo "=== ${name} (last 100 lines) ==="
+            docker logs --tail 100 "$name" || true
+          done
+
+  commit-status:
+    name: Commit status
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: ./.github/actions/install-sdk
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      # Custom config names the key file, so the basename has to be stable.
+      # features-content would land under a random temp name.
+      - name: Write feature key
+        env:
+          FEATURES_CONTENT: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FEATURES_CONTENT}" ]; then
+            echo "::error::AEROSPIKE_SERVER_FEATURES_CONF is not set"
+            exit 1
+          fi
+          printf '%s\n' "$FEATURES_CONTENT" > "${{ runner.temp }}/features.conf"
+
+      - name: Start single-node strong-consistency cluster
+        id: aerospike
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
+        with:
+          server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
+          server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
+          num-nodes: "1"
+          enable-strong-consistency: "true"
+          features-file: ${{ runner.temp }}/features.conf
+          config-file: .github/aerospike-sc-single.conf
+          container-name-prefix: aerospike-sc-single
+          startup-timeout: "60"
+          sc-stability-timeout-seconds: "30"
+          tools-tag: ${{ env.AEROSPIKE_TOOLS_TAG }}
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Assert the server is the one we asked for
+        env:
+          EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
+        run: python3 .github/assert-server.py
+
+      # These tests skip unless AEROSPIKE_HOST_SC_SINGLE answers. One node
+      # owns every partition, which is what force_single_node() needs. The
+      # action stages the roster; roster.py is only the local helper for that.
+      - name: Run commit-status tests
+        env:
+          AEROSPIKE_HOST_SC_SINGLE: 127.0.0.1:3000
+          AEROSPIKE_SC_NAMESPACE: test
+        run: |
+          set -euo pipefail
+          rm -f aerospike.env
+          python -m pytest \
+            tests/integration/async/txn_commit_status_test.py \
+            tests/integration/sync/txn_commit_status_test.py \
+            -v --junitxml="$RUNNER_TEMP/commit-status.xml"
+          python3 .github/assert-junit-executed.py --forbid-skips \
+            "$RUNNER_TEMP/commit-status.xml" \
+            tests/integration/async/txn_commit_status_test.py \
+            tests/integration/sync/txn_commit_status_test.py
 
       - name: Server logs
         if: failure()
