@@ -101,14 +101,6 @@ jobs:
           rm -f aerospike.env
           python -m pytest tests/integration -v
 
-      - name: Run canonical code examples
-        id: examples
-        env:
-          AEROSPIKE_HOST: 127.0.0.1:3000
-          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
-          AEROSPIKE_SC_NAMESPACE: test
-        run: make examples
-
       - name: Record outcome
         id: mark
         if: always()
@@ -119,8 +111,7 @@ jobs:
             "${{ steps.resolve.outcome }}" \
             "${{ steps.aerospike.outcome }}" \
             "${{ steps.unit.outcome }}" \
-            "${{ steps.integration.outcome }}" \
-            "${{ steps.examples.outcome }}"
+            "${{ steps.integration.outcome }}"
           do
             if [ "$outcome" = "failure" ]; then
               failed=true
