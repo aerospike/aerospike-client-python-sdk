@@ -2,12 +2,16 @@ name: Nightly
 
 # Pull-request CI (.github/workflows/build-test.yml) is one node of the minimum
 # supported server, with no security, no TLS, and no strong consistency. The
-# suites that need those shapes skip. This workflow runs them, plus the regular
-# suite against the current server on the newest supported Python.
+# suites that need those shapes skip. Nightly is the matrix below, on the newest
+# supported Python. Bump PYTHON_VERSION when 3.15 becomes that interpreter.
 #
-# Python is a single version on purpose. The pull-request matrix already covers
-# 3.11–3.14; nightly is about cluster shape and server vintage. Bump
-# PYTHON_VERSION when 3.15 becomes the newest supported interpreter.
+# 1. Floating canary — newest release or RC, resolved when the job runs. A
+#    failure notifies and does not fail this workflow. This is the coverage
+#    above 8.2.0.
+# 2. Server matrix — placeholder. Pinned 8.1.2.0 is deferred (CLIENT-5616).
+# 3. Multi-node SC — pinned 8.2.0.0, blocking. Rosters, MRTs, SC across nodes.
+# 4. Security / auth — pinned 8.2.0.0, blocking. string_masking_test.
+# 5. TLS — pinned 8.2.0.0, blocking.
 
 on:
   schedule:
@@ -25,8 +29,7 @@ concurrency:
 env:
   JF_URL: https://artifact.aerospike.io
   PYTHON_VERSION: "3.14"
-  # Same minimum build as build-test.yml. The latest-server job does not
-  # set a tag or repo; it takes setup-aerospike-server's defaults.
+  # Pinned jobs (SC, security, TLS). The canary resolves its own tag.
   AEROSPIKE_SERVER_TAG: "8.2.0.0"
   AEROSPIKE_SERVER_REPO: database-docker-test-local/aerospike-server-enterprise
   # Keep the tag and the image reference together. The server action pulls the
@@ -35,8 +38,143 @@ env:
   AEROSPIKE_TOOLS_IMAGE: aerospike.jfrog.io/database-docker-virtual/aerospike-tools:12.1.1_2
 
 jobs:
+  floating-canary:
+    name: Floating canary (newest release/RC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # A red canary must not fail the nightly run. notify-canary posts when
+    # this job records a failure.
+    continue-on-error: true
+    outputs:
+      failed: ${{ steps.mark.outputs.failed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: ./.github/actions/install-sdk
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          jf-project: ${{ vars.JFROG_PROJECT }}
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      # Registry tags, not the moving `latest` or `8.2` aliases. `latest` is
+      # still 8.1.2.5; the 8.2 alias is a nightly. This job wants a release
+      # or RC at or above the 8.2.0 floor.
+      - name: Resolve newest release or RC
+        id: resolve
+        run: |
+          set -euo pipefail
+          json=$(jf rt curl -s "/api/docker/database-docker-virtual/v2/aerospike-server-enterprise/tags/list")
+          tag=$(printf '%s\n' "$json" | python3 .github/resolve-server-tag.py)
+          build=$(printf '%s\n' "$tag" | python3 -c 'import re,sys; m=re.match(r"(\d+\.\d+\.\d+\.\d+)", sys.stdin.read().strip()); print(m.group(1) if m else "")')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Resolved server tag: $tag"
+
+      # server-container-repo stays at the action default (the virtual repo),
+      # where releases and RCs are published.
+      - name: Start resolved Aerospike server
+        id: aerospike
+        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
+        with:
+          server-tag: ${{ steps.resolve.outputs.tag }}
+          config-file: .github/aerospike.conf
+          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Assert the server is up and enterprise
+        env:
+          EXPECTED_BUILD: ${{ steps.resolve.outputs.build }}
+        run: python3 .github/assert-server.py
+
+      - name: Run unit tests
+        id: unit
+        run: python -m pytest tests/unit -v --cov=aerospike_sdk --cov-report=term --cov-fail-under=65
+
+      - name: Run integration tests
+        id: integration
+        env:
+          AEROSPIKE_HOST: 127.0.0.1:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+        run: |
+          set -euo pipefail
+          rm -f aerospike.env
+          python -m pytest tests/integration -v
+
+      - name: Run canonical code examples
+        id: examples
+        env:
+          AEROSPIKE_HOST: 127.0.0.1:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+          AEROSPIKE_SC_NAMESPACE: test
+        run: make examples
+
+      - name: Record outcome
+        id: mark
+        if: always()
+        run: |
+          set -euo pipefail
+          failed=false
+          for outcome in \
+            "${{ steps.resolve.outcome }}" \
+            "${{ steps.aerospike.outcome }}" \
+            "${{ steps.unit.outcome }}" \
+            "${{ steps.integration.outcome }}" \
+            "${{ steps.examples.outcome }}"
+          do
+            if [ "$outcome" = "failure" ]; then
+              failed=true
+            fi
+          done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          if [ "$failed" = "true" ]; then
+            echo "::warning::Floating canary failed against ${{ steps.resolve.outputs.tag }}. Nightly is not blocked."
+          fi
+
+      - name: Server logs
+        if: failure()
+        run: |
+          IFS=',' read -ra names <<< "${{ steps.aerospike.outputs.container-names }}"
+          for name in "${names[@]}"; do
+            [ -z "$name" ] && continue
+            echo "=== ${name} (last 100 lines) ==="
+            docker logs --tail 100 "$name" || true
+          done
+
+  notify-canary:
+    name: Notify floating-canary failure
+    needs: floating-canary
+    if: needs.floating-canary.outputs.failed == 'true'
+    uses: aerospike/shared-workflows/.github/workflows/reusable_notify-slack.yaml@dc2cdd913a4699948fbe024a85a42c354339ac15
+    with:
+      gh-workflows-ref: dc2cdd913a4699948fbe024a85a42c354339ac15
+      message-type: warning
+      title: Nightly floating canary failed
+      subtitle: ${{ github.repository }}
+      slack-channel-id: ${{ vars.SLACK_CHANNEL_ID || '' }}
+      child-blocks: |
+        [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
+            }
+          }
+        ]
+
+  server-matrix:
+    name: Server matrix (8.1.2.0, deferred)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: |
+          echo "Pinned 8.1.2.0 coverage is not in this nightly yet."
+          echo "It will block, and it covers sub-floor supports_* guards."
+          echo "Tracked by https://aerospike.atlassian.net/browse/CLIENT-5616"
+
   sc-cluster:
-    name: SC cluster (3-node, security)
+    name: Multi-node SC
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -96,13 +234,11 @@ jobs:
       # General suites authenticate and land on namespace test, which this
       # config runs as strong consistency, so transaction and durable-delete
       # tests run instead of skipping. roster.py is the roster test; this
-      # step's env points it at this cluster. AEROSPIKE_HOST_SEC turns on
-      # the masking tests, which need security.
+      # step's env points it at this cluster. Masking stays on the security job.
       - name: Run integration tests and strong-consistency examples
         env:
           AEROSPIKE_HOST: 127.0.0.1:3000
           AEROSPIKE_HOST_SC: 127.0.0.1:3000
-          AEROSPIKE_HOST_SEC: 127.0.0.1:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
           AEROSPIKE_GENERAL_AUTH: "1"
           AEROSPIKE_AUTH_MODE: INTERNAL
@@ -162,8 +298,8 @@ jobs:
             docker logs --tail 100 "$name" || true
           done
 
-  commit-status:
-    name: Commit-status (single-node SC)
+  security:
+    name: Security / auth
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -176,48 +312,50 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # Security stays off: the gate counts client data messages, and an auth
-      # handshake would spend allowances the tests are counting. One node owns
-      # every partition, which force_single_node needs. The action's SC mode
-      # configures namespace test and sets its roster; the tests read
-      # AEROSPIKE_SC_NAMESPACE.
-      - name: Start single-node strong-consistency cluster
+      - name: Start security-enabled server
         id: aerospike
         uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
         with:
           server-tag: ${{ env.AEROSPIKE_SERVER_TAG }}
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
           num-nodes: "1"
-          enable-strong-consistency: "true"
-          features-content: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}
-          base-port: "3130"
-          container-name-prefix: aerospike-sc-single
+          enable-security: "true"
+          config-file: .github/aerospike.conf
+          container-name-prefix: aerospike-sec
           startup-timeout: "60"
           tools-tag: ${{ env.AEROSPIKE_TOOLS_TAG }}
           oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
+      - name: Grant admin the roles the suite needs
+        uses: ./.github/actions/grant-admin-roles
+        with:
+          tools-image: ${{ env.AEROSPIKE_TOOLS_IMAGE }}
+
       - name: Assert the server is the one we asked for
         env:
-          SERVER_PORT: "3130"
           EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
+          SERVER_USER: admin
+          SERVER_PASSWORD: admin
+          TOOLS_IMAGE: ${{ env.AEROSPIKE_TOOLS_IMAGE }}
         run: python3 .github/assert-server.py
 
-      - name: Run commit-status tests
+      # string_masking_test skips unless AEROSPIKE_HOST_SEC points at a
+      # security-enabled 8.2.0+ server. This job is that server.
+      - name: Run string masking tests
         env:
-          AEROSPIKE_HOST_SC_SINGLE: 127.0.0.1:3130
-          AEROSPIKE_SC_NAMESPACE: test
+          AEROSPIKE_HOST_SEC: 127.0.0.1:3000
+          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
+          AEROSPIKE_AUTH_USER: admin
+          AEROSPIKE_AUTH_PASSWORD: admin
         run: |
           set -euo pipefail
           rm -f aerospike.env
-          python -m pytest \
-            tests/integration/async/txn_commit_status_test.py \
-            tests/integration/sync/txn_commit_status_test.py \
-            -v --junitxml="$RUNNER_TEMP/commit-status.xml"
+          python -m pytest tests/integration/async/string_masking_test.py -v \
+            --junitxml="$RUNNER_TEMP/masking.xml"
           python3 .github/assert-junit-executed.py --forbid-skips \
-            "$RUNNER_TEMP/commit-status.xml" \
-            tests/integration/async/txn_commit_status_test.py \
-            tests/integration/sync/txn_commit_status_test.py
+            "$RUNNER_TEMP/masking.xml" \
+            tests/integration/async/string_masking_test.py
 
       - name: Server logs
         if: failure()
@@ -230,7 +368,7 @@ jobs:
           done
 
   tls-smoke:
-    name: TLS smoke
+    name: TLS
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -309,67 +447,6 @@ jobs:
           python3 .github/assert-junit-executed.py --forbid-skips \
             "$RUNNER_TEMP/tls.xml" \
             tests/integration/async/tls_test.py
-
-      - name: Server logs
-        if: failure()
-        run: |
-          IFS=',' read -ra names <<< "${{ steps.aerospike.outputs.container-names }}"
-          for name in "${names[@]}"; do
-            [ -z "$name" ] && continue
-            echo "=== ${name} (last 100 lines) ==="
-            docker logs --tail 100 "$name" || true
-          done
-
-  latest-server:
-    name: Full suite (latest server)
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - uses: ./.github/actions/install-sdk
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          jf-project: ${{ vars.JFROG_PROJECT }}
-          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
-          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
-
-      # server-tag, server-container-repo, and num-nodes stay at the action
-      # defaults (latest, database-docker-virtual/aerospike-server-enterprise,
-      # one node). config-file is the regular suite's conf.
-      - name: Start latest Aerospike server
-        id: aerospike
-        uses: aerospike/shared-workflows/.github/actions/setup-aerospike-server@e7e19785e3f372ee5bbfa8100f8453e55dd511e5 # server cert SAN includes aerospike-tls; client cert is v3
-        with:
-          # This retrieves the latest nightly server build for this server major version.
-          server-tag: '8.2'
-          config-file: .github/aerospike.conf
-          oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
-          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
-
-      # The default tag is `latest`, not a build number, so only reachability
-      # and edition are checked.
-      - name: Assert the server is up and enterprise
-        run: python3 .github/assert-server.py
-
-      - name: Run unit tests
-        run: python -m pytest tests/unit -v --cov=aerospike_sdk --cov-report=term --cov-fail-under=65
-
-      - name: Run integration tests
-        env:
-          AEROSPIKE_HOST: 127.0.0.1:3000
-          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
-        run: |
-          set -euo pipefail
-          rm -f aerospike.env
-          python -m pytest tests/integration -v
-
-      - name: Run canonical code examples
-        env:
-          AEROSPIKE_HOST: 127.0.0.1:3000
-          AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
-          AEROSPIKE_SC_NAMESPACE: test
-        run: make examples
 
       - name: Server logs
         if: failure()
