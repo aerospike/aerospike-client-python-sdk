@@ -152,7 +152,6 @@ jobs:
           server-container-repo: ${{ env.AEROSPIKE_SERVER_REPO }}
           num-nodes: "3"
           enable-strong-consistency: "true"
-          enable-security: "true"
           features-file: ${{ runner.temp }}/features.conf
           config-file: .github/aerospike-sc.conf
           container-name-prefix: aerospike-sc
@@ -162,32 +161,19 @@ jobs:
           oidc-provider: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Grant admin the roles the suite needs
-        uses: ./.github/actions/grant-admin-roles
-        with:
-          tools-image: ${{ env.AEROSPIKE_TOOLS_IMAGE }}
-
       - name: Assert the server is the one we asked for
         env:
           EXPECTED_BUILD: ${{ env.AEROSPIKE_SERVER_TAG }}
-          SERVER_USER: admin
-          SERVER_PASSWORD: admin
-          TOOLS_IMAGE: ${{ env.AEROSPIKE_TOOLS_IMAGE }}
         run: python3 .github/assert-server.py
 
-      # General suites authenticate and land on namespace test, which this
-      # config runs as strong consistency, so transaction and durable-delete
+      # Namespace test is strong consistency, so transaction and durable-delete
       # tests run instead of skipping. roster.py is the roster test; this
-      # step's env points it at this cluster. Masking stays on the security job.
+      # step's env points it at this cluster. Security stays on the security job.
       - name: Run integration tests and strong-consistency examples
         env:
           AEROSPIKE_HOST: 127.0.0.1:3000
           AEROSPIKE_HOST_SC: 127.0.0.1:3000
           AEROSPIKE_USE_SERVICES_ALTERNATE: "true"
-          AEROSPIKE_GENERAL_AUTH: "1"
-          AEROSPIKE_AUTH_MODE: INTERNAL
-          AEROSPIKE_AUTH_USER: admin
-          AEROSPIKE_AUTH_PASSWORD: admin
           AEROSPIKE_NAMESPACE: test
           AEROSPIKE_SC_NAMESPACE: test
         run: |
