@@ -44,7 +44,8 @@ class IndexBuilder(_IndexBuilderBase):
     Typical chain for a new index: :meth:`on_bin` → :meth:`named` →
     :meth:`integer` or :meth:`string` → optional :meth:`collection` or
     :meth:`context` → ``await`` :meth:`create`. Expression-based indexes
-    replace :meth:`on_bin` with :meth:`on_expression`.
+    replace :meth:`on_bin` with :meth:`on_expression`; a set index is just
+    :meth:`on_set` → :meth:`named` → ``await`` :meth:`create`.
 
     For removal, only :meth:`named` (and namespace/set from construction) is
     required before ``await`` :meth:`drop`.
@@ -103,9 +104,9 @@ class IndexBuilder(_IndexBuilderBase):
             ``wait_till_complete()`` before querying through the index.
 
         Raises:
-            ValueError: If ``on_bin`` (or ``on_expression``), ``named``, or
-                index type was not set, or if mutually exclusive chain methods
-                were combined.
+            ValueError: If ``on_bin`` (or ``on_expression`` / ``on_set``),
+                ``named``, or index type was not set, or if mutually exclusive
+                chain methods were combined.
             AerospikeError: On server or transport failure (typed subclass when
                 the driver maps a result code).
 
@@ -115,6 +116,14 @@ class IndexBuilder(_IndexBuilderBase):
         client = self._client
         if client._record_on:
             usage.record_call(client, (usage.ADMIN_INDEX,))
+        if self._on_set:
+            index_name = self._validate_set_create()
+            try:
+                return await self._client._async_client.create_set_index(
+                    self._namespace, self._set_name, index_name,
+                )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._client,
