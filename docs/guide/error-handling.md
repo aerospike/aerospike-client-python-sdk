@@ -125,9 +125,9 @@ try:
     await session.upsert(key).bin("n").set_to(1).execute()
 except TimeoutError as exc:
     if exc.result_code == ResultCode.MAX_RETRIES_EXCEEDED:
-        ...  # the retry budget ran out: a policy problem, not a slow server
+        ...  # every allowed attempt failed (just one, with retries off)
     else:
-        ...  # ResultCode.TIMEOUT: the deadline fired
+        ...  # ResultCode.TIMEOUT: the total deadline fired, or the server said so
 except ConnectionError as exc:
     exc.result_code  # ResultCode.SERVER_NOT_AVAILABLE
 ```
