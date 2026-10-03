@@ -1908,6 +1908,22 @@ class TestAdvancedExpFilters:
         rr = await rs.first_or_raise()
         assert rr.record.bins[bin_name] == expected_value
 
+    async def test_filter_exclusive(self, session_with_filter_exp):
+        """Exactly one true: key A has A=1 and D=1 (both), key B only D=1."""
+        exp = Exp.exclusive([
+            Exp.eq(Exp.int_bin("A"), Exp.int_val(1)),
+            Exp.eq(Exp.int_bin("D"), Exp.int_val(1)),
+        ])
+        await self._assert_filtered_out(session_with_filter_exp, DS.id("A"), exp)
+        await self._assert_matches(session_with_filter_exp, DS.id("B"), exp, "A", 2)
+
+    @requires_server_compiled_ael
+    async def test_filter_exclusive_ael(self, session_with_filter_exp):
+        """The AEL form of the same exactly-one check."""
+        ael = "exclusive($.A == 1, $.D == 1)"
+        await self._assert_filtered_out(session_with_filter_exp, DS.id("A"), ael)
+        await self._assert_matches(session_with_filter_exp, DS.id("B"), ael, "A", 2)
+
     @requires_server_compiled_ael
     async def test_filter_arshift(self, session_with_filter_exp):
         """Arithmetic right shift: arshift(-2, 62) == -1 for key B."""
