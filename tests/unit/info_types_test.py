@@ -239,6 +239,25 @@ class TestSindex:
     def test_expression_index_has_no_bin(self):
         assert Sindex({**self.ENTRY, "bin": ""}).bin_name == ""
 
+    def test_set_index_reads_ready_without_state(self):
+        # A set index lists with no bin, type, or state; it must not read as
+        # a bin index that is still building.
+        row = Sindex({
+            "namespace": "test", "set": "users", "bin": "", "name": "users_set_idx",
+            "index_type": "set",
+        })
+        assert row.is_set_index is True
+        assert row.bin_name == ""
+        assert row.index_type == ""
+        assert row.collection_type == "set"
+        assert row.state == ""
+        assert row.is_ready is True
+
+    def test_bin_index_without_state_is_not_ready(self):
+        row = Sindex({k: v for k, v in self.ENTRY.items() if k != "state"})
+        assert row.is_set_index is False
+        assert row.is_ready is False
+
 
 class TestSindexDetail:
     """Typed view over a ``sindex/<ns>/<index>`` response."""

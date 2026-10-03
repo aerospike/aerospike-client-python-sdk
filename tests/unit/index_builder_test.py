@@ -136,6 +136,142 @@ class TestExpressionCreateAsync:
             await b.create()
 
 
+class TestSetIndexChaining:
+
+    def test_on_set_marks_builder(self):
+        b = _async_builder()
+        assert b.on_set() is b
+        assert b._on_set is True
+
+    def test_on_set_after_on_bin_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _async_builder().on_bin("age").on_set()
+
+    def test_on_set_after_on_expression_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _async_builder().on_expression(Exp.int_bin("age")).on_set()
+
+    def test_on_bin_after_on_set_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _async_builder().on_set().on_bin("age")
+
+    def test_on_expression_after_on_set_raises(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _async_builder().on_set().on_expression("$.age")
+
+
+class TestSetIndexCreateAsync:
+
+    async def test_routes_to_set_index_entry(self):
+        b = _async_builder()
+        b._client._async_client.create_set_index = AsyncMock(return_value=MagicMock())
+        b.on_set().named("users_set_idx")
+        task = await b.create()
+        pac = b._client._async_client
+        pac.create_set_index.assert_awaited_once_with("test", "users", "users_set_idx")
+        pac.create_index.assert_not_called()
+        pac.create_index_using_expression.assert_not_called()
+        assert task is pac.create_set_index.return_value
+
+    async def test_missing_name_raises(self):
+        with pytest.raises(ValueError, match="index_name"):
+            await _async_builder().on_set().create()
+
+    async def test_index_type_rejected(self):
+        with pytest.raises(ValueError, match="no index type"):
+            await _async_builder().on_set().named("idx").integer().create()
+
+    async def test_collection_type_rejected(self):
+        b = _async_builder().on_set().named("idx").collection(CollectionIndexType.LIST)
+        with pytest.raises(ValueError, match="no index type or collection type"):
+            await b.create()
+
+    async def test_context_rejected(self):
+        b = _async_builder().on_set().named("idx").context([CTX.map_key("meta")])
+        with pytest.raises(ValueError, match="context"):
+            await b.create()
+
+    async def test_namespace_wide_rejected(self):
+        # A set index with no set covers nothing; refuse before the wire.
+        client = MagicMock()
+        client._async_client.create_set_index = AsyncMock()
+        b = IndexBuilder(client, "test", "").on_set().named("idx")
+        with pytest.raises(ValueError, match="requires a set"):
+            await b.create()
+        client._async_client.create_set_index.assert_not_called()
+
+    async def test_converts_pac_failure(self):
+        b = _async_builder().on_set().named("idx")
+        b._client._async_client.create_set_index = AsyncMock(side_effect=RuntimeError("boom"))
+        with pytest.raises(AerospikeError):
+            await b.create()
+
+
+class TestConfigureFromArguments:
+    """The one-call ``create_index`` arguments map onto the chain exactly."""
+
+    def test_bin_index(self):
+        b = _async_builder()._configure(
+            "city_idx", "city", IndexType.STRING, CollectionIndexType.LIST,
+            [CTX.map_key("meta")], None,
+        )
+        assert b._index_name == "city_idx"
+        assert b._bin_name == "city"
+        assert b._index_type == IndexType.STRING
+        assert b._collection_index_type == CollectionIndexType.LIST
+        assert b._ctx == [CTX.map_key("meta")]
+        assert b._on_set is False
+        assert b._expression is None
+
+    def test_expression_index(self):
+        b = _async_builder()._configure("age_idx", None, IndexType.INTEGER, None, None, "$.age + 1")
+        assert b._expression == "$.age + 1"
+        assert b._bin_name is None
+        assert b._on_set is False
+
+    def test_name_alone_is_a_set_index(self):
+        b = _async_builder()._configure("set_idx", None, None, None, None, None)
+        assert b._on_set is True
+        assert b._bin_name is None
+        assert b._expression is None
+
+    def test_bin_and_expression_together_rejected(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _async_builder()._configure("idx", "age", IndexType.INTEGER, None, None, "$.age")
+
+    async def test_bin_without_type_rejected_at_create(self):
+        b = _async_builder()._configure("idx", "age", None, None, None, None)
+        with pytest.raises(ValueError, match="index_type is required"):
+            await b.create()
+
+    async def test_set_index_with_type_rejected_at_create(self):
+        b = _async_builder()._configure("idx", None, IndexType.INTEGER, None, None, None)
+        with pytest.raises(ValueError, match="no index type"):
+            await b.create()
+
+
+class TestSetIndexCreateSync:
+
+    def test_routes_to_blocking_set_index_entry(self):
+        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
+
+        sync_client = MagicMock()
+        b = SyncIB(sync_client, "test", "users").on_set().named("users_set_idx")
+        task = b.create()
+        pac = sync_client._async_client
+        pac.create_set_index_blocking.assert_called_once_with("test", "users", "users_set_idx")
+        pac.create_index_blocking.assert_not_called()
+        pac.create_index_using_expression_blocking.assert_not_called()
+        assert task is pac.create_set_index_blocking.return_value
+
+    def test_sync_index_type_rejected(self):
+        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
+
+        b = SyncIB(MagicMock(), "test", "users").on_set().named("idx").string()
+        with pytest.raises(ValueError, match="no index type"):
+            b.create()
+
+
 class TestExpressionCreateSync:
 
     def test_routes_to_blocking_expression_entry(self):

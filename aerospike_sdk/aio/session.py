@@ -33,7 +33,17 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
+    from aerospike_async import (
+        AdminPolicy,
+        CollectionIndexType,
+        CTX,
+        DropIndexTask,
+        FilterExpression,
+        IndexTask,
+        IndexType,
+        RegisterTask,
+        UdfRemoveTask,
+    )
     from aerospike_sdk.aio.client import Client
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
@@ -924,6 +934,88 @@ class Session(
         """Return the async transactional-session class (late import breaks the cycle)."""
         from aerospike_sdk.aio.transactional_session import TransactionalSession
         return TransactionalSession
+
+    async def create_index(
+        self,
+        dataset: DataSet,
+        index_name: str,
+        bin_name: Optional[str] = None,
+        index_type: Optional[IndexType] = None,
+        collection_type: Optional[CollectionIndexType] = None,
+        ctx: Optional[List[CTX]] = None,
+        expression: Optional[Union[str, FilterExpression]] = None,
+    ) -> IndexTask:
+        """Create a secondary index in one call.
+
+        The short form of the :meth:`index` builder: each argument stands in
+        for one chain step, and the same rules apply. A bin index needs
+        ``bin_name`` and ``index_type``; an expression index needs
+        ``expression`` and ``index_type``; a dataset and a name alone create a
+        set index.
+
+        Args:
+            dataset: Namespace and set to index.
+            index_name: Name the cluster stores the index under.
+            bin_name: Bin to index; mutually exclusive with ``expression``.
+            index_type: Value type indexed, such as ``IndexType.STRING``.
+            collection_type: Collection variant for list or map bins; scalar
+                when omitted.
+            ctx: CDT context path to a nested element; bin indexes only.
+            expression: A ``FilterExpression`` or an AEL string whose result
+                is indexed; mutually exclusive with ``bin_name``.
+
+        Returns:
+            An :class:`~aerospike_async.IndexTask`; await
+            ``wait_till_complete()`` before querying through the index.
+
+        Raises:
+            ValueError: If the arguments do not describe one index shape, for
+                example a bin with no type, or a bin and an expression together.
+            AerospikeError: On server or transport failure.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            task = await session.create_index(users, "users_city_idx", "city", IndexType.STRING)
+            await task.wait_till_complete()
+
+            # A dataset and a name alone make a set index.
+            await session.create_index(users, "users_set_idx")
+
+        See Also:
+            :meth:`index`: The builder this call drives.
+            :meth:`drop_index`
+        """
+        builder = self.index(dataset)._configure(
+            index_name, bin_name, index_type, collection_type, ctx, expression,
+        )
+        return await builder.create()
+
+    async def drop_index(self, dataset: DataSet, index_name: str) -> DropIndexTask:
+        """Drop a secondary index by name.
+
+        The short form of ``index(dataset).named(index_name).drop()``.
+
+        Args:
+            dataset: Namespace and set the index was created on.
+            index_name: Name the index was created with.
+
+        Returns:
+            A :class:`~aerospike_async.DropIndexTask`; await
+            ``wait_till_complete()`` until every node has removed it.
+
+        Raises:
+            AerospikeError: On server or transport failure.
+
+        Example::
+
+            task = await session.drop_index(users, "users_city_idx")
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`create_index`
+        """
+        return await self.index(dataset).named(index_name).drop()
 
     async def register_udf(
         self,

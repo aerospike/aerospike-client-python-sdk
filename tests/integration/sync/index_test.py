@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_async import FilterExpression
+from aerospike_async import FilterExpression, IndexType
 from aerospike_sdk import DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
@@ -113,6 +113,56 @@ def test_sync_namespace_wide_index_and_query(cluster):
     finally:
         session.delete(keys).execute()
         session.index(whole_namespace).named(index_name).drop()
+
+
+def test_sync_create_set_index(cluster):
+    """The blocking builder creates, lists, and drops a set index.
+
+    The sync terminal dispatches through PAC's blocking set-index entry, which
+    async coverage cannot reach. Two rounds prove the drop removed it.
+    """
+    index_name = "psdk_set_idx_sync"
+    session = cluster.create_session()
+    try:
+        session.index(NS, SET).named(index_name).drop().wait_till_complete_blocking()
+    except Exception:
+        pass
+
+    for _ in range(2):
+        task = session.index(NS, SET).on_set().named(index_name).create()
+        assert task.wait_till_complete_blocking()
+
+        rows = [i for i in session.info().secondary_indexes(NS) if i.name == index_name]
+        assert len(rows) == 1, rows
+        (row,) = rows
+        assert row.set_name == SET
+        assert row.is_set_index is True
+        assert row.is_ready is True
+
+        task = session.index(NS, SET).named(index_name).drop()
+        assert task.wait_till_complete_blocking()
+        assert not any(i.name == index_name for i in session.info().secondary_indexes(NS))
+
+
+def test_sync_create_index_and_drop_index_verbs(cluster):
+    """The blocking one-call verbs create a bin index and a set index, then drop both."""
+    session = cluster.create_session()
+    for name in ("psdk_verb_city_idx_sync", "psdk_verb_set_idx_sync"):
+        try:
+            session.drop_index(DS, name).wait_till_complete_blocking()
+        except Exception:
+            pass
+
+    assert session.create_index(DS, "psdk_verb_city_idx_sync", "city", IndexType.STRING).wait_till_complete_blocking()
+    assert session.create_index(DS, "psdk_verb_set_idx_sync").wait_till_complete_blocking()
+
+    listed = {i.name: i for i in session.info().secondary_indexes(NS)}
+    assert listed["psdk_verb_city_idx_sync"].bin_name == "city"
+    assert listed["psdk_verb_set_idx_sync"].is_set_index is True
+
+    for name in ("psdk_verb_city_idx_sync", "psdk_verb_set_idx_sync"):
+        assert session.drop_index(DS, name).wait_till_complete_blocking()
+    assert not any(i.name.startswith("psdk_verb_") for i in session.info().secondary_indexes(NS))
 
 
 @requires_server_compiled_ael
