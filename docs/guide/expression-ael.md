@@ -133,9 +133,12 @@ $.age <= 65
 $.age > 18 and $.status == "active"
 $.role == "admin" or $.role == "superadmin"
 not($.deleted:BOOL)
+exclusive($.role == "admin", $.suspended:BOOL)
 ```
 
 `not` is a call: `not($.age == 30)` parses, a bare `not $.age == 30` does not.
+`exclusive` is true when exactly one of its two or more arguments is true;
+`Exp.exclusive` is the builder form.
 
 ### Arithmetic
 
