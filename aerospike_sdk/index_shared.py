@@ -41,9 +41,10 @@ from aerospike_sdk.server_filter import filter_expression_from_ael_string
 class _IndexBuilderBase:
     """State + chaining shared by the async and sync index builders."""
 
-    # Class-level default: only expression-based builders ever assign it,
-    # so bin-based chains skip the per-instance write entirely.
+    # Class-level defaults: only expression-based and set-index builders ever
+    # assign these, so bin-based chains skip the per-instance writes entirely.
     _expression: Optional[Union[str, FilterExpression]] = None
+    _on_set: bool = False
 
     def __init__(
         self,
@@ -71,7 +72,15 @@ class _IndexBuilderBase:
 
         Returns:
             ``self`` for method chaining.
+
+        Raises:
+            ValueError: If :meth:`on_set` was already called on this builder.
         """
+        if self._on_set:
+            raise ValueError(
+                "on_set() is mutually exclusive with on_bin() and on_expression(); "
+                "a set index covers records, not values",
+            )
         self._bin_name = bin_name
         return self
 
@@ -147,8 +156,108 @@ class _IndexBuilderBase:
                 "on_bin() and on_expression() are mutually exclusive; "
                 "an index covers either a bin or an expression",
             )
+        if self._on_set:
+            raise ValueError(
+                "on_set() is mutually exclusive with on_bin() and on_expression(); "
+                "a set index covers records, not values",
+            )
         self._expression = expression
         return self
+
+    def on_set(self) -> Self:
+        """Index record presence in the set itself, rather than a bin or expression.
+
+        A set index covers every record in the set and nothing about their
+        contents, so it takes no bin, index type, collection variant, or CDT
+        context: the chain is :meth:`on_set` → :meth:`named` → :meth:`create`.
+        Creating one needs only the ``sindex-admin`` privilege. The builder
+        must name a set; a namespace-wide set index is rejected.
+
+        Mutually exclusive with :meth:`on_bin` and :meth:`on_expression`.
+
+        Returns:
+            ``self`` for method chaining.
+
+        Raises:
+            ValueError: If :meth:`on_bin` or :meth:`on_expression` was already
+                called on this builder.
+
+        Example::
+
+            task = await (
+                session.index("test", "users")
+                .on_set()
+                .named("users_set_idx")
+                .create()
+            )
+            await task.wait_till_complete()
+
+        See Also:
+            :meth:`on_bin`: Index a bin value.
+            :meth:`on_expression`: Index a value an expression computes.
+        """
+        if self._bin_name is not None or self._expression is not None:
+            raise ValueError(
+                "on_set() is mutually exclusive with on_bin() and on_expression(); "
+                "a set index covers records, not values",
+            )
+        self._on_set = True
+        return self
+
+    def _configure(
+        self,
+        index_name: str,
+        bin_name: Optional[str],
+        index_type: Optional[IndexType],
+        collection_type: Optional[CollectionIndexType],
+        ctx: Optional[List[CTX]],
+        expression: Optional[Union[str, FilterExpression]],
+    ) -> Self:
+        """Apply the flat ``create_index`` arguments as the equivalent chain.
+
+        Shared by both sessions' ``create_index`` verbs so the two runtimes map
+        arguments to chain calls identically. Nothing is validated here: the
+        chain methods and ``create()`` enforce the same rules they do for a
+        hand-built chain. Only a name, with no bin or expression, is a set
+        index.
+        """
+        self.named(index_name)
+        if bin_name is not None:
+            self.on_bin(bin_name)
+        if expression is not None:
+            self.on_expression(expression)
+        if bin_name is None and expression is None:
+            self.on_set()
+        if index_type is not None:
+            self._index_type = index_type
+        if collection_type is not None:
+            self.collection(collection_type)
+        if ctx is not None:
+            self.context(ctx)
+        return self
+
+    def _validate_set_create(self) -> str:
+        """Validate chain state for a set-index ``create()``.
+
+        Shared by the async and sync leaf terminals so the two runtimes
+        cannot drift on what a valid set-index chain looks like. Returns the
+        narrowed index name the terminals hand to the client.
+        """
+        if self._bin_name is not None or self._expression is not None:
+            raise ValueError(
+                "on_set() is mutually exclusive with on_bin() and on_expression(); "
+                "a set index covers records, not values",
+            )
+        if self._index_type is not None or self._collection_index_type is not None:
+            raise ValueError(
+                "a set index has no index type or collection type; "
+                "drop the integer()/string()/blob()/geo2dsphere()/collection() call",
+            )
+        if self._ctx:
+            raise ValueError("context() cannot be combined with on_set()")
+        if not self._set_name:
+            raise ValueError("a set index requires a set; build it from a DataSet with a set name")
+        return self._require_index_name()
 
     def _validate_expression_create(
         self, sdk_client,

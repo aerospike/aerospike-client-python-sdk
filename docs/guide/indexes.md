@@ -65,6 +65,29 @@ await (
 )
 ```
 
+### One-call form
+
+`create_index()` on the session takes the same facts as positional and keyword
+arguments and drives the builder for you. Each argument stands in for one chain
+step, so the same rules apply:
+
+```python
+from aerospike_async import IndexType
+
+task = await session.create_index(users, "users_city_idx", "city", IndexType.STRING)
+await task.wait_till_complete()
+
+# Collection and context arguments map to collection() and context().
+await session.create_index(
+    users, "users_tags_idx", "tags", IndexType.STRING,
+    collection_type=CollectionIndexType.LIST,
+)
+
+# An expression index passes expression= instead of a bin.
+await session.create_index(users, "users_age_ael_idx", index_type=IndexType.INTEGER,
+                           expression="$.age + 1")
+```
+
 ## Namespace-Wide Indexes (No Set)
 
 An index created without a set covers **every record in the namespace**, across
@@ -106,6 +129,32 @@ server does:
 `session.truncate(DataSet.of("test"))` truncates the whole namespace and cannot
 be undone, and `session.background_task().delete(DataSet.of("test"))` deletes
 every record in it. Name the set unless that is what you intend.
+```
+
+## Set Indexes
+
+A set index covers record presence in a set rather than any value in the
+records, so it takes no bin, index type, collection variant, or CDT context.
+The server uses it to serve set-scoped queries without walking the whole
+namespace, and creating one needs only the `sindex-admin` privilege. The
+builder must name a set; a namespace-wide set index is rejected.
+
+```python
+task = await (
+    session.index(users)
+    .on_set()
+    .named("users_set_idx")
+    .create()
+)
+await task.wait_till_complete()
+```
+
+`on_set()` is mutually exclusive with `on_bin()` and `on_expression()`.
+Dropping a set index is the same `drop()` call as any other index. In the
+one-call form, a dataset and a name with nothing else is a set index:
+
+```python
+await session.create_index(users, "users_set_idx")
 ```
 
 ## Expression-Based Indexes
@@ -222,13 +271,17 @@ then — pass `timeout=None` to wait as long as it takes.
 ```python
 task = await session.index(users).named("users_age_idx").drop()
 await task.wait_till_complete()
+
+# Or in one call:
+task = await session.drop_index(users, "users_age_idx")
 ```
 
 ## Listing Indexes
 
 `list_indexes()` returns the secondary indexes defined on the cluster, one dict
 per index with `namespace`, `set`, `bin` and `name` keys (plus `type`,
-`index_type`, and `context` for CDT indexes when the server reports them). It is
+`index_type`, and `context` for CDT indexes when the server reports them). A set
+index lists with an empty `bin`, no `type`, and `index_type` of `set`. It is
 available on the session, cluster, and client:
 
 ```python
