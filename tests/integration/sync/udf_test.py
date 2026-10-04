@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import importlib
 import os
+from datetime import timedelta
 
 import pytest
-from aerospike_sdk import UDFLang
-from aerospike_sdk.exceptions import ResultCode
+from aerospike_sdk import Behavior, UDFLang
+from aerospike_sdk.exceptions import ResultCode, TimeoutError
 
 from aerospike_sdk import DataSet
+from aerospike_sdk.policy.behavior_settings import Settings
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -467,3 +469,65 @@ class TestBatchApplyExpiration:
         assert all(rr.is_ok for rr in stream)
         rec = session.query(k).execute().first_or_raise().record
         assert rec.ttl is None
+
+
+SLEEP_LUA_FILE = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "udf", "sleep_example.lua"),
+)
+SLEEP_SERVER_PATH = "sleep_example.lua"
+SLEEP_MODULE = "sleep_example"
+
+
+@pytest.fixture(scope="module")
+def cluster_with_sleep_udf(aerospike_host, make_cluster_definition):
+    with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
+        udf_session = cluster.create_session()
+        try:
+            _wait_task(cluster, udf_session.remove_udf(SLEEP_SERVER_PATH))
+        except Exception:
+            pass
+        reg = udf_session.register_udf_from_file(SLEEP_LUA_FILE, SLEEP_SERVER_PATH, UDFLang.LUA)
+        assert _wait_task(cluster, reg)
+        yield cluster
+        try:
+            _wait_task(cluster, udf_session.remove_udf(SLEEP_SERVER_PATH))
+        except Exception:
+            pass
+
+
+def test_sync_batch_udf_client_timeout_marks_rows_in_doubt(cluster_with_sleep_udf):
+    """A batch UDF client timeout reports each row's own outcome: TIMEOUT, in-doubt.
+
+    The client's 250ms socket timer races the 1000ms server-side UDF sleep,
+    and total_timeout stays 0 so no server deadline can beat it. The rows come
+    from the failed batch's per-key outcomes, not the batch-wide error.
+    """
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        "sync_batch_udf_client_timeout",
+        writes=Settings(
+            socket_timeout=timedelta(milliseconds=250),
+            total_timeout=timedelta(0),
+            max_retries=0,
+        ),
+    )
+    # Seed through a default session so the 250ms timer only applies to the race.
+    seed_session = cluster_with_sleep_udf.create_session()
+    keys = [DS.id(f"sync_budf_in_doubt_{i}") for i in range(8)]
+    for k in keys:
+        seed_session.upsert(k).put({"bin": 0}).execute()
+
+    session = cluster_with_sleep_udf.create_session(behavior)
+    rows = (
+        session.execute_udf(*keys)
+        .function(SLEEP_MODULE, "sleep")
+        .passing(1000)
+        .execute()
+        .collect()
+    )
+
+    assert len(rows) == len(keys)
+    assert all(not r.is_ok for r in rows)
+    assert all(r.result_code == ResultCode.TIMEOUT for r in rows)
+    assert all(r.in_doubt is True for r in rows)
+    assert all(isinstance(r.exception, TimeoutError) for r in rows)
+    assert sorted(r.key.digest for r in rows) == sorted(k.digest for k in keys)
