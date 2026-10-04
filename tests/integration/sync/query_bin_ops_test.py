@@ -125,6 +125,26 @@ class TestSimpleBinReads:
         assert result.record.bins["tags"] == "onetwothree"
         session.delete(key).execute()
 
+    def test_str_split(self, cluster):
+        """Split on a separator, per codepoint without one, whole string when absent."""
+        session = cluster.create_session()
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}split")
+        session.upsert(key).bin("s").set_to("Hello,42").bin("u").set_to("né").execute()
+
+        result = session.query(key).bin("s").str_split(",").execute().first_or_raise()
+        assert result.record.bins["s"] == ["Hello", "42"]
+
+        result = session.query(key).bin("s").str_split().execute().first_or_raise()
+        assert result.record.bins["s"] == list("Hello,42")
+
+        result = session.query(key).bin("u").str_split().execute().first_or_raise()
+        assert result.record.bins["u"] == ["n", "é"]
+
+        result = session.query(key).bin("s").str_split(";").execute().first_or_raise()
+        assert result.record.bins["s"] == ["Hello,42"]
+        session.delete(key).execute()
+
     def test_list_get(self, cluster):
         session = cluster.create_session()
         result = (

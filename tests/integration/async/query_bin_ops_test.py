@@ -239,6 +239,30 @@ class TestCdtListReads:
         assert result.record.bins["tags"] == "onetwothree"
         await session.delete(key).execute()
 
+    async def test_str_split_with_and_without_separator(
+        self, session, supports_string_operations,
+    ):
+        """Split on a separator, per codepoint without one, whole string when absent."""
+        if not supports_string_operations:
+            pytest.skip("string split requires server >= 8.2.0")
+        ds = DataSet.of(NS, SET)
+        key = ds.id(f"{KEY_PREFIX}split")
+        await session.upsert(key).bin("s").set_to("Hello,42").bin("u").set_to("né").execute()
+
+        rs = await session.query(key=key).bin("s").str_split(",").execute()
+        assert (await rs.first_or_raise()).record.bins["s"] == ["Hello", "42"]
+
+        rs = await session.query(key=key).bin("s").str_split().execute()
+        assert (await rs.first_or_raise()).record.bins["s"] == list("Hello,42")
+
+        # Per codepoint, not per byte: "é" is two UTF-8 bytes.
+        rs = await session.query(key=key).bin("u").str_split().execute()
+        assert (await rs.first_or_raise()).record.bins["u"] == ["n", "é"]
+
+        rs = await session.query(key=key).bin("s").str_split(";").execute()
+        assert (await rs.first_or_raise()).record.bins["s"] == ["Hello,42"]
+        await session.delete(key).execute()
+
     async def test_list_join_in_write_chain(self, session, supports_string_operations):
         """Join registered as a read within an operate chain."""
         if not supports_string_operations:
