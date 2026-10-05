@@ -20,7 +20,12 @@ jobs:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Pre-release alpha window: PSDK pins to a PAC version that hasn't
       # been published to PyPI yet. Build PAC from source as a sibling so
@@ -32,20 +37,20 @@ jobs:
           ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
           echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: aerospike/aerospike-client-python-async
           ref: ${{ env.PAC_REF }}
           path: aerospike-client-python-async
 
       - name: Setup Rust toolchain (for PAC build)
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           toolchain: 1.93.0
           components: rustfmt, clippy
 
       - name: Setup Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -79,7 +84,12 @@ jobs:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Pre-release alpha window: PSDK pins to a PAC version that hasn't
       # been published to PyPI yet. Build PAC from source as a sibling so
@@ -91,20 +101,20 @@ jobs:
           ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
           echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: aerospike/aerospike-client-python-async
           ref: ${{ env.PAC_REF }}
           path: aerospike-client-python-async
 
       - name: Setup Rust toolchain (for PAC build)
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           toolchain: 1.93.0
           components: rustfmt, clippy
 
       - name: Setup Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -180,13 +190,18 @@ jobs:
         python: ['3.13t', '3.14t']
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Read PAC ref from pyproject.toml
         run: |
           ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
           echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: aerospike/aerospike-client-python-async
           ref: ${{ env.PAC_REF }}
@@ -195,12 +210,12 @@ jobs:
         # `actions-rs/toolchain` is archived; use the maintained replacement
         # for new jobs.  Existing jobs in this file still use the old action
         # and should be migrated in a separate cleanup pass.
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           toolchain: 1.93.0
           components: rustfmt, clippy
       - name: Setup free-threaded Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
       - name: Build & install PAC from source
@@ -228,13 +243,18 @@ jobs:
         python: ['3.13t', '3.14t']
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Read PAC ref from pyproject.toml
         run: |
           ref=$(grep -oE 'aerospike-client-python-async\.git@[^"]+' pyproject.toml | head -1 | cut -d@ -f2)
           echo "PAC_REF=$ref" >> "$GITHUB_ENV"
       - name: Checkout PAC source (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: aerospike/aerospike-client-python-async
           ref: ${{ env.PAC_REF }}
@@ -243,12 +263,12 @@ jobs:
         # `actions-rs/toolchain` is archived; use the maintained replacement
         # for new jobs.  Existing jobs in this file still use the old action
         # and should be migrated in a separate cleanup pass.
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           toolchain: 1.93.0
           components: rustfmt, clippy
       - name: Setup free-threaded Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
       - name: Start Aerospike server
