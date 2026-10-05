@@ -133,59 +133,71 @@ def test_where_sets_filter_expression():
     assert b._filter_expression is not None
 
 
-def test_index_filters_stores_filters():
+def test_filter_stores_filter():
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
-    b.index_filters(Filter.range("bgval", 9, 10))
-    assert len(b._index_filters) == 1
+    f = Filter.range("bgval", 9, 10)
+    assert b.filter(f) is b
+    assert b._filter is f
 
 
-def test_index_filters_empty_raises():
+def test_filter_rejects_a_second_call():
+    """The server accepts one index range per query, so a second filter is an error."""
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
-    with pytest.raises(ValueError, match="at least one"):
-        b.index_filters()
+    b.filter(Filter.range("bgval", 9, 10))
+    with pytest.raises(ValueError, match="once"):
+        b.filter(Filter.equal("state", "CO"))
 
 
-def test_where_after_index_filters_keeps_both():
+def test_filter_rejects_none():
+    """A missing filter would widen the job to the whole set."""
+    s = _session_mock()
+    ds = DataSet.of("test", "bgset")
+    b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
+    with pytest.raises(TypeError):
+        b.filter(None)
+
+
+def test_where_after_filter_keeps_both():
     """The index narrows through the index; the predicate filters what it returns."""
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
-    b.index_filters(Filter.range("bgval", 9, 10))
+    b.filter(Filter.range("bgval", 9, 10))
     b.where("$.bgval > 8")
-    assert len(b._index_filters) == 1
+    assert b._filter is not None
     assert b._filter_expression is not None
 
 
-def test_index_filters_after_where_keeps_both():
+def test_filter_after_where_keeps_both():
     """Declaration order must not matter."""
     s = _session_mock()
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
     b.where("$.bgval > 8")
-    b.index_filters(Filter.range("bgval", 9, 10))
-    assert len(b._index_filters) == 1
+    b.filter(Filter.range("bgval", 9, 10))
+    assert b._filter is not None
     assert b._filter_expression is not None
 
 
-async def test_execute_sends_index_filters_and_filter_expression_together():
-    """Both channels reach PAC: statement filters and the write policy's expression."""
+async def test_execute_sends_filter_and_filter_expression_together():
+    """Both channels reach PAC: the statement filter and the write policy's expression."""
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
     b.bin("x").set_to(1)
-    await b.index_filters(Filter.range("n", 1, 3)).where("$.n > 1").execute()
+    await b.filter(Filter.range("n", 1, 3)).where("$.n > 1").execute()
     stmt, _ops = s._client._client.query_operate.call_args[0]
     wp = s._client._client.query_operate.call_args.kwargs["write_policy"]
-    assert stmt.filters is not None
+    assert len(stmt.filters) == 1
     assert wp.filter_expression is not None
 
 
-def test_blocking_execute_sends_index_filters_and_filter_expression_together():
+def test_blocking_execute_sends_filter_and_filter_expression_together():
     """The sync tree drives this terminal, so it needs its own arm."""
     s = _session_mock()
     s._client._client.query_operate_blocking = MagicMock(return_value=MagicMock())
@@ -193,22 +205,22 @@ def test_blocking_execute_sends_index_filters_and_filter_expression_together():
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.UPDATE)
     b.bin("x").set_to(1)
-    b.index_filters(Filter.range("n", 1, 3)).where("$.n > 1")._execute_blocking()
+    b.filter(Filter.range("n", 1, 3)).where("$.n > 1")._execute_blocking()
     call = s._client._client.query_operate_blocking.call_args
     stmt, _ops = call[0]
-    assert stmt.filters is not None
+    assert len(stmt.filters) == 1
     assert call.kwargs["write_policy"].filter_expression is not None
 
 
-async def test_delete_execute_passes_statement_index_filters():
+async def test_delete_execute_passes_statement_filter():
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
     b = BackgroundOperationBuilder(s, ds, _OpType.DELETE)
-    b.index_filters(Filter.range("n", 1, 3))
+    b.filter(Filter.range("n", 1, 3))
     await b.execute()
     stmt, ops = s._client._client.query_operate.call_args[0]
-    assert stmt.filters is not None
+    assert len(stmt.filters) == 1
     assert len(ops) == 1
 
 

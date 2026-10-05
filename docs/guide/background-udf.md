@@ -70,18 +70,20 @@ read operation, such as `get()` or `select_from()`.
 
 ### Narrowing with an Index and a Predicate
 
-`where()` filters every record the job reaches. `index_filters()` changes *which*
+`where()` filters every record the job reaches. `filter()` changes *which*
 records it reaches at all, by sending the job through a secondary index instead of
 a scan of the set. They combine: the index selects the candidates, and the
-predicate decides which of those the job writes.
+predicate decides which of those the job writes. A job takes one `filter()`, since
+the server accepts one index range per query; a second call raises `ValueError`.
+Put any further conditions in `where()`.
 
 ```python
-from aerospike_async import Filter
+from aerospike_sdk import Filter
 
 task = await (
     session.background_task()
     .update(donors)
-    .index_filters(Filter.range("age", 30, 65))     # reached through the index
+    .filter(Filter.range("age", 30, 65))            # reached through the index
     .where("not($.update_pass.exists()) or $.update_pass < 5")   # and filtered
     .bin("campaign1").add(50)
     .bin("update_pass").set_to(5)
@@ -95,7 +97,7 @@ already processed, so running the job a second time changes nothing. The index k
 the server off a full scan.
 
 Either narrowing works alone. With only `where()`, the server scans the set; with
-only `index_filters()`, every record in the index range is written.
+only `filter()`, every record in the index range is written.
 
 ### Bulk Touch (Reset TTL)
 

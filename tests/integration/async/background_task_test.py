@@ -19,7 +19,7 @@ import pytest
 
 from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
-from aerospike_sdk import HllConfig, UDFLang
+from aerospike_sdk import Exp, HllConfig, UDFLang
 from aerospike_async import Filter, MapOperation, MapReturnType, Operation
 
 from aerospike_sdk import DataSet
@@ -85,6 +85,11 @@ async def cluster(aerospike_host, make_cluster_definition):
             except Exception:
                 pass
         yield c
+
+
+async def _ensure_bg_index(session):
+    task = await session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
+    assert await task.wait_till_complete()
 
 
 async def _seed_profiles(session):
@@ -408,8 +413,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     second run must change nothing.
     """
     session = cluster.create_session()
-    index_task = await session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
-    assert await index_task.wait_till_complete()
+    await _ensure_bg_index(session)
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bgif_{i}"))
@@ -421,7 +425,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     task = await (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("touched")
         .execute()
@@ -440,7 +444,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     task = await (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("second_pass")
         .execute()
@@ -448,6 +452,58 @@ async def test_background_update_with_index_filter_and_where(cluster):
     assert await task.wait_till_complete()
     for i in range(4, 9):
         assert await marker(i) == "touched"
+
+
+async def test_background_delete_with_index_filter_and_where(cluster):
+    """Only records inside the index range that also match the predicate are deleted."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(101, 111)
+    for i in values:
+        await session.upsert(DS.id(f"bgdel_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    task = await (
+        session.background_task()
+        .delete(DS)
+        .filter(Filter.range(BG_BIN, 104, 108))
+        .where(Exp.ne(Exp.int_bin(BG_BIN), Exp.int_val(106)))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rr = await (await session.query(DS.id(f"bgdel_{i}")).execute()).first()
+        if 104 <= i <= 108 and i != 106:
+            assert rr is None
+        else:
+            assert rr is not None and rr.is_ok
+
+
+async def test_background_touch_with_index_filter(cluster):
+    """A filter alone confines the job to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(201, 211)
+    for i in values:
+        await session.upsert(DS.id(f"bgtouch_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    async def generation(i):
+        rs = await session.query(DS.id(f"bgtouch_{i}")).execute()
+        return (await rs.first_or_raise()).record.generation
+
+    before = {i: await generation(i) for i in values}
+    task = await (
+        session.background_task()
+        .touch(DS)
+        .filter(Filter.range(BG_BIN, 204, 208))
+        .expire_record_after_seconds(600)
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        touched = 204 <= i <= 208
+        assert await generation(i) == before[i] + (1 if touched else 0)
 
 
 async def test_background_update_map_value_range_remove(cluster):

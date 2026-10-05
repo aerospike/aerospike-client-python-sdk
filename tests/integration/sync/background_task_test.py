@@ -241,7 +241,7 @@ def test_sync_background_update_with_index_filter_and_where(cluster):
     """One case per terminal: the sync builder is a facade over the async one.
 
     Async coverage cannot catch a wiring break here, because the sync tree
-    forwards ``index_filters`` and ``where`` through its own methods before the
+    forwards ``filter`` and ``where`` through its own methods before the
     shared blocking terminal ever sees them.
     """
     session = cluster.create_session()
@@ -259,7 +259,7 @@ def test_sync_background_update_with_index_filter_and_where(cluster):
     task = (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("touched")
         .execute()

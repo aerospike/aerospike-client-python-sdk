@@ -294,7 +294,7 @@ def ds_bg(sc_namespace) -> DataSet:
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def bgtest_bgval_index(cluster_sc, sc_namespace):
-    """Numeric secondary index on ``bgtest.bgval`` for background jobs using ``index_filters``."""
+    """Numeric secondary index on ``bgtest.bgval`` for background jobs using ``filter``."""
     session = cluster_sc.create_session()
     idx_name = "bgtest_bgval_ix"
     try:
@@ -777,13 +777,13 @@ class TestBackgroundTaskDelete:
         """Background delete by predicate; SC uses default durable delete on the job.
 
         Strong-consistency namespaces need partition pruning via ``Statement.filters``
-        (``index_filters`` on the builder). Policy-level expression filters alone do not
+        (``filter`` on the builder). Policy-level expression filters alone do not
         reliably drive durable background deletes on every server build.
         """
         session = session_sc
         is_sc = await session.is_namespace_sc(ds_bg.namespace)
 
-        b = session.background_task().delete(ds_bg).index_filters(
+        b = session.background_task().delete(ds_bg).filter(
             Filter.range(BG_BIN, 9, 10),
         )
         if is_sc:
