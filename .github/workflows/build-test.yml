@@ -3,7 +3,6 @@ name: CI Build & Test
 on:
   pull_request:
     branches:
-      - dev
       - stage
       - main
   workflow_dispatch:
