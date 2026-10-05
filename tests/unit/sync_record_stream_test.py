@@ -25,7 +25,12 @@ from types import SimpleNamespace
 import pytest
 
 from aerospike_sdk import Key
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    ConnectionError,
+    PacConnectionError,
+    ResultCode,
+)
 
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.sync.record_stream import RecordStream as SyncRecordStream
@@ -265,3 +270,27 @@ class TestSyncFirstIsTerminal:
         stream = SyncRecordStream._from_pac_batch_stream(fake)
         assert stream.first() is None
         assert fake.close_calls >= 1
+
+
+class _FakeChunkRecordset(_FakeRecordset):
+    """A chunk whose cursor reports more partitions left to scan."""
+
+    def partition_filter_sync(self):
+        return SimpleNamespace(done=lambda: False)
+
+
+class TestSyncChunkedRefetchFailure:
+
+    def test_failed_refetch_raises_sdk_error(self):
+        def _reexecute(pf):
+            raise PacConnectionError("node 10.0.0.1:3000 dropped the connection")
+
+        rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
+        stream = SyncRecordStream._from_chunked_pac_recordset(
+            _FakeChunkRecordset([rec]), _reexecute,
+        )
+        assert stream.has_more_chunks()
+        assert len(stream.collect()) == 1
+
+        with pytest.raises(ConnectionError):
+            stream.has_more_chunks()

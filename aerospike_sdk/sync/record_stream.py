@@ -175,6 +175,8 @@ class RecordStream:
                     yield RecordResult(
                         key=key, record=record, result_code=ResultCode.OK,
                     )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
             finally:
                 recordset.close()
         inst = cls(_gen())
@@ -378,6 +380,9 @@ class RecordStream:
         First call always returns ``True`` so the caller enters the loop
         for the already-loaded first chunk. Subsequent calls inspect the
         cursor; new chunks are fetched transparently via ``reexecute``.
+
+        Raises:
+            AerospikeError: The cursor read or the next chunk's query failed.
         """
         chunked = getattr(self, "_chunked", False)
         if not chunked:
@@ -402,14 +407,17 @@ class RecordStream:
         pf_getter = getattr(self._chunk_recordset, "partition_filter_sync", None)  # type: ignore[attr-defined]
         if pf_getter is None:
             return False
-        pf = pf_getter()
-        if pf is None or pf.done():
-            return False
+        try:
+            pf = pf_getter()
+            if pf is None or pf.done():
+                return False
 
-        counted_so_far = self._counter_ref[0]  # type: ignore[attr-defined]
-        if self._chunk_reexecute is None:  # type: ignore[attr-defined]
-            return False
-        new_recordset = self._chunk_reexecute(pf)  # type: ignore[attr-defined]
+            counted_so_far = self._counter_ref[0]  # type: ignore[attr-defined]
+            if self._chunk_reexecute is None:  # type: ignore[attr-defined]
+                return False
+            new_recordset = self._chunk_reexecute(pf)  # type: ignore[attr-defined]
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
         if new_recordset is None:
             return False
         # The prior chunk's recordset is consumed and its cursor read;
@@ -431,11 +439,14 @@ def _chunked_iter(
     recordset: Any, limit: int, counter: list,
 ) -> Iterator[RecordResult]:
     """Iterator that counts records and stops at ``limit`` (0 = unlimited)."""
-    for record in recordset:
-        if 0 < limit <= counter[0]:
-            return
-        key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
-        counter[0] += 1
-        yield RecordResult(
-            key=key, record=record, result_code=ResultCode.OK,
-        )
+    try:
+        for record in recordset:
+            if 0 < limit <= counter[0]:
+                return
+            key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
+            counter[0] += 1
+            yield RecordResult(
+                key=key, record=record, result_code=ResultCode.OK,
+            )
+    except Exception as e:
+        raise _convert_pac_exception(e) from e
