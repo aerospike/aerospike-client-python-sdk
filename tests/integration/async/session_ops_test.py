@@ -188,20 +188,17 @@ async def test_transactional_session_basic(cluster):
 
 
 async def test_transactional_session_context_manager(cluster):
-    """Test TransactionalSession context manager behavior.
+    """The context manager opens a transaction and commits it on exit.
 
-    NOTE: requires a namespace in strong-consistency (SC) mode to commit.
-    Marked xfail when running against an AP-only cluster.
+    The transaction stays empty, so committing it needs no server round trip
+    and runs on any namespace mode.
     """
     tx_session = cluster.transaction()
     assert tx_session.active is False
 
-    try:
-        async with tx_session as tx:
-            assert tx.active is True
-            assert tx.txn is not None
-    except Exception as exc:
-        pytest.xfail(f"Requires SC cluster for MRT commit: {exc}")
+    async with tx_session as tx:
+        assert tx.active is True
+        assert tx.txn is not None
 
     assert tx_session.active is False
 

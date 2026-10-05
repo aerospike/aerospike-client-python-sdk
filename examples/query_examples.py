@@ -704,17 +704,17 @@ async def demonstrate_multi_operation_batches(session) -> None:
             print(f"  active user: {res.record.bins}")
     stream.close()
 
-    # A dataset query cannot also carry bin operations; the combination raises.
-    try:
-        await (
-            session.query(SET)
-            .where("$.name == 'Tim'")
-            .bin("fred").get()
-            .execute()
-        )
-        print("Expected query with bin operations to raise")
-    except AerospikeError as ae:
-        print(f"Query with bin operations raised as expected: {ae}")
+    # A dataset query can carry bin operations; here they project one bin.
+    stream = await (
+        session.query(SET)
+        .where("$.name == 'Tim'")
+        .bin("age").get()
+        .execute()
+    )
+    async for res in stream:
+        if res.is_ok:
+            print(f"  Tim's age: {res.record.bins}")
+    stream.close()
 
 
 async def demonstrate_generation_check(session) -> None:
