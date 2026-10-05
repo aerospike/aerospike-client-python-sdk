@@ -19,11 +19,14 @@ Covers:
 - delete_record() atomically reads bins then deletes the record
 - delete_record() followed by a bin write recreates the record with only the new bin
 - touch_record() resets TTL within an atomic operate call
+- operation_result(i) / typed_operation_result(i) slot semantics: op-aligned,
+  out-of-range, and error rows
 """
 
 import pytest
 
 from aerospike_sdk import DataSet
+from aerospike_sdk.exceptions import ResultCode
 from tests.integration.namespace import general_namespace
 
 
@@ -126,12 +129,49 @@ def test_scalar_multi_op_results_are_op_aligned(session, ds):
     assert rec.results == [1, None, 11]
     assert rec.bins["n"] == [1, 11]
 
+    assert result.operation_result(0) == 1
     assert result.operation_result(1) is None
     assert result.operation_result(2) == 11
+    assert result.operation_result(3) is None
     typed = result.typed_operation_result(2)
     assert typed is not None and typed.get_int() == 11
+    assert result.typed_operation_result(3) is None
 
     session.delete(key).execute()
+
+
+def test_error_row_positional_results_are_none(session, ds):
+    """A row that failed on the server carries no record, so every positional
+    slot reads as ``None`` on both accessors, while the sibling row that
+    succeeded in the same batch stays op-aligned."""
+    present = ds.id("positional_present")
+    missing = ds.id("positional_missing")
+    session.delete(present).execute()
+    session.delete(missing).execute()
+    session.upsert(present).bin("n").set_to(1).execute()
+
+    rows = (
+        session.update(present, missing)
+        .bin("n").add(10)
+        .bin("n").get()
+        .execute()
+    ).collect()
+    by_id = {row.key.value: row for row in rows}
+
+    failed = by_id["positional_missing"]
+    assert not failed.is_ok
+    assert failed.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+    assert failed.record is None
+    assert failed.operation_result(0) is None
+    assert failed.operation_result(1) is None
+    assert failed.typed_operation_result(1) is None
+
+    ok = by_id["positional_present"]
+    assert ok.is_ok
+    assert ok.operation_result(0) is None
+    assert ok.operation_result(1) == 11
+
+    session.delete(present).execute()
 
 
 def test_touch_single_key_bumps_generation(session, ds):

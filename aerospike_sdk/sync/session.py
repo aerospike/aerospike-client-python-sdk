@@ -60,7 +60,17 @@ from aerospike_sdk.sync.operations.query import (
 from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
 if TYPE_CHECKING:
-    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
+    from aerospike_async import (
+        AdminPolicy,
+        CollectionIndexType,
+        CTX,
+        DropIndexTask,
+        FilterExpression,
+        IndexTask,
+        IndexType,
+        RegisterTask,
+        UdfRemoveTask,
+    )
     from aerospike_sdk.sync.client import SyncClient
     from aerospike_sdk.sync.transactional_session import TransactionalSession
 
@@ -404,6 +414,41 @@ class Session(
         """Return the sync transactional-session class (late import breaks the cycle)."""
         from aerospike_sdk.sync.transactional_session import TransactionalSession
         return TransactionalSession
+
+    def create_index(
+        self,
+        dataset: DataSet,
+        index_name: str,
+        bin_name: Optional[str] = None,
+        index_type: Optional[IndexType] = None,
+        collection_type: Optional[CollectionIndexType] = None,
+        ctx: Optional[List[CTX]] = None,
+        expression: Optional[Union[str, FilterExpression]] = None,
+    ) -> IndexTask:
+        """Create a secondary index in one call (synchronous).
+
+        Same arguments and rules as the async verb; a dataset and a name alone
+        create a set index.
+
+        Returns:
+            An :class:`~aerospike_async.IndexTask`; call
+            ``wait_till_complete_blocking()`` before querying through the index.
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.create_index`
+        """
+        builder = self.index(dataset)._configure(
+            index_name, bin_name, index_type, collection_type, ctx, expression,
+        )
+        return builder.create()
+
+    def drop_index(self, dataset: DataSet, index_name: str) -> DropIndexTask:
+        """Drop a secondary index by name (synchronous).
+
+        See Also:
+            :meth:`aerospike_sdk.aio.session.Session.drop_index`
+        """
+        return self.index(dataset).named(index_name).drop()
 
     def register_udf(
         self,

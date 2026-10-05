@@ -20,7 +20,12 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 from aerospike_sdk import Key
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import (
+    AerospikeError,
+    ConnectionError,
+    PacConnectionError,
+    ResultCode,
+)
 
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
@@ -274,6 +279,30 @@ class TestFromRecordset:
         assert len(results) == 1
         assert results[0].record is rec
         assert results[0].key == Key("", "", 0)
+
+
+class _FakeChunkRecordset(_FakeRecordset):
+    """A chunk whose cursor reports more partitions left to scan."""
+
+    async def partition_filter(self):
+        return SimpleNamespace(done=lambda: False)
+
+
+class TestChunkedRefetchFailure:
+
+    async def test_failed_refetch_raises_sdk_error(self):
+        async def _reexecute(pf):
+            raise PacConnectionError("node 10.0.0.1:3000 dropped the connection")
+
+        rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
+        stream = RecordStream._from_chunked_pac_recordset(
+            _FakeChunkRecordset([rec]), reexecute=_reexecute,
+        )
+        assert await stream.has_more_chunks()
+        assert len(await stream.collect()) == 1
+
+        with pytest.raises(ConnectionError):
+            await stream.has_more_chunks()
 
 
 # ---------------------------------------------------------------------------

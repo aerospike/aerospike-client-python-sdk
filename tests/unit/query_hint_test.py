@@ -22,7 +22,7 @@ from aerospike_sdk import (
     Exp,
     QueryHint,
 )
-from aerospike_sdk.aio.operations.query import QueryBuilder, _FilterRecord
+from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 def _query_builder():
@@ -136,47 +136,39 @@ class TestWithHint:
         assert builder._where_ael is None
 
 
-class TestFilterRecord:
-    """_FilterRecord.rebuild_for_hint() reconstruction."""
+class TestExplicitFilter:
+    """QueryBuilder.filter() attaches one authoritative secondary-index filter."""
 
-    def test_rebuild_with_index_name(self):
-        record = _FilterRecord(
-            filter=Filter.equal("age", 30),
-            method="equal",
-            identifier="age",
-            args=(30,),
+    def test_filter_is_sent_unchanged(self):
+        chosen = Filter.equal("age", 30)
+        statement = _query_builder().filter(chosen)._build_statement()
+        assert len(statement.filters) == 1
+        assert str(statement.filters[0]) == str(chosen)
+
+    def test_second_filter_raises(self):
+        builder = _query_builder().filter(Filter.equal("age", 30))
+        with pytest.raises(ValueError, match="filter\\(\\) can only be called once"):
+            builder.filter(Filter.equal("age", 31))
+
+    def test_index_name_hint_does_not_rewrite_explicit_filter(self):
+        chosen = Filter.equal("age", 30)
+        statement = (
+            _query_builder()
+            .filter(chosen)
+            .with_hint(QueryHint(index_name="other_idx"))
+            ._build_statement()
         )
-        hint = QueryHint(index_name="age_idx")
-        rebuilt = record.rebuild_for_hint(hint)
-        expected = Filter.equal_by_index("age_idx", 30)
-        assert str(rebuilt) == str(expected)
+        assert str(statement.filters[0]) == str(chosen)
 
-    def test_rebuild_range_with_index_name(self):
-        record = _FilterRecord(
-            filter=Filter.range("score", 10, 100),
-            method="range",
-            identifier="score",
-            args=(10, 100),
+    def test_duration_hint_leaves_explicit_filter_alone(self):
+        chosen = Filter.range_by_index("score_idx", 10, 100)
+        statement = (
+            _query_builder()
+            .filter(chosen)
+            .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
+            ._build_statement()
         )
-        hint = QueryHint(index_name="score_idx")
-        rebuilt = record.rebuild_for_hint(hint)
-        expected = Filter.range_by_index("score_idx", 10, 100)
-        assert str(rebuilt) == str(expected)
+        assert str(statement.filters[0]) == str(chosen)
 
-    def test_rebuild_no_hint_override_returns_original(self):
-        orig = Filter.equal("age", 30)
-        record = _FilterRecord(
-            filter=orig,
-            method="equal",
-            identifier="age",
-            args=(30,),
-        )
-        hint = QueryHint(query_duration=QueryDuration.SHORT)
-        rebuilt = record.rebuild_for_hint(hint)
-        assert rebuilt is orig
-
-    def test_rebuild_without_metadata_raises(self):
-        record = _FilterRecord(filter=Filter.equal("age", 30))
-        hint = QueryHint(index_name="age_idx")
-        with pytest.raises(ValueError, match="pre-built Filter"):
-            record.rebuild_for_hint(hint)
+    def test_no_filter_leaves_statement_unfiltered(self):
+        assert _query_builder()._build_statement().filters is None

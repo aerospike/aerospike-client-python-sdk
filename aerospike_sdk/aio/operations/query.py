@@ -88,7 +88,6 @@ from aerospike_sdk.query_shared import (  # noqa: F401
     QueryBinBuilder,
     QueryHint,
     WriteBinBuilder,
-    _FilterRecord,
     _OperationSpec,
     _QueryBuilderBase,
     _SupportsAddOperation,
@@ -1152,7 +1151,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             self._namespace, self._set_name,
             self._filter_expression is not None
             or self._where_ael is not None
-            or bool(self._filter_records),
+            or self._filter is not None,
             self._chunk_size,
             self._query_hint is not None,
             extra={"aerospike.cluster": _cmd_cluster(self._client)},

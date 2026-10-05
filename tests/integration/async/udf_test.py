@@ -715,7 +715,8 @@ async def test_udf_client_timeout_carries_retry_context(cluster_with_sleep_udf):
     err = exc_info.value
     assert err.in_doubt is True
     assert err.client is True
-    assert err.result_code == ResultCode.TIMEOUT
+    # No total deadline, so the retry budget ends the command, not the clock.
+    assert err.result_code == ResultCode.MAX_RETRIES_EXCEEDED
     assert err.node, "expected the attempted node on the exception"
     assert err.iteration is not None and err.iteration >= 1
     assert err.base_message

@@ -46,14 +46,9 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           VERSION="${{ inputs.version }}"
           case "$VERSION" in
-            *-alpha.*|*-beta.*)
-              if [ "$BRANCH" != "dev" ]; then
-                echo "::error::alpha/beta releases must be dispatched from 'dev' (current: $BRANCH)"
-                exit 1
-              fi ;;
-            *-rc.*)
+            *-alpha.*|*-beta.*|*-rc.*)
               if [ "$BRANCH" != "stage" ]; then
-                echo "::error::RC releases must be dispatched from 'stage' (current: $BRANCH)"
+                echo "::error::prereleases must be dispatched from 'stage' (current: $BRANCH)"
                 exit 1
               fi ;;
             *)

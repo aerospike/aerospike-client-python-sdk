@@ -45,7 +45,7 @@ class TestDescribeSpecs:
             _set_name="users",
             _operations=[object()],
             _where_ael="$.age > 21",
-            _filter_records=None,
+            _filter=None,
         )
         text = _describe_specs(qb)
         assert "keyless" in text

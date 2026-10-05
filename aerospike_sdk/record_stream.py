@@ -214,6 +214,8 @@ class RecordStream:
                         record=record,
                         result_code=ResultCode.OK,
                     )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
             finally:
                 recordset.close()
         inst = cls(_iter())
@@ -253,18 +255,21 @@ class RecordStream:
         counter = [already_counted]
 
         async def _iter() -> AsyncIterator[RecordResult]:
-            async for record in recordset:
-                if 0 < limit <= counter[0]:
-                    break
-                key = (
-                    record.key
-                    if hasattr(record, "key") and record.key is not None
-                    else Key("", "", 0)
-                )
-                counter[0] += 1
-                yield RecordResult(
-                    key=key, record=record, result_code=ResultCode.OK,
-                )
+            try:
+                async for record in recordset:
+                    if 0 < limit <= counter[0]:
+                        break
+                    key = (
+                        record.key
+                        if hasattr(record, "key") and record.key is not None
+                        else Key("", "", 0)
+                    )
+                    counter[0] += 1
+                    yield RecordResult(
+                        key=key, record=record, result_code=ResultCode.OK,
+                    )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
 
         inst = cls(_iter())
         inst._chunk_count = already_counted
@@ -351,6 +356,9 @@ class RecordStream:
         * the overall ``limit`` has been reached, or
         * the stream was not created with :meth:`_from_chunked_pac_recordset`.
 
+        Raises:
+            AerospikeError: The cursor read or the next chunk's query failed.
+
         Example::
 
             stream = await session.query(SET).chunk_size(10).execute()
@@ -374,15 +382,18 @@ class RecordStream:
         if 0 < self._chunk_limit <= self._chunk_count:
             return False
 
-        pf = await self._chunk_recordset.partition_filter()
-        if pf is None or pf.done():
-            return False
+        try:
+            pf = await self._chunk_recordset.partition_filter()
+            if pf is None or pf.done():
+                return False
 
-        counted_so_far = self._counter_ref[0]
-        log.debug("fetching next chunk (counted=%d)", counted_so_far)
-        if self._chunk_reexecute is None:
-            return False
-        recordset = await self._chunk_reexecute(pf)
+            counted_so_far = self._counter_ref[0]
+            log.debug("fetching next chunk (counted=%d)", counted_so_far)
+            if self._chunk_reexecute is None:
+                return False
+            recordset = await self._chunk_reexecute(pf)
+        except Exception as e:
+            raise _convert_pac_exception(e) from e
         # The prior chunk's recordset is fully consumed and its cursor read;
         # release it now rather than at GC time before adopting the new one.
         prior = self._closeable

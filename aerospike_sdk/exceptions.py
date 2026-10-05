@@ -157,10 +157,12 @@ class TimeoutError(AerospikeError):
             reported the timeout result code. A client timeout says nothing
             about server-side progress — pair it with ``in_doubt`` when
             deciding whether a write needs read-verification.
-        result_code: ``ResultCode.TIMEOUT`` whether the server or the client's
-            own deadline reported it, so both classify alike;
-            ``ResultCode.MAX_RETRIES_EXCEEDED`` when the retry budget, not the
-            clock, ran out -- a retry-policy problem rather than a slow server.
+        result_code: ``ResultCode.TIMEOUT`` when the server reported it or
+            the total timeout expired, so both classify alike;
+            ``ResultCode.MAX_RETRIES_EXCEEDED`` when every attempt the policy
+            allowed failed before that deadline -- including the only attempt
+            when retries are off, so a single socket timeout with
+            ``max_retries=0`` reports this code too.
 
     See Also:
         :class:`ConnectionError`: Cluster reachability rather than deadline

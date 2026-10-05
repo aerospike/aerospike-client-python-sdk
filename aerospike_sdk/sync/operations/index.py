@@ -41,7 +41,8 @@ class IndexBuilder(_IndexBuilderBase):
     Chain :meth:`on_bin` (or :meth:`on_expression`), :meth:`named`,
     :meth:`integer` / :meth:`string` / :meth:`geo2dsphere`, optional
     :meth:`collection` or :meth:`context` (inherited from the shared base),
-    then :meth:`create` or :meth:`drop`.
+    then :meth:`create` or :meth:`drop`. A set index is :meth:`on_set`,
+    :meth:`named`, :meth:`create`.
 
     See Also:
         :class:`~aerospike_sdk.aio.operations.index.IndexBuilder`: Async equivalent.
@@ -75,6 +76,14 @@ class IndexBuilder(_IndexBuilderBase):
         client = self._async_client
         if client._record_on:
             usage.record_call(client, (usage.ADMIN_INDEX,))
+        if self._on_set:
+            index_name = self._validate_set_create()
+            try:
+                return self._async_client._async_client.create_set_index_blocking(
+                    self._namespace, self._set_name, index_name,
+                )
+            except Exception as e:
+                raise _convert_pac_exception(e) from e
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._async_client,

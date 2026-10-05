@@ -13,12 +13,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync integration tests mirroring async idempotent-op, TTL guard, and bad-AEL paths."""
+"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, and query-stream rejection paths."""
 
 import pytest
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryDuration, QueryHint
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_sync,
@@ -210,3 +210,29 @@ class TestBinNameTooLongDiagnostic:
         assert repr("b" * 20) in err.hint
         assert "'ok'" not in err.hint
         assert err.hint in str(err)
+
+
+class TestQueryStreamRejection:
+    """A query the server rejects after the stream opens raises an SDK error."""
+
+    @pytest.mark.parametrize("chunk_size", [None, 10], ids=["plain", "chunked"])
+    def test_rejection_raises_aerospike_error(self, cluster, ds, chunk_size):
+        session = cluster.create_session()
+        key = ds.id("stream_rejection")
+        session.upsert(key).put({"v": 1}).execute()
+        builder = (
+            session.query(ds)
+            .records_per_second(100)
+            .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
+        )
+        if chunk_size is not None:
+            builder = builder.chunk_size(chunk_size)
+        stream = builder.execute()
+
+        with pytest.raises(AerospikeError) as excinfo:
+            for _ in stream:
+                pass
+
+        assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
+        stream.close()
+        _cleanup(session, key)

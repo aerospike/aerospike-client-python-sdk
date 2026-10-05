@@ -1,9 +1,9 @@
 name: Promote to stage
 
+# Manual only. Work merges to stage day to day, and those builds are
+# prereleases that must not go above TEST; promotion to STAGE is a deliberate
+# release step.
 on:
-  push:
-    branches:
-      - stage
   workflow_dispatch:
     inputs:
       dry_run:
@@ -17,26 +17,7 @@ permissions:
   id-token: write
 
 jobs:
-  verify-ancestry:
-    runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Verify stage tip is reachable from dev
-        run: |
-          git fetch origin dev
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
-            echo "::error::stage tip $GITHUB_SHA is not reachable from origin/dev."
-            echo "dev tip:   $(git rev-parse origin/dev)"
-            echo "stage tip: $GITHUB_SHA"
-            exit 1
-          fi
-          echo "stage tip $GITHUB_SHA is reachable from origin/dev"
-
   extract-version:
-    needs: verify-ancestry
     runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
     outputs:
       version: ${{ steps.extract.outputs.release-version }}
@@ -47,10 +28,10 @@ jobs:
         uses: ./.github/actions/get-version
 
   promote-bundle:
-    needs: [verify-ancestry, extract-version]
+    needs: [extract-version]
     runs-on: ${{ vars.BUILD_CONTAINER_DISTRO_VERSION || 'ubuntu-22.04' }}
     env:
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4

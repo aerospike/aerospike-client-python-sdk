@@ -22,11 +22,12 @@ Covers:
 - Multi-spec partial failure
 - Op-type errors (insert/update/replace_if_exists on wrong state)
 - fail_on_filtered_out on read and write paths
+- Query-stream failures surfacing as SDK exceptions
 """
 
 import pytest
 
-from aerospike_sdk import ErrorDetailVerbosity
+from aerospike_sdk import ErrorDetailVerbosity, QueryDuration, QueryHint
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import (
@@ -1031,3 +1032,33 @@ class TestWindowSlotTypes:
         assert isinstance(outcomes[0], AerospikeError)
         assert outcomes[0].result_code == ResultCode.RECORD_TOO_BIG
         await _cleanup(session, ok)
+
+
+class TestQueryStreamRejection:
+    """A query the server rejects after the stream opens raises an SDK error.
+
+    A records-per-second limit on a short query is accepted when the query is
+    sent and rejected once the server starts the job, so the failure arrives
+    while the caller iterates.
+    """
+
+    @pytest.mark.parametrize("chunk_size", [None, 10], ids=["plain", "chunked"])
+    async def test_rejection_raises_aerospike_error(self, session, ds, chunk_size):
+        key = ds.id("stream_rejection")
+        await session.upsert(key).put({"v": 1}).execute()
+        builder = (
+            session.query(ds)
+            .records_per_second(100)
+            .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
+        )
+        if chunk_size is not None:
+            builder = builder.chunk_size(chunk_size)
+        stream = await builder.execute()
+
+        with pytest.raises(AerospikeError) as excinfo:
+            async for _ in stream:
+                pass
+
+        assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
+        stream.close()
+        await _cleanup(session, key)

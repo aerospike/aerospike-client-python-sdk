@@ -3,11 +3,19 @@ name: CI Build & Test
 on:
   pull_request:
     branches:
-      - dev
       - stage
       - main
   workflow_dispatch:
+    inputs:
+      all-pythons:
+        description: Test every supported Python, not just the newest.
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      all-pythons:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,11 +86,32 @@ jobs:
       - name: Ruff check
         run: ruff check .
 
+  # PAC dev builds exist only for the newest Python, so day-to-day PRs do not
+  # run the SDK on older versions. This catches the likeliest break there --
+  # syntax newer than the floor -- without needing PAC.
+  syntax-floor:
+    name: Python 3.11 syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Compile under the floor
+        run: python -m compileall -q aerospike_sdk tests examples
+
   unit:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.11', '3.12', '3.13', '3.14']
+        # Day-to-day PRs test the Pythons the PAC dev channel publishes;
+        # release PRs (into main) test every supported version against the
+        # public PAC release. The 3.11 syntax gate below covers the gap on
+        # every PR.
+        python: ${{ fromJSON((github.base_ref == 'main' || inputs.all-pythons) && '["3.11","3.12","3.13","3.14","3.15"]' || '["3.14","3.15"]') }}
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +120,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Setup JFrog CLI
         id: jfrog
@@ -125,17 +155,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.11', '3.12', '3.13', '3.14']
+        # Same version split as the unit job.
+        python: ${{ fromJSON((github.base_ref == 'main' || inputs.all-pythons) && '["3.11","3.12","3.13","3.14","3.15"]' || '["3.14","3.15"]') }}
         test: [
           integration-tests
         ]
-        # No way to refer to the matrix context in "include"
-        # So we can't dynamically get the lowest and highest supported Python versions
-        include:
-        - test: code-examples
-          python: 3.11
-        - test: code-examples
-          python: 3.14
+        # Code examples run on the lowest and highest version tested.
+        include: ${{ fromJSON((github.base_ref == 'main' || inputs.all-pythons) && '[{"test":"code-examples","python":"3.11"},{"test":"code-examples","python":"3.14"}]' || '[{"test":"code-examples","python":"3.14"}]') }}
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -144,6 +170,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Start Aerospike server
         id: aerospike
@@ -215,7 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.14t']
+        python: ['3.14t', '3.15t']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -224,6 +251,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Setup JFrog CLI
         id: jfrog
@@ -259,7 +287,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ['3.14t']
+        python: ['3.14t', '3.15t']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -268,6 +296,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Start Aerospike server
         id: aerospike

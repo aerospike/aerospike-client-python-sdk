@@ -320,19 +320,33 @@ class Sindex(dict):
 
     @property
     def collection_type(self) -> str:
-        """Collection the index walks: ``default``, ``list``, ``mapkeys``, ``mapvalues``."""
+        """Collection the index walks: ``default``, ``list``, ``mapkeys``,
+        ``mapvalues``; ``set`` for a set index."""
         return self.get("index_type", "")
+
+    @property
+    def is_set_index(self) -> bool:
+        """Whether this is a set index: record presence per set, with no bin or type."""
+        return self.get("index_type", "") == "set"
 
     @property
     def state(self) -> str:
         """Server-reported state: ``RW`` once readable and writable, ``WO``
-        while the index is still being written."""
+        while the index is still being written. Empty for a set index, whose
+        listing carries no build state."""
         return self.get("state", "")
 
     @property
     def is_ready(self) -> bool:
-        """Whether the index is built and serving queries."""
-        return self.state == "RW"
+        """Whether the index is built and serving queries.
+
+        A set index lists with no ``state``, so it reads ready once it is
+        listed; :attr:`SindexDetail.load_pct` reports its build progress.
+        """
+        state = self.get("state")
+        if state is None:
+            return self.is_set_index
+        return state == "RW"
 
 
 class SindexDetail(dict):

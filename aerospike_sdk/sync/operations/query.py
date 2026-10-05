@@ -73,7 +73,7 @@ def _describe_specs(qb) -> str:
             f"keyless ns={qb._namespace!r} set={qb._set_name!r} "
             f"ops={len(getattr(qb, '_operations', []))} "
             f"where_ael={getattr(qb, '_where_ael', None) is not None} "
-            f"filter_records={bool(getattr(qb, '_filter_records', None))}"
+            f"filter={getattr(qb, '_filter', None) is not None}"
         )
     parts = []
     for i, s in enumerate(specs):
@@ -176,7 +176,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._default_filter_expression is None
             and self._where_ael is None
             and self._default_where_ael is None
-            and not self._filter_records
+            and self._filter is None
             and self._op_type is None
             and self._base_read_policy is not None
             and self._read_policy is None

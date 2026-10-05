@@ -68,14 +68,14 @@ html_theme = "furo"
 # itself (READTHEDOCS_GIT_IDENTIFIER is the ref RTD checked out). For local
 # dev builds and branch-driven RTD builds, fall back to the active integration
 # branch.
-_source_branch = os.environ.get("READTHEDOCS_GIT_IDENTIFIER", "dev")
+_source_branch = os.environ.get("READTHEDOCS_GIT_IDENTIFIER", "stage")
 html_theme_options = {
     "source_repository": "https://github.com/aerospike/aerospike-client-python-sdk",
     "source_branch": _source_branch,
     "source_directory": "docs/",
 }
 # Hand-written links into the repo resolve against the same ref the theme uses,
-# so a published tag or `main` build does not send readers to the dev branch.
+# so a published tag or `main` build does not send readers to the stage branch.
 # Substituting the whole link (rather than just the ref inside the URL) keeps
 # MyST parsing it as a link instead of emitting literal bracket text.
 _repo_blob = f"https://github.com/aerospike/aerospike-client-python-sdk/blob/{_source_branch}"

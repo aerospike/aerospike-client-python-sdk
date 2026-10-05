@@ -8,6 +8,13 @@ permissions:
 on:
   workflow_call:
     inputs:
+      promote-to-test:
+        description: >-
+          Promote the release bundle to TEST after DEV. Releases do; dev-channel
+          builds stop at DEV, since they only feed the SDK's pinned installs.
+        required: false
+        type: boolean
+        default: true
       dry_run:
         description: Keep deploy and bundle creation in dry-run mode.
         required: false
@@ -161,4 +168,12 @@ jobs:
           bundle-name: aerospike-client-python-sdk
           version: ${{ needs.extract-version.outputs.version }}
           environment: DEV
+          jf-project: ${{ vars.JFROG_PROJECT }}
+      - name: Promote release bundle to TEST
+        if: ${{ inputs.promote-to-test }}
+        uses: aerospike/shared-workflows/.github/actions/promote-release-bundle@49381314f7afd64afb580b77bab8ac263040c27e # PyPI metadata SIGPIPE fix (post-v5.0.0)
+        with:
+          bundle-name: aerospike-client-python-sdk
+          version: ${{ needs.extract-version.outputs.version }}
+          environment: TEST
           jf-project: ${{ vars.JFROG_PROJECT }}

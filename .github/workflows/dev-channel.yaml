@@ -1,7 +1,7 @@
 name: Dev channel publish
 
 # Publishes a uniquely-versioned wheel and sdist to the JFrog dev repo on
-# every merge to dev, so test teams and other downstream consumers can
+# every merge to stage, so test teams and other downstream consumers can
 # install a specific SDK build with a plain pip command instead of cloning
 # the repo.
 #
@@ -18,7 +18,7 @@ name: Dev channel publish
 on:
   push:
     branches:
-      - dev
+      - stage
   workflow_dispatch:
     inputs:
       dry_run:
@@ -62,6 +62,8 @@ jobs:
     needs: compute-version
     uses: ./.github/workflows/build-release.yaml
     with:
+      # Dev builds feed the SDK's pinned installs; they stop at DEV.
+      promote-to-test: false
       # Merges publish for real; manual dispatches default to dry-run.
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
       version-override: ${{ needs.compute-version.outputs.stamped-version }}
@@ -78,7 +80,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Setup JFrog CLI
         id: jfrog
