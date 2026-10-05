@@ -936,11 +936,6 @@ class TestFilterAfterIndexStep:
         "the cursors and are correct"
     )
 
-    _CORE_DEFECT = (
-        "the core's msgpack decoder panics on the truncated bin payload the "
-        "server returns here, instead of failing with a parse error"
-    )
-
     @staticmethod
     async def _select_after_map_index(session, n):
         k = _key(n)
@@ -957,7 +952,6 @@ class TestFilterAfterIndexStep:
         result = await self._select_after_map_index(cluster.create_session(), 44)
         assert result.record.bins["m"] == [15]
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_CORE_DEFECT)
     async def test_truncated_reply_is_not_a_panic(self, cluster):
         """The server's truncated reply fails as a typed error, not a caught panic.
 

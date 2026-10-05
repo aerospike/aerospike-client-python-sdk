@@ -13,12 +13,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, and query-stream rejection paths."""
+"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, unknown-namespace, and query-stream rejection paths."""
 
 import pytest
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, InvalidNamespaceError, ResultCode
 
-from aerospike_sdk import DataSet, QueryDuration, QueryHint
+from aerospike_sdk import DataSet, ErrorStrategy, QueryDuration, QueryHint
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_sync,
@@ -236,3 +236,30 @@ class TestQueryStreamRejection:
         assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
         stream.close()
         _cleanup(session, key)
+
+
+def _point_op(session, key, op):
+    if op == "read":
+        return session.query(key)
+    return session.upsert(key).put({"v": 1})
+
+
+class TestUnknownNamespace:
+    """A namespace the cluster lacks fails fast instead of exhausting retries."""
+
+    @pytest.mark.parametrize("op", ["read", "write"])
+    def test_raises_invalid_namespace(self, cluster, op):
+        key = DataSet.of("no_such_ns", "sync_error_handling").id(1)
+        with pytest.raises(InvalidNamespaceError) as excinfo:
+            _point_op(cluster.create_session(), key, op).execute().collect()
+        assert excinfo.value.result_code == ResultCode.INVALID_NAMESPACE
+
+    @pytest.mark.parametrize("op", ["read", "write"])
+    def test_in_stream_row(self, cluster, op):
+        key = DataSet.of("no_such_ns", "sync_error_handling").id(1)
+        results = _point_op(cluster.create_session(), key, op).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        ).collect()
+
+        assert [r.result_code for r in results] == [ResultCode.INVALID_NAMESPACE]
+        assert isinstance(results[0].exception, InvalidNamespaceError)
