@@ -52,7 +52,7 @@ except Exception:
     _SDK_CLIENT_ID = "python-sdk-0.0.0"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class _TlsSettings:
     """TLS options held until connect, when they become a ``TlsConfig``.
 

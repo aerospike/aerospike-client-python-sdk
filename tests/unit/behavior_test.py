@@ -17,6 +17,7 @@
 
 from datetime import timedelta
 
+import pytest
 from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy.behavior import Behavior
@@ -807,3 +808,11 @@ class TestSystemTxnSettings:
         text = Behavior.DEFAULT.explain()
         assert "system_txn_verify =>" in text
         assert "system_txn_roll =>" in text
+
+
+class TestSettingsKeywordOnly:
+
+    def test_positional_arguments_are_refused(self):
+        """Every field is optional, so a positional value would bind by declaration order."""
+        with pytest.raises(TypeError):
+            Settings(timedelta(seconds=1))

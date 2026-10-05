@@ -316,7 +316,7 @@ class RecordResult:
             raise TypeError(
                 f"Bin {bin_name!r} is not a 2-element list (got {type(value).__name__})",
             )
-        return HllConfig(int(value[0]), int(value[1]))
+        return HllConfig(index_bit_count=int(value[0]), min_hash_bit_count=int(value[1]))
 
     def as_bool(self) -> bool:
         """Interpret the row as an existence check (for example after :meth:`Session.exists`).
