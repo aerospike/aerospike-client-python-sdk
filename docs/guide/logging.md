@@ -195,7 +195,7 @@ Client connect lines and per-operation command / query summaries carry the
 configured cluster name as a structured `aerospike.cluster` field (via the
 stdlib `extra` mechanism), so multi-cluster processes can attribute events to a
 cluster in JSON log pipelines. The value is the name set through
-`validate_cluster_name_is(...)`, or `None` when cluster-name validation is not
+`ClusterDefinition.cluster_name(...)`, or `None` when cluster-name validation is not
 configured. A JSON formatter picks it up directly:
 
 ```python
@@ -223,7 +223,7 @@ With that formatter, connect and command lines render as:
 The cluster name is read lazily only when a summary is actually emitted (i.e.
 when the `command` / `query` logger is at DEBUG), so tagging adds no cost on the
 disabled hot path. The tag reflects the *configured* validation name, not a
-server-reported value; without `validate_cluster_name_is(...)` the field is
+server-reported value; without `ClusterDefinition.cluster_name(...)` the field is
 `None` and the connect line remains the correlation anchor.
 
 To surface the field in a plain-text formatter, reference it by its dotted key
@@ -243,7 +243,7 @@ handler.setFormatter(logging.Formatter(
 ))
 ```
 
-That yields, with `validate_cluster_name_is("prod-1")` configured:
+That yields, with `ClusterDefinition.cluster_name("prod-1")` configured:
 
 ```
 2026-07-10 14:22:01,234 INFO     aerospike_sdk.lifecycle [prod-1]: Connected seeds='127.0.0.1:3100'

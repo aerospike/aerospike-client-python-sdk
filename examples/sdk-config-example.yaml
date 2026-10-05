@@ -77,7 +77,7 @@ system:
           enabled: false
 
   # Layers on DEFAULT for connections that name this cluster via
-  # ClusterDefinition.validate_cluster_name_is("production").
+  # ClusterDefinition.cluster_name("production").
   production:
     connections:
       minimum_connections_per_node: 50

@@ -90,7 +90,7 @@ cluster_def = (
     ClusterDefinition("localhost", 3000)
     .with_native_credentials("username", "password")
     .using_services_alternate()
-    .with_ip_map({"10.0.0.1": "3.72.54.187"})
+    .ip_map({"10.0.0.1": "3.72.54.187"})
 )
 
 async with cluster_def.connect() as cluster:
@@ -268,8 +268,8 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
     print(await node.info("statistics"))
 ```
 
-`cluster_name` is the name the servers report, or `None` when they have none
-configured. If you connected with `validate_cluster_name_is(...)`, it is the
+`cluster.cluster_name` is the name the servers report, or `None` when they have none
+configured. If you connected with `ClusterDefinition.cluster_name(...)`, it is the
 same name, since nodes reporting any other name are rejected. Unknown names
 passed to `get_node()` raise `InvalidNodeError`.
 

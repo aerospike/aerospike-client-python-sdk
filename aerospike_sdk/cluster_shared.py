@@ -368,22 +368,26 @@ class ClusterDefinitionBase(Generic[_TB]):
         """The current authentication mode."""
         return self._auth_mode
 
-    def validate_cluster_name_is(self, cluster_name: str) -> Self:
-        """Validate that the cluster name matches the expected value.
+    def cluster_name(self, cluster_name: str) -> Self:
+        """Declare the name of the cluster this definition connects to.
 
-        Enables cluster-name validation so the client only connects to the
-        expected cluster. If the actual cluster name does not match, the
-        connection fails.
+        The client validates it against each node: nodes reporting a different
+        cluster name are rejected, so the connection fails if none match. The
+        name also selects the matching ``system.<name>`` profile in a dynamic
+        SDK config file before the connection is built.
 
         Args:
-            cluster_name: The expected cluster name to validate against.
+            cluster_name: The expected cluster name.
 
         Returns:
             This ClusterDefinition for method chaining.
 
         Example::
 
-            cd = ClusterDefinition("localhost", 3000).validate_cluster_name_is("my-cluster")
+            cd = ClusterDefinition("localhost", 3000).cluster_name("prod-east")
+
+        See Also:
+            :attr:`ClusterBase.cluster_name`: The name the connected servers report.
         """
         self._cluster_name = cluster_name
         return self
@@ -435,7 +439,7 @@ class ClusterDefinitionBase(Generic[_TB]):
             cd = ClusterDefinition("bench-asd", 3000).using_services_alternate(False)
 
         See Also:
-            :meth:`with_ip_map`: Client-side address translation, for when the
+            :meth:`ip_map`: Client-side address translation, for when the
                 cluster publishes no alternate addresses.
         """
         self._use_services_alternate = enabled
@@ -486,7 +490,7 @@ class ClusterDefinitionBase(Generic[_TB]):
             :meth:`using_services_alternate`: The production remedy when
                 advertised addresses are not routable — discovers peers, but
                 addresses them by their alternate address.
-            :meth:`with_ip_map`: Client-side translation of discovered
+            :meth:`ip_map`: Client-side translation of discovered
                 addresses.
         """
         self._seed_only_cluster = enabled
@@ -551,7 +555,7 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._fail_if_not_connected = fail
         return self
 
-    def with_ip_map(self, ip_map: dict[str, str]) -> Self:
+    def ip_map(self, ip_map: dict[str, str]) -> Self:
         """Set an IP address translation table for cluster node discovery.
 
         Used when clients from different networks need different IP addresses to
@@ -570,7 +574,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         Example::
 
-            cd = ClusterDefinition("localhost", 3000).with_ip_map({"10.0.0.1": "192.168.1.1"})
+            cd = ClusterDefinition("localhost", 3000).ip_map({"10.0.0.1": "192.168.1.1"})
         """
         self._ip_map = ip_map if ip_map else None
         return self
@@ -785,7 +789,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
     def cluster_name(self) -> Optional[str]:
         """The cluster name the servers report.
 
-        When the connection was built with ``validate_cluster_name_is``, nodes
+        When the connection was built with ``ClusterDefinition.cluster_name()``, nodes
         reporting any other name were rejected, so this equals the validated
         name.
 

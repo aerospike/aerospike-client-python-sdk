@@ -164,7 +164,7 @@ class TestClusterDefinitionWithSystemSettings:
     def test_chaining(self):
         cd = AsyncClusterDefinition("localhost", 3000) \
             .with_system_settings(SystemSettings(max_connections_per_node=400)) \
-            .validate_cluster_name_is("test")
+            .cluster_name("test")
         policy = cd._get_policy()
         assert policy.max_conns_per_node == 400
         assert policy.cluster_name == "test"

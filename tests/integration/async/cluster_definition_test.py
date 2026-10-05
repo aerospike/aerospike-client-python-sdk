@@ -140,7 +140,7 @@ async def test_cluster_definition_with_ip_map(aerospike_host):
     cluster_def = (
         apply_general_auth(ClusterDefinition(hostname, port))
         .using_services_alternate()
-        .with_ip_map({"10.0.0.1": "3.72.54.187"})
+        .ip_map({"10.0.0.1": "3.72.54.187"})
     )
     cluster = await cluster_def.connect()
 

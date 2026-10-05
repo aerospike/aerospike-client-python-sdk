@@ -40,7 +40,7 @@ The `system:` section holds named profiles. `DEFAULT` applies to every
 cluster; a profile whose name matches the cluster's name layers on top of it.
 
 The name comes from either side. Declaring it with
-`validate_cluster_name_is(...)` selects the profile before the connection is
+`ClusterDefinition.cluster_name(...)` selects the profile before the connection is
 built, so the whole block applies. Declaring nothing is also fine: the name
 the servers report is read once the connection is up, and a block matching it
 is selected then.
@@ -51,7 +51,7 @@ take effect on the connection that is already open. Rather than apply half a
 block quietly, the client applies the live-appliable half (`metrics`), leaves
 the rest at the values the connection was built with, and logs a warning
 naming exactly which settings were skipped and that
-`validate_cluster_name_is(...)` is what applies them at connect.
+`ClusterDefinition.cluster_name(...)` is what applies them at connect.
 
 Effective settings resolve per field, highest layer first:
 

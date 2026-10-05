@@ -237,7 +237,7 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
     """A ``system.<cluster-name>`` profile layers over ``DEFAULT`` at connect.
 
     Requires the server to have a configured cluster name (validated on the
-    wire by ``validate_cluster_name_is``); skips when the server has none.
+    wire by ``cluster_name``); skips when the server has none.
     """
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:
@@ -257,7 +257,7 @@ async def test_named_profile_selected_by_cluster_name(aerospike_host, tmp_path):
     with _sdk_config_env(_write(tmp_path, "sdk.yaml", yaml_text)):
         async with (
             apply_general_auth(ClusterDefinition(host, port))
-            .validate_cluster_name_is(cluster_name)
+            .cluster_name(cluster_name)
             .connect()
         ) as cluster:
             client = cluster._sdk_client

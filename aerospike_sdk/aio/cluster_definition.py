@@ -48,7 +48,7 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
                 .with_native_credentials("user", "secret")
                 .using_services_alternate()
                 .preferring_racks(1, 2)
-                .validate_cluster_name_is("my-cluster")
+                .cluster_name("my-cluster")
                 .connect()
             )
 

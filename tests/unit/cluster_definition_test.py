@@ -173,7 +173,7 @@ class TestClusterDefinitionChaining:
             .with_native_credentials("admin", "password")
             .using_services_alternate()
             .preferring_racks(1, 2)
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
         )
         assert cd.auth_mode == AuthMode.INTERNAL
         assert cd._use_services_alternate is True
@@ -205,20 +205,20 @@ class TestIpMap:
 
     def test_set_ip_map(self):
         mapping = {"10.0.0.1": "3.72.54.187", "10.0.0.2": "3.72.54.188"}
-        cd = ClusterDefinition("localhost", 3000).with_ip_map(mapping)
+        cd = ClusterDefinition("localhost", 3000).ip_map(mapping)
         assert cd._ip_map == mapping
 
     def test_empty_dict_clears_ip_map(self):
         cd = (
             ClusterDefinition("localhost", 3000)
-            .with_ip_map({"10.0.0.1": "1.2.3.4"})
-            .with_ip_map({})
+            .ip_map({"10.0.0.1": "1.2.3.4"})
+            .ip_map({})
         )
         assert cd._ip_map is None
 
     def test_ip_map_propagates_to_policy(self):
         mapping = {"10.0.0.1": "3.72.54.187"}
-        cd = ClusterDefinition("localhost", 3000).with_ip_map(mapping)
+        cd = ClusterDefinition("localhost", 3000).ip_map(mapping)
         policy = cd._get_policy()
         assert policy.ip_map == mapping
 
@@ -231,7 +231,7 @@ class TestIpMap:
         cd = (
             ClusterDefinition("localhost", 3000)
             .with_native_credentials("admin", "pass")
-            .with_ip_map({"10.0.0.1": "1.2.3.4"})
+            .ip_map({"10.0.0.1": "1.2.3.4"})
             .using_services_alternate()
         )
         assert cd._ip_map == {"10.0.0.1": "1.2.3.4"}
@@ -339,7 +339,7 @@ class TestSyncBuilderSmoke:
             .with_external_credentials("ldap_user", "ldap_pass")
             .using_services_alternate()
             .preferring_racks(1, 2)
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
             .fail_if_not_connected(False)
         )
         assert cd.auth_mode == AuthMode.EXTERNAL
@@ -439,7 +439,7 @@ class TestForceSingleNode:
             ClusterDefinition("localhost", 3000)
             .with_native_credentials("admin", "password")
             .force_single_node()
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
         )
         assert cd._get_policy().seed_only_cluster is True
         assert cd._cluster_name == "my-cluster"
