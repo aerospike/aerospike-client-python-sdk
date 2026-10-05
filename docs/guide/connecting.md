@@ -121,10 +121,7 @@ Server-side TLS with CA certificate verification:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-    .done()
+    .with_tls_config(tls_name="myTlsName", ca_file="/path/to/ca.pem")
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )
@@ -139,12 +136,12 @@ Mutual TLS (mTLS) with client certificate authentication:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-        .client_cert_file("/path/to/client-cert.pem")
-        .client_key_file("/path/to/client-key.pem")
-    .done()
+    .with_tls_config(
+        tls_name="myTlsName",
+        ca_file="/path/to/ca.pem",
+        client_cert_file="/path/to/client-cert.pem",
+        client_key_file="/path/to/client-key.pem",
+    )
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )
@@ -156,9 +153,19 @@ async with cluster_def.connect() as cluster:
 
 :::{note}
 The `tls_name` must match the server's configured TLS name for certificate
-validation. Setting `tls_name()` on the `ClusterDefinition` builder
-automatically applies it to all hosts.
+validation. It is applied to every host that has no `tls_name` of its own.
+Each `with_tls_config()` call replaces any earlier TLS settings.
 :::
+
+To restrict the handshake, pass `protocols=["TLSv1.3"]` or a list of
+cipher-suite names in `ciphers=`. An empty list raises `ValueError` right away;
+omit the argument to allow the defaults. At connect, an unknown name raises
+`ValueError`, and a combination that leaves no usable suite (TLS 1.2 with only
+TLS 1.3 suites, for example) raises `AerospikeError`.
+
+For certificate (PKI) authentication, pass `client_cert_file` and
+`client_key_file` here and call `with_certificate_credentials()`; connect
+refuses PKI without a client certificate.
 
 TLS for the login exchange only, with cleartext data connections, for trusted
 networks where data-plane encryption is not worth its cost:
@@ -166,11 +173,9 @@ networks where data-plane encryption is not worth its cost:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-        .for_login_only()
-    .done()
+    .with_tls_config(
+        tls_name="myTlsName", ca_file="/path/to/ca.pem", for_login_only=True,
+    )
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )

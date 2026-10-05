@@ -1,7 +1,0 @@
-# TlsBuilder
-
-```{eval-rst}
-.. autoclass:: aerospike_sdk.aio.tls_builder.TlsBuilder
-   :members:
-   :show-inheritance:
-```

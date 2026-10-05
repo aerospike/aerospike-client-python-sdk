@@ -44,7 +44,6 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`InfoCommands`](sync/info.md) | Sync info protocol commands |
 | [`TransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
 | [`RecordStream`](sync/record-stream.md) | Sync iterator over query results |
-| [`TlsBuilder`](sync/tls-builder.md) | Sync TLS configuration builder |
 
 ## Core
 
@@ -60,7 +59,6 @@ Shared types used by both async and sync APIs.
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
-| [`TlsBuilder`](tls-builder.md) | TLS configuration builder |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
@@ -110,7 +108,6 @@ sync/index-builder
 sync/background
 sync/info
 sync/udf
-sync/tls-builder
 dataset
 hll-config
 sorted-map
@@ -119,7 +116,6 @@ operation-result
 record-stream
 behavior
 cluster-definition
-tls-builder
 system-settings
 error-strategy
 expression-trace

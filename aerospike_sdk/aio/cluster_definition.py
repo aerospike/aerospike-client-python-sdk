@@ -21,7 +21,6 @@ from typing import List
 
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.cluster import Cluster
-from aerospike_sdk.aio.tls_builder import TlsBuilder
 from aerospike_sdk.awaitable_context import AwaitableContext
 from aerospike_sdk.cluster_shared import ClusterDefinitionBase, Host
 from aerospike_sdk.policy.sdk_config_loader import (
@@ -32,7 +31,7 @@ from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 __all__ = ["ClusterDefinition", "Host"]
 
 
-class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
+class ClusterDefinition(ClusterDefinitionBase):
     """Configure seeds, auth, TLS, rack awareness, and validation before :meth:`connect`.
 
     Call :meth:`connect` to obtain a live :class:`~aerospike_sdk.aio.cluster.Cluster`.
@@ -55,10 +54,6 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
     See Also:
         :class:`~aerospike_sdk.aio.cluster.Cluster`
     """
-
-    def _new_tls_builder(self) -> TlsBuilder:
-        """Return an async ``TlsBuilder`` bound to this definition."""
-        return TlsBuilder(self)
 
     def _build_pool_members(self, count: int) -> List[Client]:
         """Construct *count* unconnected pool-member clients (AsyncPool hook).

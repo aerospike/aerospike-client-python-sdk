@@ -85,19 +85,17 @@ class TestAuthMode:
         assert cd._user_name is None
         assert cd._password is None
 
-    def test_certificate_credentials_auto_enables_tls(self):
-        cd = ClusterDefinition("localhost", 3000)
-        assert cd._tls_builder is None
-        cd.with_certificate_credentials()
-        assert cd._tls_builder is not None
-        assert cd._tls_builder.is_tls_enabled()
+    def test_certificate_credentials_does_not_enable_tls(self):
+        """The certificate comes from with_tls_config(); empty TLS settings
+        could never authenticate."""
+        cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()
+        assert cd._tls is None
 
     def test_certificate_credentials_preserves_existing_tls(self):
-        cd = ClusterDefinition("localhost", 3000)
-        cd.with_tls_config_of().tls_name("myTls").done()
-        original_builder = cd._tls_builder
+        cd = ClusterDefinition("localhost", 3000).with_tls_config(tls_name="myTls")
+        original = cd._tls
         cd.with_certificate_credentials()
-        assert cd._tls_builder is original_builder
+        assert cd._tls is original
 
     def test_switching_auth_modes(self):
         cd = ClusterDefinition("localhost", 3000)
@@ -139,24 +137,46 @@ class TestAuthModePolicy:
         assert policy.auth_mode == AuthMode.NONE
 
 
+_CLIENT_PAIR = {"client_cert_file": "/certs/client.pem", "client_key_file": "/certs/client.key"}
+
+
 class TestPkiValidation:
-    def test_pki_without_tls_names_raises(self):
+    def test_pki_without_tls_config_raises(self):
         cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()
+        with pytest.raises(ValueError, match="client certificate"):
+            cd._validate()
+
+    def test_pki_without_client_certificate_raises(self):
+        """Otherwise the only signal is the server refusing the handshake."""
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_tls_config(tls_name="myTls", ca_file="/certs/ca.pem")
+            .with_certificate_credentials()
+        )
+        with pytest.raises(ValueError, match="client certificate"):
+            cd._validate()
+
+    def test_pki_without_tls_names_raises(self):
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_tls_config(**_CLIENT_PAIR)
+            .with_certificate_credentials()
+        )
         with pytest.raises(ValueError, match="Missing TLS name"):
             cd._validate()
 
     def test_pki_with_tls_names_passes(self):
-        cd = ClusterDefinition(
-            hosts=[Host("localhost", 3000, tls_name="myTls")]
-        ).with_certificate_credentials()
+        cd = (
+            ClusterDefinition(hosts=[Host("localhost", 3000, tls_name="myTls")])
+            .with_tls_config(**_CLIENT_PAIR)
+            .with_certificate_credentials()
+        )
         cd._validate()
 
-    def test_pki_with_tls_builder_name_passes(self):
+    def test_pki_with_tls_config_name_passes(self):
         cd = (
             ClusterDefinition("localhost", 3000)
-            .with_tls_config_of()
-            .tls_name("myTls")
-            .done()
+            .with_tls_config(tls_name="myTls", **_CLIENT_PAIR)
             .with_certificate_credentials()
         )
         cd._validate()
@@ -191,11 +211,12 @@ class TestClusterDefinitionChaining:
     def test_full_chain_with_certificate_credentials(self):
         cd = (
             ClusterDefinition(hosts=[Host("localhost", 3000, tls_name="myTls")])
+            .with_tls_config(**_CLIENT_PAIR)
             .with_certificate_credentials()
             .using_services_alternate()
         )
         assert cd.auth_mode == AuthMode.PKI
-        assert cd._tls_builder is not None
+        assert cd._tls is not None
 
 
 class TestIpMap:
@@ -349,15 +370,9 @@ class TestSyncBuilderSmoke:
         assert cd._cluster_name == "my-cluster"
         assert cd._fail_if_not_connected is False
 
-    def test_sync_with_tls_config_of(self):
-        cd = (
-            SyncClusterDefinition("localhost", 3000)
-            .with_tls_config_of()
-            .tls_name("myTls")
-            .done()
-        )
-        assert cd._tls_builder is not None
-        assert cd._tls_builder.is_tls_enabled()
+    def test_sync_with_tls_config(self):
+        cd = SyncClusterDefinition("localhost", 3000).with_tls_config(tls_name="myTls")
+        assert cd._tls is not None
 
     def test_sync_host_of_and_parse_hosts(self):
         h = SyncHost.of("node-a", 3000)

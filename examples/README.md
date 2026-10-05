@@ -50,6 +50,9 @@ an example, keep the contract below.
    `benchmarks/_env.py`. It resolves connection settings from the environment so the scripts run
    with no edits. A real application constructs `ClusterDefinition` directly (as the repo README's
    Quick start does) and does **not** import `_env`.
+   Set `AEROSPIKE_USE_TLS=true` to run every example over TLS: the seed becomes
+   `AEROSPIKE_HOST_TLS` and `AEROSPIKE_TLS_NAME` / `AEROSPIKE_TLS_CA_FILE` (plus the client cert
+   and key, when both are set) go to `with_tls_config()`.
 
 ## Blocked / not yet portable
 

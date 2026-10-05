@@ -23,7 +23,6 @@ from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder
 from aerospike_sdk.sync.record_stream import RecordStream
 from aerospike_sdk.sync.session import Session
-from aerospike_sdk.sync.tls_builder import TlsBuilder
 from aerospike_sdk.sync.transactional_session import TransactionalSession
 
 # Names match their aio counterparts and are differentiated by import path —
@@ -40,6 +39,5 @@ __all__ = [
     "QueryBuilder",
     "RecordStream",
     "Session",
-    "TlsBuilder",
     "TransactionalSession",
 ]
