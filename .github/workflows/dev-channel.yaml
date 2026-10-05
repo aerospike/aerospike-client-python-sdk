@@ -1,7 +1,7 @@
 name: Dev channel publish
 
 # Publishes a uniquely-versioned wheel and sdist to the JFrog dev repo on
-# every merge to dev, so test teams and other downstream consumers can
+# every merge to stage, so test teams and other downstream consumers can
 # install a specific SDK build with a plain pip command instead of cloning
 # the repo.
 #
@@ -18,7 +18,7 @@ name: Dev channel publish
 on:
   push:
     branches:
-      - dev
+      - stage
   workflow_dispatch:
     inputs:
       dry_run:

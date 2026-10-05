@@ -275,11 +275,11 @@ bump procedure.
 
 ### Pre-release builds (Aerospike internal)
 
-Every merge to `dev` publishes a wheel and an sdist to Aerospike's internal
+Every merge to `stage` publishes a wheel and an sdist to Aerospike's internal
 package index, versioned as a dev release leading toward the next
 pre-release — `0.9.0a6.dev123`, where `123` is the publishing workflow's run
 number. This is for Aerospike test teams and internal consumers who need a
-specific `dev` build; external users should use the public PyPI releases.
+specific dev build; external users should use the public PyPI releases.
 
 These builds are **not** on public PyPI, so installing one requires
 credentials for the internal index. Generate an identity token in the JFrog UI
@@ -322,7 +322,7 @@ the package from the index (per
 out *only* the tools:
 
 ```bash
-git clone --depth 1 --branch dev --filter=blob:none --sparse \
+git clone --depth 1 --branch stage --filter=blob:none --sparse \
   https://github.com/aerospike/aerospike-client-python-sdk.git psdk-bench
 cd psdk-bench
 git sparse-checkout set benchmarks           # directories only; root files come free
@@ -346,7 +346,7 @@ doesn't publish them strands the client on a single node, where most reads then
 fail to route.
 
 Take the tools from the same branch the build came from. `--depth 1` otherwise
-clones the default branch (`main`), and dev builds are published from `dev`, so
+clones the default branch (`main`), and dev builds are published from `stage`, so
 bench flags introduced alongside a new SDK feature — `--mode async-many`, for
 instance — may not exist in `main`'s copy of the tools yet,
 and the run dies on an unknown flag. For a build published by a manual dispatch
@@ -395,7 +395,7 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 pip install -e ".[dev]"    # install with dev extras
 ```
 
-On the `dev` branch, the pinned `aerospike-async` (PAC) version may be a
+On the `stage` branch, the pinned `aerospike-async` (PAC) version may be a
 pre-release build published to Aerospike's internal package index rather
 than public PyPI. When it is, the plain install above needs one extra step that
 depends on who you are:
@@ -489,8 +489,8 @@ ruff check .
 
 ### Bumping the version
 
-Bumps are manual and happen in PRs against `dev`. Promotion workflows
-(`dev → stage → main`) do not mutate the version.
+Bumps are manual and happen in PRs against `stage`. Promotion workflows
+(`stage → main`) do not mutate the version.
 
 ```bash
 # 1. Edit VERSION:
@@ -500,7 +500,7 @@ echo '0.9.0-alpha.2' > VERSION
 # 2. Confirm:
 bin/get-version    # prints 0.9.0-alpha.2
 
-# 3. Open a PR against dev with just this change.
+# 3. Open a PR against stage with just this change.
 ```
 
 ### Bumping the PAC pin
@@ -528,7 +528,7 @@ pip install "aerospike-async==<new version>"
 make check-pin
 ```
 
-Open the PR against `dev`. PSDK's own `VERSION` does not need to change for a
+Open the PR against `stage`. PSDK's own `VERSION` does not need to change for a
 PAC pin bump unless the underlying API contract has shifted enough to warrant
 it.
 

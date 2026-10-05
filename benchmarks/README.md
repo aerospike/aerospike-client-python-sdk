@@ -17,7 +17,7 @@ out just this directory. Updating the bench never touches your installed PSDK.
 
 ```bash
 # First install: sparse, blobless checkout of benchmarks/ only
-git clone --depth 1 --branch dev --filter=blob:none --sparse \
+git clone --depth 1 --branch stage --filter=blob:none --sparse \
   https://github.com/aerospike/aerospike-client-python-sdk.git psdk-bench
 cd psdk-bench && git sparse-checkout set benchmarks
 
