@@ -572,8 +572,6 @@ async def demonstrate_query_hints(session) -> None:
     for label, hint in (
         # Name a specific secondary index for the server to use.
         ("index_name", QueryHint(index_name="age_idx")),
-        # Prefer the secondary index on a given bin.
-        ("bin_name", QueryHint(bin_name="age")),
         # Declare how long the query is expected to run, which steers how the
         # server sizes its resources for it.
         ("query_duration", QueryHint(query_duration=QueryDuration.SHORT)),
@@ -581,11 +579,6 @@ async def demonstrate_query_hints(session) -> None:
         (
             "index_name + duration",
             QueryHint(index_name="age_idx", query_duration=QueryDuration.SHORT),
-        ),
-        # Order doesn't matter: duration first, then the bin.
-        (
-            "query_duration + bin_name",
-            QueryHint(query_duration=QueryDuration.SHORT, bin_name="age"),
         ),
     ):
         await count_hinted_query(

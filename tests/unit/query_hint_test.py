@@ -50,22 +50,18 @@ class TestQueryHintValidation:
     def test_all_none_is_valid(self):
         hint = QueryHint()
         assert hint.index_name is None
-        assert hint.bin_name is None
         assert hint.query_duration is None
 
-    def test_bin_name_only(self):
-        hint = QueryHint(bin_name="alt_bin")
-        assert hint.bin_name == "alt_bin"
-        assert hint.index_name is None
+    def test_bin_name_is_not_accepted(self):
+        """It never selected an index: its only effect was skipping the
+        planner, and with it the strict no-scan default."""
+        with pytest.raises(TypeError, match="bin_name"):
+            QueryHint(bin_name="age")
 
-    def test_bin_name_with_query_duration(self):
-        hint = QueryHint(bin_name="b", query_duration=QueryDuration.SHORT)
-        assert hint.bin_name == "b"
-        assert hint.query_duration == QueryDuration.SHORT
-
-    def test_index_name_and_bin_name_raises(self):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            QueryHint(index_name="idx", bin_name="b")
+    def test_fields_are_keyword_only(self):
+        """Keyword-only fields can be added later without shifting positions."""
+        with pytest.raises(TypeError):
+            QueryHint("age_idx")
 
     def test_hard_hint_without_index_name_raises(self):
         with pytest.raises(ValueError, match="hard_hint requires index_name"):

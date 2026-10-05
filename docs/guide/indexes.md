@@ -332,26 +332,20 @@ stream = await (
 `Behavior`, `True` permits the fallback, `False` rejects it. A per-query hint
 always wins over the `Behavior` setting.
 
-### Opting out of server-led selection
+### Choosing the access path yourself
 
-`bin_name` skips the server's explain step and sends the AEL as a plain filter
-expression instead. It is mutually exclusive with `index_name`:
+To bypass server-led selection, attach an explicit index filter. It is sent
+unchanged as the access path, and any `.where()` clause travels beside it as a
+residual filter expression:
 
 ```python
 stream = await (
     session.query(users)
-    .where("$.age > 25")
-    .with_hint(QueryHint(bin_name="age"))
+    .filter(Filter.range("age", 25, 40))
+    .where("$.city == 'NYC'")
     .execute()
 )
 ```
-
-!!! warning "Deprecated in alpha"
-    `bin_name` is a legacy opt-out during alpha, and the bin name itself is not
-    sent to the server — it only selects the route. The Query Optimizer PRD
-    specifies the index *name* as the sole hint shape, so this is expected to
-    be removed. To bypass the planner deliberately, prefer an explicit
-    `.filter(...)`, which the server honors when the index is available.
 
 See the [AEL guide](expression-ael.md) for string filter syntax and capability
 checks (`cluster.supports_ael()`, `cluster.supports_query_selection()`).
