@@ -214,6 +214,8 @@ class _WriteVerbs(Generic[_WSB]):
     Implemented on :class:`QueryBuilder` (chain from a read query) and
     :class:`WriteBinBuilder` (chain from a bin-scoped write). Each method
     finalizes the prior segment when applicable and targets new key(s).
+    Chaining a write onto a dataset query raises ``ValueError``: only
+    key-based queries stack.
 
     Generic over the ``WriteSegmentBuilder`` type each mixer opens so a
     sync mixer's verbs return the sync builder (and vice versa) rather than a
@@ -584,12 +586,19 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
 
         Returns:
             self for method chaining.
+
+        Raises:
+            ValueError: If ``where`` has already been called on this operation.
+                Each chained operation takes its own.
         """
+        qb = self._qb
+        if qb._filter_expression is not None or qb._where_ael is not None:
+            raise ValueError("where() can only be called once per operation")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
+            qb._filter_expression = qb._filter_expression_from_ael(expression)
         else:
-            self._qb._filter_expression = expression
+            qb._filter_expression = expression
         return self
 
     def ensure_generation_is(self, generation: int) -> Self:

@@ -20,8 +20,8 @@ runtime-agnostic bases in :mod:`aerospike_sdk.query_shared` /
 :mod:`aerospike_sdk.operations_shared`, and the blocking-IO dispatchers
 from :mod:`aerospike_sdk.sync.operations.query_dispatch`. Concrete sync
 subclasses add sync ``execute()`` (Tier 1 / 1b / 2 dispatch) and override
-factory hooks (``_start_write_verb``, ``_promote``) so chained types stay
-in the sync namespace.
+factory hooks (``_start_write_segment``, ``_start_write_verb``, ``_promote``)
+so chained types stay in the sync namespace.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
 
     # -- Write transitions ----------------------------------------------------
 
-    def _start_write_verb(  # type: ignore[override]
+    def _start_write_segment(  # type: ignore[override]
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
         """Open a sync write segment after a write verb on this query."""

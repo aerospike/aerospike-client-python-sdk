@@ -246,7 +246,7 @@ async def test_read_as_string_op_via_query(cluster):
 
 async def _survives_filter(sess, key, filter_exp) -> bool:
     """Whether *key* survives *filter_exp* (evaluated server-side)."""
-    rs = await sess.query(key).filter_expression(filter_exp).execute()
+    rs = await sess.query(key).where(filter_exp).execute()
     return len([r async for r in rs]) == 1
 
 

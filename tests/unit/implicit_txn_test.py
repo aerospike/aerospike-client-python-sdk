@@ -333,7 +333,7 @@ class TestMultiKeyWriteChainWrap:
     def test_sc_write_batch_is_wrapped(self):
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client())
-        builder.upsert(self._keys()).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         assert len(pac.commits) == 1
         assert pac.batch_policies[0] is not None
         assert pac.batch_policies[0].txn is not None
@@ -341,7 +341,7 @@ class TestMultiKeyWriteChainWrap:
     def test_ap_batch_is_not_wrapped(self):
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client(), mode=Mode.AP)
-        builder.upsert(self._keys()).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
         assert pac.batch_policies[0] is None
 
@@ -349,7 +349,7 @@ class TestMultiKeyWriteChainWrap:
         pac = _RecordingBatchClient()
         explicit = Txn()
         builder = _write_chain_builder(pac, self._sdk_client(), txn=explicit)
-        builder.upsert(self._keys()).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         # The explicit txn is stamped; no implicit commit happens.
         assert pac.commits == []
         assert pac.batch_policies[0].txn is not None
@@ -357,20 +357,23 @@ class TestMultiKeyWriteChainWrap:
     def test_with_txn_none_opts_out(self):
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client())
-        builder.upsert(self._keys()).bin("a").set_to(1).with_txn(None).execute()
+        (
+            builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1)
+            .with_txn(None).execute()
+        )
         assert pac.commits == []
         assert pac.batch_policies[0] is None
 
     def test_setting_disabled_is_not_wrapped(self):
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client(implicit=False))
-        builder.upsert(self._keys()).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
 
     def test_cluster_without_mrt_is_not_wrapped(self):
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client(supports_mrt=False))
-        builder.upsert(self._keys()).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
 
     def test_read_only_batch_is_not_wrapped(self):
@@ -388,7 +391,7 @@ class TestMultiKeyWriteChainWrap:
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client())
         keys = [Key("test", "s", 1), Key("other", "s", 2)]
-        builder.upsert(keys).bin("a").set_to(1).execute()
+        builder._start_write_segment("upsert", keys).bin("a").set_to(1).execute()
         assert pac.commits == []
         assert pac.batch_policies[0] is None
 
@@ -396,7 +399,7 @@ class TestMultiKeyWriteChainWrap:
         pac = _RecordingBatchClient()
         builder = _write_chain_builder(pac, self._sdk_client())
         (
-            builder.upsert(Key("test", "s", 1)).bin("a").set_to(1)
+            builder._start_write_segment("upsert", Key("test", "s", 1)).bin("a").set_to(1)
             .upsert(Key("other", "s", 2)).bin("a").set_to(2)
             .execute()
         )
@@ -414,7 +417,8 @@ class TestMultiKeyWriteChainWrap:
 
         pac.batch_operate_blocking = failing_batch
         builder = _write_chain_builder(pac, self._sdk_client())
-        rows = list(builder.upsert(self._keys()).bin("a").set_to(1).execute())
+        chain = builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1)
+        rows = list(chain.execute())
 
         assert len(pac.aborts) == 1
         assert pac.commits == []

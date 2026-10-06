@@ -102,9 +102,8 @@ log = logging.getLogger(SdkLoggers.QUERY)
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
-    Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.aio.session.Session.query`. Use :meth:`where`
-    or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
+    Start from :meth:`~aerospike_sdk.aio.session.Session.query`. Use
+    :meth:`where` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
 
@@ -1577,6 +1576,6 @@ class DataSetWriteBuilder(_DataSetWriteBuilderBase["QueryBuilder"]):
 
 # Bind the async write-segment class onto the shared base's factory hook so
 # `_start_write_segment` on an async QueryBuilder chains into the async
-# segment type. The sync leaf overrides `_start_write_verb` and never uses
+# segment type. The sync leaf overrides `_start_write_segment` and never uses
 # this binding.
 QueryBuilder._write_segment_cls = WriteSegmentBuilder

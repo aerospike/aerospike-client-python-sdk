@@ -189,7 +189,7 @@ class TestChainToUdfTransition:
     def test_write_segment_transition_finalizes_write_spec(self):
         qb = _connected_qb()
         k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
-        seg = qb._start_write_verb("upsert", k1)
+        seg = qb._start_write_segment("upsert", k1)
         seg.put({"a": 1})
         fb = seg.execute_udf(k2)
         assert type(fb) is UdfFunctionBuilder
@@ -202,7 +202,7 @@ class TestChainToUdfTransition:
         qb = _connected_qb()
         k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
         fb = (
-            qb._start_write_verb("upsert", k1)
+            qb._start_write_segment("upsert", k1)
             .bin("count").set_to(5)
             .execute_udf(k2)
         )

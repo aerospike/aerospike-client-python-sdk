@@ -149,7 +149,8 @@ class TestDefaultsResolveAtExecute:
         active = Exp.eq(Exp.int_bin("active"), Exp.int_val(1))
         qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
         (
-            qb.upsert(_key(1)).bin("v").set_to(1).where(own).expire_record_after_seconds(60)
+            qb._start_write_segment("upsert", _key(1)).bin("v").set_to(1)
+            .where(own).expire_record_after_seconds(60)
             .delete(_key(2), _key(3))
             .upsert(_key(4)).bin("v").set_to(2)
             .default_where(active)
@@ -163,7 +164,7 @@ class TestDefaultsResolveAtExecute:
     def test_the_last_default_set_wins(self, qb_cls):
         qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
         (
-            qb.upsert(_key(1)).bin("v").set_to(1)
+            qb._start_write_segment("upsert", _key(1)).bin("v").set_to(1)
             .default_never_expire()
             .upsert(_key(2)).bin("v").set_to(2)
             .default_expire_record_after_seconds(TTL_SECONDS)

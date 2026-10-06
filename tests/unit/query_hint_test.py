@@ -18,10 +18,7 @@
 import pytest
 from aerospike_sdk import Filter, QueryDuration
 
-from aerospike_sdk import (
-    Exp,
-    QueryHint,
-)
+from aerospike_sdk import QueryHint
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
@@ -124,12 +121,6 @@ class TestWithHint:
         builder = _query_builder()
         builder.where("$.age > 30")
         assert builder._where_ael == "$.age > 30"
-
-    def test_where_filter_expression_clears_ael_string(self):
-        builder = _query_builder()
-        builder.where("$.age > 30")
-        builder.where(Exp.gt(Exp.int_bin("age"), Exp.int_val(30)))
-        assert builder._where_ael is None
 
 
 class TestExplicitFilter:

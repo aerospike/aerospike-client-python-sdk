@@ -265,10 +265,17 @@ class _BackgroundOperationBuilderBase:
         Returns:
             This builder for chaining.
 
+        Raises:
+            ValueError: If ``where`` has already been called on this builder.
+
         Example::
-            builder.where("$.status == 'inactive'")
-            builder.where("$.status == '%s'", status)
+
+            await session.background_task().delete(users).where(
+                "$.status == '%s'", status,
+            ).execute()
         """
+        if self._filter_expression is not None:
+            raise ValueError("where() can only be called once per background task")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
@@ -698,7 +705,13 @@ class _BackgroundUdfBuilderBase:
         expression: Union[str, FilterExpression],
         *params: Any,
     ) -> BackgroundUdfBuilder:
-        """Optional predicate limiting which records invoke the UDF."""
+        """Optional predicate limiting which records invoke the UDF.
+
+        Raises:
+            ValueError: If ``where`` has already been called on this builder.
+        """
+        if self._filter_expression is not None:
+            raise ValueError("where() can only be called once per background task")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(

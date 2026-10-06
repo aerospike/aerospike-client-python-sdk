@@ -259,6 +259,10 @@ expr = Exp.and_([
 stream = await session.query(users).where(expr).execute()
 ```
 
+Each query or chained operation takes one `where()`. A second call raises
+`ValueError` rather than replacing the first, so combine conditions in a single
+expression (`and`, `or`) instead.
+
 ## Partition Filtering
 
 Query a single partition:

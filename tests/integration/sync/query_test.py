@@ -115,7 +115,7 @@ def test_query_with_filter_expression(session):
 
     stream = (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -329,7 +329,7 @@ def test_query_with_filter_expression_and(session):
 
     stream = (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0

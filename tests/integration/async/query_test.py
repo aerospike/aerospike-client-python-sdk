@@ -271,7 +271,7 @@ async def test_query_with_filter_expression(session):
 
     stream = await (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -305,7 +305,7 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
         stream = await (
             session.query(general_namespace(), "query_test")
             .filter(Filter.range("age", 20, 30))
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         count = 0
@@ -333,7 +333,7 @@ async def test_query_with_filter_expression_and(session):
 
     stream = await (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -418,7 +418,7 @@ async def test_query_digest_modulo(session):
 
     stream = await (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -436,7 +436,7 @@ async def test_query_bin_exists(session):
 
     stream = await (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -455,7 +455,7 @@ async def test_query_record_size(session):
 
     stream = await (
         session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -525,7 +525,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).filter_expression(
+            lambda: _namespace_query(cluster, namespace).where(
                 Exp.eq(Exp.string_bin("probe"), val(probe)),
             ),
             {"no-set", "named-set"},
@@ -536,7 +536,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
             Exp.ne(Exp.set_name(), val("")),
         ])
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).filter_expression(named_set_only),
+            lambda: _namespace_query(cluster, namespace).where(named_set_only),
             {"named-set"},
         )
     finally:

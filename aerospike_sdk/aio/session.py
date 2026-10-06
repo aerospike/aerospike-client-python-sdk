@@ -747,7 +747,7 @@ class Session(
             sdk_client=self._client,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
-        return qb._start_write_verb(op_type, target)
+        return qb._start_write_segment(op_type, target)
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:
         """Dataset-scoped tabular write; rows arrive through ``bins(...)``."""

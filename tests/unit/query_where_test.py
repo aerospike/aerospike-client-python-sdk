@@ -107,6 +107,10 @@ class TestQueryBuilderWhere:
             Exp.from_server_compiled_ael("$.age > 20")
         )
 
+    def test_filter_expression_is_not_a_builder_method(self):
+        """where() is the one entry point for expressions and AEL alike."""
+        assert not hasattr(_query_builder(), "filter_expression")
+
 
 class TestSyncQueryBuilderWhere:
     """Test SyncQueryBuilder.where() overloads (same behavior as QueryBuilder)."""
@@ -145,3 +149,6 @@ class TestSyncQueryBuilderWhere:
         result = builder.where(exp)
         assert result is builder
         assert builder._filter_expression is exp
+
+    def test_filter_expression_is_not_a_builder_method(self):
+        assert not hasattr(self._sync_builder(), "filter_expression")

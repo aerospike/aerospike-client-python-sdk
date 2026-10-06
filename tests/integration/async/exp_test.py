@@ -386,7 +386,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -403,7 +403,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -420,7 +420,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -438,7 +438,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -454,7 +454,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -472,7 +472,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -489,7 +489,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -506,7 +506,7 @@ class TestExpWithQuery:
 
         stream = await (
             session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -832,7 +832,7 @@ class TestCdtPathWithExp:
 
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -861,7 +861,7 @@ class TestCdtPathWithExp:
 
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -1995,7 +1995,7 @@ class TestInExpression:
         )
         stream = await (
             session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -2099,7 +2099,7 @@ class TestConvenienceWrappers:
         )
         stream = await (
             session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2115,7 +2115,7 @@ class TestConvenienceWrappers:
         )
         stream = await (
             session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2131,7 +2131,7 @@ class TestConvenienceWrappers:
         )
         stream = await (
             session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2146,7 +2146,7 @@ class TestConvenienceWrappers:
         )
         stream = await (
             session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2161,7 +2161,7 @@ class TestConvenienceWrappers:
         )
         stream = await (
             session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]

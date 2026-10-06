@@ -908,39 +908,6 @@ class _QueryBuilderBase:
         self._filter = filter_obj
         return self
 
-    def filter_expression(self, expression: FilterExpression) -> Self:
-        """
-        Set a FilterExpression for server-side filtering.
-
-        FilterExpression allows complex server-side filtering that doesn't
-        require secondary indexes. This is more efficient than client-side
-        filtering as it reduces network traffic and processing.
-
-        Args:
-            expression: The FilterExpression to apply.
-
-        Returns:
-            self for method chaining.
-
-        Example::
-
-            # Filter by multiple conditions server-side
-            filter_exp = FilterExpression.and_([
-                FilterExpression.eq(
-                    FilterExpression.string_bin("category"),
-                    FilterExpression.string_val("Shoes")
-                ),
-                FilterExpression.eq(
-                    FilterExpression.string_bin("usage"),
-                    FilterExpression.string_val("Sports")
-                )
-            ])
-            recordset = await session.query("test", "products").filter_expression(filter_exp).execute()
-
-        """
-        self._filter_expression = expression
-        return self
-
     @overload
     def where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
@@ -971,7 +938,8 @@ class _QueryBuilderBase:
 
         Raises:
             TypeError: If *params* accompany a ``FilterExpression``.
-            ValueError: If the template is not a valid printf format string.
+            ValueError: If the template is not a valid printf format string,
+                or ``where`` has already been called for this operation.
 
         Example::
 
@@ -981,13 +949,13 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`default_where`: Default filter for chained operations without their own.
-            :meth:`filter_expression`: Attach an expression without AEL parsing.
         """
+        if self._where_ael is not None or self._filter_expression is not None:
+            raise ValueError("where() can only be called once per operation")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._where_ael = expression
         else:
-            self._where_ael = None
             self._filter_expression = expression
         return self
 
@@ -2349,12 +2317,7 @@ class _QueryBuilderBase:
                 .execute()
             )
         """
-        if self._single_key is None and self._keys is None and not self._specs:
-            raise ValueError(
-                "Dataset (index) queries cannot be stacked. "
-                "Query stacking is only supported for key-based queries."
-            )
-
+        self._reject_dataset_stacking()
         self._finalize_current_spec()
         self._op_type = None
         self._set_current_keys(arg1, *more_keys)
@@ -2395,17 +2358,23 @@ class _QueryBuilderBase:
         """
         if not keys:
             raise ValueError("At least one key is required")
+        self._reject_dataset_stacking()
+        self._finalize_current_spec()
+        self._set_current_keys_from_varargs(keys)
+        return self._udf_function_builder_cls(self)
+
+    def _reject_dataset_stacking(self) -> None:
+        # A dataset query never becomes a spec, so a segment chained onto it
+        # would inherit its filter, projection, and ops while the query itself
+        # is dropped at execute().
         if self._single_key is None and self._keys is None and not self._specs:
             raise ValueError(
                 "Dataset (index) queries cannot be stacked. "
                 "Query stacking is only supported for key-based queries."
             )
-        self._finalize_current_spec()
-        self._set_current_keys_from_varargs(keys)
-        return self._udf_function_builder_cls(self)
 
     # Bound by the async leaf module to its write-segment class (the sync
-    # leaf overrides `_start_write_verb` outright, constructing its own
+    # leaf overrides `_start_write_segment` outright, constructing its own
     # segment type). Same pattern as
     # ``_WriteSegmentBuilderBase._bin_builder_cls``.
     _write_segment_cls: type
@@ -2422,7 +2391,11 @@ class _QueryBuilderBase:
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
     ) -> "WriteSegmentBuilder":
-        """Finalize current spec, set up a write segment, return builder."""
+        """Finalize current spec, set up a write segment, return builder.
+
+        Unchecked: session entry points open fresh builders here, while a
+        write verb on an existing query goes through :meth:`_start_write_verb`.
+        """
         self._finalize_current_spec()
         self._op_type = op_type
         self._set_current_keys(arg1, *more_keys)
@@ -2431,6 +2404,7 @@ class _QueryBuilderBase:
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
+        self._reject_dataset_stacking()
         return self._start_write_segment(op_type, arg1, *more_keys)
 
     def _build_statement(self) -> Statement:
