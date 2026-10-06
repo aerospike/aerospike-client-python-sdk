@@ -22,6 +22,7 @@ import pytest
 from aerospike_sdk import Behavior, ClusterDefinition, Host
 from aerospike_sdk.exceptions import ConnectionError, ResultCode
 from aerospike_sdk.policy.system_settings import SystemSettings
+from aerospike_sdk.policy import Settings
 from tests.integration.general_auth import apply_general_auth
 
 
@@ -198,7 +199,9 @@ async def test_cluster_create_session(cluster):
     assert session2 is not None
 
     # Create session with custom behavior
-    custom_behavior = Behavior.DEFAULT.derive_with_changes(name="test", max_retries=3)
+    custom_behavior = Behavior.DEFAULT.derive_with_changes(
+        name="test", all=Settings(max_retries=3),
+    )
     session3 = cluster.create_session(custom_behavior)
     assert session3 is not None
     assert session3.behavior.name == "test"

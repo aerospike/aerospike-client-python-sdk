@@ -650,9 +650,12 @@ class Client(RoutingCapabilitiesMixin):
         Example::
 
             from datetime import timedelta
+
+            from aerospike_sdk.policy import Settings
+
             fast = Behavior.DEFAULT.derive_with_changes(
                 name="fast",
-                total_timeout=timedelta(seconds=5),
+                all=Settings(total_timeout=timedelta(seconds=5)),
             )
             session = client.create_session(fast)
 

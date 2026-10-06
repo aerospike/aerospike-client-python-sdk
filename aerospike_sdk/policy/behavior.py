@@ -222,7 +222,6 @@ class Behavior:
         self,
         name: str,
         *,
-        # Scope-based (new API)
         all: Optional[Settings] = None,
         reads: Optional[Settings] = None,
         reads_point: Optional[Settings] = None,
@@ -240,45 +239,48 @@ class Behavior:
         writes_sc: Optional[Settings] = None,
         system_txn_verify: Optional[Settings] = None,
         system_txn_roll: Optional[Settings] = None,
-        # Flat shortcuts (backward-compat, applied to the ALL scope)
-        total_timeout: Optional[timedelta] = None,
-        socket_timeout: Optional[timedelta] = None,
-        max_retries: Optional[int] = None,
-        retry_delay: Optional[timedelta] = None,
-        send_key: Optional[bool] = None,
-        use_compression: Optional[bool] = None,
-        compression_threshold: Optional[int] = None,
     ) -> Behavior:
         """Create a child Behavior with the specified overrides.
 
-        Accepts either scope-keyed ``Settings`` objects or flat keyword
-        arguments (which are applied to the ``ALL`` scope).  Both styles
-        can be combined; flat kwargs are merged into the ``all`` Settings.
+        Each keyword names the operations its ``Settings`` apply to.
+        ``all`` covers every operation; narrower scopes such as ``reads``
+        or ``writes_sc`` override it for their operations. Fields left
+        unset inherit from this behavior.
 
         Example::
 
-            fast_reads = default_behavior.derive_with_changes(
+            from datetime import timedelta
+
+            from aerospike_sdk.policy import Settings
+
+            fast_reads = Behavior.DEFAULT.derive_with_changes(
                 "fast_reads",
+                all=Settings(max_retries=1),
                 reads=Settings(total_timeout=timedelta(milliseconds=200)),
             )
+
+        Args:
+            name: Name of the new behavior.
+            all: Settings for every operation.
+            reads: Settings for all reads; ``reads_point``, ``reads_batch``,
+                ``reads_query``, ``reads_ap``, and ``reads_sc`` narrow that
+                by shape or consistency mode.
+            writes: Settings for all writes; ``writes_retryable``,
+                ``writes_non_retryable``, ``writes_point``, ``writes_batch``,
+                ``writes_query``, ``writes_ap``, and ``writes_sc`` narrow
+                that by retryability, shape, or consistency mode.
+            system_txn_verify: Settings for transaction verify commands.
+            system_txn_roll: Settings for transaction roll-forward and
+                roll-back commands.
+
+        Returns:
+            A new :class:`Behavior` whose parent is this behavior.
+
+        See Also:
+            :meth:`get_settings`: Resolve the effective settings for an
+            operation.
         """
         patches: Dict[Scope, Settings] = {}
-
-        # Flat kwargs -> merge into the ALL scope
-        flat = _flat_to_settings(
-            total_timeout=total_timeout,
-            socket_timeout=socket_timeout,
-            max_retries=max_retries,
-            retry_delay=retry_delay,
-            send_key=send_key,
-            use_compression=use_compression,
-            compression_threshold=compression_threshold,
-        )
-        if flat is not None:
-            if all is not None:
-                all = Settings.merge(all, flat)
-            else:
-                all = flat
 
         _set_if(patches, Scope.ALL, all)
         _set_if(patches, Scope.READS, reads)
@@ -424,38 +426,6 @@ class Behavior:
 def _set_if(patches: Dict[Scope, Settings], scope: Scope, settings: Optional[Settings]) -> None:
     if settings is not None:
         patches[scope] = settings
-
-
-def _flat_to_settings(
-    total_timeout: Optional[timedelta] = None,
-    socket_timeout: Optional[timedelta] = None,
-    max_retries: Optional[int] = None,
-    retry_delay: Optional[timedelta] = None,
-    send_key: Optional[bool] = None,
-    use_compression: Optional[bool] = None,
-    compression_threshold: Optional[int] = None,
-) -> Optional[Settings]:
-    """Convert flat keyword arguments to a Settings, or None if all are None."""
-    values = (
-        total_timeout,
-        socket_timeout,
-        max_retries,
-        retry_delay,
-        send_key,
-        use_compression,
-        compression_threshold,
-    )
-    if all(v is None for v in values):
-        return None
-    return Settings(
-        total_timeout=total_timeout,
-        socket_timeout=socket_timeout,
-        max_retries=max_retries,
-        retry_delay=retry_delay,
-        send_key=send_key,
-        use_compression=use_compression,
-        compression_threshold=compression_threshold,
-    )
 
 
 # -- Pre-defined Behaviors ---------------------------------------------------

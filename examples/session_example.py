@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import _env
 from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.policy import Settings
 
 
 async def main() -> None:
@@ -50,8 +51,7 @@ async def main() -> None:
         # Custom behavior
         fast_behavior = Behavior.DEFAULT.derive_with_changes(
             name="fast",
-            total_timeout=timedelta(seconds=5),
-            max_retries=1,
+            all=Settings(total_timeout=timedelta(seconds=5), max_retries=1),
         )
         fast_session = cluster.create_session(fast_behavior)
         print(f"Created session with custom behavior: {fast_session.behavior.name}")

@@ -220,15 +220,10 @@ class TestDeriveWithChanges:
         w = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
         assert w.total_timeout == timedelta(seconds=1)
 
-    def test_flat_kwargs_apply_to_all_scope(self):
-        child = Behavior.DEFAULT.derive_with_changes(
-            "child",
-            total_timeout=timedelta(seconds=3),
-        )
-        r = child.get_settings(OpKind.READ, OpShape.POINT)
-        assert r.total_timeout == timedelta(seconds=3)
-        w = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
-        assert w.total_timeout == timedelta(seconds=3)
+    def test_flat_settings_are_not_accepted(self):
+        """Every change names its scope; all= is the everything scope."""
+        with pytest.raises(TypeError, match="total_timeout"):
+            Behavior.DEFAULT.derive_with_changes("child", total_timeout=timedelta(seconds=3))
 
     def test_specific_scope_overrides_general(self):
         child = Behavior.DEFAULT.derive_with_changes(
@@ -590,9 +585,9 @@ class TestCoreV3Fields:
         s = child.get_settings(OpKind.READ, OpShape.POINT, Mode.SC)
         assert s.read_mode_sc == ReadModeSC.LINEARIZE
 
-    def test_use_compression_flat_kwarg(self):
+    def test_use_compression_resolves_for_writes(self):
         child = Behavior.DEFAULT.derive_with_changes(
-            "compressed", use_compression=True,
+            "compressed", all=Settings(use_compression=True),
         )
         s = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.AP)
         assert s.use_compression is True

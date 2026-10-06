@@ -27,6 +27,7 @@ from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_value
 from aerospike_sdk import ResultCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy import Settings
 
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_async,
@@ -2268,7 +2269,9 @@ _METADATA_STR_KEY, _METADATA_NO_TTL_KEY = _set_keys(_METADATA_SET, "strkey", "no
 @pytest.fixture(scope="module")
 async def session_with_metadata(aerospike_host, make_cluster_definition):
     """A keyed record with a TTL, and a second one that never expires."""
-    behavior = Behavior.DEFAULT.derive_with_changes(name="ael_metadata", send_key=True)
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        name="ael_metadata", all=Settings(send_key=True),
+    )
     keys = (_METADATA_STR_KEY, _METADATA_INT_KEY, _METADATA_NO_TTL_KEY)
     async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session(behavior=behavior)

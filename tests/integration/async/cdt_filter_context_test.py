@@ -29,12 +29,15 @@ from aerospike_sdk import CTX, Behavior, Filter
 from aerospike_async import IndexType
 
 from aerospike_sdk import DataSet
+from aerospike_sdk.policy import Settings
 from tests.integration.namespace import general_namespace
 
 
 # These tests assert the user key round-trips through query results, which
 # requires the key to be stored with the record — an explicit opt-in.
-_SEND_KEY = Behavior.DEFAULT.derive_with_changes("cdt-ctx-send-key-aio", send_key=True)
+_SEND_KEY = Behavior.DEFAULT.derive_with_changes(
+    "cdt-ctx-send-key-aio", all=Settings(send_key=True),
+)
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"

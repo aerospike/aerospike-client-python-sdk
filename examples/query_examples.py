@@ -1000,7 +1000,7 @@ async def main() -> None:
         # this behavior opts into the scan fallback for query reads.
         custom_behavior = Behavior.DEFAULT.derive_with_changes(
             "custom-behavior",
-            total_timeout=timedelta(seconds=2),
+            all=Settings(total_timeout=timedelta(seconds=2)),
             reads_query=Settings(allow_scans_with_where=True),
         )
         session = cluster.create_session(custom_behavior)

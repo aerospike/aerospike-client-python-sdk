@@ -21,6 +21,7 @@ from datetime import timedelta
 import pytest
 
 from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.policy import Settings
 from tests.integration.namespace import general_namespace
 
 log = logging.getLogger(__name__)
@@ -44,8 +45,7 @@ async def test_session_creation_custom_behavior(cluster):
     """Test creating a session with custom behavior."""
     custom_behavior = Behavior.DEFAULT.derive_with_changes(
         name="custom",
-        total_timeout=timedelta(seconds=10),
-        max_retries=5,
+        all=Settings(total_timeout=timedelta(seconds=10), max_retries=5),
     )
     session = cluster.create_session(custom_behavior)
     assert session is not None
@@ -261,7 +261,7 @@ async def test_session_multiple_sessions_different_behaviors(cluster):
     fast_session = cluster.create_session(
         Behavior.DEFAULT.derive_with_changes(
             name="fast",
-            total_timeout=timedelta(seconds=5),
+            all=Settings(total_timeout=timedelta(seconds=5)),
         )
     )
 
@@ -283,7 +283,7 @@ async def test_session_behavior_immutability(session):
 
     new_behavior = session.behavior.derive_with_changes(
         name="new",
-        total_timeout=timedelta(seconds=60),
+        all=Settings(total_timeout=timedelta(seconds=60)),
     )
 
     assert session.behavior.total_timeout == original_timeout

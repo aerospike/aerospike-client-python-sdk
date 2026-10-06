@@ -323,12 +323,17 @@ Custom behaviors via derivation:
 ```python
 from datetime import timedelta
 
+from aerospike_sdk.policy import Settings
+
 my_behavior = Behavior.DEFAULT.derive_with_changes(
     "generous-timeouts",
-    total_timeout=timedelta(seconds=5),
-    max_retries=3,
+    all=Settings(total_timeout=timedelta(seconds=5), max_retries=3),
 )
 ```
+
+Each change names the operations it applies to: `all=` covers every
+operation, and narrower scopes such as `reads=`, `reads_batch=`, or
+`writes_sc=` override it for their operations.
 
 ## DataSets
 
