@@ -713,7 +713,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         key = spec.keys[0]
         read_policy = self._make_read_policy(spec)
         try:
-            record = await self._client.get(key, spec.bins, policy=read_policy)
+            record = await self._client.get(
+                key, spec.bins, policy=read_policy, txn=self._txn)
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
         return RecordStream._from_single(key, record)

@@ -24,10 +24,11 @@ network I/O.
 """
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aerospike_sdk import Key, ResultCode, Txn
+from aerospike_sdk import ErrorStrategy, Key, ResultCode, Txn
 from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
@@ -46,6 +47,8 @@ from aerospike_sdk.aio.operations.query import (
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 class _FakePac:
@@ -124,21 +127,45 @@ def test_query_builder_with_txn_none_clears_ambient() -> None:
     assert qb._apply_txn(WritePolicy()).txn is None
 
 
-def test_query_builder_with_txn_drops_cached_base_policies() -> None:
-    """After .with_txn() the cached base policies must be re-derived so
-    they reflect the (new) txn."""
-    rp = ReadPolicy()
-    wp = WritePolicy()
-    qb = QueryBuilder(
+@pytest.mark.parametrize("qb_cls", [QueryBuilder, SyncQueryBuilder], ids=["async", "sync"])
+def test_query_builder_with_txn_drops_cached_base_policies(qb_cls) -> None:
+    """After .with_txn() every cached base policy, AP and SC, must be
+    re-derived so it reflects the (new) txn. An SC copy left in place would
+    be swapped back in when the namespace resolves as SC."""
+    qb = qb_cls(
         client=_FakePac(), namespace="test", set_name="s",
         behavior=Behavior.DEFAULT,
-        cached_read_policy=rp, cached_write_policy=wp,
+        cached_read_policy=ReadPolicy(), cached_write_policy=WritePolicy(),
+        cached_read_policy_sc=ReadPolicy(), cached_write_policy_sc=WritePolicy(),
+        cached_read_operate_policy=WritePolicy(),
+        cached_read_operate_policy_sc=WritePolicy(),
     )
-    assert qb._base_read_policy is rp
-    assert qb._base_write_policy is wp
     qb.with_txn(Txn())
     assert qb._base_read_policy is None
     assert qb._base_write_policy is None
+    assert qb._base_read_policy_sc is None
+    assert qb._base_write_policy_sc is None
+    assert qb._base_read_operate_policy is None
+    assert qb._base_read_operate_policy_sc is None
+
+
+async def test_with_txn_single_key_read_on_sc_reaches_pac_in_the_txn() -> None:
+    """A read opted into a transaction on an SC namespace carries it to PAC
+    on the slow path that an ``on_error`` strategy takes."""
+    pac = MagicMock()
+    pac.get = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(
+        client=pac, namespace="test", set_name="s",
+        behavior=Behavior.DEFAULT,
+        cached_read_policy=ReadPolicy(), cached_write_policy=WritePolicy(),
+        cached_read_policy_sc=ReadPolicy(), cached_write_policy_sc=WritePolicy(),
+        namespace_mode_resolver=AsyncMock(return_value=Mode.SC),
+    )
+    qb._single_key = Key("test", "s", 1)
+    txn = Txn()
+    await (await qb.with_txn(txn).execute(on_error=ErrorStrategy.IN_STREAM)).collect()
+    kwargs = pac.get.call_args.kwargs
+    assert kwargs.get("txn") is txn or kwargs["policy"].txn is not None
 
 
 def test_query_builder_under_txn_skips_cached_policies() -> None:

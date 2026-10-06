@@ -747,6 +747,8 @@ class _QueryBuilderBase:
         # txn stamped on.
         self._base_read_policy = None
         self._base_write_policy = None
+        self._base_read_policy_sc = None
+        self._base_write_policy_sc = None
         self._base_read_operate_policy = None
         self._base_read_operate_policy_sc = None
         return self
