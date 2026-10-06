@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aerospike_sdk import Key
+from aerospike_sdk import Behavior, Key
 from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
@@ -187,7 +187,7 @@ class TestCodeLessFailureRows:
     ``ValueError`` escaping PAC) reports ``CLIENT_ERROR``, never ``OK``."""
 
     async def test_single_key_in_stream_row(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         stream = qb._handle_error(
             _key(), ValueError("bad argument"), _ErrorDisposition.IN_STREAM, None,
         )
@@ -196,7 +196,7 @@ class TestCodeLessFailureRows:
         assert isinstance(row.exception, AerospikeError)
 
     def test_batch_in_stream_rows(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         rows = qb._handle_batch_error_list(
             [_key(1), _key(2)], ValueError("bad argument"),
             _ErrorDisposition.IN_STREAM, None,
@@ -205,7 +205,7 @@ class TestCodeLessFailureRows:
         assert all(not r.is_ok for r in rows)
 
     def test_blocking_single_key_in_stream_row(self):
-        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         [row] = qb._handle_error_blocking_singlekey(
             _key(), ValueError("bad argument"), "upsert",
             _ErrorDisposition.IN_STREAM, None,
@@ -225,14 +225,14 @@ class TestFilteredBatchErrorDetail:
         return [failed], [_key(1)]
 
     def test_throw_carries_row_detail(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         with pytest.raises(AerospikeError) as excinfo:
             qb._filtered_batch_list(*self._rows(), _ErrorDisposition.THROW)
         assert excinfo.value.sub_code == 4
         assert excinfo.value.server_message == "bin type mismatch"
 
     def test_handler_receives_row_detail(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         captured: list = []
         out = qb._filtered_batch_list(
             *self._rows(), _ErrorDisposition.HANDLER, lambda k, i, e: captured.append(e),
@@ -254,6 +254,7 @@ class TestBuilderFlagWiring:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
         qb._op_type = "upsert"
@@ -350,6 +351,7 @@ class TestBuilderValidation:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
         )
         qb._op_type = "upsert"
         qb._single_key = _key()
@@ -380,7 +382,7 @@ class TestBuilderValidation:
         assert qb._ttl_seconds == -1
 
     def test_default_expire_record_after_seconds_passes_zero_through(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         qb.default_expire_record_after_seconds(0)
         assert qb._default_ttl_seconds == 0
 
@@ -389,6 +391,7 @@ class TestBuilderValidation:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
         )
         with pytest.raises(ValueError, match="must not be empty"):
             qb.bins([])
@@ -421,7 +424,7 @@ class TestToExpiration:
 class TestDefaultTtlMethods:
 
     def _make_qb(self):
-        return QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        return QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
 
     def test_default_never_expire(self):
         qb = self._make_qb()

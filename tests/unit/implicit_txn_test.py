@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aerospike_sdk import Key, Txn
+from aerospike_sdk import Behavior, Key, Txn
 from aerospike_async import BatchPolicy
 from aerospike_async.exceptions import AerospikeError as PacAerospikeError
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
@@ -313,6 +313,7 @@ def _write_chain_builder(pac, sdk_client, mode=Mode.SC, txn=None):
         client=pac,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         txn=txn,
         namespace_mode_resolver_blocking=lambda ns: mode,
         sdk_client=sdk_client,
@@ -343,7 +344,7 @@ class TestMultiKeyWriteChainWrap:
         builder = _write_chain_builder(pac, self._sdk_client(), mode=Mode.AP)
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         assert pac.commits == []
-        assert pac.batch_policies[0] is None
+        assert pac.batch_policies[0].txn is None
 
     def test_explicit_txn_is_not_double_wrapped(self):
         pac = _RecordingBatchClient()
@@ -362,7 +363,7 @@ class TestMultiKeyWriteChainWrap:
             .with_txn(None).execute()
         )
         assert pac.commits == []
-        assert pac.batch_policies[0] is None
+        assert pac.batch_policies[0].txn is None
 
     def test_setting_disabled_is_not_wrapped(self):
         pac = _RecordingBatchClient()
@@ -393,7 +394,7 @@ class TestMultiKeyWriteChainWrap:
         keys = [Key("test", "s", 1), Key("other", "s", 2)]
         builder._start_write_segment("upsert", keys).bin("a").set_to(1).execute()
         assert pac.commits == []
-        assert pac.batch_policies[0] is None
+        assert pac.batch_policies[0].txn is None
 
     def test_multi_namespace_write_chain_is_not_wrapped(self):
         pac = _RecordingBatchClient()
@@ -404,7 +405,7 @@ class TestMultiKeyWriteChainWrap:
             .execute()
         )
         assert pac.commits == []
-        assert pac.batch_policies[0] is None
+        assert pac.batch_policies[0].txn is None
 
     def test_failed_wrapped_batch_reports_every_row_as_failed(self):
         # The transaction aborted, so nothing was written and no row may

@@ -20,7 +20,7 @@ import pytest
 from aerospike_sdk import BitPolicy, BitWriteFlags, BitwiseOverflowActions, BitwiseResizeFlags
 from aerospike_async import BitOperation, HllOperation
 
-from aerospike_sdk import HllConfig
+from aerospike_sdk import Behavior, HllConfig
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
@@ -32,7 +32,7 @@ from aerospike_sdk.aio.operations.query import (
 
 
 def _make_wbb(bin_name: str = "h") -> tuple[WriteBinBuilder, WriteSegmentBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
     segment = WriteSegmentBuilder(qb)
     return WriteBinBuilder(segment, bin_name), segment
 

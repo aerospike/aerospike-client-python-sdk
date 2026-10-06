@@ -29,12 +29,10 @@ from typing import (
 
 from aerospike_async import (
     BatchReadOp,
-    BatchReadPolicy,
     BatchWritePolicy,
     Key,
     Operation,
     PartitionFilter,
-    ReadPolicy,
     WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
@@ -719,73 +717,50 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         has_ops = bool(spec.operations)
 
         if op_type is None and not has_ops:
-            # Simple read — fast path via PAC's get when the session-cached
-            # base ReadPolicy is available. PAC builds the per-call policy
-            # in Rust from base + filter / txn.
-            if self._base_read_policy is None and self._behavior is not None:
+            # Simple read — PAC builds the per-call policy in Rust from the
+            # session-cached base ReadPolicy + filter / txn.
+            if self._base_read_policy is None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
                     self._behavior.get_settings(
                         OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            if self._base_read_policy is not None:
-                try:
-                    record = await self._client.get(
-                        key, spec.bins,
-                        policy=self._base_read_policy,
-                        filter_expression=spec.filter_expression,
-                        txn=self._txn,
-                    )
-                except Exception as e:
-                    return self._handle_error(key, e, _ErrorDisposition.THROW, None)
-                return RecordStream._from_single(key, record)
-            # No base policy — fall back to the legacy build-in-Python path.
-            rp = self._apply_txn(ReadPolicy())
             try:
-                record = await self._client.get(key, spec.bins, policy=rp)
+                record = await self._client.get(
+                    key, spec.bins,
+                    policy=self._base_read_policy,
+                    filter_expression=spec.filter_expression,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error(key, e, _ErrorDisposition.THROW, None)
             return RecordStream._from_single(key, record)
 
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
-            # Write via operate — fast path via PAC's operate when the
-            # session-cached base WritePolicy is available. PAC builds the
-            # per-call policy in Rust from base + REA + overrides.
-            if self._base_write_policy is None and self._behavior is not None:
+            # Write via operate — PAC builds the per-call policy in Rust from
+            # the session-cached base WritePolicy + REA + overrides.
+            if self._base_write_policy is None:
                 self._base_write_policy = self._apply_txn(to_write_policy(
                     self._behavior.get_settings(
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
                         self._resolved_namespace_mode())))
-            if self._base_write_policy is not None:
-                # A record-delete op inside the operate must honor the mode-resolved
-                # durable-delete default (Scope.WRITES_SC sets it True) plus any explicit
-                # spec override — a hardcoded False here made non-durable delete_record()
-                # FailForbidden on SC. Non-delete operates keep durable_delete=False.
-                durable_delete = False
-                if spec.contains_record_delete_op and self._behavior is not None:
-                    durable_delete = self._effective_point_durable_delete(
-                        spec,
-                        self._behavior.get_settings(
-                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                            self._resolved_namespace_mode()))
-                try:
-                    record = await self._client.operate(
-                        key, spec.operations,
-                        policy=self._base_write_policy,
-                        record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                        durable_delete=durable_delete,
-                        txn=self._txn,
-                    )
-                except Exception as e:
-                    return self._handle_error(
-                        key, e, _ErrorDisposition.THROW, None,
-                        op_type=spec.op_type)
-                return RecordStream._from_single(key, record)
-            # No base policy — fall back to the legacy build-in-Python path.
-            rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
-            wp = self._apply_txn(WritePolicy())
-            if rea is not None:
-                wp.record_exists_action = rea
+            # A record-delete op inside the operate must honor the mode-resolved
+            # durable-delete default (Scope.WRITES_SC sets it True) plus any explicit
+            # spec override — a hardcoded False here made non-durable delete_record()
+            # FailForbidden on SC. Non-delete operates keep durable_delete=False.
+            durable_delete = False
+            if spec.contains_record_delete_op:
+                durable_delete = self._effective_point_durable_delete(
+                    spec,
+                    self._behavior.get_settings(
+                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+                        self._resolved_namespace_mode()))
             try:
-                record = await self._client.operate(key, spec.operations, policy=wp)
+                record = await self._client.operate(
+                    key, spec.operations,
+                    policy=self._base_write_policy,
+                    record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
+                    durable_delete=durable_delete,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error(
                     key, e, _ErrorDisposition.THROW, None,
@@ -831,15 +806,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_read_policy = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
-            batch_read_policy = to_batch_read_policy(settings)
+        batch_read_policy = to_batch_read_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode()))
         batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
         if spec.filter_expression is not None:
-            if batch_read_policy is None:
-                batch_read_policy = BatchReadPolicy()
             batch_read_policy.filter_expression = spec.filter_expression
         try:
             batch_records = await self._client.batch_read(
@@ -1364,12 +1334,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # -- exists (uses ReadPolicy, returns bool) --
         if op_type == "exists":
             rp = cached_rp
-            if rp is None and self._behavior_fast is not None:
-                rp = self._apply_txn(to_read_policy(
-                    self._behavior_fast.get_settings(
-                        OpKind.READ, OpShape.POINT, mode)))
             if rp is None:
-                rp = ReadPolicy()
+                rp = to_read_policy(
+                    self._behavior_fast.get_settings(OpKind.READ, OpShape.POINT, mode))
             rp = self._apply_txn(rp)
             try:
                 found = await self._client_fast.exists(key, policy=rp)
@@ -1403,15 +1370,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     self._client_fast)
             return RecordStream._from_single(key, record)
 
-        # Fall back to the legacy build-policy-in-Python path.
+        # No cached policy: build it from behavior.
         rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
         if rea is not None:
-            if self._behavior_fast is not None:
-                wp = to_write_policy(
-                    self._behavior_fast.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
-            else:
-                wp = WritePolicy()
+            wp = to_write_policy(
+                self._behavior_fast.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
             wp.record_exists_action = rea
         else:
             wp = self._get_write_policy(mode)

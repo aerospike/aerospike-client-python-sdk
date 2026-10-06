@@ -25,7 +25,7 @@ from datetime import timedelta
 
 import pytest
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.aio.operations.query import (
     DataSetWriteBuilder,
     QueryBuilder,
@@ -36,7 +36,7 @@ USERS = DataSet.of("test", "unit_rows")
 
 
 def _builder(op_type: str = "upsert") -> DataSetWriteBuilder:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit_rows")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit_rows", behavior=Behavior.DEFAULT)
     return DataSetWriteBuilder(qb, op_type, USERS)
 
 

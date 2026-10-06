@@ -22,7 +22,7 @@ tests pin the entries each step emits and the client-side rules for
 
 import pytest
 
-from aerospike_sdk import CTX, Exp, LoopVarPart, MapOrder
+from aerospike_sdk import Behavior, CTX, Exp, LoopVarPart, MapOrder
 from aerospike_sdk.aio.operations.cdt_read import CdtPathBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -47,7 +47,7 @@ def _over(threshold: int):
 
 
 def _write_bin(bin_name: str = "m") -> tuple[WriteBinBuilder, WriteSegmentBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
     segment = WriteSegmentBuilder(qb)
     return WriteBinBuilder(segment, bin_name), segment
 

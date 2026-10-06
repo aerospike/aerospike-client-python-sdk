@@ -70,7 +70,7 @@ def _session_mock() -> MagicMock:
 
 
 def _query_builder(qb_cls=QueryBuilder):
-    return qb_cls(client=MagicMock(), namespace="test", set_name="t")
+    return qb_cls(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
 
 
 def _multi_key_segment():

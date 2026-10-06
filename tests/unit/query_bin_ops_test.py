@@ -26,7 +26,7 @@ Covers:
 import pytest
 from aerospike_async import Operation
 
-from aerospike_sdk import Exp, Key, ListReturnType, MapReturnType
+from aerospike_sdk import Behavior, Exp, Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.aio.operations.cdt_read import (
@@ -57,6 +57,7 @@ class _OpCollector:
 
 def _make_builder(**overrides) -> QueryBuilder:
     """Create a QueryBuilder with a fake client for unit testing."""
+    overrides.setdefault("behavior", Behavior.DEFAULT)
     return QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
 
 
@@ -566,6 +567,7 @@ class TestSyncQueryBuilderDelegation:
             client=object(),
             namespace="test",
             set_name="unit",
+            behavior=Behavior.DEFAULT,
         )
 
     def test_bin_returns_query_bin_builder(self):
@@ -641,12 +643,12 @@ class TestDatasetQueryIntoWrite:
 
     @pytest.mark.parametrize("configure", _DATASET_INTO_WRITE)
     def test_write_verb_on_dataset_query_raises(self, qb_cls, configure):
-        qb = configure(qb_cls(client=object(), namespace="test", set_name="unit"))
+        qb = configure(qb_cls(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT))
         with pytest.raises(ValueError, match="Dataset.*cannot be stacked"):
             qb.upsert(_make_key(2))
 
     def test_key_query_filter_stays_with_its_segment(self, qb_cls):
-        qb = qb_cls(client=object(), namespace="test", set_name="unit")
+        qb = qb_cls(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
         qb._single_key = _make_key(1)
         qb.where(_EXP).upsert(_make_key(2)).bin("x").set_to(1)
         qb._finalize_chain()

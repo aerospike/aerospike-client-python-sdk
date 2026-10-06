@@ -16,7 +16,7 @@
 """Unit tests for QueryHint dataclass and QueryBuilder.with_hint()."""
 
 import pytest
-from aerospike_sdk import Filter, QueryDuration
+from aerospike_sdk import Behavior, Filter, QueryDuration
 
 from aerospike_sdk import QueryHint
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -24,7 +24,7 @@ from aerospike_sdk.aio.operations.query import QueryBuilder
 
 def _query_builder():
     """Return a QueryBuilder with a fake client (no real connection)."""
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit_test", behavior=Behavior.DEFAULT)
 
 
 class TestQueryHintValidation:

@@ -60,7 +60,7 @@ def _key(val: int = 1) -> Key:
 
 
 def _multi(qb_cls, wsb_cls):
-    qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
+    qb = qb_cls(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
     qb._op_type = "upsert"
     qb._single_key = _key()
     return wsb_cls(qb), qb
@@ -147,7 +147,7 @@ class TestDefaultsResolveAtExecute:
     def test_a_default_set_last_reaches_segments_already_closed(self, qb_cls):
         own = Exp.eq(Exp.int_bin("tier"), Exp.int_val(1))
         active = Exp.eq(Exp.int_bin("active"), Exp.int_val(1))
-        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
+        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         (
             qb._start_write_segment("upsert", _key(1)).bin("v").set_to(1)
             .where(own).expire_record_after_seconds(60)
@@ -162,7 +162,7 @@ class TestDefaultsResolveAtExecute:
         ]
 
     def test_the_last_default_set_wins(self, qb_cls):
-        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t")
+        qb = qb_cls(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         (
             qb._start_write_segment("upsert", _key(1)).bin("v").set_to(1)
             .default_never_expire()

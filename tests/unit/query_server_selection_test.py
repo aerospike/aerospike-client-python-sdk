@@ -22,9 +22,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aerospike_async import FilterExpression, QueryPolicy, QueryWhereFlags
 
-from aerospike_sdk import Filter, QueryDuration, QueryHint, ResultCode
+from aerospike_sdk import Behavior, Filter, QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
@@ -42,13 +43,17 @@ def _async_builder(
     supports_query_selection: bool = True,
     supports_server_compiled_ael: bool = False,
 ) -> QueryBuilder:
-    return QueryBuilder(
+    qb = QueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         supports_query_selection=supports_query_selection,
         supports_server_compiled_ael=supports_server_compiled_ael,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 def _sync_builder(
@@ -57,13 +62,17 @@ def _sync_builder(
     supports_query_selection: bool = True,
     supports_server_compiled_ael: bool = False,
 ) -> SyncQueryBuilder:
-    return SyncQueryBuilder(
+    qb = SyncQueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         supports_query_selection=supports_query_selection,
         supports_server_compiled_ael=supports_server_compiled_ael,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 class TestUseServerQuerySelection:
@@ -115,8 +124,7 @@ class TestUseServerQuerySelection:
 
 class TestExplainWhereFlags:
     def test_strict_default_sets_require_index(self):
-        # No hint (and no Behavior) resolves to the strict default: reject the
-        # primary-index fallback.
+        # No hint resolves to the strict default: reject the primary-index fallback.
         qb = _async_builder(_ClientSupportsSelection())
         flags = qb._query_explain_where_flags(None)
         assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)

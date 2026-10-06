@@ -20,7 +20,7 @@ import time
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import Filter, Key
+from aerospike_sdk import Behavior, Filter, Key
 from aerospike_async import PartitionFilter
 from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.record_result import RecordResult
@@ -70,6 +70,7 @@ def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
         client=sdk.underlying_client,
         namespace=namespace,
         set_name=None,
+        behavior=Behavior.DEFAULT,
         sdk_client=sdk,
     )
 

@@ -17,12 +17,13 @@
 
 import pytest
 
+from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 def _query_builder():
     """Return a QueryBuilder with a fake client (no real connection)."""
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit_test", behavior=Behavior.DEFAULT)
 
 
 @pytest.mark.parametrize("value", [0, -1])

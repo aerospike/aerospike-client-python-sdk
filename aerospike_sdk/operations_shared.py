@@ -75,6 +75,7 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.op
     from aerospike_sdk.aio.operations.query import WriteBinBuilder
     from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
     from aerospike_sdk.error_strategy import OnError
+    from aerospike_sdk.policy.behavior import Behavior
     from aerospike_sdk.query_shared import _QueryBuilderBase
     from aerospike_sdk.record_result import RecordResult
 
@@ -1213,7 +1214,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         client: Client,
         key: Key,
         op_type: str,
-        behavior: Any,
+        behavior: Behavior,
         write_policy: Optional[WritePolicy],
         read_policy: Optional[ReadPolicy] = None,
         txn: Optional[Txn] = None,
@@ -1432,7 +1433,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         cached policies to force fresh derivation.
         """
         cached = self._write_policy_sc if mode == Mode.SC else self._write_policy
-        if cached is None and self._behavior_fast is not None:
+        if cached is None:
             cached = self._apply_txn(to_write_policy(
                 self._behavior_fast.get_settings(
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode)))
@@ -1442,7 +1443,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                 self._write_policy_sc = cached
             else:
                 self._write_policy = cached
-        return self._apply_txn(cached or WritePolicy())
+        return self._apply_txn(cached)
 
     def _execute_blocking_fast_path(
         self,

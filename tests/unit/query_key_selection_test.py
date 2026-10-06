@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aerospike_async import Key, PartitionFilter, ReadPolicy
 
+from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
@@ -39,6 +40,7 @@ def _builder(qb_cls, *keys, client=None, **kwargs):
         client=client if client is not None else MagicMock(),
         namespace="test",
         set_name="t",
+        behavior=Behavior.DEFAULT,
         **kwargs,
     )
     qb._set_current_keys_from_varargs(keys)

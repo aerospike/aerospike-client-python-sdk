@@ -26,7 +26,7 @@ Covers:
 
 import pytest
 
-from aerospike_sdk import Exp, Key
+from aerospike_sdk import Behavior, Exp, Key
 from aerospike_async import RecordExistsAction, WritePolicy, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
@@ -36,6 +36,7 @@ from aerospike_sdk.aio.operations.query import (
     WriteSegmentBuilder,
     WriteBinBuilder,
 )
+from aerospike_sdk.policy.behavior_settings import Mode
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +56,11 @@ def _mock_server_compiled_ael_string(monkeypatch):
 
 def _make_builder(**overrides) -> QueryBuilder:
     overrides.setdefault("supports_server_compiled_ael", True)
-    return QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
+    overrides.setdefault("behavior", Behavior.DEFAULT)
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 def _make_key(i: int = 1) -> Key:
     return Key("test", "unit", f"key{i}")

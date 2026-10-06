@@ -33,6 +33,7 @@ def _make_key(i: int = 1):
 
 
 def _make_qb(**kwargs) -> QueryBuilder:
+    kwargs.setdefault("behavior", Behavior.DEFAULT)
     return QueryBuilder(client=object(), namespace="test", set_name="unit", **kwargs)
 
 

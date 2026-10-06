@@ -27,6 +27,7 @@ Covers:
 import pytest
 
 from aerospike_sdk import (
+    Behavior,
     CTX,
     Key,
     ListOrderType,
@@ -75,7 +76,7 @@ class _OpCollector:
 
 
 def _make_qb() -> QueryBuilder:
-    return QueryBuilder(client=object(), namespace="test", set_name="unit")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
 
 
 def _make_key(digest: int = 1) -> Key:

@@ -337,7 +337,7 @@ def test_background_task_refuses_a_string_where_the_cluster_cannot_compile(kind)
 )
 def test_query_builder_has_no_background_task_methods(qb_cls, name):
     """session.background_task() is the one entry point for background jobs."""
-    assert not hasattr(qb_cls(MagicMock(), "test", "bgset"), name)
+    assert not hasattr(qb_cls(MagicMock(), "test", "bgset", Behavior.DEFAULT), name)
 
 
 def test_records_per_second_reaches_the_write_policy():

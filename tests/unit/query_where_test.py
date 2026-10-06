@@ -21,7 +21,7 @@ Tests the two forms: where(str) and where(Exp).
 from unittest.mock import patch
 
 
-from aerospike_sdk import Exp
+from aerospike_sdk import Behavior, Exp
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
@@ -29,6 +29,7 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
     client = kwargs.pop("client", None)
+    kwargs.setdefault("behavior", Behavior.DEFAULT)
     supports_server_compiled_ael = kwargs.pop("supports_server_compiled_ael", False)
     if client is None:
         client = object()
@@ -121,6 +122,7 @@ class TestSyncQueryBuilderWhere:
             client=object(),
             namespace="test",
             set_name="unit_test",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
 

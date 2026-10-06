@@ -25,7 +25,7 @@ Covers:
 import pytest
 from unittest.mock import MagicMock, call, patch
 
-from aerospike_sdk import Exp, Key
+from aerospike_sdk import Behavior, Exp, Key
 from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
@@ -202,6 +202,7 @@ class TestDatasetQueryProjection:
             client=MagicMock(),
             namespace="test",
             set_name="s",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
         qb.bin("ev").select_from(Exp.num_add([Exp.int_bin("A"), Exp.int_val(4)]))
@@ -223,6 +224,7 @@ class TestWriteBinBuilderExpression:
             client=MagicMock(),
             namespace="test",
             set_name="s",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
         qb._single_key = Key("test", "s", "k1")

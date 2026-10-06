@@ -66,10 +66,7 @@ from aerospike_sdk.implicit_txn import (
     run_in_implicit_txn_blocking,
     stamp_txn,
 )
-from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
-    _result_code_to_exception,
-)
+from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
@@ -220,8 +217,6 @@ class _BlockingQueryDispatch:
         results: list[RecordResult] = []
         for i, (key, found) in enumerate(zip(spec.keys, found_list)):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if not found and self._is_actionable(rc, "exists") and disp is _ErrorDisposition.THROW:
-                raise _result_code_to_exception(rc)
             if not self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
             ):
@@ -322,7 +317,7 @@ class _BlockingQueryDispatch:
             # Simple read — all bins or projected bins. Fast path: PAC's
             # get_blocking builds the per-call ReadPolicy in Rust from the
             # session-cached base + filter_expression / txn. Falls back to
-            # `_make_read_policy` only when no Behavior is bound.
+            # `_make_read_policy` when no base is cached (a transaction nulls it).
             if self._base_read_policy is not None:
                 try:
                     record = self._client.get_blocking(
@@ -338,7 +333,7 @@ class _BlockingQueryDispatch:
                 return [RecordResult(
                     key=key, record=record, result_code=ResultCode.OK,
                 )]
-            # Slow path: no base, or user-supplied read_policy.
+            # Slow path: no cached base policy.
             rp = self._make_read_policy(spec)
             try:
                 record = self._client.get_blocking(key, spec.bins, policy=rp)
@@ -355,8 +350,8 @@ class _BlockingQueryDispatch:
             # small set of fields the SDK actually varies. Skips
             # _make_write_policy's Python work on the hot path.
             #
-            # Fall back to the legacy path when:
-            #  - no session-cached base policy (no Behavior bound), or
+            # Fall back to _make_write_policy when:
+            #  - no session-cached base policy (a transaction nulls it), or
             #  - record-delete op present (applies_dd True; needs the spec's
             #    effective_dd resolution inside _make_write_policy).
             if self._base_write_policy is not None and not spec.contains_record_delete_op:
@@ -380,7 +375,7 @@ class _BlockingQueryDispatch:
                 return [RecordResult(
                     key=key, record=record, result_code=ResultCode.OK,
                 )]
-            # Slow path: complex durable-delete or no Behavior — fall back.
+            # Slow path: record-delete op or no cached base policy.
             wp = self._make_write_policy(spec)
             try:
                 record = self._client.operate_blocking(key, spec.operations, policy=wp)
@@ -590,21 +585,11 @@ class _BlockingQueryDispatch:
         :class:`RecordResult` that the caller (the sync builder) wraps with
         :class:`RecordStream.from_list`.
         """
-        batch_read_policy = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
-            batch_read_policy = to_batch_read_policy(settings)
+        batch_read_policy = to_batch_read_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode()))
         batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
-        spec_brp = self._make_batch_read_policy(spec)
-        if spec_brp is not None:
-            # _make_batch_read_policy currently returns a fresh policy
-            # carrying the spec's filter_expression. Merge into the behavior
-            # policy when both exist; otherwise the spec policy wins.
-            if batch_read_policy is None:
-                batch_read_policy = spec_brp
-            else:
-                batch_read_policy.filter_expression = spec_brp.filter_expression
+        if spec.filter_expression is not None:
+            batch_read_policy.filter_expression = spec.filter_expression
         try:
             batch_records = self._client.batch_read_blocking(
                 spec.keys, spec.bins,

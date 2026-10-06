@@ -20,13 +20,13 @@ are stored on the builder and forwarded to the underlying ``Statement``
 via ``set_operations``.
 """
 
-from aerospike_sdk import CTX, CdtOperation
+from aerospike_sdk import Behavior, CTX, CdtOperation
 from aerospike_async import Operation
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 def _make_qb() -> QueryBuilder:
-    return QueryBuilder(client=object(), namespace="test", set_name="users")
+    return QueryBuilder(client=object(), namespace="test", set_name="users", behavior=Behavior.DEFAULT)
 
 
 class TestWithOpProjection:

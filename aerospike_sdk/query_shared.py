@@ -468,7 +468,7 @@ class _QueryBuilderBase:
         client: Client,
         namespace: str,
         set_name: str,
-        behavior: Optional[Behavior] = None,
+        behavior: Behavior,
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         cached_read_policy_sc: Optional[ReadPolicy] = None,
@@ -487,7 +487,7 @@ class _QueryBuilderBase:
             client: The underlying async client.
             namespace: The namespace name.
             set_name: The set name.
-            behavior: Optional Behavior for deriving policies.
+            behavior: The Behavior every policy this builder sends is derived from.
             cached_read_policy: Pre-computed read policy from the session.
             cached_write_policy: Pre-computed write policy from the session.
             txn: Optional active :class:`~aerospike_async.Txn` captured from
@@ -688,28 +688,6 @@ class _QueryBuilderBase:
             elif mode is not first:
                 return True
         return False
-
-    def _make_batch_policy(
-        self, settings: Optional[Any],
-    ) -> Optional[BatchPolicy]:
-        """Build a BatchPolicy from settings and stamp the captured txn.
-
-        Returns ``None`` when neither a settings bundle nor an active
-        transaction is in play (the PAC tolerates a ``None`` batch policy
-        in that case). Under MRT, always materializes a policy so the txn
-        can ride along.
-
-        Args:
-            settings: Settings bundle from behavior (may be ``None``).
-
-        Returns:
-            A txn-stamped :class:`~aerospike_async.BatchPolicy`, or
-            ``None`` when no policy is needed.
-        """
-        bp = to_batch_policy(settings) if settings is not None else None
-        if self._txn is not None and bp is None:
-            bp = BatchPolicy()
-        return self._apply_txn(bp)
 
     def _warn_if_query_in_txn(self) -> None:
         """Warn that a dataset query cannot participate in its transaction.
@@ -1351,12 +1329,8 @@ class _QueryBuilderBase:
         ``limit()`` total is enforced by the stream across chunks; ``0`` means
         no cap.
         """
-        if self._behavior is not None:
-            policy = to_query_policy(self._behavior.get_settings(
-                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()))
-        else:
-            policy = QueryPolicy()
-        policy = self._apply_txn(policy)
+        policy = self._apply_txn(to_query_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
         if self._records_per_second is not None:
             policy.records_per_second = self._records_per_second
         if self._chunk_size is not None:
@@ -1689,16 +1663,13 @@ class _QueryBuilderBase:
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchUDFPolicy]:
-        settings = (
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE,
-                OpShape.BATCH,
-                mode if mode is not None else self._resolved_namespace_mode(),
-            )
-            if self._behavior is not None else None
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE,
+            OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
         )
         eff = resolve_durable_delete(
-            settings.durable_delete if settings is not None else None,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
@@ -1922,59 +1893,47 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> ReadPolicy:
         """Build a ``ReadPolicy`` for single-key reads."""
-        if self._behavior is not None:
-            if self._base_read_policy is None:
-                self._base_read_policy = self._apply_txn(to_read_policy(
-                    self._behavior.get_settings(
-                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            if spec.filter_expression is None:
-                return self._base_read_policy
-            rp = self._apply_txn(to_read_policy(
+        if self._base_read_policy is None:
+            self._base_read_policy = self._apply_txn(to_read_policy(
                 self._behavior.get_settings(
                     OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-        else:
-            rp = self._apply_txn(ReadPolicy())
-        if spec.filter_expression is not None:
-            rp.filter_expression = spec.filter_expression
+        if spec.filter_expression is None:
+            return self._base_read_policy
+        rp = self._apply_txn(to_read_policy(
+            self._behavior.get_settings(
+                OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+        rp.filter_expression = spec.filter_expression
         return rp
 
     def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         """Build a ``WritePolicy`` for single-key writes."""
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        settings = (
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                self._resolved_namespace_mode(),
-            )
-            if self._behavior is not None else None
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+            self._resolved_namespace_mode(),
         )
         applies_dd = op_type == "delete" or spec.contains_record_delete_op
         effective_dd = self._effective_point_durable_delete(spec, settings)
 
-        if self._behavior is not None:
-            if self._base_write_policy is None:
-                base_settings = settings
-                if base_settings is not None and base_settings.durable_delete:
-                    base_settings = Settings.merge(
-                        base_settings, Settings(durable_delete=False))
-                self._base_write_policy = self._apply_txn(to_write_policy(
-                    base_settings) if base_settings is not None else WritePolicy())
-            if (
-                rea is None
-                and spec.filter_expression is None
-                and spec.generation is None
-                and spec.ttl_seconds is None
-                and spec.durable_delete is None
-                and spec.durable_delete_command_default is None
-                and not spec.contains_record_delete_op
-                and not applies_dd
-            ):
-                return self._base_write_policy
-            wp = self._apply_txn(to_write_policy(
-                settings) if settings is not None else WritePolicy())
-        else:
-            wp = self._apply_txn(WritePolicy())
+        if self._base_write_policy is None:
+            base_settings = settings
+            if base_settings.durable_delete:
+                base_settings = Settings.merge(
+                    base_settings, Settings(durable_delete=False))
+            self._base_write_policy = self._apply_txn(to_write_policy(base_settings))
+        if (
+            rea is None
+            and spec.filter_expression is None
+            and spec.generation is None
+            and spec.ttl_seconds is None
+            and spec.durable_delete is None
+            and spec.durable_delete_command_default is None
+            and not spec.contains_record_delete_op
+            and not applies_dd
+        ):
+            return self._base_write_policy
+        wp = self._apply_txn(to_write_policy(settings))
         if rea is not None:
             wp.record_exists_action = rea
         if spec.filter_expression is not None:
@@ -2070,13 +2029,10 @@ class _QueryBuilderBase:
         """
         if hint is not None and hint.allow_scans_with_where is not None:
             return hint.allow_scans_with_where
-        if self._behavior is not None:
-            resolved = self._behavior.get_settings(
-                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
-            ).allow_scans_with_where
-            if resolved is not None:
-                return resolved
-        return False
+        resolved = self._behavior.get_settings(
+            OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
+        ).allow_scans_with_where
+        return resolved if resolved is not None else False
 
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
         flags = QueryWhereFlags.EXPLAIN
@@ -2193,19 +2149,15 @@ class _QueryBuilderBase:
 
     def _batch_policy_for(
         self, op_kind: "OpKind", op_shape: "OpShape",
-    ) -> Optional[BatchPolicy]:
-        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings.
+    ) -> BatchPolicy:
+        """The txn-stamped parent BatchPolicy resolved from behavior settings.
 
         Resolves with :meth:`_resolved_batch_mode` — SC-escalated when the
         batch spans an SC namespace — since the parent policy applies to
         every key in the batch.
         """
-        settings = (
-            self._behavior.get_settings(
-                op_kind, op_shape, self._resolved_batch_mode())
-            if self._behavior is not None else None
-        )
-        return self._make_batch_policy(settings)
+        return self._apply_txn(to_batch_policy(self._behavior.get_settings(
+            op_kind, op_shape, self._resolved_batch_mode())))
 
     def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
         """Start a bin-level read operation.
@@ -2381,19 +2333,14 @@ class _QueryBuilderBase:
         return statement
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
-        settings = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE,
-                OpShape.POINT,
-                self._resolved_namespace_mode(),
-            )
-            wp = to_write_policy(settings)
-        else:
-            wp = WritePolicy()
-        self._apply_txn(wp)
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE,
+            OpShape.POINT,
+            self._resolved_namespace_mode(),
+        )
+        wp = self._apply_txn(to_write_policy(settings))
         wp.durable_delete = resolve_durable_delete(
-            settings.durable_delete if settings is not None else None,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
@@ -2404,13 +2351,12 @@ class _QueryBuilderBase:
         return wp
 
     def _effective_point_durable_delete(
-        self, spec: _OperationSpec, settings: Optional[Settings],
+        self, spec: _OperationSpec, settings: Settings,
     ) -> bool:
         if spec.op_type == "touch":
             return False
-        setting_dd = settings.durable_delete if settings is not None else None
         return resolve_durable_delete(
-            setting_dd,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
@@ -2423,12 +2369,6 @@ class _QueryBuilderBase:
         *mode* is the row's namespace mode; ``None`` falls back to the
         builder's resolved mode (single-namespace batches).
         """
-        if self._behavior is None:
-            return resolve_durable_delete(
-                None,
-                spec.durable_delete_command_default,
-                spec.durable_delete,
-            )
         bset = self._behavior.get_settings(
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
             mode if mode is not None else self._resolved_namespace_mode(),
@@ -2449,8 +2389,6 @@ class _QueryBuilderBase:
         zero-allocation no-policy fast path. Only a non-default level (e.g.
         ``COMMIT_MASTER``) is threaded through.
         """
-        if self._behavior is None:
-            return None
         if mode is None:
             mode = self._resolved_namespace_mode()
         is_sc = mode is Mode.SC
