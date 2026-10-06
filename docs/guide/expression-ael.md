@@ -15,22 +15,22 @@ primary-index fallback.
 
 ## How string AEL is executed
 
-The SDK does **not** parse AEL strings locally. When the connected cluster
-supports it (Aerospike **8.2.0+** on every node), string AEL is sent to the
+The SDK does **not** parse AEL strings locally. String AEL is sent to the
 server for compilation (**field 43** via
-`FilterExpression.from_server_compiled_ael`).
+`FilterExpression.from_server_compiled_ael`) when every node can compile it.
 
 The check is re-derived from the cluster's node list once per tend interval, so a
-node joining with an older build closes the capability within one tend rather
-than at the next reconnect, and it reopens once that node leaves.
+node joining with a build older than 8.2.0 (during a rolling upgrade, for
+example) closes the capability within one tend rather than at the next
+reconnect, and it reopens once that node leaves.
 
 Dataset queries on clusters that also support **query selection** (**field 44**)
 use server-led index selection: the server explains the AEL string, picks an
 index/plan, and the SDK executes with that plan. Use
 [`QueryHint`](../api/query-hint.md) to influence index choice.
 
-On older clusters, use the programmatic [`Exp`](../api/exp.md) builder instead of string
-AEL. Check capability at runtime:
+If a cluster mid-upgrade may still include an older node, guard string AEL and
+fall back to the programmatic [`Exp`](../api/exp.md) builder:
 
 ```python
 async with ClusterDefinition("localhost", 3000).connect() as cluster:
@@ -45,7 +45,7 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
         )
 ```
 
-String AEL against an older cluster raises `AerospikeError` with
+Unguarded, string AEL against a cluster with such a node raises `AerospikeError` with
 `ResultCode.OP_NOT_APPLICABLE`:
 
 ```python

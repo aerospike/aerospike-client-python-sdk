@@ -229,9 +229,10 @@ hot-reloaded on change. See [Dynamic SDK Configuration](dynamic-sdk-config.md).
 
 ## Checking Server Capabilities
 
-Some features require a minimum server version. On a mixed-version or
-mid-upgrade cluster you can guard a feature before using it, rather than
-letting a call fail at runtime. The `Cluster` reports a feature as supported
+Every feature works on every supported server (8.2.0 and later), but a cluster
+in the middle of a rolling upgrade can briefly include nodes on an older
+build. You can guard a feature before using it there, rather than letting a
+call fail at runtime. The `Cluster` reports a feature as supported
 only when *every* connected node supports it, so you always guard against the
 cluster's least-capable node.
 

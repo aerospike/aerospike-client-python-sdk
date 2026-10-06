@@ -10,12 +10,15 @@ thread throughput well past what GIL-bound clients can sustain.
 > **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
 > via [GitHub Issues](https://github.com/aerospike/aerospike-client-python-sdk/issues).
 
+> **Server requirement:** The Aerospike Python SDK supports only Aerospike Server
+> 8.2.0 and later.
+
 ## AI coding agent entry point
 
 PyPI package `aerospike-sdk`. Authoritative version: the root `VERSION` file —
 currently `0.9.0-alpha.5`, a public preview whose signatures may change between
-releases. Python 3.11+. Aerospike Server 8.2.0+ (older servers may work but are
-not guaranteed). Async-first: the top-level `aerospike_sdk` package is the async
+releases. Python 3.11+. Aerospike Server 8.2.0 or later only; earlier servers are
+not supported. Async-first: the top-level `aerospike_sdk` package is the async
 surface; `aerospike_sdk.sync` is an independent synchronous implementation of
 the same surface. Both connect through `ClusterDefinition`.
 

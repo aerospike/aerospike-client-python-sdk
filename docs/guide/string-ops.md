@@ -5,9 +5,6 @@ in a bin without fetching the record. All character indexes are codepoint
 indexes — not byte indexes — so the operations are Unicode-aware, matching
 the canonical particle semantics on the server.
 
-**Server requirement**: 8.2.0 or later. Older servers reject the
-``STRING_READ`` / ``STRING_MODIFY`` op types at the wire layer.
-
 ## Reading String Properties
 
 Read-shaped operations chain like any other read; each call records a

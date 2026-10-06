@@ -18,7 +18,7 @@ The primary API. All operations are `async`/`await`.
 | [`RowWriteBuilder`](row-write.md) | Tabular writes: a bin schema, then one row per record |
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
-| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.2.0+) |
+| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
@@ -71,10 +71,10 @@ Shared types used by both async and sync APIs.
 
 | Class / Function | Description |
 |-----------------|-------------|
-| [`Exp`](exp.md) | Programmatic expression builder (all server versions) |
+| [`Exp`](exp.md) | Programmatic expression builder |
 
-String AEL for `.where()` is compiled on the server (field 43) when the cluster
-supports it — see the [AEL guide](../guide/expression-ael.md).
+String AEL for `.where()` is compiled on the server (field 43) — see the
+[AEL guide](../guide/expression-ael.md).
 
 ```{toctree}
 :hidden:

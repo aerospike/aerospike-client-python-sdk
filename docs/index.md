@@ -4,6 +4,10 @@ A high-level, chainable API for the [Aerospike](https://aerospike.com/) database
 built on top of the
 [Aerospike Python Async Client](https://github.com/aerospike/aerospike-client-python-async).
 
+```{important}
+The Aerospike Python SDK supports only Aerospike Server 8.2.0 and later.
+```
+
 ## Quick Example
 
 ::::{tab-set}
@@ -115,14 +119,14 @@ pip install -e ".[dev]"
 :   Reads return a [`QueryBuilder`](api/query.md), writes return a [`WriteSegmentBuilder`](api/write-segment.md). Chain methods, then call `.execute()`.
 
 **Aerospike Expression Language (AEL)**
-:   Filter records with string expressions on server 8.2.0+ (`"$.age > 18 and $.status == 'active'"`), or use [`Exp`](api/exp.md) on older clusters. See the [AEL guide](guide/expression-ael.md).
+:   Filter records with string expressions (`"$.age > 18 and $.status == 'active'"`), or build them in code with [`Exp`](api/exp.md). See the [AEL guide](guide/expression-ael.md).
 
 ## Requirements
 
 - Python 3.11+ (the SDK supports every CPython version under upstream
   security support; the floor rises in minor releases as versions reach
   end-of-life)
-- Aerospike Server 8.2.0+ (older servers may work but are not guaranteed)
+- Aerospike Server 8.2.0 or later; earlier servers are not supported
 - [aerospike-client-python-async](https://github.com/aerospike/aerospike-client-python-async)
 
 ## Next Steps

@@ -192,7 +192,7 @@ navigation inside the expression instead.
 
 ### From an AEL string
 
-On server 8.2.0+, `on_expression()` also accepts an AEL string. The client
+`on_expression()` also accepts an AEL string. The client
 sends the string as-is and the server parses and compiles it when the index
 is created, so the AEL dialect is the server's:
 
@@ -218,9 +218,9 @@ stream = await session.query(users).filter(flt).execute()
 
 The same rules apply as for prebuilt expressions: the AEL must produce a
 value of the index's type, so a boolean predicate like `"$.age > 21"` is
-rejected by the server. If any node is older than 8.2.0, `create()` raises
-with result code `OP_NOT_APPLICABLE` — build the expression with `Exp`
-instead on those clusters.
+rejected by the server. While any node runs a build older than 8.2.0 (during
+a rolling upgrade, for example), `create()` raises with result code
+`OP_NOT_APPLICABLE`.
 
 ### Indexing only some records (sparse indexes)
 
