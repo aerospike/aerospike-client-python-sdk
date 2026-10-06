@@ -601,29 +601,24 @@ class TestCoreV3Fields:
             assert s.replica == variant
 
 
-class TestBackwardCompatProperties:
-    """Verify the backward-compatible read-only properties (total_timeout,
-    socket_timeout, max_retries, retry_delay, send_key) that resolve
-    from (READ, POINT, AP) scope, preserving the original flat-field API."""
-    def test_total_timeout(self):
-        assert Behavior.DEFAULT.total_timeout == timedelta(seconds=1)
+class TestIntrospection:
+    def test_no_single_scope_setting_properties(self):
+        """Settings vary by operation; only get_settings() can answer for one."""
+        for attr in ("total_timeout", "socket_timeout", "max_retries", "retry_delay", "send_key"):
+            assert not hasattr(Behavior.DEFAULT, attr), attr
 
-    def test_max_retries(self):
-        assert Behavior.DEFAULT.max_retries == 2
-
-    def test_socket_timeout(self):
-        assert Behavior.DEFAULT.socket_timeout == timedelta(seconds=30)
-
-    def test_retry_delay(self):
-        assert Behavior.DEFAULT.retry_delay == timedelta(0)
-
-    def test_send_key(self):
-        assert Behavior.DEFAULT.send_key is False
-
-    def test_repr(self):
+    def test_repr_root_omits_parent(self):
         r = repr(Behavior.DEFAULT)
-        assert "DEFAULT" in r
-        assert "total_timeout" in r
+        assert r.startswith("<Behavior 'DEFAULT' patches=")
+        assert "parent=" not in r
+
+    def test_repr_counts_children_only_when_present(self):
+        child = Behavior.DEFAULT.derive_with_changes(
+            "repr-child", all=Settings(max_retries=1),
+        )
+        assert repr(child) == "<Behavior 'repr-child' parent='DEFAULT' patches=1>"
+        child.derive_with_changes("repr-grandchild")
+        assert repr(child) == "<Behavior 'repr-child' parent='DEFAULT' patches=1 children=1>"
 
 
 class TestCaching:

@@ -379,46 +379,14 @@ class Behavior:
                 base = Settings.merge(base, patch)
         return base
 
-    # -- Backward-compat read-only properties ---------------------------------
-    # These resolve from the (READ, POINT, AP) scope for the common case.
-
-    @property
-    def total_timeout(self) -> timedelta:
-        """Total timeout for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.total_timeout if s.total_timeout is not None else timedelta(0)
-
-    @property
-    def socket_timeout(self) -> timedelta:
-        """Socket timeout for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.socket_timeout if s.socket_timeout is not None else timedelta(0)
-
-    @property
-    def max_retries(self) -> int:
-        """Max retries for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.max_retries if s.max_retries is not None else 0
-
-    @property
-    def retry_delay(self) -> timedelta:
-        """Retry delay for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.retry_delay if s.retry_delay is not None else timedelta(0)
-
-    @property
-    def send_key(self) -> bool:
-        """Whether to send the user key with point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.send_key if s.send_key is not None else False
-
     def __repr__(self) -> str:
-        return (
-            f"Behavior(name={self._name!r}, "
-            f"total_timeout={self.total_timeout}, "
-            f"socket_timeout={self.socket_timeout}, "
-            f"max_retries={self.max_retries})"
-        )
+        parts = [f"<Behavior {self._name!r}"]
+        if self._parent is not None:
+            parts.append(f"parent={self._parent._name!r}")
+        parts.append(f"patches={len(self._patches)}")
+        if self._children:
+            parts.append(f"children={len(self._children)}")
+        return " ".join(parts) + ">"
 
 
 # -- Helpers ------------------------------------------------------------------

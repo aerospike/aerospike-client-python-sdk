@@ -22,6 +22,7 @@ import pytest
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.policy import Settings
+from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
 from tests.integration.namespace import general_namespace
 
 log = logging.getLogger(__name__)
@@ -50,8 +51,9 @@ async def test_session_creation_custom_behavior(cluster):
     session = cluster.create_session(custom_behavior)
     assert session is not None
     assert session.behavior.name == "custom"
-    assert session.behavior.total_timeout == timedelta(seconds=10)
-    assert session.behavior.max_retries == 5
+    point_reads = session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    assert point_reads.total_timeout == timedelta(seconds=10)
+    assert point_reads.max_retries == 5
     assert session._client is cluster._client
 
 
@@ -267,8 +269,10 @@ async def test_session_multiple_sessions_different_behaviors(cluster):
 
     assert default_session.behavior.name == "DEFAULT"
     assert fast_session.behavior.name == "fast"
-    assert fast_session.behavior.total_timeout == timedelta(seconds=5)
-    assert default_session.behavior.total_timeout == timedelta(seconds=1)
+    fast = fast_session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    default = default_session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    assert fast.total_timeout == timedelta(seconds=5)
+    assert default.total_timeout == timedelta(seconds=1)
 
 
 async def test_session_transaction(session):
@@ -279,15 +283,18 @@ async def test_session_transaction(session):
 
 async def test_session_behavior_immutability(session):
     """Test that behavior is immutable."""
-    original_timeout = session.behavior.total_timeout
+    def point_read_timeout(behavior):
+        return behavior.get_settings(OpKind.READ, OpShape.POINT).total_timeout
+
+    original_timeout = point_read_timeout(session.behavior)
 
     new_behavior = session.behavior.derive_with_changes(
         name="new",
         all=Settings(total_timeout=timedelta(seconds=60)),
     )
 
-    assert session.behavior.total_timeout == original_timeout
-    assert new_behavior.total_timeout == timedelta(seconds=60)
+    assert point_read_timeout(session.behavior) == original_timeout
+    assert point_read_timeout(new_behavior) == timedelta(seconds=60)
     assert new_behavior.name == "new"
 
 
