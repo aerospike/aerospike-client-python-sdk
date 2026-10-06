@@ -44,12 +44,6 @@ def cluster(aerospike_host, make_cluster_definition):
         yield cluster
 
 
-def _partition_id(key) -> int:
-    """Partition id = low 12 bits of the first two digest bytes (little-endian)."""
-    d = bytes.fromhex(key.digest)
-    return (d[0] | (d[1] << 8)) & 0xFFF
-
-
 def _count(stream) -> int:
     return sum(1 for _ in stream)
 
@@ -67,7 +61,7 @@ def _seed(session, ds):
     per_partition: Counter = Counter()
     for i in range(NUM_KEYS):
         key = ds.id(f"pk{i}")
-        per_partition[_partition_id(key)] += 1
+        per_partition[key.partition_id] += 1
         session.upsert(key).put({"v": i}).execute()
     return per_partition
 
@@ -79,7 +73,7 @@ def _seed_hot_partition(session, ds):
     while inserted < HOT_RECORDS:
         key = ds.id(f"hot{candidate}")
         candidate += 1
-        if _partition_id(key) != HOT_PARTITION:
+        if key.partition_id != HOT_PARTITION:
             continue
         session.upsert(key).put({"v": inserted}).execute()
         inserted += 1

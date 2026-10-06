@@ -279,6 +279,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             and self._default_ttl_seconds is None
             and self._durable_delete is None
             and self._udf_function is None
+            and self._partition_filter is None
             and on_error is None
         ):
             # Hot path: hand AP + SC base policies to PAC, let Rust resolve
@@ -311,6 +312,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # them): legacy path with explicit mode resolution.
 
         self._finalize_chain()
+        if self._keys_selected and not self._specs:
+            return RecordStream._from_list([])
         if self._record_on:
             self._record_call(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()

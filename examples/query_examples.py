@@ -672,10 +672,10 @@ async def demonstrate_multi_operation_batches(session) -> None:
         pass
     stream.close()
 
-    # Per-segment limits and TTLs.
+    # Per-segment TTLs. limit() is for read-only chains: with a write in the
+    # chain it would skip keys the write never reaches, so it raises.
     stream = await (
         session.query(SET.ids(1, 2, 3))
-        .limit(2)
         .update(SET.ids(4, 5, 6))
         .bin("name").set_to("bob")
         .expire_record_after_seconds(500)

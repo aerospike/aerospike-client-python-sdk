@@ -415,6 +415,7 @@ class _QueryBuilderBase:
     _limit: Optional[int] = None
     _records_per_second: Optional[int] = None
     _partition_filter: Optional[PartitionFilter] = None
+    _keys_selected: bool = False
     _chunk_size: Optional[int] = None
     _fail_on_filtered_out: bool = False
     _respond_all_keys: bool = False
@@ -960,15 +961,28 @@ class _QueryBuilderBase:
         return self
 
     def partition(self, partition_filter: PartitionFilter) -> Self:
-        """Restrict a dataset query using a PAC :class:`~aerospike_async.PartitionFilter`.
+        """Restrict the query using a PAC :class:`~aerospike_async.PartitionFilter`.
 
-        Prefer :meth:`on_partition` or :meth:`on_partition_range` for common cases.
+        Prefer :meth:`on_partition` or :meth:`on_partition_range` for common
+        cases. A filter reused from an earlier dataset query resumes where that
+        query stopped. On a key query only the filter's partition range applies:
+        keys outside it are skipped before anything is sent.
+
+        Example::
+
+                part = PartitionFilter.by_range(0, 2048)
+                stream = await session.query(users).partition(part).execute()
 
         Args:
             partition_filter: Built filter (all partitions, by id, by range, etc.).
 
         Returns:
             This builder for chaining.
+
+        Raises:
+            ValueError: At execute, on a key query, if the filter carries resume
+                state (``PartitionFilter.by_key`` or progress from an earlier
+                query), or if the chain also writes or calls a UDF.
 
         See Also:
             :meth:`on_partition_range`: Inclusive start, exclusive end partition ids.
@@ -982,6 +996,8 @@ class _QueryBuilderBase:
 
         This method restricts the query to a single partition. This can be useful
         for load balancing or when you know the data distribution across partitions.
+        On a key query, keys in other partitions are skipped before anything is
+        sent.
 
         Args:
             part_id: The partition ID to target (0-4095)
@@ -990,7 +1006,8 @@ class _QueryBuilderBase:
             self for method chaining
 
         Raises:
-            ValueError: If part_id is out of range
+            ValueError: If part_id is out of range, or at execute if a key query
+                chain also writes or calls a UDF.
 
         Example::
 
@@ -1013,6 +1030,9 @@ class _QueryBuilderBase:
         The partition range can only be set once per query. Subsequent calls
         with different ranges will overwrite the previous range.
 
+        On a key query, keys outside the range are skipped before anything is
+        sent, and :meth:`limit` then counts only the keys that remain.
+
         Args:
             start_incl: Start partition (inclusive, 0-4095)
             end_excl: End partition (exclusive, 1-4096)
@@ -1021,7 +1041,8 @@ class _QueryBuilderBase:
             self for method chaining
 
         Raises:
-            ValueError: If partition range is invalid
+            ValueError: If partition range is invalid, or at execute if a key
+                query chain also writes or calls a UDF.
 
         Example::
 
@@ -1125,6 +1146,10 @@ class _QueryBuilderBase:
         returns every matching record; there is no value that means
         "unlimited", so leave the limit unset instead.
 
+        On a key query, only the first ``limit`` keys are read, in order across
+        chained reads. A missing key still counts, so ``ids(1, 3, 5, 7)`` with
+        ``limit(3)`` returns two records when key 5 does not exist.
+
         Example::
 
                 stream = await session.query(users).where("$.age > 18").limit(100).execute()
@@ -1136,7 +1161,8 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         Raises:
-            ValueError: If ``limit <= 0``.
+            ValueError: If ``limit <= 0``, or at execute if a key query chain
+                also writes or calls a UDF.
 
         See Also:
             :meth:`chunk_size`: Records per server round trip, rather than in
@@ -1520,6 +1546,47 @@ class _QueryBuilderBase:
             or self._default_ttl_seconds is not None
         ):
             self._apply_chain_defaults()
+        if (
+            self._specs
+            and not self._keys_selected
+            and (self._limit is not None or self._partition_filter is not None)
+        ):
+            self._select_keys()
+
+    def _select_keys(self) -> None:
+        """Narrow the chain to the keys the partition filter, then ``limit()``, allow.
+
+        Selection is client-side and in chain order. If no key survives the
+        partition filter, ``_specs`` ends up empty with ``_keys_selected`` set,
+        which terminals must treat as an empty result, not a dataset query.
+        """
+        self._keys_selected = True
+        for spec in self._specs:
+            if spec.op_type is not None and spec.op_type != "exists":
+                raise ValueError(
+                    "limit() and partition filters on a key query cannot be "
+                    "combined with a chained write or UDF call"
+                )
+        pf = self._partition_filter
+        if pf is not None:
+            if pf.digest is not None or pf.partitions is not None:
+                raise ValueError(
+                    "A PartitionFilter with resume state applies only to dataset "
+                    "queries, not to a key query"
+                )
+            begin = pf.begin
+            end = begin + pf.count
+            for spec in self._specs:
+                spec.keys = [key for key in spec.keys if begin <= key.partition_id < end]
+            self._specs = [spec for spec in self._specs if spec.keys]
+        remaining = self._limit
+        if remaining is not None:
+            for i, spec in enumerate(self._specs):
+                if len(spec.keys) >= remaining:
+                    spec.keys = spec.keys[:remaining]
+                    del self._specs[i + 1:]
+                    break
+                remaining -= len(spec.keys)
 
     def _apply_chain_defaults(self) -> None:
         self._resolve_default_filter_expression()

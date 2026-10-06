@@ -287,6 +287,12 @@ stream = await (
 )
 ```
 
+On a key query, a partition filter and `limit()` choose which keys are read,
+before anything is sent: keys outside the partition range are skipped, then
+only the first `limit` remaining keys are read. A missing key still counts
+toward the limit. Because skipped keys would never be written, a key chain that
+also writes or calls a UDF raises `ValueError` when either is set.
+
 ## Query Policies
 
 Fine-tune query behavior:

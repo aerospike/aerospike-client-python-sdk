@@ -178,6 +178,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._default_where_ael is None
             and self._filter is None
             and self._op_type is None
+            and self._partition_filter is None
             and self._base_read_policy is not None
         ):
             if self._record_on:
@@ -222,10 +223,13 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
+        # The dispatchers finalize internally; doing it here first lets an
+        # empty key selection return before any dispatcher reads it as a
+        # dataset query, and leaves their own call a no-op.
+        self._finalize_chain()
+        if self._keys_selected and not self._specs:
+            return RecordStream._from_list([])
         if self._record_on:
-            # The dispatchers finalize internally; doing it here first makes
-            # the shape readable and leaves their own call a no-op.
-            self._finalize_chain()
             self._record_call(usage.API_BLOCKING, self._usage_shape())
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self._execute_blocking_fast_path(on_error)
