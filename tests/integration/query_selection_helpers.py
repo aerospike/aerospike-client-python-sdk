@@ -17,15 +17,15 @@
 
 from __future__ import annotations
 
+import math
 import struct
-from typing import TYPE_CHECKING, Any, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
+import pytest
 from aerospike_async import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
-from aerospike_sdk import DataSet, ResultCode
+from aerospike_sdk import AerospikeError, DataSet, QueryHint, ResultCode
 from tests.integration.namespace import general_namespace
-
-if TYPE_CHECKING:
-    from aerospike_sdk import QueryHint
 
 
 NS = general_namespace()
@@ -58,15 +58,55 @@ SCOPE_COUNTRY_BIN = "country"
 SCOPE_BLOB_BIN = "bb"
 SCOPE_MAP_BIN = "map_bin"
 SCOPE_MAP_KEY = "mkey2"
+SCOPE_TAG_BIN = "tag"
+SCOPE_TAG_INDEX = "qscexp_tag_idx"
+SCOPE_TAG_MATCH = "featured"
+SCOPE_LOC_BIN = "loc"
+SCOPE_LOC_INDEX = "qscexp_loc_idx"
+SCOPE_PT_BIN = "pt"
+SCOPE_PT_INDEX = "qscexp_pt_idx"
+SCOPE_SCORE_LIST_BIN = "scoreList"
+SCOPE_SCORE_LIST_INDEX = "qscexp_score_list_idx"
+SCOPE_SCORE_LIST_POSITION = 2
+SCOPE_SCORE_LIST_MATCH = 42
+SCOPE_VENUE_BIN = "venue"
+SCOPE_VENUE_INDEX = "qscexp_venue_loc_idx"
+SCOPE_VENUE_KEY = "location"
+SCOPE_NAME_BIN = "name"
+SCOPE_UPPER_INDEX = "qscexp_upper_name_idx"
+SCOPE_UPPER_MATCH = "ALICE"
+SCOPE_AGE_PLUS_INDEX = "qscexp_age_plus_idx"
+SCOPE_AGE_PLUS_MATCH = 26
+# STRING and BLOB index bounds are capped at this many bytes; geo bounds are not.
+STRING_BOUND_MAX = 2048
 
 # CDT planner integration fixture (qp_cdt set)
 CDT_SET_NAME = "qp_cdt"
 CDT_KEY_PREFIX = "qpcdt"
 CDT_MAP_BIN = "map_bin"
 CDT_LIST_BIN = "list_bin"
+CDT_LIST_STR_BIN = "list_str_bin"
+CDT_INT_LIST_BIN = "int_list_bin"
+CDT_INT_MAP_BIN = "int_map_bin"
+CDT_NESTED_BIN = "nested_bin"
+CDT_NESTED_KEY = "inner"
 CDT_MAP_KEY = "mkey2"
+CDT_MAP_VALUE_TARGET = "mv_target"
+CDT_LIST_STR_TARGET = "ls_target"
+CDT_NESTED_TARGET = "nested_target"
 CDT_MAP_INDEX = "qp_mapkeys_idx"
+CDT_MAP_VALUES_INDEX = "qp_mapvalues_idx"
 CDT_LIST_INDEX = "qp_list_idx"
+CDT_LIST_STR_INDEX = "qp_list_str_idx"
+CDT_INT_LIST_INDEX = "qp_int_list_idx"
+CDT_INT_MAP_KEYS_INDEX = "qp_int_mapkeys_idx"
+CDT_INT_MAP_VALUES_INDEX = "qp_int_mapvalues_idx"
+CDT_NESTED_INDEX = "qp_nested_list_idx"
+CDT_LIST_RANGE = (10, 30)
+CDT_MAP_KEY_RANGE = (10, 30)
+CDT_MAP_VALUE_RANGE = (100, 300)
+CDT_STR_MAP_KEY_RANGE = ("mkey10", "mkey20")
+CDT_STR_MAP_VALUE_RANGE = ("mv10", "mv20")
 CDT_SIZE = 20
 
 
@@ -91,12 +131,37 @@ SCOPE_BLOB_BYTES = long_bytes_be(50001)
 CDT_LIST_BLOB_BYTES = long_bytes_be(50003)
 
 
+def point_geo_json(lng: float, lat: float) -> str:
+    return f'{{"type":"Point","coordinates":[{lng:.7f},{lat:.7f}]}}'
+
+
+def circle_geo_json(lng: float, lat: float, radius_meters: float) -> str:
+    return f'{{"type":"AeroCircle","coordinates":[[{lng},{lat}],{radius_meters}]}}'
+
+
+def circle_polygon_geo_json(lng: float, lat: float, radius_deg: float, vertices: int) -> str:
+    """Closed ring approximating a circle; the vertex count sizes the literal."""
+    points = []
+    for i in range(vertices + 1):
+        theta = 2 * math.pi * (i % vertices) / vertices
+        points.append(
+            f"[{lng + radius_deg * math.cos(theta):.6f},{lat + radius_deg * math.sin(theta):.6f}]"
+        )
+    return '{"type":"Polygon","coordinates":[[' + ",".join(points) + "]]}"
+
+
+SCOPE_MATCH_LNG, SCOPE_MATCH_LAT = -122.0986857, 37.4214209
+SCOPE_FAR_LNG, SCOPE_FAR_LAT = -121.0, 38.0
+SCOPE_MATCH_POINT = point_geo_json(SCOPE_MATCH_LNG, SCOPE_MATCH_LAT)
+SCOPE_LARGE_REGION = circle_polygon_geo_json(SCOPE_MATCH_LNG, SCOPE_MATCH_LAT, 0.5, 200)
+
+
 def blob_hex_literal(blob_bytes: bytes) -> str:
     """Server AEL hex blob literal for equality (``x'...'`` form)."""
     return blob_bytes.hex()
 
 
-def explain_where_flags(hint: Optional["QueryHint"]) -> Optional[int]:
+def explain_where_flags(hint: Optional[QueryHint]) -> Optional[int]:
     """Map :class:`QueryHint` to PAC ``explain_where_flags`` (field ``44``)."""
     if hint is None:
         return None
@@ -140,21 +205,29 @@ async def create_index_quiet_async(
     pac,
     *,
     set_name: str,
-    bin_name: str,
+    bin_name: Optional[str],
     index_name: str,
     index_type,
     collection_type=None,
+    ctx=None,
+    expression=None,
 ) -> None:
     """Create an index and wait for its build, tolerating one that exists.
 
     The wait lives here so no caller can forget it: an index that is registered
     but still building answers queries with fewer records than it will once the
-    build completes.
+    build completes. An ``expression`` index has no bin, so ``bin_name`` and
+    ``ctx`` are ignored for it.
     """
     try:
-        task = await pac.create_index(
-            NS, set_name, bin_name, index_name, index_type, collection_type,
-        )
+        if expression is not None:
+            task = await pac.create_index_using_expression(
+                NS, set_name, index_name, index_type, expression, collection_type,
+            )
+        else:
+            task = await pac.create_index(
+                NS, set_name, bin_name, index_name, index_type, collection_type, ctx,
+            )
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
             raise
@@ -166,16 +239,23 @@ def create_index_quiet_blocking(
     pac,
     *,
     set_name: str,
-    bin_name: str,
+    bin_name: Optional[str],
     index_name: str,
     index_type,
     collection_type=None,
+    ctx=None,
+    expression=None,
 ) -> None:
     """Blocking sibling of :func:`create_index_quiet_async`."""
     try:
-        task = pac.create_index_blocking(
-            NS, set_name, bin_name, index_name, index_type, collection_type,
-        )
+        if expression is not None:
+            task = pac.create_index_using_expression_blocking(
+                NS, set_name, index_name, index_type, expression, collection_type,
+            )
+        else:
+            task = pac.create_index_blocking(
+                NS, set_name, bin_name, index_name, index_type, collection_type, ctx,
+            )
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_FOUND:
             raise
@@ -251,6 +331,46 @@ def collect_ages_sync(stream) -> list[int]:
     finally:
         stream.close()
     return sorted(ages)
+
+
+async def count_matches_async(
+    session,
+    dataset: DataSet,
+    where: str,
+    bin_name: str,
+    *,
+    needs_scan_opt_in: bool,
+    check: Optional[Callable[[Any], bool]] = None,
+) -> int:
+    """Count the rows ``where`` returns, after pinning whether it needs the scan opt-in.
+
+    A predicate no index can serve falls back to a primary-index scan, which the
+    default behavior refuses. With ``needs_scan_opt_in`` the refusal is asserted
+    first and the rows are then read with ``allow_scans_with_where``; without it
+    the rows are read under the default, which shows an index served them.
+    ``check`` is applied to each returned bin value.
+    """
+    def query():
+        return session.query(dataset).bins([bin_name]).where(where)
+
+    if needs_scan_opt_in:
+        with pytest.raises(AerospikeError) as exc_info:
+            await count_records_async(await query().execute())
+        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+        stream = await query().with_hint(QueryHint(allow_scans_with_where=True)).execute()
+    else:
+        stream = await query().execute()
+
+    count = 0
+    try:
+        async for result in stream:
+            value = result.record_or_raise().bins[bin_name]
+            if check is not None:
+                assert check(value), value
+            count += 1
+    finally:
+        stream.close()
+    return count
 
 
 async def count_records_async(stream) -> int:
