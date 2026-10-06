@@ -124,7 +124,7 @@ class TestSyncAelErrorHandling:
     def test_dataset_invalid_ael_rejected(self, session_with_ael_row):
         """Malformed dataset AEL surfaces as ``PARAMETER_ERROR`` from the server."""
         assert_dataset_invalid_ael_rejected_sync(
-            lambda: session_with_ael_row.query(general_namespace(), AEL_ERROR_SET)
+            lambda: session_with_ael_row.query(DataSet.of(general_namespace(), AEL_ERROR_SET))
             .where("$.age >")
             .execute()
         )

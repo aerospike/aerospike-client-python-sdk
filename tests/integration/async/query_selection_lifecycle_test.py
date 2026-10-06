@@ -81,7 +81,7 @@ async def lifecycle_set(query_selection_cluster):
 
 async def _ages(session, hint=None):
     builder = (
-        session.query(namespace=NS, set_name=LIFECYCLE_SET).where(AGE_RANGE_WHERE)
+        session.query(DataSet.of(NS, LIFECYCLE_SET)).where(AGE_RANGE_WHERE)
     )
     if hint is not None:
         builder = builder.with_hint(hint)
@@ -144,7 +144,7 @@ class TestIndexLifecycle:
         session, pac, _, _ = lifecycle_set
         created: set[str] = set()
         stream = await (
-            session.query(namespace=NS, set_name=LIFECYCLE_SET)
+            session.query(DataSet.of(NS, LIFECYCLE_SET))
             .where(AGE_RANGE_WHERE)
             .chunk_size(3)
             .execute()

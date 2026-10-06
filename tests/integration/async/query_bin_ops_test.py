@@ -40,6 +40,7 @@ from tests.integration.namespace import general_namespace
 KEY_PREFIX = "qbops_"
 NS = general_namespace()
 SET = "query_bin_ops"
+DS = DataSet.of(NS, SET)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
@@ -47,7 +48,7 @@ async def cluster(aerospike_host, make_cluster_definition):
     """Connect a Cluster, seed test data, yield it."""
     async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
-        ds = DataSet.of(NS, SET)
+        ds = DS
 
         for i in range(1, 4):
             settings = {"theme": "dark", "volume": i * 10, "notifications": True}
@@ -87,13 +88,13 @@ def _key(i: int) -> Key:
 class TestSimpleBinReads:
 
     async def test_get_single_bin(self, session):
-        rs = await session.query(key=_key(1)).bin("name").get().execute()
+        rs = await session.query(_key(1)).bin("name").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["name"] == "user1"
 
     async def test_get_multiple_bins(self, session):
         rs = await (
-            session.query(key=_key(1))
+            session.query(_key(1))
             .bin("name").get()
             .bin("age").get()
             .execute()
@@ -103,30 +104,30 @@ class TestSimpleBinReads:
         assert result.record.bins["age"] == 21
 
     async def test_map_size(self, session):
-        rs = await session.query(key=_key(1)).bin("settings").map_size().execute()
+        rs = await session.query(_key(1)).bin("settings").map_size().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["settings"] == 3
 
     async def test_list_size(self, session):
-        rs = await session.query(key=_key(1)).bin("scores").list_size().execute()
+        rs = await session.query(_key(1)).bin("scores").list_size().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 3
 
     async def test_list_get(self, session):
-        rs = await session.query(key=_key(1)).bin("scores").list_get(0).execute()
+        rs = await session.query(_key(1)).bin("scores").list_get(0).execute()
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 10
 
     async def test_list_get_range(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("scores").list_get_range(0, 2).execute()
+            session.query(_key(1)).bin("scores").list_get_range(0, 2).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20]
 
     async def test_list_get_range_from_index(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("scores").list_get_range(1, None).execute()
+            session.query(_key(1)).bin("scores").list_get_range(1, None).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [20, 30]
@@ -140,7 +141,7 @@ class TestCdtMapReads:
 
     async def test_map_key_get_values(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("settings").on_map_key("theme").get_values()
+            session.query(_key(1)).bin("settings").on_map_key("theme").get_values()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -148,7 +149,7 @@ class TestCdtMapReads:
 
     async def test_map_key_count(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("settings").on_map_key("theme").count()
+            session.query(_key(1)).bin("settings").on_map_key("theme").count()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -156,7 +157,7 @@ class TestCdtMapReads:
 
     async def test_map_index_range_get_values(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
+            session.query(_key(1)).bin("settings").on_map_index_range(0, 2).get_values()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -166,7 +167,7 @@ class TestCdtMapReads:
 
     async def test_map_rank_get_values(self, session):
         rs = await (
-            session.query(key=_key(2)).bin("settings").on_map_rank(0).get_values()
+            session.query(_key(2)).bin("settings").on_map_rank(0).get_values()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -181,7 +182,7 @@ class TestCdtListReads:
 
     async def test_list_index_get_values(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("scores").on_list_index(0).get_values()
+            session.query(_key(1)).bin("scores").on_list_index(0).get_values()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -189,7 +190,7 @@ class TestCdtListReads:
 
     async def test_list_index_count(self, session):
         rs = await (
-            session.query(key=_key(1)).bin("scores").on_list_index(0).count()
+            session.query(_key(1)).bin("scores").on_list_index(0).count()
             .execute()
         )
         result = await rs.first_or_raise()
@@ -198,14 +199,14 @@ class TestCdtListReads:
     async def test_list_rank_get_values(self, session):
         """Rank 0 = lowest value; for key 2 scores=[20,40,60], lowest=20."""
         rs = await (
-            session.query(key=_key(2)).bin("scores").on_list_rank(0).get_values()
+            session.query(_key(2)).bin("scores").on_list_rank(0).get_values()
             .execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == 20
 
     async def test_nested_list_get(self, session):
-        ds = DataSet.of(NS, SET)
+        ds = DS
         kid = f"{KEY_PREFIX}nested_lg"
         key = ds.id(kid)
         try:
@@ -214,7 +215,7 @@ class TestCdtListReads:
             pass
         await session.upsert(key).bin("ll").set_to([[10, 20], [30, 40]]).execute()
         rs = await (
-            session.query(key=key).bin("ll").on_list_index(0).list_get(1).execute()
+            session.query(key).bin("ll").on_list_index(0).list_get(1).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["ll"] == 20
@@ -226,15 +227,15 @@ class TestCdtListReads:
         """Join concatenates the string items; the separator is optional."""
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join")
         await session.upsert(key).bin("tags").set_to(["one", "two", "three"]).execute()
 
-        rs = await session.query(key=key).bin("tags").list_join(",").execute()
+        rs = await session.query(key).bin("tags").list_join(",").execute()
         result = await rs.first_or_raise()
         assert result.record.bins["tags"] == "one,two,three"
 
-        rs = await session.query(key=key).bin("tags").list_join().execute()
+        rs = await session.query(key).bin("tags").list_join().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["tags"] == "onetwothree"
         await session.delete(key).execute()
@@ -245,21 +246,21 @@ class TestCdtListReads:
         """Split on a separator, per codepoint without one, whole string when absent."""
         if not supports_string_operations:
             pytest.skip("string split requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}split")
         await session.upsert(key).bin("s").set_to("Hello,42").bin("u").set_to("né").execute()
 
-        rs = await session.query(key=key).bin("s").str_split(",").execute()
+        rs = await session.query(key).bin("s").str_split(",").execute()
         assert (await rs.first_or_raise()).record.bins["s"] == ["Hello", "42"]
 
-        rs = await session.query(key=key).bin("s").str_split().execute()
+        rs = await session.query(key).bin("s").str_split().execute()
         assert (await rs.first_or_raise()).record.bins["s"] == list("Hello,42")
 
         # Per codepoint, not per byte: "é" is two UTF-8 bytes.
-        rs = await session.query(key=key).bin("u").str_split().execute()
+        rs = await session.query(key).bin("u").str_split().execute()
         assert (await rs.first_or_raise()).record.bins["u"] == ["n", "é"]
 
-        rs = await session.query(key=key).bin("s").str_split(";").execute()
+        rs = await session.query(key).bin("s").str_split(";").execute()
         assert (await rs.first_or_raise()).record.bins["s"] == ["Hello,42"]
         await session.delete(key).execute()
 
@@ -267,7 +268,7 @@ class TestCdtListReads:
         """Join registered as a read within an operate chain."""
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join_chain")
         await session.upsert(key).bin("tags").set_to(["one", "two"]).execute()
 
@@ -282,12 +283,12 @@ class TestCdtListReads:
         """Join a list nested under a map key via the CDT read path."""
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join_nested")
         await session.upsert(key).put({"outer": {"strs": ["a", "b"]}}).execute()
 
         rs = await (
-            session.query(key=key).bin("outer").on_map_key("strs").list_join("-").execute()
+            session.query(key).bin("outer").on_map_key("strs").list_join("-").execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["outer"] == "a-b"
@@ -299,12 +300,12 @@ class TestCdtListReads:
         """Two joins on one bin come back as an ordered list of results."""
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join_stacked")
         await session.upsert(key).bin("tags").set_to(["alpha", "beta", "gamma"]).execute()
 
         rs = await (
-            session.query(key=key)
+            session.query(key)
             .bin("tags").list_join()
             .bin("tags").list_join(", ")
             .execute()
@@ -318,11 +319,11 @@ class TestCdtListReads:
     ):
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join_empty")
         await session.upsert(key).bin("tags").set_to([]).execute()
 
-        rs = await session.query(key=key).bin("tags").list_join(",").execute()
+        rs = await session.query(key).bin("tags").list_join(",").execute()
         result = await rs.first_or_raise()
         assert result.record.bins["tags"] == ""
         await session.delete(key).execute()
@@ -333,12 +334,12 @@ class TestCdtListReads:
         """Every item must be a string; the server rejects the whole op otherwise."""
         if not supports_string_operations:
             pytest.skip("list join requires server >= 8.2.0")
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}join_bad")
         await session.upsert(key).bin("tags").set_to(["alpha", 7]).execute()
 
         with pytest.raises(AerospikeError) as exc_info:
-            await (await session.query(key=key).bin("tags").list_join(",").execute()).first_or_raise()
+            await (await session.query(key).bin("tags").list_join(",").execute()).first_or_raise()
         assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
         await session.delete(key).execute()
 
@@ -350,7 +351,7 @@ class TestCdtListReads:
 class TestIndexBasedListWrites:
 
     async def test_list_insert_then_read(self, session):
-        ds = DataSet.of(NS, SET)
+        ds = DS
         kid = f"{KEY_PREFIX}idx_mut"
         key = ds.id(kid)
         try:
@@ -359,13 +360,13 @@ class TestIndexBasedListWrites:
             pass
         await session.upsert(key).bin("nums").set_to([1, 2, 3]).execute()
         await session.upsert(key).bin("nums").list_insert(1, 9).execute()
-        rs = await session.query(key=key).bin("nums").get().execute()
+        rs = await session.query(key).bin("nums").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["nums"] == [1, 9, 2, 3]
         await session.delete(key).execute()
 
     async def test_list_increment_and_nested_insert(self, session):
-        ds = DataSet.of(NS, SET)
+        ds = DS
         kid = f"{KEY_PREFIX}idx_mut2"
         key = ds.id(kid)
         try:
@@ -379,7 +380,7 @@ class TestIndexBasedListWrites:
         await (
             session.upsert(key).bin("outer").on_map_key("items").list_insert(1, 0).execute()
         )
-        rs = await session.query(key=key).bin("outer").get().execute()
+        rs = await session.query(key).bin("outer").get().execute()
         result = await rs.first_or_raise()
         assert result.record.bins["outer"]["items"] == [15, 0, 20]
         await session.delete(key).execute()
@@ -393,7 +394,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_bin_get(self, session):
         rs = await (
-            session.query(keys=[_key(1), _key(2)]).bin("name").get()
+            session.query([_key(1), _key(2)]).bin("name").get()
             .execute()
         )
         results = await rs.collect()
@@ -403,7 +404,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_map_read(self, session):
         rs = await (
-            session.query(keys=[_key(1), _key(2), _key(3)])
+            session.query([_key(1), _key(2), _key(3)])
             .bin("settings").on_map_key("theme").get_values()
             .execute()
         )
@@ -415,7 +416,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_list_size(self, session):
         rs = await (
-            session.query(keys=[_key(1), _key(2), _key(3)])
+            session.query([_key(1), _key(2), _key(3)])
             .bin("scores").list_size()
             .execute()
         )
@@ -427,7 +428,7 @@ class TestBatchKeyQueries:
 
     async def test_batch_cdt_list_get(self, session):
         rs = await (
-            session.query(keys=[_key(1), _key(2), _key(3)])
+            session.query([_key(1), _key(2), _key(3)])
             .bin("scores").list_get(0)
             .execute()
         )
@@ -443,7 +444,7 @@ class TestCdtReadEdgeCases:
     async def test_list_get_range_past_end_returns_partial(self, session):
         """list_get_range with count past the end returns the full tail."""
         rs = await (
-            session.query(key=_key(1)).bin("scores").list_get_range(0, 100).execute()
+            session.query(_key(1)).bin("scores").list_get_range(0, 100).execute()
         )
         result = await rs.first_or_raise()
         assert result.record.bins["scores"] == [10, 20, 30]
@@ -451,7 +452,7 @@ class TestCdtReadEdgeCases:
     async def test_remove_from_nonexistent_key_raises(self, cluster):
         """Map remove_by_key_list on a missing record raises KEY_NOT_FOUND_ERROR."""
         session = cluster.create_session()
-        ds = DataSet.of(NS, SET)
+        ds = DS
         key = ds.id(f"{KEY_PREFIX}missing_rm")
         try:
             await session.delete(key).execute()
@@ -475,7 +476,7 @@ class TestDatasetQueryBinOps:
         for every record, not the stored bins."""
         from aerospike_sdk import Exp
         stream = await (
-            session.query(NS, SET)
+            session.query(DS)
             .bin("age_next").select_from(
                 Exp.num_add([Exp.int_bin("age"), Exp.int_val(1)]))
             .execute()
@@ -490,7 +491,7 @@ class TestDatasetQueryBinOps:
         ``where`` filter still narrows the dataset."""
         from aerospike_sdk import Exp
         stream = await (
-            session.query(NS, SET)
+            session.query(DS)
             .where(Exp.ge(Exp.int_bin("age"), Exp.int_val(22)))
             .bin("name").get()
             .bin("settings").on_map_key("volume").get_values()
@@ -510,7 +511,7 @@ class TestQueryStacking:
     async def test_stack_two_point_queries(self, session):
         rs = await (
             session
-            .query(key=_key(1)).bin("name").get()
+            .query(_key(1)).bin("name").get()
             .query(_key(2)).bin("age").get()
             .execute()
         )
@@ -527,7 +528,7 @@ class TestQueryStacking:
     async def test_stack_batch_queries(self, session):
         rs = await (
             session
-            .query(keys=[_key(1), _key(2)]).bin("name").get()
+            .query([_key(1), _key(2)]).bin("name").get()
             .query([_key(3)]).bin("age").get()
             .execute()
         )
@@ -536,7 +537,7 @@ class TestQueryStacking:
 
     async def test_dataset_query_cannot_stack(self, session):
         with pytest.raises(ValueError, match="cannot be stacked"):
-            session.query(NS, SET).query(_key(1))
+            session.query(DS).query(_key(1))
 
     @requires_server_compiled_ael
     async def test_stacked_read_complex(self, session):
@@ -544,7 +545,7 @@ class TestQueryStacking:
         select_from, missing bin, and missing key."""
         rs = await (
             session
-            .query(key=_key(1)).bins(["name"])
+            .query(_key(1)).bins(["name"])
             .query(_key(2))
             .query(_key(3)).with_no_bins()
             .query(_key(1)).bin("score").select_from("$.score * 8")
@@ -593,7 +594,7 @@ class TestInvertedReads:
     async def test_map_key_range_get_all_other_values(self, session):
         """Get all map values EXCEPT those in the range."""
         rs = await (
-            session.query(key=_key(1))
+            session.query(_key(1))
             .bin("settings").on_map_key_range("theme", "volume").get_all_other_values()
             .execute()
         )
@@ -608,7 +609,7 @@ class TestInvertedReads:
     async def test_list_value_get_all_other_values(self, session):
         """Get all list elements EXCEPT those matching the value."""
         rs = await (
-            session.query(key=_key(1))
+            session.query(_key(1))
             .bin("scores").on_list_value(10).get_all_other_values()
             .execute()
         )
@@ -629,7 +630,7 @@ class TestExpressionReads:
     @requires_server_compiled_ael
     async def test_select_from_simple(self, session):
         rs = await (
-            session.query(key=_key(1))
+            session.query(_key(1))
             .bin("age_plus_20").select_from("$.age + 20")
             .execute()
         )
@@ -639,7 +640,7 @@ class TestExpressionReads:
     @requires_server_compiled_ael
     async def test_select_from_multiple(self, session):
         rs = await (
-            session.query(key=_key(2))
+            session.query(_key(2))
             .bin("double_age").select_from("$.age * 2")
             .bin("triple_score").select_from("$.score * 3")
             .execute()
@@ -651,7 +652,7 @@ class TestExpressionReads:
     @requires_server_compiled_ael
     async def test_select_from_with_get(self, session):
         rs = await (
-            session.query(key=_key(1))
+            session.query(_key(1))
             .bin("name").get()
             .bin("age_in_10").select_from("$.age + 10")
             .execute()

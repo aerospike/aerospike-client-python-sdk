@@ -17,6 +17,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
+from aerospike_sdk import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_async.exceptions import ConnectionError as PacConnectionError
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
@@ -669,7 +670,7 @@ def wait_for_set_visible():
         deadline = time.monotonic() + timeout
         last_seen = -1
         while time.monotonic() < deadline:
-            stream = await session.query(ns, set_name).execute()
+            stream = await session.query(DataSet.of(ns, set_name)).execute()
             seen = 0
             async for _ in stream:
                 seen += 1
@@ -709,7 +710,7 @@ def sync_wait_for_set_visible():
         deadline = time.monotonic() + timeout
         last_seen = -1
         while time.monotonic() < deadline:
-            stream = session.query(ns, set_name).execute()
+            stream = session.query(DataSet.of(ns, set_name)).execute()
             seen = 0
             for _ in stream:
                 seen += 1

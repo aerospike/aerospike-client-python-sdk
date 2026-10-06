@@ -25,10 +25,10 @@ from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior_settings import Settings
 
 from tests.integration.query_selection_helpers import (
+    HINT_DS,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
-    NS,
     QuerySelection,
     QueryWhereFlags,
     count_records_sync,
@@ -114,7 +114,7 @@ class TestSyncQuerySelectionBuilderScanBlocking:
     def test_disallow_scans_via_builder_rejects_scan(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
             (
-                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                query_selection_cluster.session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
@@ -125,7 +125,7 @@ class TestSyncQuerySelectionBuilderScanBlocking:
     def test_strict_default_via_builder_rejects_scan(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
             (
-                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                query_selection_cluster.session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .execute()
             )
@@ -134,7 +134,7 @@ class TestSyncQuerySelectionBuilderScanBlocking:
     @requires_query_selection
     def test_allow_scans_via_builder_permits_scan(self, query_selection_cluster):
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+            query_selection_cluster.session.query(HINT_DS)
             .where("$.country == 'US'")
             .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
@@ -152,7 +152,7 @@ class TestSyncQuerySelectionBuilderScanBlocking:
         session = query_selection_cluster.client.create_session(permissive)
         with pytest.raises(AerospikeError) as exc_info:
             (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()

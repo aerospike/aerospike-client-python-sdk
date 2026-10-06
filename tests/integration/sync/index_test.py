@@ -43,7 +43,7 @@ def test_sync_create_index_from_ael_string_and_query(cluster):
     session = cluster.create_session()
 
     try:
-        session.index(NS, SET).named(index_name).drop()
+        session.index(DS).named(index_name).drop()
     except Exception:
         pass
 
@@ -53,7 +53,7 @@ def test_sync_create_index_from_ael_string_and_query(cluster):
 
     try:
         index_task = (
-            session.index(NS, SET)
+            session.index(DS)
             .on_expression(ael)
             .named(index_name)
             .integer()
@@ -67,7 +67,7 @@ def test_sync_create_index_from_ael_string_and_query(cluster):
         flt = Filter.range("age", 32, 34).expression(
             FilterExpression.from_server_compiled_ael(ael),
         )
-        stream = session.query(NS, SET).filter(flt).bins(["age"]).execute()
+        stream = session.query(DS).filter(flt).bins(["age"]).execute()
         ages = sorted(
             [r.record.bins["age"] for r in stream if r.is_ok and r.record],
         )
@@ -75,7 +75,7 @@ def test_sync_create_index_from_ael_string_and_query(cluster):
     finally:
         session.delete(keys).execute()
         try:
-            session.index(NS, SET).named(index_name).drop()
+            session.index(DS).named(index_name).drop()
         except Exception:
             pass
 
@@ -124,12 +124,12 @@ def test_sync_create_set_index(cluster):
     index_name = "psdk_set_idx_sync"
     session = cluster.create_session()
     try:
-        session.index(NS, SET).named(index_name).drop().wait_till_complete_blocking()
+        session.index(DS).named(index_name).drop().wait_till_complete_blocking()
     except Exception:
         pass
 
     for _ in range(2):
-        task = session.index(NS, SET).on_set().named(index_name).create()
+        task = session.index(DS).on_set().named(index_name).create()
         assert task.wait_till_complete_blocking()
 
         rows = [i for i in session.info().secondary_indexes(NS) if i.name == index_name]
@@ -139,7 +139,7 @@ def test_sync_create_set_index(cluster):
         assert row.is_set_index is True
         assert row.is_ready is True
 
-        task = session.index(NS, SET).named(index_name).drop()
+        task = session.index(DS).named(index_name).drop()
         assert task.wait_till_complete_blocking()
         assert not any(i.name == index_name for i in session.info().secondary_indexes(NS))
 
@@ -171,7 +171,7 @@ def test_sync_create_index_from_boolean_ael_rejected(cluster):
     session = cluster.create_session()
     with pytest.raises(AerospikeError):
         (
-            session.index(NS, SET)
+            session.index(DS)
             .on_expression("$.age > 31")
             .named("psdk_ael_bool_idx_sync")
             .integer()

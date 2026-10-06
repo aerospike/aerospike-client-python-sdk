@@ -29,6 +29,7 @@ from aerospike_sdk import DataSet, Exp, QueryDuration, QueryHint, ResultCode, va
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
+    QSEL_DS,
     BIN_AGE,
     BIN_COUNTRY,
     BIN_SCORE,
@@ -147,7 +148,7 @@ class TestQueryExplain:
         plan = await explain_plan_async(pac, where, hint=hint)
 
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -215,7 +216,7 @@ class TestQueryExecute:
     async def test_simple_range_returns_matching_records(self, query_selection_cluster):
         where = "$.age >= 14 and $.age <= 18"
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -227,7 +228,7 @@ class TestQueryExecute:
     @requires_query_selection
     async def test_equality_returns_single_record(self, query_selection_cluster):
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where("$.age == 25")
             .execute()
@@ -239,7 +240,7 @@ class TestQueryExecute:
     @requires_query_selection
     async def test_primary_index_predicate(self, query_selection_cluster):
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_COUNTRY])
             .where("$.country == 'US'")
             # No secondary index on country -> primary-index scan; opt into it
@@ -269,7 +270,7 @@ class TestQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -286,7 +287,7 @@ class TestQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE, BIN_COUNTRY])
             .where(where)
             .execute()
@@ -306,7 +307,7 @@ class TestQueryExecute:
     async def test_reading_only_bins_projects_requested_bins(self, query_selection_cluster):
         where = "$.age >= 14 and $.age <= 18"
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -326,7 +327,7 @@ class TestQueryExecute:
     async def test_contradiction_raises_filtered_out(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+                query_selection_cluster.session.query(QSEL_DS)
                 .where("$.age > 100 and $.age < 10")
                 .execute()
             )
@@ -341,7 +342,7 @@ class TestQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -354,7 +355,7 @@ class TestQueryExecute:
         self, query_selection_cluster,
     ):
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .where("$.age > 10 and ($.age < 14 or $.country == 'US')")
             .execute()
         )
@@ -370,7 +371,7 @@ class TestQueryExecute:
 
         async def ages(where):
             stream = await (
-                session.query(namespace=NS, set_name=SET_NAME).where(where).execute()
+                session.query(QSEL_DS).where(where).execute()
             )
             return await collect_ages_async(stream)
 
@@ -388,7 +389,7 @@ class TestQueryExecute:
         """No integer lies strictly between 10 and 11."""
         with pytest.raises(AerospikeError) as excinfo:
             await (
-                query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+                query_selection_cluster.session.query(QSEL_DS)
                 .where("$.age > 10 and $.age < 11")
                 .execute()
             )
@@ -404,7 +405,7 @@ class TestQuerySelectionRouting:
 
         plan = await explain_plan_async(pac, where, hint=hint)
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -426,7 +427,7 @@ class TestQuerySelectionRouting:
 
         plan = await explain_plan_async(pac, where, hint=hint)
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -441,7 +442,7 @@ class TestQuerySelectionRouting:
     @requires_query_selection
     async def test_where_exp_uses_non_probe_execute_path(self, query_selection_cluster):
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(
                 Exp.and_([
@@ -463,13 +464,13 @@ class TestQuerySelectionRouting:
         score_plan = await explain_plan_async(pac, score_where)
 
         age_stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(age_where)
             .execute()
         )
         score_stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_SCORE])
             .where(score_where)
             .execute()
@@ -486,7 +487,7 @@ class TestQuerySelectionRouting:
 
     @requires_query_selection
     async def test_no_where_scan_returns_all_records(self, query_selection_cluster):
-        stream = await query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).execute()
+        stream = await query_selection_cluster.session.query(QSEL_DS).execute()
         count = await count_records_async(stream)
         assert count == SIZE
 
@@ -497,12 +498,12 @@ class TestQuerySelectionRouting:
         """A bound ``where()`` takes the same selection path as literal text."""
         session = query_selection_cluster.session
         bound = await count_records_async(
-            await session.query(namespace=NS, set_name=SET_NAME)
+            await session.query(QSEL_DS)
             .where("$.age >= %s and $.age <= %s", 14, 18)
             .execute()
         )
         literal = await count_records_async(
-            await session.query(namespace=NS, set_name=SET_NAME)
+            await session.query(QSEL_DS)
             .where("$.age >= 14 and $.age <= 18")
             .execute()
         )
@@ -551,7 +552,7 @@ class TestSparseRanges:
     @requires_query_selection
     async def test_range_returns_only_the_ages_that_exist(self, sparse_set):
         stream = await (
-            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            sparse_set.query(DataSet.of(NS, SPARSE_SET))
             .where("$.age >= 5 and $.age <= 30")
             .execute()
         )
@@ -560,7 +561,7 @@ class TestSparseRanges:
     @requires_query_selection
     async def test_range_spanning_a_gap_returns_nothing(self, sparse_set):
         stream = await (
-            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            sparse_set.query(DataSet.of(NS, SPARSE_SET))
             .where("$.age >= 8 and $.age <= 22")
             .execute()
         )
@@ -570,7 +571,7 @@ class TestSparseRanges:
     async def test_range_skips_records_without_the_bin(self, sparse_set):
         """The two bin-less records must not appear, and must not error."""
         stream = await (
-            sparse_set.query(namespace=NS, set_name=SPARSE_SET)
+            sparse_set.query(DataSet.of(NS, SPARSE_SET))
             .where("$.age >= 1")
             .execute()
         )

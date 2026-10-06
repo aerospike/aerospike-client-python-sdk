@@ -31,11 +31,10 @@ from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.namespace import requires_mode
 from tests.integration.query_selection_helpers import (
+    HINT_DS,
     HINT_BOGUS_INDEX_NAME,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
-    HINT_SET_NAME,
-    NS,
     count_records_async,
 )
 from tests.pac_compat import requires_query_selection
@@ -46,7 +45,7 @@ INDEXED_PREDICATE = "$.age >= 25"
 
 def _query(state, predicate, hint=None):
     builder = (
-        state.session.query(namespace=NS, set_name=HINT_SET_NAME).where(predicate)
+        state.session.query(HINT_DS).where(predicate)
     )
     return builder.with_hint(hint) if hint is not None else builder
 

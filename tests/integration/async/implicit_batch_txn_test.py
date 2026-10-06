@@ -144,7 +144,7 @@ async def test_multi_segment_write_chain_is_wrapped(session, ds, txn_spy):
     await _reset(session, keys)
 
     await (
-        session.upsert(key=keys[0]).bin("n").set_to(1)
+        session.upsert(keys[0]).bin("n").set_to(1)
         .upsert(keys[1]).bin("n").set_to(2)
         .execute()
     )
@@ -235,7 +235,7 @@ async def test_multi_namespace_batch_is_not_wrapped(session, ds, txn_spy):
     await _reset(session, [good])
 
     stream = await (
-        session.upsert(key=good).bin("n").set_to(9)
+        session.upsert(good).bin("n").set_to(9)
         .upsert(bad).bin("n").set_to(9)
         .execute()
     )

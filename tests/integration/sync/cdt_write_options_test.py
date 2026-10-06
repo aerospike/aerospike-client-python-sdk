@@ -55,7 +55,7 @@ class TestListUniqueFlag:
                 .execute()
             )
 
-        rs = session.query(key=k).bin("lst").get().execute()
+        rs = session.query(k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3]
 
@@ -70,7 +70,7 @@ class TestListUniqueFlag:
             .execute()
         )
 
-        rs = session.query(key=k).bin("lst").get().execute()
+        rs = session.query(k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2, 3, 4]
 
@@ -88,7 +88,7 @@ class TestListCombinedFlags:
             .execute()
         )
 
-        rs = session.query(key=k).bin("lst").get().execute()
+        rs = session.query(k).bin("lst").get().execute()
         result = rs.first_or_raise()
         assert sorted(result.record.bins["lst"]) == [1, 2]
 
@@ -109,7 +109,7 @@ class TestMapNoFail:
             .execute()
         )
 
-        rs = session.query(key=k).bin("m").get().execute()
+        rs = session.query(k).bin("m").get().execute()
         result = rs.first_or_raise()
         assert result.record.bins["m"]["a"] == 1
         assert result.record.bins["m"]["b"] == 2

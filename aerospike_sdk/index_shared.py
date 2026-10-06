@@ -121,13 +121,14 @@ class _IndexBuilderBase:
 
             from aerospike_sdk.exp import Exp
 
+            users = DataSet.of("test", "users")
             adult_flag = Exp.cond([
                 Exp.ge(Exp.int_bin("age"), Exp.int_val(18)),
                 Exp.int_val(1),
                 Exp.unknown(),
             ])
             await (
-                client.index("test", "users")
+                session.index(users)
                 .on_expression(adult_flag)
                 .named("users_adult_idx")
                 .integer()
@@ -136,7 +137,7 @@ class _IndexBuilderBase:
 
             # Or let the server compile an AEL string (server 8.2.0+):
             await (
-                client.index("test", "users")
+                session.index(users)
                 .on_expression("$.age + 1")
                 .named("users_age_ael_idx")
                 .integer()
@@ -184,8 +185,9 @@ class _IndexBuilderBase:
 
         Example::
 
+            users = DataSet.of("test", "users")
             task = await (
-                session.index("test", "users")
+                session.index(users)
                 .on_set()
                 .named("users_set_idx")
                 .create()
@@ -411,8 +413,9 @@ class _IndexBuilderBase:
 
         Example::
 
+            events = DataSet.of("test", "events")
             await (
-                client.index("test", "events")
+                session.index(events)
                 .on_bin("payload")
                 .named("nested_ts_idx")
                 .integer()

@@ -21,7 +21,7 @@ import struct
 from typing import TYPE_CHECKING, Any, Optional
 
 from aerospike_async import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
-from aerospike_sdk import ResultCode
+from aerospike_sdk import DataSet, ResultCode
 from tests.integration.namespace import general_namespace
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 NS = general_namespace()
 SET_NAME = "qselint"
+QSEL_DS = DataSet.of(NS, SET_NAME)
 INDEX_NAME = "qsel_age_idx"
 SCORE_INDEX_NAME = "qsel_score_idx"
 BOGUS_INDEX_NAME = "qsel_nonexistent_idx"
@@ -41,6 +42,7 @@ SIZE = 50
 
 # Hint-flags integration fixture (qselhint set)
 HINT_SET_NAME = "qselhint"
+HINT_DS = DataSet.of(NS, HINT_SET_NAME)
 HINT_INDEX_NAME = "qselhint_age_idx"
 HINT_SCORE_INDEX_NAME = "qselhint_score_idx"
 HINT_BOGUS_INDEX_NAME = "qselhint_missing_idx"
@@ -188,7 +190,7 @@ async def drop_index_quiet_async(
     index_name: str,
 ) -> None:
     try:
-        await client.index(ns, set_name).named(index_name).drop()
+        await client.index(DataSet.of(ns, set_name)).named(index_name).drop()
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_NOT_FOUND:
             raise
@@ -201,7 +203,7 @@ def drop_index_quiet_blocking(
     index_name: str,
 ) -> None:
     try:
-        client.index(ns, set_name).named(index_name).drop()
+        client.index(DataSet.of(ns, set_name)).named(index_name).drop()
     except Exception as exc:
         if getattr(exc, "result_code", None) != ResultCode.INDEX_NOT_FOUND:
             raise

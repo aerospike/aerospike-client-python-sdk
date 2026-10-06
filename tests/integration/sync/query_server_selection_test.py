@@ -23,15 +23,14 @@ from aerospike_sdk import Exp, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.query_selection_helpers import (
+    QSEL_DS,
     BIN_AGE,
     BIN_COUNTRY,
     BIN_SCORE,
     BOGUS_INDEX_NAME,
     INDEX_NAME,
-    NS,
     QuerySelection,
     SCORE_INDEX_NAME,
-    SET_NAME,
     SIZE,
     collect_ages_sync,
     collect_scores_sync,
@@ -108,7 +107,7 @@ class TestSyncQueryExplain:
         plan = explain_plan_blocking(pac, where, hint=hint)
 
         ages = collect_ages_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -126,7 +125,7 @@ class TestSyncQueryExecute:
     @requires_query_selection
     def test_simple_range(self, query_selection_cluster):
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where("$.age >= 14 and $.age <= 18")
             .execute()
@@ -137,7 +136,7 @@ class TestSyncQueryExecute:
     @requires_query_selection
     def test_equality_returns_single_record(self, query_selection_cluster):
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where("$.age == 25")
             .execute()
@@ -148,7 +147,7 @@ class TestSyncQueryExecute:
     @requires_query_selection
     def test_primary_index_predicate(self, query_selection_cluster):
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_COUNTRY])
             .where("$.country == 'US'")
             # No secondary index on country -> primary-index scan; opt into it
@@ -174,7 +173,7 @@ class TestSyncQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -190,7 +189,7 @@ class TestSyncQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE, BIN_COUNTRY])
             .where(where)
             .execute()
@@ -210,7 +209,7 @@ class TestSyncQueryExecute:
     def test_reading_only_bins_projects_requested_bins(self, query_selection_cluster):
         where = "$.age >= 14 and $.age <= 18"
         stream = (
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute()
@@ -229,7 +228,7 @@ class TestSyncQueryExecute:
     @requires_query_selection
     def test_contradiction_raises_filtered_out(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).where(
+            query_selection_cluster.session.query(QSEL_DS).where(
                 "$.age > 100 and $.age < 10",
             ).execute()
         assert exc_info.value.result_code == ResultCode.FILTERED_OUT
@@ -243,7 +242,7 @@ class TestSyncQueryExecute:
         assert plan.index_name == INDEX_NAME
 
         count = count_records_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .execute(),
@@ -259,7 +258,7 @@ class TestSyncQuerySelectionRouting:
         hint = QueryHint(index_name=INDEX_NAME)
         plan = explain_plan_blocking(pac, where, hint=hint)
         ages = collect_ages_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -276,7 +275,7 @@ class TestSyncQuerySelectionRouting:
         hint = QueryHint(query_duration=QueryDuration.SHORT)
         plan = explain_plan_blocking(pac, where, hint=hint)
         ages = collect_ages_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(where)
             .with_hint(hint)
@@ -289,7 +288,7 @@ class TestSyncQuerySelectionRouting:
     @requires_query_selection
     def test_where_exp_uses_non_probe_execute_path(self, query_selection_cluster):
         ages = collect_ages_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(
                 Exp.and_([
@@ -310,13 +309,13 @@ class TestSyncQuerySelectionRouting:
         age_plan = explain_plan_blocking(pac, age_where)
         score_plan = explain_plan_blocking(pac, score_where)
         ages = collect_ages_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
             .where(age_where)
             .execute(),
         )
         scores = collect_scores_sync(
-            query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME)
+            query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_SCORE])
             .where(score_where)
             .execute(),
@@ -329,5 +328,5 @@ class TestSyncQuerySelectionRouting:
 
     @requires_query_selection
     def test_no_where_scan(self, query_selection_cluster):
-        count = count_records_sync(query_selection_cluster.session.query(namespace=NS, set_name=SET_NAME).execute())
+        count = count_records_sync(query_selection_cluster.session.query(QSEL_DS).execute())
         assert count == SIZE

@@ -145,7 +145,7 @@ def test_multi_segment_write_chain_is_wrapped(session, ds, txn_spy):
     _reset(session, keys)
 
     (
-        session.upsert(key=keys[0]).bin("n").set_to(1)
+        session.upsert(keys[0]).bin("n").set_to(1)
         .upsert(keys[1]).bin("n").set_to(2)
         .execute()
     )

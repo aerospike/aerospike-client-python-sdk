@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import asyncio
 
-from aerospike_sdk import ClusterDefinition
+from aerospike_sdk import ClusterDefinition, DataSet
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
 
 NS = general_namespace()
 SET = "list_indexes_integ"
+DS = DataSet.of(NS, SET)
 BIN = "age"
 IDX = "psdk_list_indexes_age"
 
@@ -57,12 +58,12 @@ async def test_list_indexes_via_cluster_and_session(aerospike_host):
         session = cluster.create_session()
 
         try:
-            await session.index(NS, SET).named(IDX).drop()
+            await session.index(DS).named(IDX).drop()
         except Exception:
             pass
         assert await _wait_visible(cluster.list_indexes, IDX, present=False)
 
-        await session.index(NS, SET).on_bin(BIN).named(IDX).integer().create()
+        await session.index(DS).on_bin(BIN).named(IDX).integer().create()
         assert await _wait_visible(cluster.list_indexes, IDX, present=True)
 
         mine = [i for i in await cluster.list_indexes() if i["name"] == IDX]
@@ -75,7 +76,7 @@ async def test_list_indexes_via_cluster_and_session(aerospike_host):
         # Reachable via the Session delegator too.
         assert any(i["name"] == IDX for i in await session.list_indexes())
 
-        await session.index(NS, SET).named(IDX).drop()
+        await session.index(DS).named(IDX).drop()
         assert await _wait_visible(session.list_indexes, IDX, present=False)
     finally:
         await cluster.close()

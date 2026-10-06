@@ -33,9 +33,8 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from tests.integration.query_selection_helpers import (
+    HINT_DS,
     HINT_BOGUS_INDEX_NAME,
-    HINT_SET_NAME,
-    NS,
 )
 from tests.pac_compat import requires_query_selection
 
@@ -74,7 +73,7 @@ class TestQuerySelectionErrorDetail:
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.NONE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where(_BAD_AEL)
                 .execute()
             )
@@ -89,7 +88,7 @@ class TestQuerySelectionErrorDetail:
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where(_BAD_AEL)
                 .execute()
             )
@@ -111,7 +110,7 @@ class TestQuerySelectionErrorDetail:
         )
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where(_BAD_AEL)
                 .execute()
             )
@@ -137,7 +136,7 @@ class TestQuerySelectionErrorDetail:
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
@@ -152,7 +151,7 @@ class TestQuerySelectionErrorDetail:
         session = _verbose_session(query_selection_cluster, ErrorDetailVerbosity.MESSAGE)
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where("$.age == 51")
                 .with_hint(QueryHint(index_name=HINT_BOGUS_INDEX_NAME, hard_hint=True))
                 .execute()

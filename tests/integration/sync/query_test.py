@@ -21,6 +21,8 @@ import pytest
 from aerospike_sdk import DataSet, Exp
 from tests.integration.namespace import general_namespace
 
+QUERY_DS = DataSet.of(general_namespace(), "query_test")
+
 
 @pytest.fixture(scope="module")
 def shared_cluster(aerospike_host, make_cluster_definition):
@@ -36,7 +38,7 @@ def cluster(shared_cluster, enterprise):
     """Setup sync SDK cluster and test data for query tests."""
     cluster = shared_cluster
     session = cluster.create_session()
-    ds = DataSet.of(general_namespace(), "query_test")
+    ds = QUERY_DS
     session.truncate(ds)
 
     for i in range(10):
@@ -52,7 +54,7 @@ def session(cluster):
 
 def test_query_basic(session):
     """Test basic query operation without filters."""
-    stream = session.query(general_namespace(), "query_test").execute()
+    stream = session.query(QUERY_DS).execute()
     count = 0
     for result in stream:
         record = result.record
@@ -64,8 +66,8 @@ def test_query_basic(session):
 
 def test_query_with_dataset(session):
     """Test query using DataSet."""
-    users = DataSet.of(general_namespace(), "query_test")
-    stream = session.query(dataset=users).execute()
+    users = QUERY_DS
+    stream = session.query(users).execute()
     count = 0
     for result in stream:
         record = result.record
@@ -77,14 +79,14 @@ def test_query_with_dataset(session):
 
 def test_query_with_single_key(session):
     """Test query using a single Key."""
-    users = DataSet.of(general_namespace(), "query_test")
+    users = QUERY_DS
     result = session.query(users.id(5)).execute().first_or_raise()
     assert result.is_ok
     assert result.record.bins == {"id": 5, "age": 25, "name": "User5"}
 
 def test_query_with_multiple_keys(session):
     """Test query using multiple Keys."""
-    users = DataSet.of(general_namespace(), "query_test")
+    users = QUERY_DS
     results = session.query(users.ids(6, 7)).execute().collect()
     assert all(r.is_ok for r in results)
     by_idx = {r.index: r for r in results}
@@ -94,7 +96,7 @@ def test_query_with_multiple_keys(session):
 
 def test_query_with_bins(session):
     """Test query with specific bin selection."""
-    stream = session.query(general_namespace(), "query_test").bins(["name", "age"]).execute()
+    stream = session.query(QUERY_DS).bins(["name", "age"]).execute()
     count = 0
     for result in stream:
         record = result.record
@@ -114,7 +116,7 @@ def test_query_with_filter_expression(session):
     filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = (
-        session.query(general_namespace(), "query_test")
+        session.query(QUERY_DS)
         .where(filter_exp)
         .execute()
     )
@@ -144,7 +146,7 @@ class TestSyncStreamAcrossBuilders:
         """Multi-key read: stream yields the same rows (by index)
         as buffered execute()."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(0, 1, 2)
 
         lazy = session.query(keys).stream().collect()
@@ -210,7 +212,7 @@ class TestSyncPopVsFirst:
 
     def test_pop_keeps_stream_open(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = session.query(ds.ids(0, 1, 2)).stream()
         head = stream.pop()
         assert head is not None
@@ -219,7 +221,7 @@ class TestSyncPopVsFirst:
 
     def test_first_closes_stream(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = session.query(ds.ids(0, 1, 2)).stream()
         head = stream.first()
         assert head is not None
@@ -227,7 +229,7 @@ class TestSyncPopVsFirst:
 
     def test_pop_or_raise_and_first_or_raise(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         open_stream = session.query(ds.ids(0, 1)).stream()
         assert open_stream.pop_or_raise().is_ok
@@ -245,7 +247,7 @@ class TestSyncStreamClose:
 
     def test_close_mid_stream_stops_iteration(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(*range(10))
 
         stream = session.query(keys).stream()
@@ -261,7 +263,7 @@ class TestSyncStreamClose:
 
     def test_close_is_idempotent(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = session.query(ds.ids(0, 1, 2)).stream()
         stream.close()
         stream.close()
@@ -270,7 +272,7 @@ class TestSyncStreamClose:
 
     def test_reiterate_after_close_yields_nothing(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = session.query(ds.ids(0, 1, 2, 3)).stream()
         stream.close()
         assert list(stream) == []
@@ -278,7 +280,7 @@ class TestSyncStreamClose:
 
     def test_client_usable_after_early_close(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = session.query(ds.ids(*range(10))).stream()
         for _ in stream:
             stream.close()
@@ -288,7 +290,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_normal_exit(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         seen = []
         with session.query(ds.ids(0, 1, 2)).stream() as stream:
             for r in stream:
@@ -298,7 +300,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_early_break(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         with session.query(ds.ids(*range(10))).stream() as stream:
             for _ in stream:
                 break
@@ -308,7 +310,7 @@ class TestSyncStreamClose:
 
     def test_with_closes_on_exception(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream_ref = {}
         with pytest.raises(RuntimeError, match="boom"):
             with session.query(ds.ids(*range(10))).stream() as stream:
@@ -328,7 +330,7 @@ def test_query_with_filter_expression_and(session):
     )
 
     stream = (
-        session.query(general_namespace(), "query_test")
+        session.query(QUERY_DS)
         .where(filter_exp)
         .execute()
     )
@@ -350,25 +352,25 @@ class TestSingleRecordTerminals:
     """Sync twin: ``first`` / ``first_or_raise`` on the builder."""
 
     def test_first_or_raise_matches_the_stream_form(self, session):
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         via_stream = session.query(ds.id(0)).execute().first_or_raise().record_or_raise()
         via_builder = session.query(ds.id(0)).first_or_raise().record_or_raise()
         assert via_builder.bins == via_stream.bins
 
     def test_first_returns_none_when_nothing_matches(self, session):
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         assert session.query(ds.id("no_such_key_xyz")).first() is None
 
     def test_first_or_raise_raises_when_nothing_matches(self, session):
         """The sync stream signals exhaustion with StopIteration, not its async twin."""
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         with pytest.raises(StopIteration):
             session.query(ds.id("no_such_key_xyz")).first_or_raise()
 
     def test_result_envelope_is_preserved(self, session):
         from aerospike_sdk.record_result import RecordResult
 
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         result = session.query(ds.id(0)).first()
         assert isinstance(result, RecordResult)
         assert result.is_ok and result.record is not None
@@ -380,7 +382,7 @@ class TestSingleRecordTerminals:
         closing terminal from a non-closing one; only an unconsumed remainder
         can.
         """
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         builder = session.query(ds.ids(0, 1, 2))
         opened = []
         real_execute = builder.execute

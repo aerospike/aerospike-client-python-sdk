@@ -95,36 +95,6 @@ async def test_session_upsert_with_key(session):
         assert rec.bins == {"name": "John", "age": 30}
 
 
-async def test_session_upsert_with_dataset(session):
-    """Test session.upsert() with DataSet."""
-    users = DataSet.of(general_namespace(), "users")
-
-    await session.upsert(dataset=users, key_value="user456").put(
-        {"name": "Jane", "age": 25}
-    ).execute()
-
-    key = users.id("user456")
-    stream = await session.query(key).execute()
-    async for result in stream:
-        rec = result.record_or_raise()
-        assert rec.bins == {"name": "Jane", "age": 25}
-
-
-async def test_session_upsert_with_namespace_set(session):
-    """Test session.upsert() with explicit namespace/set."""
-    from aerospike_sdk import Key
-
-    key = Key(general_namespace(), "users", "user789")
-    await session.upsert(
-        namespace=general_namespace(), set_name="users", key_value="user789"
-    ).put({"name": "Bob", "age": 35}).execute()
-
-    stream = await session.query(key).execute()
-    async for result in stream:
-        rec = result.record_or_raise()
-        assert rec.bins == {"name": "Bob", "age": 35}
-
-
 async def test_session_insert(session):
     """Test session.insert() method."""
     users = DataSet.of(general_namespace(), "users")
@@ -236,25 +206,10 @@ async def test_session_index_delegation(session):
     """Test that session.index() delegates to client correctly."""
     users = DataSet.of(general_namespace(), "users")
 
-    index_builder = session.index(dataset=users)
+    index_builder = session.index(users)
     assert index_builder is not None
     assert index_builder._namespace == general_namespace()
     assert index_builder._set_name == "users"
-
-
-async def test_session_index_accepts_dataset_positionally(session):
-    """A DataSet in the first slot resolves the same as ``dataset=``."""
-    users = DataSet.of(general_namespace(), "users")
-
-    positional = session.index(users)
-    assert positional._namespace == general_namespace()
-    assert positional._set_name == "users"
-
-
-async def test_session_upsert_error_no_key(session):
-    """Test that upsert raises error when no key is provided."""
-    with pytest.raises(ValueError, match="At least one key must be provided"):
-        await session.upsert().put({"name": "Test"}).execute()
 
 
 async def test_session_multiple_sessions_different_behaviors(cluster):

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Callable, Dict, Optional, Union, overload
+from typing import Any, Callable, Dict, Optional
 
 from aerospike_async import (
     AdminPolicy,
@@ -49,6 +49,7 @@ from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, SyncSdkConfigMonitor
 from aerospike_sdk.session_shared import (
+    _dataset_not_strings,
     _namespace_mode_from_partition_map,
     _probe_namespace_mode_blocking,
 )
@@ -292,40 +293,17 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     # -- Factories: query / index / session ------------------------------------
 
-    @overload
-    def index(
-        self, dataset: DataSet, /,
-    ) -> IndexBuilder: ...
-    @overload
-    def index(
-        self, *, dataset: DataSet,
-    ) -> IndexBuilder: ...
-    @overload
-    def index(
-        self, namespace: str, set_name: str,
-    ) -> IndexBuilder: ...
-
-    def index(
-        self,
-        namespace: Optional[Union[str, DataSet]] = None,
-        set_name: Optional[str] = None,
-        *,
-        dataset: Optional[DataSet] = None,
-    ) -> IndexBuilder:
-        """Create a secondary-index builder (synchronous)."""
+    def index(self, dataset: DataSet, /) -> IndexBuilder:
+        """Create a secondary-index builder for a dataset (synchronous)."""
         self._ensure_connected()
-        if isinstance(namespace, DataSet):
-            dataset = namespace
-            namespace = None
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        if not namespace or set_name is None:
-            raise ValueError("namespace and set_name are required (or provide dataset)")
+        if not isinstance(dataset, DataSet):
+            if isinstance(dataset, str):
+                raise TypeError(_dataset_not_strings("index"))
+            raise TypeError(f"Expected a DataSet, got {type(dataset)}")
         return IndexBuilder(
             async_client=self,
-            namespace=namespace,
-            set_name=set_name,
+            namespace=dataset.namespace,
+            set_name=dataset.set_name,
         )
 
     def truncate(

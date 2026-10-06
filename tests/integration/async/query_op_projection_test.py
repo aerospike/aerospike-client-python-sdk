@@ -49,6 +49,7 @@ _AnyAerospikeError = (SdkAerospikeError, PacAerospikeError)
 
 _NS = general_namespace()
 _SET = "qopproj"
+_DS = DataSet.of(_NS, _SET)
 _KEY_PREFIX = "qopproj_"
 _BIN1 = "tqobin1"
 _BIN2 = "tqobin2"
@@ -60,7 +61,7 @@ _SIZE = 20
 async def _seed_qopproj_dataset(c, wait_for_set_visible):
     """Seed the 20-record dataset and SI used by both ``cluster`` fixtures."""
     session = c.create_session()
-    ds = DataSet.of(_NS, _SET)
+    ds = _DS
 
     # Best-effort cleanup so reruns are deterministic.
     for i in range(1, _SIZE + 1):
@@ -84,7 +85,7 @@ async def _seed_qopproj_dataset(c, wait_for_set_visible):
 
     try:
         index_task = await (
-            session.index(_NS, _SET).on_bin(_BIN1).named("qopproj_idx_b1").integer().create()
+            session.index(_DS).on_bin(_BIN1).named("qopproj_idx_b1").integer().create()
         )
     except Exception:
         # Already present from an earlier run: its build is done, no task to await.
@@ -95,7 +96,7 @@ async def _seed_qopproj_dataset(c, wait_for_set_visible):
 
 async def _drop_qopproj_index(c):
     try:
-        await c.create_session().index(_NS, _SET).named("qopproj_idx_b1").drop()
+        await c.create_session().index(_DS).named("qopproj_idx_b1").drop()
     except Exception:
         pass
 
@@ -157,7 +158,7 @@ class TestSdkOpsProjBackwardCompat:
     async def test_get_bin_projection(self, session):
         """``with_op_projection(Operation.get_bin)`` over a SI range."""
         stream = await (
-            session.query(_NS, _SET)
+            session.query(_DS)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(Operation.get_bin(_BIN1))
             .execute()
@@ -180,7 +181,7 @@ class TestSdkOpsProjExt812:
     async def test_exp_read_projection(self, session_812):
         """Projecting via ``ExpOperation.read`` requires 8.1.2+."""
         stream = await (
-            session_812.query(_NS, _SET)
+            session_812.query(_DS)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(
                 Operation.get_bin(_BIN1),
@@ -200,7 +201,7 @@ class TestSdkOpsProjExt812:
     async def test_cdt_select_values_projection(self, session_812):
         """Path-form CDT read alongside a basic projection."""
         stream = await (
-            session_812.query(_NS, _SET)
+            session_812.query(_DS)
             .filter(Filter.range(_BIN1, 1, 5))
             .with_op_projection(
                 Operation.get_bin(_BIN1),
@@ -230,7 +231,7 @@ class TestSdkOpsProjRejects:
         """``Operation.put`` in a foreground query is rejected."""
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                session.query(_NS, _SET)
+                session.query(_DS)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(Operation.put("foo", "bar"))
                 .execute()
@@ -243,7 +244,7 @@ class TestSdkOpsProjRejects:
         """``ExpOperation.write`` in a foreground query is rejected."""
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                session.query(_NS, _SET)
+                session.query(_DS)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
                     ExpOperation.write("foo", Exp.string_val("bar"), ExpWriteFlags.DEFAULT)
@@ -275,7 +276,7 @@ class TestSdkOpsProjPre812Gate:
 
         with pytest.raises(_AnyAerospikeError) as excinfo:
             stream = await (
-                session.query(_NS, _SET)
+                session.query(_DS)
                 .filter(Filter.range(_BIN1, 1, 5))
                 .with_op_projection(
                     ExpOperation.read("computed", Exp.int_bin(_BIN1), ExpReadFlags.DEFAULT)

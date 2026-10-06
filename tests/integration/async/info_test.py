@@ -16,7 +16,7 @@
 """Tests for InfoCommands."""
 
 import pytest
-from aerospike_sdk import Behavior
+from aerospike_sdk import Behavior, DataSet
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ async def secondary_index(session):
 
     try:
         task = await (
-            session.index(namespace, set_name)
+            session.index(DataSet.of(namespace, set_name))
             .on_bin("idx_bin").named(index_name).integer().create()
         )
     except Exception:
@@ -58,7 +58,7 @@ async def secondary_index(session):
     yield namespace, index_name
 
     try:
-        await session.index(namespace, set_name).named(index_name).drop()
+        await session.index(DataSet.of(namespace, set_name)).named(index_name).drop()
     except Exception:
         pass
 

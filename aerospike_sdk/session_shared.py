@@ -30,7 +30,6 @@ from typing import (
     NamedTuple,
     Optional,
     overload,
-    Tuple,
     TYPE_CHECKING,
     TypeVar,
     Union,
@@ -147,6 +146,19 @@ def _probe_namespace_mode_blocking(pac_client: Any, namespace: str) -> Mode:
         return Mode.AP
     detail = NamespaceDetail.from_response(result, namespace)
     return Mode.SC if detail is not None and detail.strong_consistency else Mode.AP
+
+
+def _dataset_not_strings(verb: str) -> str:
+    """Message for a namespace/set string passed where a DataSet belongs."""
+    return (
+        f"{verb}() takes a DataSet, not namespace and set strings; "
+        "use DataSet.of(namespace, set_name)"
+    )
+
+
+def _keys_need_key_first(verb: str, arg1: object) -> str:
+    """Message for extra positional keys after a non-Key first argument."""
+    return f"{verb}() takes extra positional keys only after a Key, got {type(arg1).__name__}"
 
 
 class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
@@ -289,35 +301,19 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         raise NotImplementedError
 
     def _build_write_segment(
-        self,
-        op_type: str,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *more_keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> _WSB:
-        """Multi-key / dataset write segment; overridden per leaf. Not called on the base."""
+        """Multi-key write segment; overridden per leaf. Not called on the base."""
         raise NotImplementedError
 
-    def _fast_query_builder(self, key: Key, behavior: "Behavior") -> _QB:
+    def _fast_query_builder(self, key: Key) -> _QB:
         """Single-key query shortcut; overridden per leaf. Not called on the base."""
         raise NotImplementedError
 
     def _build_query_builder(
-        self,
-        *,
-        dataset: Optional[DataSet],
-        key: Optional[Key],
-        keys: Optional[List[Key]],
-        namespace: Optional[str],
-        set_name: Optional[str],
-        behavior: "Behavior",
+        self, *, dataset: Optional[DataSet], keys: Optional[List[Key]],
     ) -> _QB:
-        """Multi-key / dataset / namespace query; overridden per leaf. Not called on the base."""
+        """Multi-key / dataset query; overridden per leaf. Not called on the base."""
         raise NotImplementedError
 
     # -- Shared transaction binding -------------------------------------------
@@ -333,30 +329,6 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             builder.with_txn(self._txn)
         return builder
 
-    # -- Shared argument normalization ----------------------------------------
-
-    def _is_single_key(
-        self,
-        arg1: object,
-        arg2: object,
-        keys: Tuple[Key, ...],
-        key: object,
-        dataset: object,
-        namespace: object,
-        key_value: object,
-    ) -> bool:
-        """True when a write verb was called with exactly one positional key.
-
-        This is the hot single-key shape (``session.upsert(users.id(1))``); it
-        routes to the direct :meth:`_fast_write_segment` path instead of the
-        general key-resolution path.
-        """
-        return (
-            isinstance(arg1, Key) and arg2 is None and not keys
-            and key is None and dataset is None
-            and namespace is None and key_value is None
-        )
-
     # -- Write-verb builder factories -----------------------------------------
     # One shared body per verb: the single-key fast shape short-circuits to
     # `_fast_write_segment`; every other shape flows through
@@ -369,26 +341,16 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     @overload
     def upsert(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB: ...
 
     def upsert(  # type: ignore[misc]
         self,
-        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[DataSet, Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> Union[_WSB, _DSWB]:
         """Start a create-or-replace write for one or more keys.
 
@@ -397,25 +359,17 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         the record must not already exist.
 
         Args:
-            arg1: A single :class:`~aerospike_async.Key`, a list of keys, a
+            arg1: A single :class:`~aerospike_async.Key`, a list of keys, or a
                 :class:`~aerospike_sdk.dataset.DataSet` for a tabular write
-                (rows follow via ``bins(...)``), or omit and pass ``key`` /
-                ``dataset`` + ``key_value`` / ``namespace`` + ``set_name`` +
-                ``key_value``.
-            arg2: Optional second key when passing multiple keys positionally.
-            *keys: Additional keys when the first positional is a key.
-            key: Single key (keyword form).
-            dataset: Dataset used with ``key_value`` to build a key.
-            namespace: Namespace used with ``set_name`` and ``key_value``.
-            set_name: Set name used with ``namespace`` and ``key_value``.
-            key_value: User key value with ``dataset`` or ``namespace``/``set_name``.
+                (rows follow via ``bins(...)``).
+            *keys: Additional keys when ``arg1`` is a key.
 
         Returns:
             A write-segment builder for ``put``, ``bin``, ``where``, ``execute``, etc.
 
         Raises:
-            ValueError: If no keys are resolved or lists are empty.
-            TypeError: If positional arguments are not keys or lists of keys.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys, a list of keys, or a dataset.
 
         Example::
 
@@ -430,15 +384,13 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             :meth:`update`: Fails if the record does not exist.
             :meth:`replace`: Replace-entire-record semantics when configured.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("upsert", arg1)  # type: ignore[arg-type]
         if isinstance(arg1, DataSet):
+            if keys:
+                raise TypeError(_keys_need_key_first("upsert", arg1))
             return self._dataset_write_builder("upsert", arg1)
-        return self._build_write_segment(
-            "upsert", arg1, arg2, *keys,  # type: ignore[arg-type]
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("upsert", arg1, *keys)  # type: ignore[arg-type]
 
     @overload
     def insert(self, arg1: DataSet, /) -> _DSWB: ...
@@ -446,26 +398,16 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     @overload
     def insert(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB: ...
 
     def insert(  # type: ignore[misc]
         self,
-        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[DataSet, Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> Union[_WSB, _DSWB]:
         """Start a create-only write; fails on execute if the record already exists.
 
@@ -475,8 +417,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -486,15 +428,13 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         See Also:
             :meth:`upsert`: Create or update.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("insert", arg1)  # type: ignore[arg-type]
         if isinstance(arg1, DataSet):
+            if keys:
+                raise TypeError(_keys_need_key_first("insert", arg1))
             return self._dataset_write_builder("insert", arg1)
-        return self._build_write_segment(
-            "insert", arg1, arg2, *keys,  # type: ignore[arg-type]
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("insert", arg1, *keys)  # type: ignore[arg-type]
 
     @overload
     def update(self, arg1: DataSet, /) -> _DSWB: ...
@@ -502,26 +442,16 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     @overload
     def update(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB: ...
 
     def update(  # type: ignore[misc]
         self,
-        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[DataSet, Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> Union[_WSB, _DSWB]:
         """Start an update-only write; fails on execute if the record does not exist.
 
@@ -531,8 +461,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -543,15 +473,13 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             :meth:`upsert`: Create or update.
             :meth:`replace_if_exists`: Replace-entire-record only if present.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("update", arg1)  # type: ignore[arg-type]
         if isinstance(arg1, DataSet):
+            if keys:
+                raise TypeError(_keys_need_key_first("update", arg1))
             return self._dataset_write_builder("update", arg1)
-        return self._build_write_segment(
-            "update", arg1, arg2, *keys,  # type: ignore[arg-type]
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("update", arg1, *keys)  # type: ignore[arg-type]
 
     @overload
     def replace(self, arg1: DataSet, /) -> _DSWB: ...
@@ -559,26 +487,16 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     @overload
     def replace(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB: ...
 
     def replace(  # type: ignore[misc]
         self,
-        arg1: Optional[Union[DataSet, Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[DataSet, Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> Union[_WSB, _DSWB]:
         """Start a replace-entire-record write (create or replace).
 
@@ -588,8 +506,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -600,26 +518,19 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             :meth:`replace_if_exists`: Replace only when the record exists.
             :meth:`upsert`: Merge instead of replace.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("replace", arg1)  # type: ignore[arg-type]
         if isinstance(arg1, DataSet):
+            if keys:
+                raise TypeError(_keys_need_key_first("replace", arg1))
             return self._dataset_write_builder("replace", arg1)
-        return self._build_write_segment(
-            "replace", arg1, arg2, *keys,  # type: ignore[arg-type]
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("replace", arg1, *keys)  # type: ignore[arg-type]
 
     def replace_if_exists(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB:
         """Start a replace-entire-record write that fails if the record is absent.
 
@@ -629,8 +540,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -641,24 +552,15 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             :meth:`replace`: Create or replace.
             :meth:`update`: Merge only when the record exists.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("replace_if_exists", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "replace_if_exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("replace_if_exists", arg1, *keys)
 
     def delete(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB:
         """Start a delete for one or more keys.
 
@@ -668,8 +570,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -679,24 +581,15 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         See Also:
             :meth:`upsert`: Create or update the same keys.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("delete", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "delete", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("delete", arg1, *keys)
 
     def touch(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB:
         """Start a touch (bump generation / reset TTL) for one or more keys.
 
@@ -706,8 +599,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -717,24 +610,15 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         See Also:
             :meth:`update`: Modify bins as well as metadata.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("touch", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "touch", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("touch", arg1, *keys)
 
     def exists(
         self,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
+        arg1: Union[Key, List[Key]],
+        /,
         *keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
     ) -> _WSB:
         """Start an existence check for one or more keys.
 
@@ -744,8 +628,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             A write-segment builder whose result reports presence per key.
 
         Raises:
-            ValueError: If no keys are resolved.
-            TypeError: If positional arguments are invalid.
+            ValueError: If a key list is empty.
+            TypeError: If the arguments are not keys or a list of keys.
 
         Example::
 
@@ -755,53 +639,27 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         See Also:
             :meth:`query`: Fetch the record instead of just presence.
         """
-        if self._is_single_key(arg1, arg2, keys, key, dataset, namespace, key_value):
+        if arg1.__class__ is Key and not keys:
             return self._fast_write_segment("exists", arg1)  # type: ignore[arg-type]
-        return self._build_write_segment(
-            "exists", arg1, arg2, *keys,
-            key=key, dataset=dataset, namespace=namespace,
-            set_name=set_name, key_value=key_value,
-        )
+        return self._build_write_segment("exists", arg1, *keys)
 
     # -- Query factory --------------------------------------------------------
 
-    def query(
-        self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        arg2: Optional[Union[str, Key]] = None,
-        # Named ``more_keys`` only so the ``keys`` name stays free for the
-        # keyword form below; varargs names are never visible to callers.
-        *more_keys: Key,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys: Optional[List[Key]] = None,
-        behavior: Optional["Behavior"] = None,
-    ) -> _QB:
+    def query(self, arg1: Union[DataSet, Key, List[Key]], /, *keys: Key) -> _QB:
         """Start a read or secondary-index query for keys or a whole set.
 
-        This session's behavior is applied to the underlying query builder.
-        Supported shapes: a :class:`~aerospike_sdk.dataset.DataSet` (set-wide
-        query), a single :class:`~aerospike_async.Key`, multiple keys (list or
-        varargs), or explicit ``namespace`` / ``set_name`` for index scans.
-        Multi-key queries are split into per-node sub-batches, and a node whose
-        sub-batch holds a single key is sent a regular single-record command
-        automatically — size-1 batches need no special-casing by the caller.
+        This session's behavior is applied to the underlying query builder; use
+        :meth:`session_for` to run a query under a different one. Supported
+        shapes: a :class:`~aerospike_sdk.dataset.DataSet` (set-wide query), a
+        single :class:`~aerospike_async.Key`, or multiple keys (varargs or a
+        list). Multi-key queries are split into per-node sub-batches, and a node
+        whose sub-batch holds a single key is sent a regular single-record
+        command automatically — size-1 batches need no special-casing by the
+        caller.
 
         Args:
-            arg1: Positional dataset, key, list of keys, or namespace string
-                (when paired with ``arg2`` as set name).
-            arg2: When ``arg1`` is a namespace, the set name; otherwise may be a
-                second key when passing multiple keys positionally.
-            *more_keys: Additional keys when the first positional argument is a key.
-            namespace: Keyword namespace (with ``set_name``) when not using a dataset.
-            set_name: Keyword set name (with ``namespace``).
-            dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet`.
-            key: Keyword single key.
-            keys: Keyword list of keys when not using ``arg1`` or varargs.
-            behavior: Optional override for this query; defaults to the session's
-                behavior.
+            arg1: A dataset, a key, or a list of keys.
+            *keys: Additional keys when ``arg1`` is a key.
 
         Returns:
             A query builder to chain ``where``, ``bins``, ``execute``, etc. The
@@ -809,8 +667,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             sync sessions.
 
         Raises:
-            TypeError: If positional types do not match the supported shapes.
-            ValueError: If a key list is empty or arguments are inconsistent.
+            TypeError: If the arguments are not a dataset, keys, or a list of keys.
+            ValueError: If a key list is empty.
 
         Example::
 
@@ -818,61 +676,30 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             rs = await session.query(users.id(1)).bins(["name"]).execute()
             row = await rs.first_or_raise()
 
+            # A whole set, or a whole namespace with DataSet.of("test"):
+            rs = await session.query(users).where("$.age > 30").execute()
+
         See Also:
             :meth:`upsert`: Writes for the same keys.
         """
-        # Ultra-fast entry for the most common shape: ``session.query(key)`` with
-        # no other args. Skip the isinstance chain and kwarg routing entirely and
-        # go straight to the single-key builder. This is the bench / typical-app
-        # read pattern; the extra normalization below is pure cold-path cost.
-        if (
-            arg1.__class__ is Key
-            and arg2 is None
-            and not more_keys
-            and namespace is None
-            and set_name is None
-            and dataset is None
-            and key is None
-            and keys is None
-            and behavior is None
-        ):
-            return self._fast_query_builder(arg1, self._behavior)  # type: ignore[arg-type]
+        # The bench / typical-app read shape: skip the isinstance chain below.
+        if arg1.__class__ is Key and not keys:
+            return self._fast_query_builder(arg1)  # type: ignore[arg-type]
 
-        b = self._behavior if behavior is None else behavior
-
-        if arg1 is not None:
-            if isinstance(arg1, DataSet):
-                dataset = arg1
-            elif isinstance(arg1, Key):
-                all_keys = [arg1]
-                if isinstance(arg2, Key):
-                    all_keys.append(arg2)
-                    all_keys.extend(more_keys)
-                elif more_keys:
-                    all_keys.extend(more_keys)
-                if len(all_keys) == 1:
-                    key = arg1
-                else:
-                    keys = all_keys
-            elif isinstance(arg1, list):
-                if not arg1:
-                    raise ValueError("keys list cannot be empty")
-                if not isinstance(arg1[0], Key):
-                    raise TypeError(
-                        f"Expected List[Key], got first element {type(arg1[0])}",
-                    )
-                keys = arg1
-            elif isinstance(arg1, str) and arg2 is not None and isinstance(arg2, str):
-                namespace = arg1
-                set_name = arg2
-            else:
-                raise TypeError(f"Unsupported arg1 type: {type(arg1)}")
-
-        if key is not None and keys is None and dataset is None and namespace is None:
-            builder = self._fast_query_builder(key, b)
+        if isinstance(arg1, Key):
+            builder = self._build_query_builder(dataset=None, keys=[arg1, *keys])
+        elif isinstance(arg1, str):
+            raise TypeError(_dataset_not_strings("query"))
+        elif keys:
+            raise TypeError(_keys_need_key_first("query", arg1))
+        elif isinstance(arg1, DataSet):
+            builder = self._build_query_builder(dataset=arg1, keys=None)
+        elif isinstance(arg1, list):
+            if not arg1:
+                raise ValueError("keys list cannot be empty")
+            if not isinstance(arg1[0], Key):
+                raise TypeError(f"Expected List[Key], got first element {type(arg1[0])}")
+            builder = self._build_query_builder(dataset=None, keys=arg1)
         else:
-            builder = self._build_query_builder(
-                dataset=dataset, key=key, keys=keys,
-                namespace=namespace, set_name=set_name, behavior=b,
-            )
+            raise TypeError(f"Expected a DataSet, Key, or List[Key], got {type(arg1)}")
         return self._bind_txn(builder)

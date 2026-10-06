@@ -70,7 +70,7 @@ async def test_query_with_dataset(aerospike_host, make_cluster_definition):
         await session.upsert(users.id("q2")).put({"id": "q2", "value": 20}).execute()
 
         # Query using DataSet
-        stream = await session.query(dataset=users).execute()
+        stream = await session.query(users).execute()
         count = 0
         async for result in stream:
             record = result.record
@@ -96,7 +96,7 @@ async def test_query_with_single_key(aerospike_host, make_cluster_definition):
         await session.upsert(key).put({"name": "Bob", "age": 35}).execute()
 
         # Query using single Key
-        stream = await session.query(key=key).execute()
+        stream = await session.query(key).execute()
         count = 0
         async for result in stream:
             record = result.record

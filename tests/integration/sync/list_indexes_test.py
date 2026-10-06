@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import time
 
+from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
 
 NS = general_namespace()
 SET = "list_indexes_integ_sync"
+DS = DataSet.of(NS, SET)
 BIN = "age"
 IDX = "psdk_list_indexes_age_sync"
 
@@ -52,12 +54,12 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
         session = cluster.create_session()
 
         try:
-            session.index(NS, SET).named(IDX).drop()
+            session.index(DS).named(IDX).drop()
         except Exception:
             pass
         assert _wait_visible(cluster.list_indexes, IDX, present=False)
 
-        session.index(NS, SET).on_bin(BIN).named(IDX).integer().create()
+        session.index(DS).on_bin(BIN).named(IDX).integer().create()
         assert _wait_visible(cluster.list_indexes, IDX, present=True)
 
         mine = [i for i in cluster.list_indexes() if i["name"] == IDX]
@@ -69,7 +71,7 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
 
         assert any(i["name"] == IDX for i in session.list_indexes())
 
-        session.index(NS, SET).named(IDX).drop()
+        session.index(DS).named(IDX).drop()
         assert _wait_visible(session.list_indexes, IDX, present=False)
     finally:
         cluster.close()
@@ -107,13 +109,13 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
             pytest.skip("expression-based indexes require server 8.1.2+")
 
         try:
-            session.index(NS, SET).named(idx).drop()
+            session.index(DS).named(idx).drop()
         except Exception:
             pass
         assert _wait_visible(cluster.list_indexes, idx, present=False)
 
         (
-            session.index(NS, SET)
+            session.index(DS)
             .on_expression(Exp.int_bin(BIN))
             .named(idx)
             .integer()
@@ -121,7 +123,7 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
         )
         assert _wait_visible(cluster.list_indexes, idx, present=True)
 
-        session.index(NS, SET).named(idx).drop()
+        session.index(DS).named(idx).drop()
         assert _wait_visible(session.list_indexes, idx, present=False)
     finally:
         cluster.close()

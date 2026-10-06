@@ -584,8 +584,7 @@ class _BlockingQueryDispatch:
     ) -> Optional[tuple]:
         """Dataset/SI/scan blocking dispatch returning a streaming source.
 
-        For keyless query shapes (``session.query(dataset)`` or
-        ``session.query(namespace, set_name)``), build the policy +
+        For a keyless ``session.query(dataset)``, build the policy +
         statement synchronously and call PAC ``query_blocking``. Returns
         the raw :class:`Recordset` (Python iterator that blocks per
         record) so the caller can wrap it in :class:`RecordStream`

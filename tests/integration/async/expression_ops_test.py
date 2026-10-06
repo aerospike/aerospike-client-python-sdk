@@ -31,7 +31,7 @@ import asyncio
 
 import pytest
 
-from aerospike_sdk import Key
+from aerospike_sdk import DataSet, Key
 from aerospike_sdk.exceptions import ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
@@ -352,7 +352,7 @@ class TestSelectFromShapes:
     async def test_dataset_query_select_from_projects(self, session):
         """select_from on a dataset query projects the virtual bin for every record."""
         rs = await (
-            session.query(namespace=NS, set_name=SET).bin("ev").select_from("$.D * 3")
+            session.query(DataSet.of(NS, SET)).bin("ev").select_from("$.D * 3")
             .execute()
         )
         results = await rs.collect()

@@ -25,10 +25,10 @@ from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior_settings import Settings
 
 from tests.integration.query_selection_helpers import (
+    HINT_DS,
     HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
     HINT_SET_NAME,
-    NS,
     QuerySelection,
     QueryWhereFlags,
     count_records_async,
@@ -132,7 +132,7 @@ class TestQuerySelectionBuilderScanBlocking:
         # A per-query hint disallowing scans rejects the primary-index fallback.
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                query_selection_cluster.session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
@@ -144,7 +144,7 @@ class TestQuerySelectionBuilderScanBlocking:
         # No hint: the Behavior.DEFAULT strict setting blocks the fallback.
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+                query_selection_cluster.session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .execute()
             )
@@ -154,7 +154,7 @@ class TestQuerySelectionBuilderScanBlocking:
     async def test_allow_scans_via_builder_permits_scan(self, query_selection_cluster):
         # allow_scans_with_where=True permits the primary-index fallback: no raise.
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+            query_selection_cluster.session.query(HINT_DS)
             .where("$.country == 'US'")
             .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
@@ -166,7 +166,7 @@ class TestQuerySelectionBuilderScanBlocking:
         # The Behavior alone opens the fallback — no hint involved.
         session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
         stream = await (
-            session.query(namespace=NS, set_name=HINT_SET_NAME)
+            session.query(HINT_DS)
             .where("$.country == 'US'")
             .execute()
         )
@@ -181,7 +181,7 @@ class TestQuerySelectionBuilderScanBlocking:
         session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
         with pytest.raises(AerospikeError) as exc_info:
             await (
-                session.query(namespace=NS, set_name=HINT_SET_NAME)
+                session.query(HINT_DS)
                 .where("$.country == 'US'")
                 .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
@@ -195,7 +195,7 @@ class TestQuerySelectionBuilderScanBlocking:
         # The setting is scoped to where-clause queries: a deliberate bare scan
         # under the strict default still runs.
         stream = await (
-            query_selection_cluster.session.query(namespace=NS, set_name=HINT_SET_NAME)
+            query_selection_cluster.session.query(HINT_DS)
             .execute()
         )
         assert await count_records_async(stream) > 0

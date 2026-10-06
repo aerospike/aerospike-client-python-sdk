@@ -67,7 +67,7 @@ async def _drain_chunks(stream) -> tuple[int, int]:
 async def _drop_index_quiet(session, ds) -> None:
     """Drop the filter index, tolerating its absence, so a run leaves no residue."""
     try:
-        await session.index(dataset=ds).named(V_INDEX).drop()
+        await session.index(ds).named(V_INDEX).drop()
     except AerospikeError:
         pass
 
@@ -210,7 +210,7 @@ async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     # creating an index that already exists fails.
     await _drop_index_quiet(session, ds)
     index_task = await (
-        session.index(dataset=ds).on_bin("v").named(V_INDEX).integer().create()
+        session.index(ds).on_bin("v").named(V_INDEX).integer().create()
     )
     try:
         # The build task is authoritative; a query probe only infers readiness.

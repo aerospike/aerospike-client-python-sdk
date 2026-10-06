@@ -82,11 +82,6 @@ class TestSyncSessionFactoryReturnTypes:
         builder = session.query(ds)
         assert isinstance(builder, SyncQueryBuilder)
 
-    def test_query_namespace_set(self):
-        session = _make_offline_sync_session()
-        builder = session.query(namespace="test", set_name="users")
-        assert isinstance(builder, SyncQueryBuilder)
-
 
 class TestSyncSessionCapabilityFlags:
     """Fast-path QueryBuilder construction must inherit server capability flags."""

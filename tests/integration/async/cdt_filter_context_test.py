@@ -41,6 +41,7 @@ _SEND_KEY = Behavior.DEFAULT.derive_with_changes(
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
+_DS = DataSet.of(_NS, _SET)
 _INDEX = "pfc_cdt_fctx_map_num"
 _BIN = "mapbin"
 _OUTER = "outer"
@@ -79,7 +80,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     """
     _require_filter_context()
 
-    ds = DataSet.of(_NS, _SET)
+    ds = _DS
     key_hi = ds.id("cdt_ctx_hi")
     key_lo = ds.id("cdt_ctx_lo")
     key_missing_inner = ds.id("cdt_ctx_no_inner")
@@ -132,7 +133,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     await index_task.wait_till_complete()
 
     try:
-        stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = await session.query(_DS).filter(flt).bins([_BIN]).execute()
         found = []
         try:
             async for res in stream:
@@ -144,7 +145,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
         assert user_keys == ["cdt_ctx_hi"]
 
         flt2 = Filter.equal(_BIN, 9999).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
-        stream2 = await session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
+        stream2 = await session.query(_DS).filter(flt2).bins([_BIN]).execute()
         found2 = []
         try:
             async for res in stream2:
@@ -165,7 +166,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
     _require_filter_context()
 
-    ds = DataSet.of(_NS, _SET)
+    ds = _DS
     key_match = ds.id("cdt_ctx_flat_a")
     key_other = ds.id("cdt_ctx_flat_b")
     keys = (key_match, key_other)
@@ -211,7 +212,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     await index_task.wait_till_complete()
 
     try:
-        stream = await session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        stream = await session.query(_DS).filter(flt).bins([_BIN]).execute()
         found = []
         try:
             async for res in stream:
