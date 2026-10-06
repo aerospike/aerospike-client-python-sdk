@@ -848,8 +848,6 @@ class Session(
         self,
         dataset: DataSet,
         /,
-        *,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder from a DataSet."""
         ...
@@ -859,7 +857,6 @@ class Session(
         self,
         *,
         dataset: DataSet,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder from a DataSet."""
         ...
@@ -869,8 +866,6 @@ class Session(
         self,
         namespace: str,
         set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder with explicit namespace/set."""
         ...
@@ -881,7 +876,6 @@ class Session(
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """
         Create a secondary index builder for a namespace and set.
@@ -895,8 +889,6 @@ class Session(
             set_name: Set name when ``namespace`` is a namespace string.
             dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet` that
                 supplies namespace and set.
-            behavior: Reserved for symmetry with :meth:`query`; forwarded to
-                :meth:`Client.index` but not used by index operations yet.
 
         Returns:
             :class:`~aerospike_sdk.aio.operations.index.IndexBuilder` for
@@ -918,11 +910,9 @@ class Session(
             dataset = namespace
             namespace = None
         if dataset is not None:
-            return self._client.index(dataset=dataset, behavior=behavior)
+            return self._client.index(dataset=dataset)
         elif namespace is not None and set_name is not None:
-            return self._client.index(
-                namespace, set_name, behavior=behavior,
-            )
+            return self._client.index(namespace, set_name)
         else:
             raise ValueError(
                 "Invalid arguments. Use either:\n"

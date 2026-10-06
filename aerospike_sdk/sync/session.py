@@ -392,10 +392,8 @@ class Session(
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Synchronous secondary-index builder."""
-        _ = behavior
         if isinstance(namespace, DataSet):
             dataset = namespace
             namespace = None

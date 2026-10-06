@@ -6,7 +6,7 @@ a LIST collection index with a membership query, a MAP_VALUES collection
 index, an index on a nested element via a CTX path, the error raised by a
 conflicting redefinition, and dropping an index.
 
-Index creation is asynchronous on the server. ``create()`` returns a task and
+Index creation is asynchronous on the server. ``create_index()`` returns a task and
 ``wait_till_complete()`` waits until every node has finished building, which is
 what makes the query immediately afterwards deterministic.
 """
@@ -14,7 +14,7 @@ what makes the query immediately afterwards deterministic.
 import asyncio
 
 import _env
-from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet
+from aerospike_sdk import Behavior, CollectionIndexType, CTX, DataSet, IndexType
 from aerospike_sdk.exceptions import AerospikeError, SecondaryIndexError
 
 SET = DataSet.of("test", "sindex-demo")
@@ -42,9 +42,9 @@ PEOPLE = (
 async def run_examples(session) -> None:
     # --- 1) Scalar indexes: numeric and string ---
     print("--- 1) Scalar indexes: numeric and string ---")
-    task = await session.index(SET).on_bin("age").named(AGE_INDEX).integer().create()
+    task = await session.create_index(SET, AGE_INDEX, "age", IndexType.INTEGER)
     await task.wait_till_complete()
-    task = await session.index(SET).on_bin("city").named(CITY_INDEX).string().create()
+    task = await session.create_index(SET, CITY_INDEX, "city", IndexType.STRING)
     await task.wait_till_complete()
 
     over_30 = await count(session, "$.age > 30")
@@ -54,11 +54,8 @@ async def run_examples(session) -> None:
 
     # --- 2) Collection index: LIST indexes each element of a list bin ---
     print("--- 2) Collection index: LIST indexes each element of a list bin ---")
-    task = await (
-        session.index(SET)
-        .on_bin("tags").named(TAGS_INDEX).string()
-        .collection(CollectionIndexType.LIST)
-        .create()
+    task = await session.create_index(
+        SET, TAGS_INDEX, "tags", IndexType.STRING, CollectionIndexType.LIST,
     )
     await task.wait_till_complete()
     tagged_admin = await count(session, '"admin" in $.tags')
@@ -66,22 +63,16 @@ async def run_examples(session) -> None:
 
     # --- 3) Collection index: MAP_VALUES indexes each value of a map bin ---
     print("--- 3) Collection index: MAP_VALUES indexes each value of a map bin ---")
-    task = await (
-        session.index(SET)
-        .on_bin("scores").named(SCORE_INDEX).integer()
-        .collection(CollectionIndexType.MAP_VALUES)
-        .create()
+    task = await session.create_index(
+        SET, SCORE_INDEX, "scores", IndexType.INTEGER, CollectionIndexType.MAP_VALUES,
     )
     await task.wait_till_complete()
     print(f"created {SCORE_INDEX} over the values of the 'scores' map")
 
     # --- 4) Index a nested element with a CTX path ---
     print("--- 4) Index a nested element with a CTX path ---")
-    task = await (
-        session.index(SET)
-        .on_bin("address").named(NESTED_INDEX).string()
-        .context([CTX.map_key("zip")])
-        .create()
+    task = await session.create_index(
+        SET, NESTED_INDEX, "address", IndexType.STRING, ctx=[CTX.map_key("zip")],
     )
     await task.wait_till_complete()
     print(f"created {NESTED_INDEX} over address.zip")
@@ -92,11 +83,7 @@ async def run_examples(session) -> None:
     # which makes startup code that unconditionally creates its indexes safe.
     # Reusing the name for a different definition is the case that fails.
     try:
-        task = await (
-            session.index(SET)
-            .on_bin("city").named(AGE_INDEX).string()
-            .create()
-        )
+        task = await session.create_index(SET, AGE_INDEX, "city", IndexType.STRING)
         await task.wait_till_complete()
         raise AssertionError("expected SecondaryIndexError was not raised")
     except SecondaryIndexError as exc:
@@ -104,7 +91,7 @@ async def run_examples(session) -> None:
 
     # --- 6) Drop an index ---
     print("--- 6) Drop an index ---")
-    task = await session.index(SET).named(SCORE_INDEX).drop()
+    task = await session.drop_index(SET, SCORE_INDEX)
     await task.wait_till_complete()
     print(f"dropped {SCORE_INDEX}")
 
@@ -139,7 +126,7 @@ async def drop_all(session) -> None:
     """Drop every index this example creates, ignoring ones that aren't there."""
     for name in INDEX_NAMES:
         try:
-            task = await session.index(SET).named(name).drop()
+            task = await session.drop_index(SET, name)
             await task.wait_till_complete()
         except AerospikeError:
             pass

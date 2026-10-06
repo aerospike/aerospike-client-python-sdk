@@ -506,8 +506,6 @@ class Client(RoutingCapabilitiesMixin):
         self,
         dataset: DataSet,
         /,
-        *,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder from a DataSet."""
         ...
@@ -517,7 +515,6 @@ class Client(RoutingCapabilitiesMixin):
         self,
         *,
         dataset: DataSet,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder from a DataSet."""
         ...
@@ -527,8 +524,6 @@ class Client(RoutingCapabilitiesMixin):
         self,
         namespace: str,
         set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create an index builder with explicit namespace/set."""
         ...
@@ -539,7 +534,6 @@ class Client(RoutingCapabilitiesMixin):
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """
         Create an index builder.
@@ -563,13 +557,10 @@ class Client(RoutingCapabilitiesMixin):
                 ``set_name`` too.
             set_name: The set name when ``namespace`` is a namespace string.
             dataset: Keyword DataSet to use for namespace/set.
-            behavior: Reserved for symmetry with :meth:`query`; not applied to
-                index operations yet.
 
         Returns:
             An IndexBuilder for chaining index operations.
         """
-        _ = behavior
         if isinstance(namespace, DataSet):
             dataset = namespace
             namespace = None

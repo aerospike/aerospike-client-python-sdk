@@ -18,6 +18,7 @@ from aerospike_sdk import (
     BitwiseOverflowActions,
     DataSet,
     Exp,
+    IndexType,
     ListOrderType,
     MapOrder,
     QueryDuration,
@@ -563,7 +564,7 @@ async def demonstrate_query_hints(session) -> None:
     print("\n--- Query hints ---")
     # A hint can only name an index that exists, so this section owns one.
     try:
-        task = await session.index(SET).on_bin("age").named("age_idx").integer().create()
+        task = await session.create_index(SET, "age_idx", "age", IndexType.INTEGER)
         await task.wait_till_complete()
     except IndexAlreadyExistsError:
         pass  # An earlier run already created it with the same definition.
@@ -585,7 +586,7 @@ async def demonstrate_query_hints(session) -> None:
             label, session.query(SET).where("$.age > 30").with_hint(hint)
         )
 
-    task = await session.index(SET).named("age_idx").drop()
+    task = await session.drop_index(SET, "age_idx")
     await task.wait_till_complete()
 
 

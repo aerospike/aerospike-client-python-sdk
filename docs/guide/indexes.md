@@ -72,7 +72,7 @@ arguments and drives the builder for you. Each argument stands in for one chain
 step, so the same rules apply:
 
 ```python
-from aerospike_async import IndexType
+from aerospike_sdk import IndexType
 
 task = await session.create_index(users, "users_city_idx", "city", IndexType.STRING)
 await task.wait_till_complete()

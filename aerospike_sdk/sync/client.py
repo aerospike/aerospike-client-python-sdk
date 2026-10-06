@@ -294,15 +294,15 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     @overload
     def index(
-        self, dataset: DataSet, /, *, behavior: Optional[Behavior] = None,
+        self, dataset: DataSet, /,
     ) -> IndexBuilder: ...
     @overload
     def index(
-        self, *, dataset: DataSet, behavior: Optional[Behavior] = None,
+        self, *, dataset: DataSet,
     ) -> IndexBuilder: ...
     @overload
     def index(
-        self, namespace: str, set_name: str, *, behavior: Optional[Behavior] = None,
+        self, namespace: str, set_name: str,
     ) -> IndexBuilder: ...
 
     def index(
@@ -311,7 +311,6 @@ class SyncClient(RoutingCapabilitiesMixin):
         set_name: Optional[str] = None,
         *,
         dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
     ) -> IndexBuilder:
         """Create a secondary-index builder (synchronous)."""
         self._ensure_connected()

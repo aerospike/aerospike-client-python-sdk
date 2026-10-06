@@ -15,14 +15,21 @@
 
 """Unit tests for the secondary-index builder chain (expression-based creation)."""
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
+import aerospike_async
 import pytest
+import aerospike_sdk
 from aerospike_sdk import CollectionIndexType, CTX, Exp
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_async import FilterExpression, IndexType
 
+from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.operations.index import IndexBuilder
+from aerospike_sdk.aio.session import Session
+from aerospike_sdk.sync.client import SyncClient
+from aerospike_sdk.sync.session import Session as SyncSession
 
 
 def _async_builder(supports_server_compiled_ael: bool = True) -> IndexBuilder:
@@ -431,3 +438,19 @@ class TestSyncBinPathValidation:
         client._async_client.drop_index_blocking.side_effect = RuntimeError("boom")
         with pytest.raises(AerospikeError):
             b.named("idx_age").drop()
+
+
+class TestIndexEntryPoints:
+
+    def test_index_type_is_exported_from_the_package(self):
+        """create_index() takes an IndexType, so callers need not import it from PAC."""
+        assert "IndexType" in aerospike_sdk.__all__
+        assert aerospike_sdk.IndexType is aerospike_async.IndexType
+
+    @pytest.mark.parametrize(
+        "owner", [Session, SyncSession, Client, SyncClient],
+        ids=["async-session", "sync-session", "async-client", "sync-client"],
+    )
+    def test_index_takes_no_behavior(self, owner):
+        """Index admin calls take no policy, so there is nothing for a Behavior to set."""
+        assert "behavior" not in inspect.signature(owner.index).parameters

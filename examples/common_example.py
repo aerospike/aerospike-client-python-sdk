@@ -9,7 +9,7 @@ read/write, and query hints.
 import asyncio
 
 import _env
-from aerospike_sdk import Behavior, DataSet, QueryDuration, QueryHint
+from aerospike_sdk import Behavior, DataSet, IndexType, QueryDuration, QueryHint
 from aerospike_sdk.exceptions import (
     AerospikeError,
     IndexAlreadyExistsError,
@@ -286,7 +286,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("Create index")
     try:
-        task = await session.index(SET).on_bin("age").named("ageidx").integer().create()
+        task = await session.create_index(SET, "ageidx", "age", IndexType.INTEGER)
         # The server builds the index asynchronously; a query through one that
         # is still building can miss records that are already written.
         await task.wait_till_complete()
@@ -417,7 +417,7 @@ async def run_examples(session) -> None:
     # ------------------------------------------------------------------
     print("\nCleanup: drop index")
     try:
-        await session.index(SET).named("ageidx").drop()
+        await session.drop_index(SET, "ageidx")
     except IndexNotFoundError:
         pass  # Nothing to drop; an earlier run may have removed it already.
 
