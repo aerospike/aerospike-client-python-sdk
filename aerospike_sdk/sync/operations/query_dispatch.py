@@ -98,6 +98,7 @@ class _BlockingQueryDispatch:
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     def _ensure_batch_namespace_modes_blocking(self) -> None:
         """Sync counterpart of the async ``_ensure_batch_namespace_modes``.
@@ -337,6 +338,22 @@ class _BlockingQueryDispatch:
             rp = self._make_read_policy(spec)
             try:
                 record = self._client.get_blocking(key, spec.bins, policy=rp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, None, disp, handler)
+            return [RecordResult(
+                key=key, record=record, result_code=ResultCode.OK,
+            )]
+
+        if has_ops and op_type is None:
+            try:
+                record = self._client.operate_blocking(
+                    key,
+                    spec.operations,
+                    policy=self._read_operate_policy(),
+                    filter_expression=spec.filter_expression,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error_blocking_singlekey(
                     key, e, None, disp, handler)

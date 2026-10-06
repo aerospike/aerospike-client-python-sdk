@@ -134,6 +134,7 @@ from aerospike_sdk.policy.policy_mapper import (
     resolve_durable_delete,
     to_batch_policy,
     to_query_policy,
+    to_read_operate_policy,
     to_read_policy,
     to_write_policy,
 )
@@ -473,6 +474,8 @@ class _QueryBuilderBase:
         cached_write_policy: Optional[WritePolicy] = None,
         cached_read_policy_sc: Optional[ReadPolicy] = None,
         cached_write_policy_sc: Optional[WritePolicy] = None,
+        cached_read_operate_policy: Optional[WritePolicy] = None,
+        cached_read_operate_policy_sc: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
@@ -490,6 +493,8 @@ class _QueryBuilderBase:
             behavior: The Behavior every policy this builder sends is derived from.
             cached_read_policy: Pre-computed read policy from the session.
             cached_write_policy: Pre-computed write policy from the session.
+            cached_read_operate_policy: Pre-computed policy for single-key
+                operate calls that only read, from the session.
             txn: Optional active :class:`~aerospike_async.Txn` captured from
                 a transactional session at construction; every policy this
                 builder hands to the PAC gets stamped with it. ``None``
@@ -557,11 +562,16 @@ class _QueryBuilderBase:
             # mode at use time and pick the right cached policy.
             self._base_read_policy_sc: Optional[ReadPolicy] = cached_read_policy_sc
             self._base_write_policy_sc: Optional[WritePolicy] = cached_write_policy_sc
+            self._base_read_operate_policy: Optional[WritePolicy] = cached_read_operate_policy
+            self._base_read_operate_policy_sc: Optional[WritePolicy] = (
+                cached_read_operate_policy_sc)
         else:
             self._base_read_policy = None
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+            self._base_read_operate_policy = None
+            self._base_read_operate_policy_sc = None
 
     def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
         return filter_expression_from_ael_string(
@@ -737,6 +747,8 @@ class _QueryBuilderBase:
         # txn stamped on.
         self._base_read_policy = None
         self._base_write_policy = None
+        self._base_read_operate_policy = None
+        self._base_read_operate_policy_sc = None
         return self
 
     def bins(self, *bin_names: Union[str, Sequence[str]]) -> Self:
@@ -1907,6 +1919,18 @@ class _QueryBuilderBase:
                 OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
         rp.filter_expression = spec.filter_expression
         return rp
+
+    def _read_operate_policy(self) -> WritePolicy:
+        """Base ``WritePolicy`` for a single-key operate with no write verb.
+
+        Callers pass the spec's filter and the transaction to PAC per call, so
+        the base is shared across filters.
+        """
+        if self._base_read_operate_policy is None:
+            self._base_read_operate_policy = self._apply_txn(to_read_operate_policy(
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+        return self._base_read_operate_policy
 
     def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         """Build a ``WritePolicy`` for single-key writes."""

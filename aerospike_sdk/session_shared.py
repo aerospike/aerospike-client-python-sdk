@@ -42,7 +42,11 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.policy.behavior import OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
-from aerospike_sdk.policy.policy_mapper import to_read_policy, to_write_policy
+from aerospike_sdk.policy.policy_mapper import (
+    to_read_operate_policy,
+    to_read_policy,
+    to_write_policy,
+)
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete builders live per-tree.
     from aerospike_async import Txn
@@ -206,6 +210,10 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
         self._cached_write_policy_sc = to_write_policy(
             behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
+        self._cached_read_operate_policy = to_read_operate_policy(
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
+        self._cached_read_operate_policy_sc = to_read_operate_policy(
+            behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
 
     @property
     def behavior(self) -> "Behavior":

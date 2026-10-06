@@ -765,6 +765,8 @@ class Session(
             self._cached_write_policy,
             self._cached_read_policy_sc,
             self._cached_write_policy_sc,
+            self._cached_read_operate_policy,
+            self._cached_read_operate_policy_sc,
             self._txn,
             self._resolve_namespace_mode,
             self._resolve_namespace_mode_blocking,

@@ -33,7 +33,6 @@ from aerospike_async import (
     Key,
     Operation,
     PartitionFilter,
-    WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
 
@@ -147,6 +146,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     async def _ensure_batch_namespace_modes(self) -> None:
         """Resolve modes for every namespace the finalized specs touch.
@@ -170,42 +170,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
             self._batch_any_sc = True
 
-
-
-
-
-
-    
-
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    
-
-    # -- Chain-level defaults -------------------------------------------------
-    # -- Query stacking -------------------------------------------------------
-    # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
     async def execute(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
@@ -444,7 +408,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         """
         return await (await self.execute(on_error)).first_or_raise()
 
-
     def stream(
         self, on_error: OnError | None = None,
     ) -> AwaitableContext[RecordStream]:
@@ -505,12 +468,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
 
     # -- Private helpers -------------------------------------------------------
-
-
-
-
-
-
 
     async def _execute_specs_batch(
         self,
@@ -602,8 +559,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return await self._execute_single_key_write(spec, disp, handler)
         return await self._execute_batch_write(spec, disp, handler)
 
-
-
     async def _execute_single_key_udf(
         self,
         spec: _OperationSpec,
@@ -689,18 +644,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return self._filtered_batch_stream(
             batch_records, spec.keys, disp, handler, op_type="udf")
 
-
-
-
-
-
-
-
-
-
-
-
-
     async def _execute_single_key_direct(
         self, spec: _OperationSpec,
     ) -> Optional[RecordStream]:
@@ -734,6 +677,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 return self._handle_error(key, e, _ErrorDisposition.THROW, None)
             return RecordStream._from_single(key, record)
 
+        if has_ops and op_type is None:
+            return await self._execute_single_key_operate(
+                spec, _ErrorDisposition.THROW, None)
+
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
             # Write via operate — PAC builds the per-call policy in Rust from
             # the session-cached base WritePolicy + REA + overrides.
@@ -742,23 +689,12 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     self._behavior.get_settings(
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
                         self._resolved_namespace_mode())))
-            # A record-delete op inside the operate must honor the mode-resolved
-            # durable-delete default (Scope.WRITES_SC sets it True) plus any explicit
-            # spec override — a hardcoded False here made non-durable delete_record()
-            # FailForbidden on SC. Non-delete operates keep durable_delete=False.
-            durable_delete = False
-            if spec.contains_record_delete_op:
-                durable_delete = self._effective_point_durable_delete(
-                    spec,
-                    self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                        self._resolved_namespace_mode()))
             try:
                 record = await self._client.operate(
                     key, spec.operations,
                     policy=self._base_write_policy,
-                    record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                    durable_delete=durable_delete,
+                    record_exists_action=_OP_TYPE_TO_REA.get(op_type),
+                    durable_delete=False,
                     txn=self._txn,
                 )
             except Exception as e:
@@ -769,12 +705,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         # Not a simple case — fall back to normal chain.
         return None
-
-
-
-
-
-
 
     async def _execute_single_key_read(
         self, spec: _OperationSpec,
@@ -793,11 +723,13 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
         key = spec.keys[0]
-        policy = self._apply_txn(WritePolicy())
-        if spec.filter_expression is not None:
-            policy.filter_expression = spec.filter_expression
         try:
-            record = await self._client.operate(key, spec.operations, policy=policy)
+            record = await self._client.operate(
+                key, spec.operations,
+                policy=self._read_operate_policy(),
+                filter_expression=spec.filter_expression,
+                txn=self._txn,
+            )
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
         return RecordStream._from_single(key, record)
@@ -819,7 +751,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
 
-
     async def _execute_batch_read_operate(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
@@ -839,11 +770,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
 
     # -- Write execution helpers ----------------------------------------------
-
-
-
-
-
 
     async def _execute_single_key_write(
         self, spec: _OperationSpec,
@@ -1160,22 +1086,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # __dict__ inherited from the non-slotted base).
     )
 
-
-
-
-    # -- Operation methods ---------------------------------------------------
-    # On the fast path (_qb is None) these use self._ops directly.
-    # After promotion (_qb is set) they delegate to the QB's list.
-
-
-
-
-
-
-
-
-
-
     # -- In-place promotion --------------------------------------------------
 
     def _promote(self) -> None:
@@ -1204,24 +1114,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         qb._record_delete_in_operations = self._record_delete_in_fast_ops
         self._qb = qb
 
-
-
-
-
-
-
-
-
-
-
-    # -- Error handling ------------------------------------------------------
-
-
-    # -- Policy helpers ------------------------------------------------------
-
-
     # -- Execution -----------------------------------------------------------
-
 
     def stream(  # type: ignore[override]
         self, on_error: OnError | None = None,

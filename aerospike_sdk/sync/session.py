@@ -298,6 +298,8 @@ class Session(
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
                 cached_write_policy_sc=self._cached_write_policy_sc,
+                cached_read_operate_policy=self._cached_read_operate_policy,
+                cached_read_operate_policy_sc=self._cached_read_operate_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
