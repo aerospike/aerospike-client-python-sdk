@@ -734,31 +734,10 @@ def aerospike_host_sec():
     return os.environ.get('AEROSPIKE_HOST_SEC', 'localhost:3109')
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def aerospike_host_812_required(aerospike_host, server_version):
-    """The default seed, required to be server >= 8.1.2, else skip.
-
-    Single-host model: version-gated tests connect to the default
-    ``AEROSPIKE_HOST`` and skip unless it is 8.1.2+. Point ``AEROSPIKE_HOST``
-    at an 8.1.2+ build to run them; CI covers the version spread via a server
-    matrix rather than a dedicated host var. Skips when the seed is < 8.1.2 or
-    unreachable (``server_version`` probes to ``None``).
-    """
-    if server_version is None or server_version < SERVER_8_1_2:
-        pytest.skip(
-            "default cluster is not 8.1.2+ (or unreachable); point "
-            "AEROSPIKE_HOST at an 8.1.2+ build to run these tests"
-        )
-    return aerospike_host
-
-
 # Named server-version floors for capability gates. Compare against the
 # ``(M, m, p, b)`` tuple from :func:`server_version`. Centralized so feature
-# checks reference an intent-named constant instead of an inline magic tuple
-# (mirrors the Java clients' ``SERVER_VERSION_*`` constants). Add a new floor
-# here rather than inlining a tuple in a new ``supports_*`` gate.
-SERVER_8_1_1 = (8, 1, 1, 0)
-SERVER_8_1_2 = (8, 1, 2, 0)
+# checks reference an intent-named constant instead of an inline magic tuple.
+# Add a new floor here rather than inlining a tuple in a new ``supports_*`` gate.
 SERVER_8_2_0 = (8, 2, 0, 0)
 
 
@@ -844,30 +823,6 @@ async def server_version(aerospike_host, client_policy):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_query_ops_projection_ext(server_version):
-    """``True`` when the seed cluster accepts non-basic-read ops in queries.
-
-    Mirrors the per-node feature in the Rust core (server >= 8.1.2). Tests
-    that need extended reads in ``Statement.set_operations`` (or its PSDK
-    facade ``QueryBuilder.with_op_projection``) should ``pytest.skip``
-    when this is ``False``.
-    """
-    return server_version is not None and server_version >= SERVER_8_1_2
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_cdt_path_expressions(server_version):
-    """``True`` when the cluster supports CDT path expressions. Server >= 8.1.1.
-
-    Covers the operation-level path factories (``select_by_path`` /
-    ``modify_by_path`` / ``remove``), the expression-level path forms
-    (``exp_select_*`` / ``exp_modify_*`` / ``exp_remove``), the loop-variable
-    family, and ``remove_result``.
-    """
-    return server_version is not None and server_version >= SERVER_8_1_1
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def supports_error_detail(server_version):
     """``True`` when the cluster supplies extended server error detail.
 
@@ -877,15 +832,4 @@ async def supports_error_detail(server_version):
     detail should ``pytest.skip`` when this is ``False``.
     """
     return server_version is not None and server_version >= SERVER_8_2_0
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_blob_index(server_version):
-    """``True`` when the cluster supports blob secondary indexes.
-
-    Covers ``IndexBuilder.blob()`` and blob equality filters served by a
-    secondary index. Server >= 7.0. Tests that create blob indexes should
-    ``pytest.skip`` when this is ``False``.
-    """
-    return server_version is not None and server_version >= (7, 0, 0, 0)
 

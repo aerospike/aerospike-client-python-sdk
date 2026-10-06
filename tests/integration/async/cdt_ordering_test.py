@@ -15,12 +15,10 @@
 
 """Tests proving K-ordered map key ordering is preserved through native Python dict."""
 
-import pytest
 import pytest_asyncio
 from aerospike_sdk import Exp, MapOrder, MapReturnType, SortedMap
 from aerospike_async import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
-from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
 
@@ -630,26 +628,11 @@ class TestSortedMapOnPlainWrites:
         assert list(got) == sorted(m)
 
     @requires_server_compiled_ael
-    @pytest.mark.xfail(
-        raises=AerospikeError,
-        reason=(
-            "Server-compiled AEL has no collection-literal syntax. A map "
-            "literal on the right of == is rejected with PARAMETER_ERROR, and "
-            "so is a list literal (measured), so this is a "
-            "uniform boundary of the DSL rather than a map-specific gap. "
-            "Scalars compare, collections can be navigated into "
-            "(`:MAP.count()` / `:LIST.count()`), and the same comparison "
-            "succeeds as a built expression, so nothing is unreachable. "
-            "Promote only if AEL gains collection literals -- a feature "
-            "question, not a pending fix."
-        ),
-    )
     async def test_sorted_map_equality_via_server_ael(self, cluster):
         """The AEL spelling of :meth:`test_sorted_map_equals_itself_in_an_expression`.
 
-        Kept as the string-filter twin of the built-expression test so the two
-        surfaces stay paired. Not evidence of a defect: list literals are
-        rejected the same way, so AEL simply has no collection-literal syntax.
+        The left side is ``$.bin:MAP``: the server rejects a literal compared
+        against the ``.get(type: MAP)`` accessor with PARAMETER_ERROR.
         """
         session = cluster.create_session()
         k = DS.id(35)
@@ -665,9 +648,10 @@ class TestSortedMapOnPlainWrites:
             session.query(k)
             .bins([BIN])
             .fail_on_filtered_out()
-            .where(f"$.{BIN}.get(type: MAP) == {literal}")
+            .where(f"$.{BIN}:MAP == {literal}")
             .execute()
         )
         rows = await stream.collect()
 
         assert rows, "a key-ordered map must compare equal to itself"
+        assert rows[0].record_or_raise().bins[BIN] == m

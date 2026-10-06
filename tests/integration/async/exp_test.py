@@ -734,13 +734,7 @@ class TestAelScanFilter:
 
 
 async def _seed_cdt_data(cluster, *, wait_for_set_visible):
-    """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
-
-    Used by both ``session_with_cdt_data`` (ungated) and
-    ``session_with_cdt_data_812`` (skips unless the default seed is 8.1.2+)
-    so the gated and ungated tests see the exact same shape.
-
-    """
+    """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests."""
     session = cluster.create_session()
     ds = CDT_DS
 
@@ -782,30 +776,8 @@ async def _drop_cdt_data(session, ds):
 
 
 @pytest.fixture(scope="module")
-async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_definition, wait_for_set_visible):
-    """Connected cluster + CDT dataset on the default 8.1.2+ seed.
-
-
-    Used by tests that exercise convenience wrappers around server-8.2.0
-    ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
-    ``aerospike_host_812_required`` fixture connects to the default
-    ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
-    """
-    async with make_cluster_definition(aerospike_host_812_required).connect() as cluster:
-        session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
-        yield cluster.create_session()
-        await _drop_cdt_data(session, ds)
-
-
-@pytest.fixture(scope="module")
 async def session_with_cdt_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
-    """Connected cluster + CDT dataset on the broad-surface seed.
-
-    Tests that exercise convenience wrappers around server-8.1.2 ExpOps
-    should consume ``session_with_cdt_data_812`` instead, which uses the
-    default ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+.
-
-    """
+    """Connected cluster + CDT dataset on the default seed."""
     async with make_cluster_definition(aerospike_host).connect() as cluster:
         session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
         yield cluster.create_session()
@@ -2076,25 +2048,18 @@ class TestInExpressionAel:
 class TestConvenienceWrappers:
     """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    These helpers are thin pass-throughs to the native 8.2.0 ExpOps (see
-    the docstrings in ``aerospike_sdk/exp.py``). Server versions older
-    than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
-    consume ``session_with_cdt_data_812`` which uses the default
-    ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+. Callers
-
-    that need broader compatibility should build the equivalent expression
-    explicitly with ``Exp.list_get_by_value`` /
-    ``Exp.map_get_by_index_range`` rather than using these wrappers.
+    These helpers are thin pass-throughs to native ExpOps (see the
+    docstrings in ``aerospike_sdk/exp.py``).
     """
 
-    async def test_in_list_string_match(self, session_with_cdt_data_812):
+    async def test_in_list_string_match(self, session_with_cdt_data):
         """in_list finds "bob" in the names list bin (rec1 only)."""
         filt = Exp.eq(
             in_list(Exp.string_val("bob"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(CDT_DS)
+            session_with_cdt_data.query(CDT_DS)
             .where(filt)
             .execute()
         )
@@ -2103,14 +2068,14 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert "bob" in records[0].bins["names"]
 
-    async def test_in_list_int_match(self, session_with_cdt_data_812):
+    async def test_in_list_int_match(self, session_with_cdt_data):
         """in_list finds 200 in the numbers list bin (rec3 only)."""
         filt = Exp.eq(
             in_list(Exp.int_val(200), Exp.list_bin("numbers")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(CDT_DS)
+            session_with_cdt_data.query(CDT_DS)
             .where(filt)
             .execute()
         )
@@ -2119,14 +2084,14 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert 200 in records[0].bins["numbers"]
 
-    async def test_in_list_no_match(self, session_with_cdt_data_812):
+    async def test_in_list_no_match(self, session_with_cdt_data):
         """in_list returns false when the value is not present."""
         filt = Exp.eq(
             in_list(Exp.string_val("zzz"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(CDT_DS)
+            session_with_cdt_data.query(CDT_DS)
             .where(filt)
             .execute()
         )
@@ -2134,14 +2099,14 @@ class TestConvenienceWrappers:
         stream.close()
         assert len(records) == 0
 
-    async def test_map_keys(self, session_with_cdt_data_812):
+    async def test_map_keys(self, session_with_cdt_data):
         """map_keys returns the key set of the info map."""
         filt = Exp.eq(
             Exp.list_size(map_keys(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query(CDT_DS)
+            session_with_cdt_data.query(CDT_DS)
             .where(filt)
             .execute()
         )
@@ -2149,14 +2114,14 @@ class TestConvenienceWrappers:
         stream.close()
         assert len(records) == 3
 
-    async def test_map_values(self, session_with_cdt_data_812):
+    async def test_map_values(self, session_with_cdt_data):
         """map_values returns values; filter on list size == 3."""
         filt = Exp.eq(
             Exp.list_size(map_values(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query(CDT_DS)
+            session_with_cdt_data.query(CDT_DS)
             .where(filt)
             .execute()
         )

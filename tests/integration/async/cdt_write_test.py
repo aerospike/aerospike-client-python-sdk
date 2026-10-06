@@ -1431,18 +1431,14 @@ class TestBatchCdtWrite:
 
 
 # ===================================================================
-# Path-expression removal (server >= 8.1.1)
+# Path-expression removal
 # ===================================================================
 
 class TestPathExpressionRemove:
     """Remove nested elements matched by a CTX path filter."""
 
-    async def test_remove_strips_matching_list_elements(
-        self, cluster, supports_cdt_path_expressions
-    ):
+    async def test_remove_strips_matching_list_elements(self, cluster):
         """``CdtOperation.remove`` drops every element the path filter matches."""
-        if not supports_cdt_path_expressions:
-            pytest.skip("CDT path expressions require server >= 8.1.1")
         session = cluster.create_session()
         k = DS.id("path_remove_op")
         await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()
@@ -1455,12 +1451,8 @@ class TestPathExpressionRemove:
         result = await (await session.query(k).execute()).first_or_raise()
         assert result.record.bins["nums"] == [3, 2]
 
-    async def test_exp_remove_strips_matching_list_elements(
-        self, cluster, supports_cdt_path_expressions
-    ):
-        """The expression-level ``Exp.exp_remove`` form works on the same floor."""
-        if not supports_cdt_path_expressions:
-            pytest.skip("CDT path expressions require server >= 8.1.1")
+    async def test_exp_remove_strips_matching_list_elements(self, cluster):
+        """The expression-level ``Exp.exp_remove`` form strips the same elements."""
         session = cluster.create_session()
         k = DS.id("path_remove_exp")
         await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()

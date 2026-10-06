@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from aerospike_sdk import DataSet, Exp
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
@@ -79,22 +77,8 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
         cluster.close()
 
 
-def _build_at_least(session, floor) -> bool:
-    """Best-effort probe: True when every node's build is >= *floor*."""
-    for raw in session.info("build").values():
-        parts = raw.strip().split(".")
-        try:
-            triple = (int(parts[0]), int(parts[1]), int(parts[2]))
-        except (ValueError, IndexError):
-            return False
-        if triple < floor:
-            return False
-    return True
-
-
 def test_sync_expression_index_create_and_drop(aerospike_host):
     """Sync smoke for expression-based index creation (blocking PAC entry)."""
-
     if ":" in aerospike_host:
         hostname, port_str = aerospike_host.split(":", 1)
         port = int(port_str)
@@ -105,9 +89,6 @@ def test_sync_expression_index_create_and_drop(aerospike_host):
     cluster = apply_general_auth(ClusterDefinition(hostname, port)).connect()
     try:
         session = cluster.create_session()
-        if not _build_at_least(session, (8, 1, 2)):
-            pytest.skip("expression-based indexes require server 8.1.2+")
-
         try:
             session.index(DS).named(idx).drop()
         except Exception:

@@ -341,10 +341,8 @@ async def test_create_index_with_cdt_context(cluster, enterprise):
             pass
 
 
-async def test_create_expression_index_and_query(cluster, server_version):
+async def test_create_expression_index_and_query(cluster):
     """Create an expression-based index, list it, query through it, drop it."""
-    if server_version is None or server_version < (8, 1, 2, 0):
-        pytest.skip("expression-based indexes require server 8.1.2+")
 
     set_name = "exp_idx_set"
     index_name = "psdk_exp_age_idx"
@@ -396,10 +394,8 @@ async def test_create_expression_index_and_query(cluster, server_version):
         i["name"] == index_name for i in await session.list_indexes()
     ), "expression index still listed after drop"
 
-async def test_create_blob_index_and_query(cluster, supports_blob_index):
+async def test_create_blob_index_and_query(cluster):
     """Create a blob index on a bytes bin, query through it, drop it."""
-    if not supports_blob_index:
-        pytest.skip("blob secondary indexes require server 7.0+")
 
     set_name = "blob_idx_set"
     index_name = "psdk_blob_payload_idx"
@@ -442,10 +438,8 @@ async def test_create_blob_index_and_query(cluster, supports_blob_index):
         except Exception:
             pass
 
-async def test_create_blob_list_collection_index_and_query(cluster, supports_blob_index):
+async def test_create_blob_list_collection_index_and_query(cluster):
     """Blob index over LIST collection elements: create, query via contains, drop."""
-    if not supports_blob_index:
-        pytest.skip("blob secondary indexes require server 7.0+")
 
     set_name = "blob_list_idx_set"
     index_name = "psdk_blob_list_payloads_idx"
