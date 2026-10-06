@@ -439,7 +439,7 @@ async def test_query_bin_exists(session):
 
 async def test_query_record_size(session):
     """Test query filtering by record size metadata."""
-    filter_exp = Exp.ge(Exp.device_size(), Exp.int_val(0))
+    filter_exp = Exp.ge(Exp.record_size(), Exp.int_val(0))
 
     stream = await (
         session.query(QUERY_DS)

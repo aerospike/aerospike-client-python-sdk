@@ -815,7 +815,7 @@ class Session(
 
     def _txn_session_cls(self) -> "type[TransactionalSession]":
         """Return the async transactional-session class (late import breaks the cycle)."""
-        from aerospike_sdk.aio.transactional_session import TransactionalSession
+        from aerospike_sdk.aio.transactional_session import TransactionalSession  # noqa: PLC0415
         return TransactionalSession
 
     async def create_index(

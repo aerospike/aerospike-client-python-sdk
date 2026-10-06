@@ -15,6 +15,7 @@
 
 """Tests for the SDK config ``behaviors:`` section: parsing, apply, session push."""
 
+import gc
 from datetime import timedelta
 from unittest.mock import MagicMock
 
@@ -337,7 +338,6 @@ class TestSessionPush:
         session = self._offline_session(behavior)
         assert len(behavior._sessions) == 1
         del session
-        import gc
         gc.collect()
         assert len(behavior._sessions) == 0
 

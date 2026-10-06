@@ -23,6 +23,7 @@ loader code covered by the unit and sync suites.
 
 import asyncio
 import contextlib
+import logging
 import os
 
 import pytest
@@ -320,7 +321,6 @@ async def test_connect_time_settings_in_a_discovered_block_are_reported(
     silently would be worse than not applying it at all -- the operator has to
     be told which half, and how to get the rest.
     """
-    import logging
 
     host, port = _host_port(aerospike_host)
     async with apply_general_auth(ClusterDefinition(host, port)).connect() as probe:

@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -17,10 +18,17 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
-from aerospike_sdk import DataSet
+from aerospike_sdk import ClusterDefinition, DataSet, Host
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition, Host as SyncHost
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
+from tests.integration.general_auth import (
+    apply_auth_to_definition,
+    general_auth_enabled,
+    general_seed,
+)
+from tests.integration.namespace import general_namespace, requires_mode_skip_reason
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -140,7 +148,7 @@ def pytest_configure(config):
         # Defaults only for unset keys so CI and explicit exports keep precedence.
         load_env_file(env_example, override=False)
         print(f"Loaded default environment variables from {env_example} (no {env_local.name})\n")
-    
+
     _warn_on_podman_clock_skew()
 
     # Configure logging from AEROSPIKE_LOG_LEVEL / AEROSPIKE_LOG_FILE
@@ -168,7 +176,6 @@ def pytest_configure(config):
                 logger.addHandler(handler)
 
     # Ensure python path includes the tests directory for imports
-    import sys
     tests_dir = Path(__file__).parent / "tests"
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
@@ -260,7 +267,6 @@ def _apply_auth_to_definition(cluster_def) -> None:
     for the definition-path auth contract (raw-definition test sites import
     it directly).
     """
-    from tests.integration.general_auth import apply_auth_to_definition
     apply_auth_to_definition(cluster_def)
 
 
@@ -276,7 +282,6 @@ def _general_auth_enabled() -> bool:
     an auth-required SC seed for the Mode axis. New env var, so it
     is not clobbered by ``aerospike.env`` (which loads ``override=True``).
     """
-    from tests.integration.general_auth import general_auth_enabled
     return general_auth_enabled()
 
 
@@ -295,9 +300,6 @@ def make_cluster_definition():
     general suites can reach an auth-required SC seed on the Mode-axis ``make test-sc``
     leg without disturbing the no-auth AP fast path.
     """
-    from aerospike_sdk import ClusterDefinition, Host
-    from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
-    from aerospike_sdk.sync import Host as SyncHost
 
     def _make(seed: str, *, auth: bool = False, sync: bool = False):
         if sync:
@@ -375,7 +377,6 @@ def aerospike_host():
     ``AEROSPIKE_HOST``); it falls back to ``AEROSPIKE_HOST`` on single-cluster setups
     where ``AEROSPIKE_HOST_SC`` is unset.
     """
-    from tests.integration.general_auth import general_seed
     return general_seed()
 
 
@@ -389,7 +390,6 @@ def general_namespace_is_sc(aerospike_host, pytestconfig):
     ``AEROSPIKE_NAMESPACE`` string (which would misclassify a differently-named SC
     namespace). Returns ``False`` (treat as AP) on any probe failure.
     """
-    from tests.integration.namespace import general_namespace
 
     ns = general_namespace()
     probe = ClientPolicy()
@@ -462,7 +462,6 @@ def _enforce_requires_mode(request):
     marker = request.node.get_closest_marker("requires_mode")
     if marker is None:
         return
-    from tests.integration.namespace import requires_mode_skip_reason
 
     reason = requires_mode_skip_reason(
         marker.args[0], request.getfixturevalue("general_namespace_is_sc"),

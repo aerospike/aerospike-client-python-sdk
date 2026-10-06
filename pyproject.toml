@@ -90,6 +90,9 @@ source = ["aerospike_sdk"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint]
+extend-select = ["PLC0415"]
+
 [tool.ruff.lint.per-file-ignores]
 # The CDT builders pass one-line lambda factories straight into a constructor;
 # most are inline keyword arguments, and these are the same thunks that an
@@ -97,3 +100,11 @@ target-version = "py311"
 "aerospike_sdk/query_shared.py" = ["E731"]
 "aerospike_sdk/aio/operations/cdt_read.py" = ["E731"]
 "aerospike_sdk/aio/operations/cdt_write.py" = ["E731"]
+# Function-level imports are allowed only where module scope cannot hold them,
+# and only file-wide when the reason is: the info_types import cycle, the legacy
+# client the benchmarks compare against (optional), and SDK imports that must
+# wait for examples/_env.py to load aerospike.env. Single sites carry a
+# line-level `# noqa: PLC0415` instead.
+"aerospike_sdk/info_shared.py" = ["PLC0415"]
+"benchmarks/**" = ["PLC0415"]
+"examples/_env.py" = ["PLC0415"]

@@ -28,7 +28,8 @@ from aerospike_sdk.metrics import (
     MetricsSnapshot,
     Sampler,
 )
-from aerospike_sdk.metrics.snapshot import _merge_histograms
+from aerospike_sdk.metrics.snapshot import _COMMAND_LATENCY_GROUP, _merge_histograms, ProcessSampler
+from aerospike_sdk.metrics.export import _NodeCloseTracker
 
 
 class TestMetricsPolicy:
@@ -207,7 +208,6 @@ class TestCommandGroupingContract:
 
     def test_every_command_the_client_exposes_is_grouped(self):
         """A new CommandType must be assigned a group, not silently ignored."""
-        from aerospike_sdk.metrics.snapshot import _COMMAND_LATENCY_GROUP
 
         exposed = {
             str(getattr(CommandType, name))
@@ -219,7 +219,6 @@ class TestCommandGroupingContract:
 
     def test_no_grouped_command_is_unknown_to_the_client(self):
         """A renamed command must not leave a dead key behind."""
-        from aerospike_sdk.metrics.snapshot import _COMMAND_LATENCY_GROUP
 
         exposed = {
             str(getattr(CommandType, name))
@@ -230,8 +229,6 @@ class TestCommandGroupingContract:
         assert not stale, f"grouped names the client no longer has: {sorted(stale)}"
 
     def test_group_values_are_the_canonical_group_names(self):
-        from aerospike_sdk.metrics.snapshot import _COMMAND_LATENCY_GROUP
-
         assert set(_COMMAND_LATENCY_GROUP.values()) <= {
             "conn", "read", "write", "batch", "query",
         }
@@ -442,8 +439,6 @@ class TestCanonicalSnapshot:
         assert doc["nodes_departed"] == []
 
     def test_a_departed_node_moves_to_nodes_departed(self):
-        from aerospike_sdk.metrics.export import _NodeCloseTracker
-
         # An empty live-node list: the one measured host has left the cluster.
         snapshot = self._snapshot(nodes=[])
         snapshot._mark_departed(_NodeCloseTracker())
@@ -453,7 +448,6 @@ class TestCanonicalSnapshot:
 
     def test_an_already_reported_departure_is_listed_nowhere(self):
         """The tracker reports each host once; afterwards it is neither live nor departed."""
-        from aerospike_sdk.metrics.export import _NodeCloseTracker
 
         tracker = _NodeCloseTracker()
         first = self._snapshot(nodes=[])
@@ -483,16 +477,12 @@ class TestProcessSampler:
     """The SDK's own process samples: CPU over the interval, resident memory now."""
 
     def test_samples_are_a_percent_and_bytes(self):
-        from aerospike_sdk.metrics.snapshot import ProcessSampler
-
         sampler = ProcessSampler()
         cpu, rss = sampler.sample()
         assert 0.0 <= cpu <= 100.0 * 64
         assert isinstance(rss, int) and rss > 0
 
     def test_cpu_reflects_work_since_the_previous_sample(self):
-        from aerospike_sdk.metrics.snapshot import ProcessSampler
-
         sampler = ProcessSampler()
         sampler.sample()
         deadline = time.monotonic() + 0.05

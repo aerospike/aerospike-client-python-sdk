@@ -228,7 +228,7 @@ class TestSindex:
         assert index.namespace == "test"
         assert index.set_name == "users"
         assert index.bin_name == "age"
-        # The stub answers the pre-8.1.3 name; the read reports the current one.
+        # The stub answers the old name; the read reports the current one.
         assert index.index_type == "integer"
         assert index.collection_type == "default"
         assert index.is_ready is True

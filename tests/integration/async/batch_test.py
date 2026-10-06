@@ -48,11 +48,11 @@ class TestBatchOperations:
     async def test_batch_insert_multiple_keys(self, cluster, users: DataSet):
         """Test inserting multiple records in a single batch."""
         session = cluster.create_session()
-        
+
         key1 = users.id("batch_user_1")
         key2 = users.id("batch_user_2")
         key3 = users.id("batch_user_3")
-        
+
         # Clean up first
         try:
             await session.delete(key1).execute()
@@ -60,7 +60,7 @@ class TestBatchOperations:
             await session.delete(key3).execute()
         except Exception:
             pass
-        
+
         # Insert multiple records with chained operations
         stream = await (
             session.insert(key1)
@@ -75,7 +75,7 @@ class TestBatchOperations:
         results = await stream.collect()
 
         assert len(results) == 3
-        
+
         # Verify records were created
         rs1 = await session.query(key1).execute()
         record1 = await rs1.first_or_raise()
@@ -103,11 +103,11 @@ class TestBatchOperations:
     async def test_batch_mixed_operations(self, cluster, users: DataSet):
         """Test batch with mixed insert, update, and delete operations."""
         session = cluster.create_session()
-        
+
         key1 = users.id("batch_mixed_1")
         key2 = users.id("batch_mixed_2")
         key3 = users.id("batch_mixed_3")
-        
+
         # Setup: create initial records
         await session.upsert(key1).put({"counter": 10}).execute()
         await session.upsert(key2).put({"name": "ToDelete"}).execute()
@@ -117,7 +117,7 @@ class TestBatchOperations:
             await session.delete(key3).execute()
         except Exception:
             pass
-        
+
         # Execute mixed batch operations
         stream = await (
             session.update(key1).bin("counter").add(5)
@@ -128,7 +128,7 @@ class TestBatchOperations:
         results = await stream.collect()
 
         assert len(results) == 3
-        
+
         # Verify update worked
         rs1 = await session.query(key1).execute()
         record1 = await rs1.first_or_raise()
@@ -153,24 +153,24 @@ class TestBatchOperations:
     async def test_batch_upsert_operations(self, cluster, users: DataSet):
         """Test batch upsert operations."""
         session = cluster.create_session()
-        
+
         key1 = users.id("batch_upsert_1")
         key2 = users.id("batch_upsert_2")
-        
+
         # Clean up first
         try:
             await session.delete(key1).delete()
             await session.delete(key2).delete()
         except Exception:
             pass
-        
+
         # First batch: create records
         await (
             session.upsert(key1).bin("value").set_to("initial1")
             .upsert(key2).bin("value").set_to("initial2")
             .execute()
         )
-        
+
         # Verify initial values
         rs1 = await session.query(key1).execute()
         record1 = await rs1.first_or_raise()
@@ -182,7 +182,7 @@ class TestBatchOperations:
             .upsert(key2).bin("value").set_to("updated2")
             .execute()
         )
-        
+
         # Verify updated values
         rs1 = await session.query(key1).execute()
         record1 = await rs1.first_or_raise()
@@ -199,11 +199,11 @@ class TestBatchOperations:
     async def test_batch_delete_multiple_keys(self, cluster, users: DataSet):
         """Test deleting multiple records in a single batch."""
         session = cluster.create_session()
-        
+
         key1 = users.id("batch_del_1")
         key2 = users.id("batch_del_2")
         key3 = users.id("batch_del_3")
-        
+
         # Setup: create records
         await session.upsert(key1).put({"data": "1"}).execute()
         await session.upsert(key2).put({"data": "2"}).execute()
@@ -219,7 +219,7 @@ class TestBatchOperations:
         results = await stream.collect()
 
         assert len(results) == 3
-        
+
         # Verify all deleted
         for k in (key1, key2, key3):
             exists_stream = await session.exists(k).include_missing_keys().execute()
@@ -229,10 +229,10 @@ class TestBatchOperations:
     async def test_batch_bin_string_operations(self, cluster, users: DataSet):
         """Test batch with string bin operations (append/prepend)."""
         session = cluster.create_session()
-        
+
         key1 = users.id("batch_str_1")
         key2 = users.id("batch_str_2")
-        
+
         # Setup
         await session.upsert(key1).put({"message": "Hello"}).execute()
         await session.upsert(key2).put({"message": "World"}).execute()
@@ -243,7 +243,7 @@ class TestBatchOperations:
             .update(key2).bin("message").prepend("Hello ")
             .execute()
         )
-        
+
         # Verify
         rs1 = await session.query(key1).execute()
         record1 = await rs1.first_or_raise()
@@ -261,7 +261,7 @@ class TestBatchOperations:
 class TestHomogeneousBatchOperations:
     """
     Test homogeneous batch operations (same operation on multiple keys).
-    
+
     Tests for homogeneous batch operations:
     - batchExists
     - batch_reads (via query)
@@ -276,12 +276,12 @@ class TestHomogeneousBatchOperations:
         size = 10
         key_prefix = "batchkey"
         value_prefix = "batchvalue"
-        
+
         # Create test records
         for i in range(1, size + 1):
             key = users.id(f"{key_prefix}{i}")
             list_data = [j * i for j in range(i)]
-            
+
             if i != 6:
                 await session.upsert(key).put({
                     "bbin": f"{value_prefix}{i}",
@@ -293,7 +293,7 @@ class TestHomogeneousBatchOperations:
                     "bbin": i,
                     "lbin": list_data,
                 }).execute()
-        
+
         yield {
             "session": session,
             "size": size,
@@ -301,7 +301,7 @@ class TestHomogeneousBatchOperations:
             "value_prefix": value_prefix,
             "users": users,
         }
-        
+
         # Cleanup
         for i in range(1, size + 1):
             key = users.id(f"{key_prefix}{i}")
@@ -319,7 +319,7 @@ class TestHomogeneousBatchOperations:
         session = data["session"]
         size = data["size"]
         key_prefix = data["key_prefix"]
-        
+
         # Create list of keys
         keys = users.ids(*[f"{key_prefix}{i}" for i in range(1, size + 1)])
 
@@ -341,7 +341,7 @@ class TestHomogeneousBatchOperations:
         size = data["size"]
         key_prefix = data["key_prefix"]
         value_prefix = data["value_prefix"]
-        
+
         # Create list of keys
         keys = users.ids(*[f"{key_prefix}{i}" for i in range(1, size + 1)])
 
@@ -370,7 +370,7 @@ class TestHomogeneousBatchOperations:
         session = data["session"]
         size = data["size"]
         key_prefix = data["key_prefix"]
-        
+
         # Create list of keys
         keys = users.ids(*[f"{key_prefix}{i}" for i in range(1, size + 1)])
 
@@ -391,12 +391,12 @@ class TestHomogeneousBatchOperations:
         Test batch delete operation.
         """
         session = cluster.create_session()
-        
+
         # Create test records
         first_key = 10000
         num_keys = 10
         keys = users.ids(*[first_key + i for i in range(num_keys)])
-        
+
         for i, key in enumerate(keys):
             await session.upsert(key).put({"bbin": first_key + i}).execute()
 
@@ -422,11 +422,11 @@ class TestHomogeneousBatchOperations:
     async def test_batch_exists_with_varargs(self, cluster, users: DataSet):
         """Test batch exists using varargs style."""
         session = cluster.create_session()
-        
+
         key1 = users.id("vararg_exist_1")
         key2 = users.id("vararg_exist_2")
         key3 = users.id("vararg_exist_3")
-        
+
         # Create some records
         await session.upsert(key1).put({"data": "1"}).execute()
         await session.upsert(key2).put({"data": "2"}).execute()
@@ -440,7 +440,7 @@ class TestHomogeneousBatchOperations:
         assert results[0].as_bool() is True   # key1 exists
         assert results[1].as_bool() is True   # key2 exists
         assert results[2].as_bool() is False  # key3 does not exist
-        
+
         # Cleanup
         await session.delete(key1).execute()
         await session.delete(key2).execute()
@@ -448,11 +448,11 @@ class TestHomogeneousBatchOperations:
     async def test_batch_delete_with_varargs(self, cluster, users: DataSet):
         """Test batch delete using varargs style."""
         session = cluster.create_session()
-        
+
         key1 = users.id("vararg_del_1")
         key2 = users.id("vararg_del_2")
         key3 = users.id("vararg_del_3")
-        
+
         # Create records
         await session.upsert(key1).put({"data": "1"}).execute()
         await session.upsert(key2).put({"data": "2"}).execute()

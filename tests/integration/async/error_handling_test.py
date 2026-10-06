@@ -25,6 +25,8 @@ Covers:
 - Query-stream failures surfacing as SDK exceptions
 """
 
+import asyncio
+
 import pytest
 
 from aerospike_sdk import ErrorDetailVerbosity, QueryDuration, QueryHint
@@ -898,7 +900,6 @@ class TestTtlExpiry:
 
     async def test_record_expires_after_ttl(self, session, ds):
         """Record with short TTL is gone after expiry."""
-        import asyncio
         k = ds.id("ttl_expire")
         await _cleanup(session, k)
 
@@ -920,7 +921,6 @@ class TestTtlExpiry:
 
     async def test_record_with_no_ttl_persists(self, session, ds):
         """A record written with ``never_expire()`` persists beyond a short wait."""
-        import asyncio
         k = ds.id("ttl_persist")
         await _cleanup(session, k)
 
@@ -935,7 +935,6 @@ class TestTtlExpiry:
 
     async def test_touch_extends_ttl(self, session, ds):
         """Write with short TTL, touch to extend, verify it survives."""
-        import asyncio
         k = ds.id("ttl_touch_ext")
         await _cleanup(session, k)
 

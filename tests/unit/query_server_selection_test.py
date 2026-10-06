@@ -17,16 +17,19 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import FilterExpression, QueryPolicy, QueryWhereFlags
+from aerospike_async import ClientPolicy, FilterExpression, QueryPolicy, QueryWhereFlags
 
-from aerospike_sdk import Behavior, Filter, QueryDuration, QueryHint, ResultCode
+from aerospike_sdk import Behavior, Filter, Key, QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
+from aerospike_sdk.aio.client import Client
+from aerospike_sdk.aio.session import Session
 
 
 class _ClientSupportsSelection:
@@ -309,8 +312,6 @@ class TestExecuteDatasetQueryBlockingRouting:
 
 class TestServerCompiledAelWhere:
     def test_where_uses_server_filter_helper_when_gate_on(self):
-        from unittest.mock import patch
-
         sentinel = object()
         with patch(
             "aerospike_sdk.query_shared.filter_expression_from_ael_string",
@@ -343,16 +344,6 @@ class TestServerCompiledAelWhere:
 
 class TestAsyncSessionSingleKeyCapabilityFlags:
     def test_fast_path_inherits_server_compiled_ael(self):
-        from unittest.mock import MagicMock
-        import time
-
-        from aerospike_async import ClientPolicy
-        from aerospike_sdk import Key
-
-        from aerospike_sdk.aio.client import Client
-        from aerospike_sdk.aio.session import Session
-        from aerospike_sdk.policy.behavior import Behavior
-
         sdk_client = Client("127.0.0.1:3000", policy=ClientPolicy())
         sdk_client._client = MagicMock()
         sdk_client._connected = True

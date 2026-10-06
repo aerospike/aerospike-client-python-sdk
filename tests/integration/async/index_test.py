@@ -21,8 +21,17 @@ import os
 import pytest
 import pytest_asyncio
 
-from aerospike_async import ClientPolicy as PacClientPolicy, IndexType, new_client
-from aerospike_sdk import Behavior, ClusterDefinition, CollectionIndexType, CTX, DataSet, Filter, Host
+from aerospike_async import ClientPolicy as PacClientPolicy, FilterExpression, IndexType, new_client
+from aerospike_sdk import (
+    Behavior,
+    ClusterDefinition,
+    CollectionIndexType,
+    CTX,
+    DataSet,
+    Exp,
+    Filter,
+    Host,
+)
 from aerospike_sdk.policy import Settings
 from aerospike_sdk.exceptions import (
     AerospikeError,
@@ -336,7 +345,6 @@ async def test_create_expression_index_and_query(cluster, server_version):
     """Create an expression-based index, list it, query through it, drop it."""
     if server_version is None or server_version < (8, 1, 2, 0):
         pytest.skip("expression-based indexes require server 8.1.2+")
-    from aerospike_sdk import Exp, Filter
 
     set_name = "exp_idx_set"
     index_name = "psdk_exp_age_idx"
@@ -368,7 +376,7 @@ async def test_create_expression_index_and_query(cluster, server_version):
         assert listed, "expression index not visible in list_indexes"
         assert listed[0]["namespace"] == general_namespace()
         assert listed[0]["set"] == set_name
-        # The server's own name for the type from 8.1.3 on.
+        # The server's own name for the type.
         assert listed[0]["type"] == "integer"
 
         flt = Filter.range("age", 31, 33).expression(expr)
@@ -489,7 +497,6 @@ async def test_create_blob_list_collection_index_and_query(cluster, supports_blo
 @requires_server_compiled_ael
 async def test_create_index_from_ael_string_and_query(cluster):
     """Create an expression index from an AEL string, list it, query through it, drop it."""
-    from aerospike_async import FilterExpression
 
     set_name = "ael_idx_set"
     index_name = "psdk_ael_age_idx"

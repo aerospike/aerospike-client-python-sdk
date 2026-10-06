@@ -32,7 +32,7 @@ import pytest
 from tests.pac_compat import requires_server_compiled_ael
 import pytest_asyncio
 
-from aerospike_sdk import DataSet, Key
+from aerospike_sdk import DataSet, Exp, Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from tests.integration.namespace import general_namespace
 
@@ -474,7 +474,6 @@ class TestDatasetQueryBinOps:
     async def test_select_from_projects_over_dataset(self, session):
         """``.bin().select_from()`` on a dataset query returns the virtual bin
         for every record, not the stored bins."""
-        from aerospike_sdk import Exp
         stream = await (
             session.query(DS)
             .bin("age_next").select_from(
@@ -489,7 +488,6 @@ class TestDatasetQueryBinOps:
     async def test_get_and_cdt_read_over_dataset_with_where(self, session):
         """Plain ``.get()`` and a CDT read both ride the projection, and the
         ``where`` filter still narrows the dataset."""
-        from aerospike_sdk import Exp
         stream = await (
             session.query(DS)
             .where(Exp.ge(Exp.int_bin("age"), Exp.int_val(22)))

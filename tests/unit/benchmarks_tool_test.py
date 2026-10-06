@@ -28,6 +28,7 @@ from benchmarks.config import (
 )
 from benchmarks.record_spec import first_integer_bin, parse_bin_spec
 from benchmarks.stats import latency_column_labels, latency_threshold_ms
+from benchmarks._env import client_policy_from_config, cluster_def_from_config
 
 
 def test_parse_bin_spec() -> None:
@@ -109,7 +110,6 @@ def test_services_alternate_agrees_across_bench_client_paths(
     alternate addresses, fell back to one node, and ~2/3 of point reads failed
     to route while every other mode looked healthy.
     """
-    from benchmarks._env import client_policy_from_config, cluster_def_from_config
 
     monkeypatch.setenv("AEROSPIKE_USE_SERVICES_ALTERNATE", "true")
     cfg = _cfg_for(argv)
@@ -127,7 +127,6 @@ def test_conn_pools_per_node_reaches_the_pool_path() -> None:
     It only reached the direct-client policy before, so tuning it while
     benchmarking an AsyncPool silently measured nothing.
     """
-    from benchmarks._env import client_policy_from_config, cluster_def_from_config
 
     cfg = _cfg_for(["--conn-pools-per-node", "8"])
     assert client_policy_from_config(cfg).conn_pools_per_node == 8

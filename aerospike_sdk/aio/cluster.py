@@ -74,10 +74,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def __init__(self, sdk_client: Client) -> None:
         """
         Initialize a Cluster instance.
-        
+
         Args:
             sdk_client: The underlying Client instance
-        
+
         Note:
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
@@ -90,7 +90,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         self._installed_exporter: Any = None
         self._export_timer: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
-    
+
     @classmethod
     async def _create(
         cls,
@@ -159,11 +159,11 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
                 result_code=ResultCode.SERVER_NOT_AVAILABLE,
             )
         return cls(sdk_client)
-    
+
     async def __aenter__(self) -> Cluster:
         """Async context manager entry."""
         return self
-    
+
     async def __aexit__(
         self,
         exc_type: Optional[type[BaseException]],
@@ -172,7 +172,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     ) -> None:
         """Async context manager exit."""
         await self.close()
-    
+
     @property
     def _client(self) -> Client:
         """Get the underlying Client."""

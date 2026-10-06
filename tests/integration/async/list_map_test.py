@@ -49,7 +49,7 @@ class TestListMap:
         record = result.record
         assert record is not None
         received_list = record.bins[bin_name]
-        
+
         assert len(received_list) == 3
         assert received_list[0] == "string1"
         assert received_list[1] == "string2"

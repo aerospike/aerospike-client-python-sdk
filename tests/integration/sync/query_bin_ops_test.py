@@ -27,7 +27,7 @@ Coverage:
 """
 
 import pytest
-from aerospike_sdk import Key
+from aerospike_sdk import Exp, Key
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
@@ -521,7 +521,6 @@ class TestDatasetQueryBinOps:
         """``.bin().select_from()`` on a dataset query returns the virtual bin
         for every record, not the stored bins."""
         session = cluster.create_session()
-        from aerospike_sdk import Exp
         stream = (
             session.query(DataSet.of(NS, SET))
             .bin("age_next").select_from(
@@ -537,7 +536,6 @@ class TestDatasetQueryBinOps:
         """Plain ``.get()`` and a CDT read both ride the projection, and the
         ``where`` filter still narrows the dataset."""
         session = cluster.create_session()
-        from aerospike_sdk import Exp
         stream = (
             session.query(DataSet.of(NS, SET))
             .where(Exp.ge(Exp.int_bin("age"), Exp.int_val(22)))

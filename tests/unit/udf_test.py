@@ -24,9 +24,11 @@ from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk import Key, Txn
 from aerospike_sdk.exceptions import ResultCode
 
-from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec
+from aerospike_sdk.aio.operations.query import QueryBuilder, _OperationSpec, _SingleKeyWriteSegment
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQB
+from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder as SyncUFB
 
 
 def _connected_qb(txn: Txn | None = None) -> QueryBuilder:
@@ -210,8 +212,6 @@ class TestChainToUdfTransition:
         assert qb._specs[0].op_type == "upsert"
 
     def test_single_key_fast_segment_promotes_then_transitions(self):
-        from aerospike_sdk.aio.operations.query import _SingleKeyWriteSegment
-
         k1, k2 = Key("test", "set", 1), Key("test", "set", 2)
         seg = _SingleKeyWriteSegment(
             MagicMock(), k1, "upsert", Behavior.DEFAULT, None,
@@ -256,11 +256,6 @@ class TestChainToUdfTransition:
     def test_sync_chain_returns_sync_builder(self):
         # Cross-surface invariant: the ClassVar hook must hand back the
         # sync leaf type when the chain started on the sync surface.
-        from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQB
-        from aerospike_sdk.sync.operations.udf import (
-            UdfFunctionBuilder as SyncUFB,
-        )
-
         qb = SyncQB(MagicMock(), "test", "set", Behavior.DEFAULT)
         qb._set_current_keys(Key("test", "set", 1))
         fb = qb.execute_udf(Key("test", "set", 2))

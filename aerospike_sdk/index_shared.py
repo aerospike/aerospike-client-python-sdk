@@ -340,8 +340,7 @@ class _IndexBuilderBase:
 
         Call this or :meth:`string` before :meth:`create`, matching how the bin is
         stored. If both are called on the same builder, the last call wins. The
-        server has called this index type ``integer`` since 8.1.3; the SDK sends
-        that name.
+        server calls this index type ``integer``; the SDK sends that name.
 
         Returns:
             ``self`` for method chaining.

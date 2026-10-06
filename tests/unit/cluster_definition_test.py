@@ -28,6 +28,9 @@ from aerospike_sdk.sync.cluster_definition import (
     ClusterDefinition as SyncClusterDefinition,
     Host as SyncHost,
 )
+import aerospike_sdk.sync.cluster as sync_cluster
+from aerospike_sdk.aio.cluster import Cluster
+from aerospike_sdk.exceptions import ConnectionError, ResultCode
 
 
 class TestAuthMode:
@@ -483,9 +486,6 @@ class TestConnectValidationCarriesACode:
 
     @pytest.mark.asyncio
     async def test_async_not_connected_reports_server_not_available(self):
-        from aerospike_sdk.aio.cluster import Cluster
-        from aerospike_sdk.exceptions import ConnectionError, ResultCode
-
         class _Pac:
             def is_connected(self):
                 return False
@@ -505,9 +505,6 @@ class TestConnectValidationCarriesACode:
         assert excinfo.value.result_code == ResultCode.SERVER_NOT_AVAILABLE
 
     def test_sync_not_connected_reports_server_not_available(self, monkeypatch):
-        import aerospike_sdk.sync.cluster as sync_cluster
-        from aerospike_sdk.exceptions import ConnectionError, ResultCode
-
         class _Pac:
             def is_connected(self):
                 return False

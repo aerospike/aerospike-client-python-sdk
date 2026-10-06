@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import time
 
-from aerospike_sdk import DataSet
+import pytest
+
+from aerospike_sdk import DataSet, Exp
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -92,8 +94,6 @@ def _build_at_least(session, floor) -> bool:
 
 def test_sync_expression_index_create_and_drop(aerospike_host):
     """Sync smoke for expression-based index creation (blocking PAC entry)."""
-    import pytest
-    from aerospike_sdk import Exp
 
     if ":" in aerospike_host:
         hostname, port_str = aerospike_host.split(":", 1)

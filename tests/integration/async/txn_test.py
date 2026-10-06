@@ -34,7 +34,7 @@ from datetime import timedelta
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Behavior, DataSet, ResultCode
+from aerospike_sdk import Behavior, DataSet, ResultCode, Txn, TxnState
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy import Settings
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
@@ -182,7 +182,6 @@ async def test_txn_write_conflict(session, mrt_set):
 async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.
     del session
-    from aerospike_sdk import Txn, TxnState
 
     key = mrt_set.id("txn_read_fails_for_all_states_except_open")
 
@@ -458,7 +457,6 @@ async def test_txn_mrt_expired_after_deadline(session, mrt_set):
     ``MRT_EXPIRED``. ``MRT_EXPIRED`` is non-retryable so
     :meth:`do_in_transaction` propagates the failure on the first attempt.
     """
-    import asyncio
 
     key = mrt_set.id("txn_mrt_expired")
     await _reset(session, key)

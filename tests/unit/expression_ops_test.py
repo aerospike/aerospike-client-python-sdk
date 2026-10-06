@@ -35,6 +35,7 @@ from aerospike_sdk.aio.operations.query import (
     WriteSegmentBuilder,
 )
 from aerospike_sdk.operations_shared import _build_exp_write_flags
+from aerospike_sdk import server_filter
 
 _EXP_READ_DEFAULT = ExpReadFlags.DEFAULT
 _EXP_READ_EVAL_NO_FAIL = ExpReadFlags.EVAL_NO_FAIL
@@ -81,9 +82,7 @@ class _OpCollector:
         self.operations.append(op)
 
     def _filter_expression_from_ael(self, ael: str):
-        from aerospike_sdk.server_filter import filter_expression_from_ael_string
-
-        return filter_expression_from_ael_string(
+        return server_filter.filter_expression_from_ael_string(
             ael,
             supports_server_compiled_ael=self._supports_server_compiled_ael,
         )

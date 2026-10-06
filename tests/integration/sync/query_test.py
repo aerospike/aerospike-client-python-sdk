@@ -20,6 +20,7 @@ import time
 import pytest
 from aerospike_sdk import DataSet, Exp
 from tests.integration.namespace import general_namespace
+from aerospike_sdk.record_result import RecordResult
 
 QUERY_DS = DataSet.of(general_namespace(), "query_test")
 
@@ -368,8 +369,6 @@ class TestSingleRecordTerminals:
             session.query(ds.id("no_such_key_xyz")).first_or_raise()
 
     def test_result_envelope_is_preserved(self, session):
-        from aerospike_sdk.record_result import RecordResult
-
         ds = QUERY_DS
         result = session.query(ds.id(0)).first()
         assert isinstance(result, RecordResult)

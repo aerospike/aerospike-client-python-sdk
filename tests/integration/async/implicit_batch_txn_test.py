@@ -42,6 +42,8 @@ from integration.sc_namespace_resolve import (
     resolve_sc_namespace,
     skip_reason_no_sc_namespace,
 )
+import aerospike_sdk.implicit_txn as impl
+from aerospike_sdk.aio.operations import query as query_mod
 
 
 async def _namespaces_on_cluster_hint(session) -> str:
@@ -96,8 +98,6 @@ def ds(sc_namespace):
 @pytest.fixture
 def txn_spy(monkeypatch):
     """Record every implicit-transaction wrap while delegating to the real runner."""
-    import aerospike_sdk.implicit_txn as impl
-    from aerospike_sdk.aio.operations import query as query_mod
 
     calls: list = []
     real = impl.run_in_implicit_txn

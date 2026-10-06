@@ -14,12 +14,19 @@
 
 import pytest
 
-from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
+from aerospike_sdk.metrics import (
+    CommandType,
+    LatencyType,
+    LatencyUnit,
+    MetricsPolicy,
+    MetricsSnapshot,
+    Sampler,
+)
 import os
 
 from aerospike_sdk import UDFLang
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.metrics.export import AsyncMetricsExportTimer
+from aerospike_sdk.metrics.export import AsyncMetricsExportTimer, LearnMetricsFileExporter
 
 from tests.integration.namespace import general_namespace
 
@@ -470,7 +477,6 @@ class TestMetricsExport:
         narrowed instead -- everything downstream of it (the export tick, the
         tracker, the departed section, the exporter call) is the real path.
         """
-        from aerospike_sdk.metrics import MetricsSnapshot
 
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         session = metrics_cluster.create_session()
@@ -535,7 +541,6 @@ class TestMetricsExport:
         self, metrics_cluster, tmp_path
     ):
         """The built-in exporter's output matches the header it emits."""
-        from aerospike_sdk.metrics.export import LearnMetricsFileExporter
 
         exporter = LearnMetricsFileExporter(str(tmp_path))
         try:

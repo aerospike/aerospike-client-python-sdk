@@ -75,10 +75,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def __init__(self, sdk_client: SyncClient) -> None:
         """
         Initialize a Cluster instance.
-        
+
         Args:
             sdk_client: The underlying SyncClient instance
-        
+
         Note:
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
@@ -91,7 +91,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         self._installed_exporter: Any = None
         self._export_timer: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
-    
+
     @classmethod
     def _create(
         cls,
@@ -147,11 +147,11 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         if sdk_config_source is not None:
             sdk_client._start_sdk_config_monitor(sdk_config_source)
         return cluster
-    
+
     def __enter__(self) -> Cluster:
         """Context manager entry."""
         return self
-    
+
     def __exit__(
         self,
         exc_type: Optional[type[BaseException]],
@@ -160,7 +160,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     ) -> None:
         """Context manager exit."""
         self.close()
-    
+
     @property
     def _client(self) -> SyncClient:
         """Get the underlying SyncClient."""
@@ -434,10 +434,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def close(self) -> None:
         """
         Closes the cluster connection and releases all associated resources.
-        
+
         This method closes the underlying client connection. It should be called
         when the cluster is no longer needed to ensure proper resource cleanup.
-        
+
         This method is automatically called when using context manager::
 
                 with ClusterDefinition("localhost", 3100).connect() as cluster:

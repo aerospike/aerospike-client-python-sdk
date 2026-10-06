@@ -835,15 +835,15 @@ class _QueryBuilderBase:
     def with_no_bins(self) -> Self:
         """
         Specify that no bins should be read (header-only query).
-        
+
         This method is useful when you only need to check for record existence
         or get metadata like generation numbers, without reading the actual data.
-        
+
         This method cannot be used together with bins().
-        
+
         Returns:
             self for method chaining.
-            
+
         Raises:
             ValueError: If used together with bins().
         """

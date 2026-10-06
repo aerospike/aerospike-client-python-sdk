@@ -30,6 +30,7 @@ from aerospike_sdk.aio.operations.index import IndexBuilder
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.sync.client import SyncClient
 from aerospike_sdk.sync.session import Session as SyncSession
+from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
 
 
 def _async_builder(supports_server_compiled_ael: bool = True) -> IndexBuilder:
@@ -260,8 +261,6 @@ class TestConfigureFromArguments:
 class TestSetIndexCreateSync:
 
     def test_routes_to_blocking_set_index_entry(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         b = SyncIB(sync_client, "test", "users").on_set().named("users_set_idx")
         task = b.create()
@@ -272,8 +271,6 @@ class TestSetIndexCreateSync:
         assert task is pac.create_set_index_blocking.return_value
 
     def test_sync_index_type_rejected(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         b = SyncIB(MagicMock(), "test", "users").on_set().named("idx").string()
         with pytest.raises(ValueError, match="no index type"):
             b.create()
@@ -284,8 +281,6 @@ class TestExpressionCreateSync:
     def test_routes_to_blocking_expression_entry(self):
         # Sync-specific dispatch: the blocking terminal must hit PAC's
         # `*_blocking` sibling, not the async entry.
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         exp = Exp.int_bin("age")
         b = (
@@ -355,8 +350,6 @@ class TestAelStringCreate:
         assert client.gate_reads == 0
 
     def test_sync_string_routes_to_blocking_expression_entry(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         sync_client.supports_server_compiled_ael = True
         b = (
@@ -394,7 +387,6 @@ class TestSyncBinPathValidation:
     """Bin-path create()/drop() validation and error conversion (sync)."""
 
     def _sync_builder(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
         client = MagicMock()
         client._usage_on = False
         return client, SyncIB(client, "test", "users")

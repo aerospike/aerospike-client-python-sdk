@@ -12,6 +12,7 @@
 
 """Unit tests for the feature-usage counter helpers."""
 
+import gc
 import threading
 from types import SimpleNamespace
 
@@ -294,7 +295,6 @@ class TestUsageCounters:
 
     def test_finished_threads_do_not_accumulate_buckets(self):
         """A thread-per-request server must not grow the bucket list forever."""
-        import gc
 
         counters = usage.UsageCounters()
         for _ in range(30):

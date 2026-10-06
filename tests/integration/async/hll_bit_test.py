@@ -20,7 +20,7 @@ import base64
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Exp
+from aerospike_sdk import Exp, HllConfig
 from aerospike_sdk.dataset import DataSet
 from tests.integration.namespace import general_namespace
 
@@ -40,7 +40,6 @@ def _b64(raw: bytes) -> str:
 
 
 async def test_hll_init_add_and_get_count(cluster):
-    from aerospike_sdk import HllConfig
     session = cluster.create_session()
     k = DataSet.of(general_namespace(), "test").id("hll_bit_fluent_1")
     await (

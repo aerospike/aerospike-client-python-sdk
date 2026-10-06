@@ -23,7 +23,7 @@ import pytest
 from aerospike_async import FilterExpression
 
 from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_values, val
-from aerospike_sdk import ResultCode
+from aerospike_sdk import ExpType, ListReturnType, MapReturnType, ResultCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy import Settings
@@ -817,7 +817,6 @@ class TestCdtPathWithExp:
 
     async def test_list_get_by_index(self, session_with_cdt_data):
         """Test list_get_by_index using Exp builder."""
-        from aerospike_sdk import ExpType, ListReturnType
 
         # Filter: numbers[0] == 10
         filter_exp = Exp.eq(
@@ -846,7 +845,6 @@ class TestCdtPathWithExp:
 
     async def test_map_get_by_key(self, session_with_cdt_data):
         """Test map_get_by_key using Exp builder."""
-        from aerospike_sdk import ExpType, MapReturnType
 
         # Filter: info.age == 30
         filter_exp = Exp.eq(
@@ -881,7 +879,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_index_access(self, session_with_cdt_data):
         """Test AEL list index access: $.numbers.[0] == 10
-        
+
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
@@ -900,7 +898,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_negative_index(self, session_with_cdt_data):
         """Test AEL list negative index access: $.numbers.[-1] == 50
-        
+
         Note: The AEL grammar requires a dot before brackets: .[-1] not [-1]
         """
         stream = await (
@@ -952,7 +950,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_index_greater_than(self, session_with_cdt_data):
         """Test AEL list index with greater than: $.numbers.[0] > 50
-        
+
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
@@ -1885,8 +1883,6 @@ class TestAdvancedExpFilters:
 
     async def _assert_filtered_out(self, session, key, ael):
         """Query with AEL filter that should NOT match, expect FILTERED_OUT."""
-        from aerospike_sdk.exceptions import ResultCode
-        from aerospike_sdk.exceptions import AerospikeError
 
         with pytest.raises(AerospikeError) as exc_info:
             rs = await (
@@ -1987,7 +1983,6 @@ class TestInExpression:
 
     async def test_string_in_list_bin_with_exp(self, session_with_cdt_data):
         """Filter: "bob" in $.names — should match rec1 only."""
-        from aerospike_sdk import ListReturnType
         filter_exp = Exp.list_get_by_value(
             ListReturnType.EXISTS,
             Exp.string_val("bob"),
