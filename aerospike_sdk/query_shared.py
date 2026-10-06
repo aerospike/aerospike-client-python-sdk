@@ -1145,7 +1145,7 @@ class _QueryBuilderBase:
                     stream.close()
 
         See Also:
-            :meth:`max_records`: Cap total records returned.
+            :meth:`limit`: Cap total records returned.
             :meth:`~aerospike_sdk.record_stream.RecordStream.has_more_chunks`:
             Advance to the next server chunk.
         """
@@ -1171,47 +1171,34 @@ class _QueryBuilderBase:
         self._ensure_policy().records_per_second = rps
         return self
 
-    def max_records(self, max_records: int) -> Self:
-        """
-        Set the maximum number of records to return.
-        
-        Args:
-            max_records: Maximum number of records to return.
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
-
-                query = session.query(dataset).max_records(10000)
-        """
-        self._ensure_policy().max_records = max_records
-        return self
-
     def limit(self, limit: int) -> Self:
-        """
-        Set the maximum number of records to return (alias for max_records).
-        
-        This method is an alias for max_records().
-        It limits the total number of records returned by the query.
-        Once the limit is reached, the query will stop processing.
-        
-        Args:
-            limit: Maximum number of records to return (must be > 0).
-        
-        Returns:
-            self for method chaining.
-            
-        Raises:
-            ValueError: If limit is <= 0.
-            
+        """Cap the total number of records the query returns.
+
+        Once the limit is reached, the query stops. A query without a limit
+        returns every matching record; there is no value that means
+        "unlimited", so leave the limit unset instead.
+
         Example::
 
-                query = session.query(dataset).limit(100)
+                stream = await session.query(users).where("$.age > 18").limit(100).execute()
+
+        Args:
+            limit: Maximum number of records to return; must be positive.
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            ValueError: If ``limit <= 0``.
+
+        See Also:
+            :meth:`chunk_size`: Records per server round trip, rather than in
+            total.
         """
         if limit <= 0:
             raise ValueError(f"Limit must be > 0, not {limit}")
-        return self.max_records(limit)
+        self._ensure_policy().max_records = limit
+        return self
 
     def expected_duration(self, duration: "QueryDuration") -> Self:
         """

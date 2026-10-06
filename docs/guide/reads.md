@@ -318,7 +318,7 @@ finally:
 ```
 
 To cap how many records you get in total — rather than how many arrive per trip
-— use `max_records()`.
+— use `limit()`.
 
 ## RecordResult
 

@@ -46,12 +46,12 @@ def test_records_per_second(session):
     assert query_builder is not None
 
 
-def test_max_records(session):
-    """Test max_records method on SyncQueryBuilder."""
+def test_limit(session):
+    """Test limit method on SyncQueryBuilder."""
     users = DataSet.of(general_namespace(), "users")
 
     # Test that the method exists and can be called
-    query_builder = session.query(users).max_records(10000)
+    query_builder = session.query(users).limit(10000)
     assert query_builder is not None
 
 
@@ -91,7 +91,7 @@ def test_chaining_policy_fields(session):
     query_builder = (
         session.query(users)
         .records_per_second(1000)
-        .max_records(10000)
+        .limit(10000)
         .expected_duration(QueryDuration.SHORT)
         .replica(Replica.SEQUENCE)
     )
@@ -107,6 +107,6 @@ def test_policy_fields_with_existing_policy(session):
     query_builder = session.query(users).with_policy(policy)
 
     # Then add additional fields
-    query_builder = query_builder.records_per_second(1000).max_records(10000)
+    query_builder = query_builder.records_per_second(1000).limit(10000)
     assert query_builder is not None
 

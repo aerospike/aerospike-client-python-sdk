@@ -1167,10 +1167,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             policy = self._apply_txn(QueryPolicy())
         chunk_total_limit = 0
         if self._chunk_size is not None and self._chunk_size > 0:
-            # limit()/max_records() land on policy.max_records. Capture it as the
-            # overall cap before chunk_size overwrites the field with the per-chunk
-            # fetch size, then hand it to the stream's _chunk_limit below so the
-            # total is enforced across chunks.
+            # limit() lands on policy.max_records. Capture it as the overall cap
+            # before chunk_size overwrites the field with the per-chunk fetch
+            # size, then hand it to the stream's _chunk_limit below so the total
+            # is enforced across chunks.
             chunk_total_limit = policy.max_records or 0
             policy.max_records = self._chunk_size
         hint = self._query_hint

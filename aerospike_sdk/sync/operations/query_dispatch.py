@@ -847,7 +847,7 @@ class _BlockingQueryDispatch:
             policy = self._apply_txn(QueryPolicy())
         chunk_total_limit = 0
         if self._chunk_size is not None and self._chunk_size > 0:
-            # Capture the caller's limit()/max_records() before chunk_size
+            # Capture the caller's limit() before chunk_size
             # overwrites the field with the per-chunk fetch size; the total cap
             # is enforced client-side by the stream's _chunk_limit below.
             chunk_total_limit = policy.max_records or 0
