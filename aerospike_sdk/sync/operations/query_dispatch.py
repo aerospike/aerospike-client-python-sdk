@@ -787,8 +787,9 @@ class _BlockingQueryDispatch:
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, 0, pfc_exc)
                 return []
-
-        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
+        elif not self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out,
+        ):
             return []
         return [RecordResult(
             key=key, record=None, result_code=rc,

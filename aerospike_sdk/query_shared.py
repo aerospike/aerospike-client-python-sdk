@@ -1808,7 +1808,9 @@ class _QueryBuilderBase:
         The PAC raises ``ServerError`` for ``KEY_NOT_FOUND_ERROR`` and
         ``FILTERED_OUT`` rather than returning a sentinel. Whether these
         codes are routed through disposition depends on the operation
-        context (see ``_is_actionable``).
+        context (see ``_is_actionable``). An actionable code under IN_STREAM
+        is always embedded; only non-actionable codes go through
+        :meth:`_should_include_result`.
         """
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
@@ -1821,8 +1823,9 @@ class _QueryBuilderBase:
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, index, pfc_exc)
                 return RecordStream._from_list([])
-
-        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
+        elif not self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out,
+        ):
             return RecordStream._from_list([])
 
         return RecordStream._from_error(key, rc, in_doubt, exception=pfc_exc)

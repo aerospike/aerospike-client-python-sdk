@@ -13,7 +13,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, unknown-namespace, and query-stream rejection paths."""
+"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, unknown-namespace, query-stream rejection, and missing-key in-stream write paths."""
 
 import pytest
 from aerospike_sdk.exceptions import AerospikeError, InvalidNamespaceError, ResultCode
@@ -233,3 +233,17 @@ class TestUnknownNamespace:
 
         assert [r.result_code for r in results] == [ResultCode.INVALID_NAMESPACE]
         assert isinstance(results[0].exception, InvalidNamespaceError)
+
+
+class TestMissingKeyWriteInStream:
+    """Single-key writes that require the record report the missing key in stream."""
+
+    @pytest.mark.parametrize("verb", ["update", "replace_if_exists"])
+    def test_reports_a_row(self, cluster, ds, verb):
+        k = ds.id(f"smk_{verb}_miss")
+        session = cluster.create_session()
+        _cleanup(session, k)
+        results = getattr(session, verb)(k).put({"v": 1}).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        ).collect()
+        assert [r.result_code for r in results] == [ResultCode.KEY_NOT_FOUND_ERROR]

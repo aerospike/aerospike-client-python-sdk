@@ -329,6 +329,18 @@ class TestOpTypeErrors:
             await session.replace_if_exists(k).put({"v": 1}).execute()
         assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
+    @pytest.mark.parametrize("verb", ["update", "replace_if_exists"])
+    async def test_missing_key_write_in_stream(self, session, ds, verb):
+        """A write that requires the record reports its missing key as a row."""
+        k = ds.id(f"ot_{verb}_miss_is")
+        await _cleanup(session, k)
+
+        rs = await getattr(session, verb)(k).put({"v": 1}).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        )
+        results = await rs.collect()
+        assert [r.result_code for r in results] == [ResultCode.KEY_NOT_FOUND_ERROR]
+
     async def test_batch_insert_partial_failure_in_stream(self, session, ds):
         """Batch insert: existing key gets KEY_EXISTS_ERROR, new key succeeds."""
         k_exists = ds.id("ot_bi_exists")
