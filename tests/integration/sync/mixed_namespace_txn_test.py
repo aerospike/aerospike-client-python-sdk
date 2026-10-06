@@ -19,8 +19,9 @@ The rule lives in the shared batch error handler, so this is not a mirror of
 the async suite. What is *not* shared is the wiring: ``sync/operations/
 query_dispatch.py`` is an independent implementation with routes the async tier
 does not have -- ``_execute_blocking_fast_path`` sends a multi-key single-spec
-batch straight to ``_execute_batch_*_blocking``, skipping
-``_execute_spec_blocking`` -- and each route must still deliver the raise.
+batch straight to ``_execute_batch_*_blocking``, and
+``_execute_multispec_blocking`` folds a chain into its own batch calls -- and
+each route must still deliver the raise.
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ def keys(sc_namespace, request):
 
 
 def test_multi_key_single_spec_batch_is_rejected_in_a_transaction(session, keys):
-    """The fast path: one spec, several keys, dispatched without _execute_spec_blocking."""
+    """The fast path: one spec, several keys, sent straight to a batch call."""
     def op(tx):
         tx.upsert(keys).put({BIN: 1}).execute()
 

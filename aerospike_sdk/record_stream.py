@@ -28,7 +28,7 @@ from aerospike_sdk.exceptions import (
     _convert_pac_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_result import RecordResult
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
     from aerospike_sdk.error_strategy import ErrorHandler
@@ -126,13 +126,6 @@ class RecordStream:
                 async for r in st:
                     yield r
         return cls(_iter())
-
-    @classmethod
-    def _from_batch_records(
-        cls, batch_records: Sequence, keys: Sequence,
-    ) -> RecordStream:
-        """Wrap async-client ``BatchRecord`` objects and their request keys (internal plumbing)."""
-        return cls._from_list(batch_records_to_results(batch_records, keys))
 
     @classmethod
     def _from_pac_batch_stream(

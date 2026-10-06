@@ -20,8 +20,8 @@ typically a PAC :class:`Recordset`, a list of ``BatchRecord``, or a
 materialized list of :class:`RecordResult`.
 
 Factory classmethods mirror :class:`aerospike_sdk.record_stream.RecordStream`
-so callers that already use ``_from_list`` / ``_from_batch_records`` /
-``_from_single`` / ``_from_error`` / ``chain`` keep the same shape. The
+so callers that already use ``_from_list`` / ``_from_single`` /
+``_from_error`` / ``chain`` keep the same shape. The
 producer adapters that wrap a live PAC recordset / batch stream are private
 plumbing (``_from_pac_recordset`` / ``_from_chunked_pac_recordset`` /
 ``_from_pac_batch_stream``), driven by the query/batch dispatch code.
@@ -38,7 +38,7 @@ from aerospike_sdk.exceptions import (
     _convert_pac_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.record_result import RecordResult, batch_records_to_results
+from aerospike_sdk.record_result import RecordResult
 
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -92,13 +92,6 @@ class RecordStream:
     def _from_list(cls, results: Sequence[RecordResult]) -> "RecordStream":
         """Wrap an already-materialized list of results."""
         return cls(iter(results))
-
-    @classmethod
-    def _from_batch_records(
-        cls, batch_records: Sequence, keys: Sequence,
-    ) -> "RecordStream":
-        """Wrap a list of PAC ``BatchRecord`` objects and their request keys."""
-        return cls._from_list(batch_records_to_results(batch_records, keys))
 
     @classmethod
     def _from_pac_batch_stream(

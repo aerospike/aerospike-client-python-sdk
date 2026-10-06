@@ -28,7 +28,6 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 from aerospike_sdk.error_strategy import (
     ErrorStrategy,
     _ErrorDisposition,
-    _filter_records_with_handler,
     _resolve_disposition,
 )
 from aerospike_sdk.operations_shared import _to_expiration
@@ -92,83 +91,6 @@ class TestResolveDisposition:
     def test_callable_multi_key_returns_handler(self):
         result = _resolve_disposition(lambda k, i, e: None, is_single_key=False)
         assert result is _ErrorDisposition.HANDLER
-
-
-# ---------------------------------------------------------------------------
-# _filter_records_with_handler
-# ---------------------------------------------------------------------------
-
-class TestFilterRecordsWithHandler:
-    """``_filter_records_with_handler`` routes non-OK rows to the callback
-    and returns successes only. Backs the ``on_error`` parameter on the
-    batch ``execute()`` / ``stream()`` surface."""
-
-    def _ok(self, key_val: int, idx: int) -> RecordResult:
-        return RecordResult(
-            key=_key(key_val), record=None,
-            result_code=ResultCode.OK, index=idx,
-        )
-
-    def _fail(
-        self, key_val: int, idx: int,
-        rc: ResultCode = ResultCode.KEY_NOT_FOUND_ERROR,
-        exception=None,
-    ) -> RecordResult:
-        return RecordResult(
-            key=_key(key_val), record=None,
-            result_code=rc, index=idx, exception=exception,
-        )
-
-    def test_all_successes_pass_through_unchanged(self):
-        rows = [self._ok(1, 0), self._ok(2, 1)]
-        captured: list = []
-        out = _filter_records_with_handler(rows, lambda *a: captured.append(a))
-        assert out == rows
-        assert captured == []
-
-    def test_failures_routed_to_handler_and_excluded(self):
-        rows = [self._ok(1, 0), self._fail(2, 1), self._ok(3, 2)]
-        captured: list = []
-        out = _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append((k, i, e)),
-        )
-        assert [r.index for r in out] == [0, 2]
-        assert len(captured) == 1
-        k, i, exc = captured[0]
-        assert k == _key(2)
-        assert i == 1
-        assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
-
-    def test_handler_receives_stored_exception_when_present(self):
-        stored = TimeoutError("timed out")
-        rows = [self._fail(1, 0, rc=ResultCode.TIMEOUT, exception=stored)]
-        captured: list = []
-        _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append(e),
-        )
-        assert captured[0] is stored
-
-    def test_handler_receives_synthesized_exception_when_no_stored(self):
-        rows = [self._fail(1, 0, rc=ResultCode.KEY_NOT_FOUND_ERROR)]
-        captured: list = []
-        _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append(e),
-        )
-        assert isinstance(captured[0], AerospikeError)
-        assert captured[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
-
-    def test_synthesized_exception_carries_sub_code(self):
-        """The handler-synthesized exception keeps the row's sub_code —
-        matching what ``RecordResult.or_raise`` raises for the same row."""
-        row = RecordResult(
-            key=_key(1), record=None,
-            result_code=ResultCode.OP_NOT_APPLICABLE, index=0, sub_code=2,
-        )
-        captured: list = []
-        _filter_records_with_handler(
-            [row], lambda k, i, e: captured.append(e),
-        )
-        assert captured[0].sub_code == 2
 
 
 # ---------------------------------------------------------------------------

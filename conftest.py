@@ -730,12 +730,6 @@ def sync_wait_for_set_visible():
 
 
 @pytest.fixture(scope="session")
-def aerospike_host_tls():
-    """Fixture providing the TLS-enabled Aerospike host for tests"""
-    return os.environ.get('AEROSPIKE_HOST_TLS', 'localhost:3107')
-
-
-@pytest.fixture(scope="session")
 def aerospike_host_sec():
     """Fixture providing the security-enabled Aerospike host for tests"""
     return os.environ.get('AEROSPIKE_HOST_SEC', 'localhost:3109')

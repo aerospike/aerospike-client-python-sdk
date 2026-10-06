@@ -31,7 +31,6 @@ from aerospike_async import (
     UDFLang,
     UdfRemoveTask,
     new_client,
-    new_client_blocking,
 )
 
 from aerospike_sdk.dataset import DataSet
@@ -224,57 +223,6 @@ class Client(RoutingCapabilitiesMixin):
             self._sdk_config_monitor = None
         if self._client is not None:
             await self._client.close()
-            self._client = None
-            self._connected = False
-            log.info("Client closed")
-        self._clear_routing_capability_cache()
-        self._namespace_mode_cache.clear()
-        self._supports_mrt_cache = None
-
-    def connect_blocking(self) -> None:
-        """Synchronously open a connection without requiring an asyncio loop.
-
-        Uses :func:`aerospike_async.new_client_blocking` to construct the
-        underlying PAC client and sets ``_connected = True``.
-
-        Idempotent: returns early if already connected.
-
-        Raises:
-            ConnectionError: When the PAC blocking connect cannot reach the
-                cluster.
-
-        Example::
-
-            client = Client("localhost:3000")
-            client.connect_blocking()
-            try:
-                ...
-            finally:
-                client.close_blocking()
-        """
-        if self._connected and self._client is not None:
-            return
-        refresh_log_levels()
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
-        try:
-            self._client = new_client_blocking(self._policy, self._seeds)
-        except PacAerospikeError as exc:
-            raise _convert_pac_exception(exc) from exc
-        self._connected = True
-        self._warm_routing_capabilities()
-        log.info(
-            "Connected seeds=%r", self._seeds,
-            extra={"aerospike.cluster": self._policy.cluster_name},
-        )
-
-    def close_blocking(self) -> None:
-        """Synchronously close the underlying client. Pair with :meth:`connect_blocking`.
-
-        Safe to call when already closed.
-        """
-        if self._client is not None:
-            self._client.close_blocking()
             self._client = None
             self._connected = False
             log.info("Client closed")

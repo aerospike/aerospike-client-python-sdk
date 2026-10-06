@@ -32,11 +32,6 @@ def _make_wbb(bin_name: str = "s") -> tuple[WriteBinBuilder, WriteSegmentBuilder
     return WriteBinBuilder(segment, bin_name), segment
 
 
-def _make_qbb(bin_name: str = "s") -> tuple[QueryBinBuilder, QueryBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
-    return QueryBinBuilder(qb, bin_name), qb
-
-
 # ---------------------------------------------------------------------------
 # Op factory shape — each str_* registers a StringOperation of the right type
 # ---------------------------------------------------------------------------

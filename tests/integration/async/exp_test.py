@@ -18,7 +18,6 @@
 Tests expression building and usage with actual database operations.
 """
 
-import base64
 
 import pytest
 from aerospike_async import FilterExpression
@@ -2173,11 +2172,6 @@ class TestConvenienceWrappers:
 
 def _hex_blob_expr(payload: bytes) -> str:
     return f"$.payload:BLOB == X'{payload.hex()}'"
-
-
-def _b64_blob_expr(payload: bytes) -> str:
-    enc = base64.b64encode(payload).decode("ascii")
-    return f'$.payload.get(type: BLOB) == "{enc}"'
 
 
 @pytest.fixture(scope="module")

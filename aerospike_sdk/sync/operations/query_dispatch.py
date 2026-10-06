@@ -466,44 +466,6 @@ class _BlockingQueryDispatch:
 
         return None
 
-    def _execute_spec_blocking(
-        self,
-        spec: _OperationSpec,
-        disp: _ErrorDisposition,
-        handler: ErrorHandler | None,
-    ) -> List[RecordResult]:
-        """Sync dispatch for one :class:`_OperationSpec`.
-
-        Mirrors :meth:`_execute_spec` shape-for-shape, routing each
-        (op_type, key-cardinality) combination to its blocking sibling.
-        Single-key dispatches via :meth:`_execute_single_key_direct_blocking`
-        (which itself branches on op_type). Multi-key dispatches via the
-        ``_execute_batch_*_blocking`` family.
-        """
-        keys = spec.keys
-        op_type = spec.op_type
-
-        if len(keys) == 1:
-            result = self._execute_single_key_direct_blocking(spec, disp, handler)
-            if result is None:
-                raise NotImplementedError(
-                    f"blocking single-key dispatch missing for op_type={op_type}")
-            return result
-
-        if op_type is None:
-            if spec.operations:
-                return self._execute_batch_read_operate_blocking(spec, disp, handler)
-            return self._execute_batch_read_blocking(spec, disp, handler)
-        if op_type == "udf":
-            return self._execute_batch_udf_blocking(spec, disp, handler)
-        if op_type == "delete":
-            return self._execute_batch_delete_blocking(spec, disp, handler)
-        if op_type == "touch":
-            return self._execute_batch_touch_blocking(spec, disp, handler)
-        if op_type == "exists":
-            return self._execute_batch_exists_blocking(spec, disp, handler)
-        return self._execute_batch_write_blocking(spec, disp, handler)
-
     def _execute_multispec_blocking(
         self,
         on_error: Optional[OnError] = None,
@@ -514,8 +476,9 @@ class _BlockingQueryDispatch:
         (chained queries), routes through either:
 
         - **Sequential**: when :meth:`_specs_require_sequential_run` is true
-          (e.g. any UDF spec), per-spec dispatch via
-          :meth:`_execute_spec_blocking`, results concatenated.
+          (two or more segments share a key), each key-disjoint run from
+          :meth:`_spec_batch_runs` goes out as its own batch, in chain order,
+          results concatenated.
         - **Mixed batch**: combine all per-spec ops into a single PAC
           ``batch_blocking`` call.
 
