@@ -17,7 +17,7 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import DataSet
+from aerospike_sdk import AbortStatus, CommitStatus, DataSet
 from aerospike_sdk.exceptions import (
     AerospikeError,
     RecordNotFoundError,
@@ -201,6 +201,21 @@ async def test_transactional_session_context_manager(cluster):
         assert tx.txn is not None
 
     assert tx_session.active is False
+
+
+async def test_empty_transaction_explicit_commit_and_abort_report_ok(cluster):
+    """An empty transaction commits or aborts cleanly when finalized by hand.
+
+    With nothing written there is no monitor record to roll or close, so any
+    status other than ``OK`` means the empty case took a wrong turn.
+    """
+    async with cluster.transaction() as tx:
+        assert await tx.commit() == CommitStatus.OK
+    assert tx.active is False
+
+    async with cluster.transaction() as tx:
+        assert await tx.abort() == AbortStatus.OK
+    assert tx.active is False
 
 
 async def test_fast_path_get_missing_key_raises_sdk_type(cluster):

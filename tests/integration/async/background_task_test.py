@@ -16,8 +16,9 @@
 """Integration tests for session.background_task() (async)."""
 
 from tests.pac_compat import requires_server_compiled_ael
+import pytest
 import pytest_asyncio
-from aerospike_sdk import Exp, HllConfig, UDFLang
+from aerospike_sdk import Exp, HllConfig, IndexNotFoundError, ResultCode, UDFLang
 from aerospike_async import Filter, MapOperation, MapReturnType
 
 from aerospike_sdk import DataSet
@@ -33,6 +34,7 @@ CUTOFF = [1704067200]
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
 BG_INDEX = "pfc_bg_idx"
+MISSING_INDEX = "pfc_bg_missing_idx"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
 
@@ -477,6 +479,100 @@ async def test_background_touch_with_index_filter(cluster):
     for i in values:
         touched = 204 <= i <= 208
         assert await generation(i) == before[i] + (1 if touched else 0)
+
+
+async def test_background_touch_with_index_filter_and_where(cluster):
+    """Only records inside the index range that also match the predicate are touched."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(601, 611)
+    for i in values:
+        await session.upsert(DS.id(f"bgtouchw_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    async def generation(i):
+        rs = await session.query(DS.id(f"bgtouchw_{i}")).execute()
+        return (await rs.first_or_raise()).record.generation
+
+    before = {i: await generation(i) for i in values}
+    task = await (
+        session.background_task()
+        .touch(DS)
+        .filter(Filter.range(BG_BIN, 604, 608))
+        .where(Exp.ne(Exp.int_bin(BG_BIN), Exp.int_val(606)))
+        .expire_record_after_seconds(600)
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        touched = 604 <= i <= 608 and i != 606
+        assert await generation(i) == before[i] + (1 if touched else 0)
+
+
+async def test_background_update_with_index_filter(cluster):
+    """A filter alone confines the update to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(401, 411)
+    for i in values:
+        await (
+            session.upsert(DS.id(f"bgupd_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+
+    task = await (
+        session.background_task()
+        .update(DS)
+        .filter(Filter.range(BG_BIN, 404, 408))
+        .bin(BG_BIN2).set_to("indexed")
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rs = await session.query(DS.id(f"bgupd_{i}")).bins([BG_BIN2]).execute()
+        written = (await rs.first_or_raise()).record.bins[BG_BIN2]
+        assert written == ("indexed" if 404 <= i <= 408 else "original")
+
+
+async def test_background_delete_with_index_filter(cluster):
+    """A filter alone confines the delete to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(501, 511)
+    for i in values:
+        await session.upsert(DS.id(f"bgdelf_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    task = await (
+        session.background_task()
+        .delete(DS)
+        .filter(Filter.range(BG_BIN, 504, 508))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rr = await (await session.query(DS.id(f"bgdelf_{i}")).execute()).first()
+        if 504 <= i <= 508:
+            assert rr is None
+        else:
+            assert rr is not None and rr.is_ok
+
+
+async def test_background_filter_on_missing_named_index_fails_at_execute(cluster):
+    """A filter naming an index that does not exist is refused when the job starts."""
+    session = cluster.create_session()
+    with pytest.raises(IndexNotFoundError) as exc_info:
+        await (
+            session.background_task()
+            .update(DS)
+            .filter(Filter.range_by_index(MISSING_INDEX, 1, 10))
+            .bin(BG_BIN2).set_to("unreachable")
+            .execute()
+        )
+    assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
 
 async def test_background_update_map_value_range_remove(cluster):

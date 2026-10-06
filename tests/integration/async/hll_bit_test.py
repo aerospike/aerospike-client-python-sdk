@@ -20,7 +20,7 @@ import base64
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Exp, HllConfig
+from aerospike_sdk import BinOpInvalidError, BitwiseOverflowActions, Exp, HllConfig
 from aerospike_sdk.dataset import DataSet
 from tests.integration.namespace import general_namespace
 
@@ -30,7 +30,7 @@ async def cluster(aerospike_host, make_cluster_definition):
     async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
         test_ds = DataSet.of(general_namespace(), "test")
-        for suffix in ("fluent_1", "fluent_2", "b64_1", "b64_2", "b64_3"):
+        for suffix in ("fluent_1", "fluent_2", "b64_1", "b64_2", "b64_3", "table"):
             await session.delete(test_ds.id(f"hll_bit_{suffix}")).execute()
         yield c
 
@@ -152,3 +152,99 @@ async def test_bit_b64_encode_expression_reads(cluster, supports_bit_b64_encode)
     assert bins["span"] == _b64(b"\x42\x03")
     assert bins["inverted"] == _b64(b"\x42\x03\x04\x05")
     assert bins["negoff"] == _b64(b"\x04\x05")
+
+
+# Bits, most significant first: 00000001 01000010 00000011 00000100 00000101.
+# Offsets and sizes are deliberately unequal and off byte boundaries so that a
+# swapped or dropped argument lands on different bits and changes the result.
+_BIT_SEED = b"\x01\x42\x03\x04\x05"
+_WRAP = BitwiseOverflowActions.WRAP
+_SATURATE = BitwiseOverflowActions.SATURATE
+
+
+@pytest.mark.parametrize(
+    ("apply", "expected"),
+    [
+        pytest.param(lambda b: b.bit_insert(1, b"\xff"), b"\x01\xff\x42\x03\x04\x05", id="insert"),
+        pytest.param(lambda b: b.bit_remove(1, 2), b"\x01\x04\x05", id="remove"),
+        pytest.param(lambda b: b.bit_set(13, 3, b"\xe0"), b"\x01\x47\x03\x04\x05", id="set"),
+        pytest.param(lambda b: b.bit_or(17, 6, b"\xa8"), b"\x01\x42\x57\x04\x05", id="or"),
+        pytest.param(lambda b: b.bit_xor(1, 7, b"\xfe"), b"\x7e\x42\x03\x04\x05", id="xor"),
+        pytest.param(lambda b: b.bit_and(12, 4, b"\x00"), b"\x01\x40\x03\x04\x05", id="and"),
+        pytest.param(lambda b: b.bit_not(25, 6), b"\x01\x42\x03\x7a\x05", id="not"),
+        pytest.param(lambda b: b.bit_lshift(32, 8, 3), b"\x01\x42\x03\x04\x28", id="lshift"),
+        # The low bit of byte 0 crosses into the top bit of byte 1.
+        pytest.param(lambda b: b.bit_rshift(0, 9, 1), b"\x00\xc2\x03\x04\x05", id="rshift"),
+        pytest.param(lambda b: b.bit_set_int(8, 16, 0x1234), b"\x01\x12\x34\x04\x05", id="set_int"),
+        pytest.param(
+            lambda b: b.bit_add(24, 16, 128, False, BitwiseOverflowActions.FAIL),
+            b"\x01\x42\x03\x04\x85", id="add",
+        ),
+        pytest.param(
+            lambda b: b.bit_add(0, 8, 255, False, _WRAP), b"\x00\x42\x03\x04\x05", id="add_wrap",
+        ),
+        pytest.param(
+            lambda b: b.bit_add(0, 8, 255, False, _SATURATE), b"\xff\x42\x03\x04\x05",
+            id="add_saturate",
+        ),
+        # 66 + 100 saturates at the signed maximum; unsigned it would be 0xa6.
+        pytest.param(
+            lambda b: b.bit_add(8, 8, 100, True, _SATURATE), b"\x01\x7f\x03\x04\x05",
+            id="add_signed_saturate",
+        ),
+        pytest.param(
+            lambda b: b.bit_subtract(8, 8, 0x43, False, _WRAP), b"\x01\xff\x03\x04\x05",
+            id="subtract_wrap",
+        ),
+        pytest.param(
+            lambda b: b.bit_subtract(8, 8, 0x43, False, _SATURATE), b"\x01\x00\x03\x04\x05",
+            id="subtract_saturate",
+        ),
+    ],
+)
+async def test_bit_write_ops_against_server(cluster, apply, expected):
+    """Each write op changes exactly the bits its arguments name."""
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), "test").id("hll_bit_table")
+    await session.upsert(k).bin("bits").set_to(_BIT_SEED).execute()
+    await apply(session.update(k).bin("bits")).execute()
+    rs = await session.query(k).bins(["bits"]).execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["bits"] == expected
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        # Bits 9-13 are 10000, returned left-aligned in a byte.
+        pytest.param(lambda b: b.bit_get(9, 5), b"\x80", id="get"),
+        pytest.param(lambda b: b.bit_count(20, 4), 2, id="count"),
+        pytest.param(lambda b: b.bit_lscan(24, 8, True), 5, id="lscan"),
+        pytest.param(lambda b: b.bit_rscan(32, 8, False), 6, id="rscan"),
+        pytest.param(lambda b: b.bit_get_int(8, 8, False), 0x42, id="get_int"),
+        # Bits 9-11 are 100: -4 as a 3-bit signed integer, 4 unsigned.
+        pytest.param(lambda b: b.bit_get_int(9, 3, True), -4, id="get_int_signed"),
+        pytest.param(lambda b: b.bit_get_int(9, 3, False), 4, id="get_int_unsigned"),
+    ],
+)
+async def test_bit_read_ops_against_server(cluster, read, expected):
+    """Each read op reports on exactly the bits its arguments name."""
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), "test").id("hll_bit_table")
+    await session.upsert(k).bin("bits").set_to(_BIT_SEED).execute()
+    rs = await read(session.query(k).bin("bits")).execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["bits"] == expected
+
+
+async def test_bit_add_overflow_fail_raises_and_leaves_the_bin(cluster):
+    """The FAIL action refuses an overflowing add instead of writing it."""
+    session = cluster.create_session()
+    k = DataSet.of(general_namespace(), "test").id("hll_bit_table")
+    await session.upsert(k).bin("bits").set_to(_BIT_SEED).execute()
+    with pytest.raises(BinOpInvalidError):
+        await (
+            session.update(k).bin("bits")
+            .bit_add(0, 8, 255, False, BitwiseOverflowActions.FAIL)
+            .execute()
+        )
+    rs = await session.query(k).bins(["bits"]).execute()
+    assert (await rs.first_or_raise()).record_or_raise().bins["bits"] == _BIT_SEED

@@ -16,7 +16,7 @@
 """Integration tests for session.background_task() (sync)."""
 
 import pytest
-from aerospike_sdk import UDFLang
+from aerospike_sdk import IndexNotFoundError, ResultCode, UDFLang
 from aerospike_async import Filter
 
 from aerospike_sdk import DataSet
@@ -29,6 +29,7 @@ DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
 BG_INDEX = "pfc_bg_idx"
+MISSING_INDEX = "pfc_bg_missing_idx"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
 
@@ -243,3 +244,17 @@ def test_sync_background_update_with_index_filter_and_where(cluster):
         rs = session.query(DS.id(f"sbgif_{i}")).bins([BG_BIN2]).execute()
         bins = next(iter(rs)).record.bins
         assert bins.get(BG_BIN2) == ("touched" if 4 <= i <= 8 else "original")
+
+
+def test_sync_background_filter_on_missing_named_index_fails_at_execute(cluster):
+    """The blocking terminal converts the start-up refusal on its own path."""
+    session = cluster.create_session()
+    with pytest.raises(IndexNotFoundError) as exc_info:
+        (
+            session.background_task()
+            .update(DS)
+            .filter(Filter.range_by_index(MISSING_INDEX, 1, 10))
+            .bin(BG_BIN2).set_to("unreachable")
+            .execute()
+        )
+    assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
