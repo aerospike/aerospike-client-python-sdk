@@ -40,6 +40,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
     TypeVar,
     Union,
     cast,
@@ -49,7 +50,6 @@ from typing import (
 from typing import Self
 
 from aerospike_async import (
-    BasePolicy,
     BatchDeleteOp,
     BatchDeletePolicy,
     BatchPolicy,
@@ -91,7 +91,6 @@ from aerospike_async import (
     QueryPolicy,
     QueryWhereFlags,
     ReadPolicy,
-    Replica,
     Statement,
     StringNumericType,
     StringOperation,
@@ -134,6 +133,7 @@ from aerospike_sdk.operations_shared import (
 from aerospike_sdk.policy.policy_mapper import (
     resolve_durable_delete,
     to_batch_policy,
+    to_query_policy,
     to_read_policy,
     to_write_policy,
 )
@@ -412,12 +412,12 @@ class _QueryBuilderBase:
     _filter_expression: Optional[FilterExpression] = None
     _query_hint: Optional[QueryHint] = None
     _where_ael: Optional[str] = None
-    _policy: Optional[QueryPolicy] = None
+    _limit: Optional[int] = None
+    _records_per_second: Optional[int] = None
     _partition_filter: Optional[PartitionFilter] = None
     _chunk_size: Optional[int] = None
     _fail_on_filtered_out: bool = False
     _respond_all_keys: bool = False
-    _read_policy: Optional[ReadPolicy] = None
     _op_type: Optional[str] = None
     _generation: Optional[int] = None
     _ttl_seconds: Optional[int] = None
@@ -959,32 +959,6 @@ class _QueryBuilderBase:
             self._filter_expression = expression
         return self
 
-    def with_policy(self, policy: QueryPolicy) -> Self:
-        """
-        Set the query policy.
-        
-        Args:
-            policy: The query policy to use.
-        
-        Returns:
-            self for method chaining.
-        """
-        self._policy = policy
-        return self
-
-    def with_read_policy(self, policy: ReadPolicy) -> Self:
-        """
-        Set the read policy (for single key or batch key queries).
-        
-        Args:
-            policy: The read policy to use.
-        
-        Returns:
-            self for method chaining.
-        """
-        self._read_policy = policy
-        return self
-
     def partition(self, partition_filter: PartitionFilter) -> Self:
         """Restrict a dataset query using a PAC :class:`~aerospike_async.PartitionFilter`.
 
@@ -1123,20 +1097,25 @@ class _QueryBuilderBase:
         return self
 
     def records_per_second(self, rps: int) -> Self:
-        """
-        Set the maximum records per second for the query.
-        
-        Args:
-            rps: Maximum records per second to process.
-        
-        Returns:
-            self for method chaining.
-            
+        """Throttle the query to at most *rps* records per second on each server node.
+
+        Also throttles a background task started from this query with
+        :meth:`execute_background_task` or :meth:`execute_udf_background_task`.
+
         Example::
 
-                query = session.query(dataset).records_per_second(1000)
+                stream = await session.query(users).records_per_second(1000).execute()
+
+        Args:
+            rps: Maximum records per second; ``0`` means unthrottled.
+
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`limit`: Cap the total records returned.
         """
-        self._ensure_policy().records_per_second = rps
+        self._records_per_second = rps
         return self
 
     def limit(self, limit: int) -> Self:
@@ -1165,25 +1144,7 @@ class _QueryBuilderBase:
         """
         if limit <= 0:
             raise ValueError(f"Limit must be > 0, not {limit}")
-        self._ensure_policy().max_records = limit
-        return self
-
-    def expected_duration(self, duration: "QueryDuration") -> Self:
-        """
-        Set the expected duration of the query.
-        
-        Args:
-            duration: Expected duration (QueryDuration.LONG, QueryDuration.SHORT, or QueryDuration.LONG_RELAX_AP).
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
-
-                from aerospike_async import QueryDuration
-                query = session.query(dataset).expected_duration(QueryDuration.SHORT)
-        """
-        self._ensure_policy().expected_duration = duration
+        self._limit = limit
         return self
 
     def with_hint(self, hint: QueryHint) -> Self:
@@ -1218,44 +1179,6 @@ class _QueryBuilderBase:
         if self._query_hint is not None:
             raise ValueError("with_hint() can only be called once per query builder")
         self._query_hint = hint
-        return self
-
-    def replica(self, replica: "Replica") -> Self:
-        """
-        Set the replica preference for the query.
-        
-        Args:
-            replica: Replica preference. One of ``Replica.MASTER``, ``Replica.MASTER_PROLES``,
-                ``Replica.RANDOM``, ``Replica.SEQUENCE``, or ``Replica.PREFER_RACK``.
-        
-        Returns:
-            self for method chaining.
-        
-        Example::
-
-                from aerospike_async import Replica
-                query = session.query(dataset).replica(Replica.SEQUENCE)
-        """
-        self._ensure_policy().replica = replica
-        return self
-
-    def base_policy(self, base_policy: "BasePolicy") -> Self:
-        """
-        Set the base policy for the query.
-        
-        Args:
-            base_policy: The base policy to use.
-        
-        Returns:
-            self for method chaining.
-        
-        Example::
-
-                from aerospike_async import BasePolicy
-                base = BasePolicy()
-                query = session.query(dataset).base_policy(base)
-        """
-        self._ensure_policy().base_policy = base_policy
         return self
 
     def fail_on_filtered_out(self) -> Self:
@@ -1409,11 +1332,27 @@ class _QueryBuilderBase:
         self._default_ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
-    def _ensure_policy(self) -> QueryPolicy:
-        """Return the existing policy or create a default one."""
-        if self._policy is None:
-            self._policy = self._apply_txn(QueryPolicy())
-        return self._policy
+    def _build_dataset_query_policy(self) -> Tuple[QueryPolicy, int]:
+        """Build the dataset query policy; also return the overall cap for a chunked query.
+
+        A chunked query fetches ``chunk_size`` records per round trip, so the
+        ``limit()`` total is enforced by the stream across chunks; ``0`` means
+        no cap.
+        """
+        if self._behavior is not None:
+            policy = to_query_policy(self._behavior.get_settings(
+                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()))
+        else:
+            policy = QueryPolicy()
+        policy = self._apply_txn(policy)
+        if self._records_per_second is not None:
+            policy.records_per_second = self._records_per_second
+        if self._chunk_size is not None:
+            policy.max_records = self._chunk_size
+            return policy, self._limit or 0
+        if self._limit is not None:
+            policy.max_records = self._limit
+        return policy, 0
 
     def _set_current_keys(
         self,
@@ -1950,9 +1889,7 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> ReadPolicy:
         """Build a ``ReadPolicy`` for single-key reads."""
-        if self._read_policy is not None:
-            rp = self._read_policy
-        elif self._behavior is not None:
+        if self._behavior is not None:
             if self._base_read_policy is None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
                     self._behavior.get_settings(
@@ -2441,6 +2378,7 @@ class _QueryBuilderBase:
             None,
             None,
             namespace_mode=self._resolved_namespace_mode(),
+            records_per_second=self._records_per_second,
         )
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:

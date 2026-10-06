@@ -179,7 +179,6 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._filter is None
             and self._op_type is None
             and self._base_read_policy is not None
-            and self._read_policy is None
         ):
             if self._record_on:
                 self._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)

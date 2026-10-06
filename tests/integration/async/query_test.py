@@ -21,7 +21,7 @@ import time
 import pytest
 import pytest_asyncio
 from aerospike_sdk import Filter, Key
-from aerospike_async import PartitionFilter, QueryPolicy
+from aerospike_async import PartitionFilter
 from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
@@ -153,20 +153,6 @@ async def test_query_with_bins(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_policy(session):
-    """Test query with custom policy."""
-    policy = QueryPolicy()
-    stream = await session.query(general_namespace(), "query_test").with_policy(policy).execute()
-    count = 0
-    async for result in stream:
-        assert result.is_ok
-        count += 1
-        if count >= 3:
-            break
-
-    stream.close()
-    assert count > 0
-
 async def test_query_with_partition_filter(session):
     """Test query with partition filter."""
     partition_filter = PartitionFilter.all()
@@ -183,13 +169,12 @@ async def test_query_with_partition_filter(session):
 
 async def test_query_builder_chaining(session):
     """Test method chaining on query builder."""
-    policy = QueryPolicy()
     partition_filter = PartitionFilter.all()
 
     stream = await (
         session.query(general_namespace(), "query_test")
         .bins(["name", "age"])
-        .with_policy(policy)
+        .limit(10)
         .partition(partition_filter)
         .execute()
     )

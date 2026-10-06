@@ -25,11 +25,6 @@ def _query_builder():
     return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
 
 
-def test_limit_sets_policy_cap():
-    builder = _query_builder().limit(100)
-    assert builder._policy.max_records == 100
-
-
 @pytest.mark.parametrize("value", [0, -1])
 def test_limit_rejects_non_positive(value):
     """No limit is the default; there is no value that means "unlimited"."""

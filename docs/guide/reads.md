@@ -292,16 +292,22 @@ stream = await (
 Fine-tune query behavior:
 
 ```python
-from aerospike_sdk import QueryDuration
+from aerospike_sdk import QueryDuration, QueryHint
 
 stream = await (
     session.query(users)
     .where("$.age > 18")
-    .expected_duration(QueryDuration.LONG)
+    .with_hint(QueryHint(query_duration=QueryDuration.LONG))
+    .records_per_second(5000)
     .chunk_size(500)
     .execute()
 )
 ```
+
+These tweaks layer onto the session's `Behavior`, so its query timeouts,
+retries, and replica preference still apply. To change those, derive a
+`Behavior` with a `reads_query=Settings(...)` scope (see
+[Connecting](connecting.md)).
 
 ### Draining a chunked query
 

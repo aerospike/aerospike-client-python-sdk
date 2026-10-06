@@ -35,7 +35,6 @@ from aerospike_async import (
     Key,
     Operation,
     PartitionFilter,
-    QueryPolicy,
     ReadPolicy,
     WritePolicy,
 )
@@ -58,7 +57,6 @@ from aerospike_sdk.operations_shared import (
 
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
-    to_query_policy,
     to_read_policy,
     to_write_policy,
 )
@@ -1106,16 +1104,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
         key = spec.keys[0]
-        if self._read_policy is not None:
-            rp = self._read_policy
-        elif self._behavior is not None:
-            rp = self._apply_txn(to_read_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-        else:
-            rp = self._apply_txn(ReadPolicy())
-        if spec.filter_expression is not None:
-            rp.filter_expression = spec.filter_expression
+        rp = self._make_read_policy(spec)
         try:
             found = await self._client.exists(key, policy=rp)
         except Exception as e:
@@ -1156,22 +1145,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         self._warn_if_query_in_txn()
-        if self._policy is not None:
-            policy = self._policy
-        elif self._behavior is not None:
-            policy = self._apply_txn(to_query_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
-        else:
-            policy = self._apply_txn(QueryPolicy())
-        chunk_total_limit = 0
-        if self._chunk_size is not None and self._chunk_size > 0:
-            # limit() lands on policy.max_records. Capture it as the overall cap
-            # before chunk_size overwrites the field with the per-chunk fetch
-            # size, then hand it to the stream's _chunk_limit below so the total
-            # is enforced across chunks.
-            chunk_total_limit = policy.max_records or 0
-            policy.max_records = self._chunk_size
+        policy, chunk_total_limit = self._build_dataset_query_policy()
         hint = self._query_hint
         use_server_query_selection = self._use_server_query_selection()
         self._apply_dataset_query_policy_filter(

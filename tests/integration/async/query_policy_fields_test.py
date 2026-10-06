@@ -13,126 +13,28 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Tests for QueryPolicy field exposure."""
+"""Query builder tweaks combined with a Behavior's query settings, end to end."""
 
-import pytest
-from aerospike_sdk import QueryDuration
-from aerospike_async import BasePolicy, QueryPolicy, Replica
+from datetime import timedelta
 
-from aerospike_sdk import DataSet
-from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.policy import Settings
 from tests.integration.namespace import general_namespace
 
-
-@pytest.fixture
-async def session(cluster):
-    """Setup session with default behavior for testing."""
-    return cluster.create_session(Behavior.DEFAULT)
-
-
-async def test_records_per_second(session):
-    """Test records_per_second method on QueryBuilder."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Test that the method exists and can be called
-    query_builder = session.query(users).records_per_second(1000)
-    assert query_builder is not None
-
-    # Verify the policy was set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.records_per_second == 1000
+_SET = "query_policy_fields"
+_BEHAVIOR = Behavior.DEFAULT.derive_with_changes(
+    "query-policy-fields",
+    reads_query=Settings(total_timeout=timedelta(seconds=7), max_retries=4),
+)
 
 
-async def test_limit(session):
-    """Test limit method on QueryBuilder."""
-    users = DataSet.of(general_namespace(), "users")
+async def test_limit_and_rate_run_under_a_behavior(cluster):
+    session = cluster.create_session(_BEHAVIOR)
+    ds = DataSet.of(general_namespace(), _SET)
+    for i in range(10):
+        await session.upsert(ds.id(i)).put({"v": i}).execute()
 
-    # Test that the method exists and can be called
-    query_builder = session.query(users).limit(10000)
-    assert query_builder is not None
+    stream = await session.query(ds).limit(3).records_per_second(1000).execute()
+    rows = await stream.collect()
 
-    # Verify the policy was set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.max_records == 10000
-
-
-async def test_expected_duration(session):
-    """Test expected_duration method on QueryBuilder."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Test that the method exists and can be called with QueryDuration enum
-    query_builder = session.query(users).expected_duration(QueryDuration.SHORT)
-    assert query_builder is not None
-
-    # Verify the policy was set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.expected_duration == QueryDuration.SHORT
-
-
-async def test_replica(session):
-    """Test replica method on QueryBuilder."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Test that the method exists and can be called with Replica enum
-    query_builder = session.query(users).replica(Replica.SEQUENCE)
-    assert query_builder is not None
-
-    # Verify the policy was set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.replica == Replica.SEQUENCE
-
-
-async def test_base_policy(session):
-    """Test base_policy method on QueryBuilder."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Test that the method exists and can be called
-    base = BasePolicy()
-    query_builder = session.query(users).base_policy(base)
-    assert query_builder is not None
-
-    # Verify the policy was set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.base_policy is not None
-
-
-async def test_chaining_policy_fields(session):
-    """Test that multiple policy fields can be chained."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Test chaining multiple policy methods
-    query_builder = (
-        session.query(users)
-        .records_per_second(1000)
-        .limit(10000)
-        .expected_duration(QueryDuration.SHORT)
-        .replica(Replica.SEQUENCE)
-    )
-    assert query_builder is not None
-
-    # Verify all fields were set
-    policy = query_builder._policy
-    assert policy is not None
-    assert policy.records_per_second == 1000
-    assert policy.max_records == 10000
-    assert policy.expected_duration == QueryDuration.SHORT
-    assert policy.replica == Replica.SEQUENCE
-
-
-async def test_policy_fields_with_existing_policy(session):
-    """Test that policy fields work with an existing QueryPolicy."""
-    users = DataSet.of(general_namespace(), "users")
-
-    # Create a policy and set it
-    policy = QueryPolicy()
-    query_builder = session.query(users).with_policy(policy)
-
-    # Then add additional fields
-    query_builder = query_builder.records_per_second(1000).limit(10000)
-    assert query_builder is not None
-
+    assert 0 < len(rows) <= 3
