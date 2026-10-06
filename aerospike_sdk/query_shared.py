@@ -137,7 +137,6 @@ from aerospike_sdk.policy.policy_mapper import (
     to_read_policy,
     to_write_policy,
 )
-from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
@@ -725,16 +724,6 @@ class _QueryBuilderBase:
         if self._txn is not None:
             log.warning(_QUERY_IN_TXN_WARNING)
 
-    def _refuse_background_in_txn(self) -> None:
-        """Raise when a background task would start inside a transaction.
-
-        Unlike a query, whose reads are harmless outside the transaction, a
-        background task writes, and those writes would escape its commit and
-        abort. ``with_txn(None)`` opts out explicitly.
-        """
-        if self._txn is not None:
-            raise RuntimeError(_BACKGROUND_IN_TXN_ERROR)
-
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
 
@@ -1120,9 +1109,6 @@ class _QueryBuilderBase:
     def records_per_second(self, rps: int) -> Self:
         """Throttle the query to at most *rps* records per second on each server node.
 
-        Also throttles a background task started from this query with
-        :meth:`execute_background_task` or :meth:`execute_udf_background_task`.
-
         Example::
 
                 stream = await session.query(users).records_per_second(1000).execute()
@@ -1461,25 +1447,6 @@ class _QueryBuilderBase:
         if self._txn is not None:
             features.append(usage.TRANSACTION)
         usage.record(self._sdk_client, features)
-
-    def _flush_background_usage(self, kind: str) -> None:
-        """Record a background job that has passed validation.
-
-        Dataset queries never hit :meth:`_finalize_current_spec`'s collect
-        (no keys), so the current segment's filters and ops are folded in
-        here. ``kind`` is :data:`~aerospike_sdk.metrics.usage.BACKGROUND_OPERATE`
-        or :data:`~aerospike_sdk.metrics.usage.BACKGROUND_UDF`.
-        """
-        if not self._record_on:
-            return
-        if self._usage_on:
-            self._collect_segment_usage()
-            features = self._usage_features
-            if features is None:
-                self._usage_features = [kind]
-            else:
-                features.append(kind)
-        self._record_call(usage.API_BACKGROUND, usage.SHAPE_QUERY)
 
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
@@ -2269,27 +2236,6 @@ class _QueryBuilderBase:
         self._operations.append(op)
         return self
 
-    def with_write_operations(
-        self, operations: Sequence[Any],
-    ) -> Self:
-        """Attach write operations for a background dataset task.
-
-        Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
-        chained bin writes. Use with :meth:`execute_background_task` on a dataset
-        query (no keys). Any write operation is valid, including list, map,
-        bit, HLL and string operations; the server rejects read operations in a
-        background job.
-
-        Args:
-            operations: Sequence of write operations (e.g. ``Operation.put``,
-                ``MapOperation.remove_by_value_range``).
-
-        Returns:
-            self for method chaining.
-        """
-        self._operations.extend(operations)
-        return self
-
     def query(
         self,
         arg1: Union[Key, List[Key]],
@@ -2434,19 +2380,6 @@ class _QueryBuilderBase:
             projection = list(self._op_projection) if self._op_projection else []
             statement.set_operations(projection + list(self._operations))
         return statement
-
-    def _make_background_write_policy(self) -> WritePolicy:
-        # A keyless query never reaches a segment finalizer, which is where a
-        # string where() is otherwise materialized.
-        self._resolve_where_filter_expression()
-        return make_background_write_policy(
-            self._behavior,
-            self._filter_expression,
-            None,
-            None,
-            namespace_mode=self._resolved_namespace_mode(),
-            records_per_second=self._records_per_second,
-        )
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         settings = None

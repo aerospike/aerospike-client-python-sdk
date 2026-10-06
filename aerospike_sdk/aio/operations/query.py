@@ -31,7 +31,6 @@ from aerospike_async import (
     BatchReadOp,
     BatchReadPolicy,
     BatchWritePolicy,
-    ExecuteTask,
     Key,
     Operation,
     PartitionFilter,
@@ -506,85 +505,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         # The lazy path only honors the callback form of on_error; an
         # ErrorStrategy enum collapses to inline errors (the stream default).
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
-
-    async def execute_background_task(self) -> ExecuteTask:
-        """Run a background write against all records matching this dataset query.
-
-        Returns a server task handle; poll with ``wait_till_complete`` or
-        ``query_status``. Requires :meth:`with_write_operations`.
-
-        Raises:
-            ValueError: If the builder targets keys or has no write operations.
-            RuntimeError: If the builder is bound to a transaction; opt out
-                with ``with_txn(None)``.
-            AerospikeError: If the server rejects the job, for example because
-                it contains a read operation.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if not self._operations:
-            raise ValueError(
-                "At least one write operation is required; use with_write_operations(...).",
-            )
-        self._flush_background_usage(usage.BACKGROUND_OPERATE)
-        log.debug(
-            "background task: %s.%s ops=%d",
-            self._namespace, self._set_name, len(self._operations),
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        try:
-            return await self._client.query_operate(
-                statement, list(self._operations), write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    async def execute_udf_background_task(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Apply a registered UDF to matching records as a background task.
-
-        Do not use :meth:`with_write_operations` on the same builder.
-
-        Raises:
-            ValueError: If the builder targets keys or has write operations set.
-            RuntimeError: If the builder is bound to a transaction; opt out
-                with ``with_txn(None)``.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if self._operations:
-            raise ValueError(
-                "Do not combine with_write_operations with execute_udf_background_task.",
-            )
-        self._flush_background_usage(usage.BACKGROUND_UDF)
-        log.debug(
-            "background UDF: %s.%s %s.%s",
-            self._namespace, self._set_name, package_name, function_name,
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        py_args: Optional[List[Any]] = list(args) if args is not None else None
-        try:
-            return await self._client.query_execute_udf(
-                statement, package_name, function_name, py_args, write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-
 
     # -- Private helpers -------------------------------------------------------
 

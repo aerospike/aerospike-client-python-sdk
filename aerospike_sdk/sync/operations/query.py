@@ -27,10 +27,10 @@ so chained types stay in the sync namespace.
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any, List, Optional, Sequence, Union
+from typing import List, Optional, Union
 
 
-from aerospike_async import ExecuteTask, Key
+from aerospike_async import Key
 
 from aerospike_async import ResultCode
 
@@ -135,21 +135,6 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         return WriteSegmentBuilder(self)
 
     # -- Execute --------------------------------------------------------------
-
-    def execute_background_task(self) -> ExecuteTask:
-        """Run a background write for this dataset query (synchronous)."""
-        return self._execute_background_task_blocking()
-
-    def execute_udf_background_task(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Run a background UDF for this dataset query (synchronous)."""
-        return self._execute_udf_background_task_blocking(
-            package_name, function_name, args,
-        )
 
     def execute(
         self, on_error: Optional[OnError] = None,

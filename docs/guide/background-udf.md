@@ -136,6 +136,22 @@ task = await (
 await task.wait_till_complete()
 ```
 
+A UDF job narrows the same way as a write job: `filter()` confines it to a
+secondary-index range, and `where()` decides which of those records invoke the UDF.
+
+```python
+from aerospike_sdk import Filter
+
+task = await (
+    session.background_task()
+    .execute_udf(users)
+    .function("my_module", "transform_record")
+    .filter(Filter.range("age", 30, 65))
+    .where("$.status == 'active'")
+    .execute()
+)
+```
+
 ## Foreground UDF
 
 Execute a Lua UDF on specific keys and get results back:

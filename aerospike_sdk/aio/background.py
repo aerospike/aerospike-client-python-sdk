@@ -654,6 +654,7 @@ class _BackgroundUdfBuilderBase:
         self._package_name = package_name
         self._function_name = function_name
         self._args: Optional[List[Any]] = None
+        self._filter: Optional[Filter] = None
         self._filter_expression: Optional[FilterExpression] = None
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
@@ -722,6 +723,48 @@ class _BackgroundUdfBuilderBase:
             self._filter_expression = expression
         return self
 
+    def filter(self, filter_obj: Filter) -> BackgroundUdfBuilder:
+        """Restrict the UDF job with a secondary-index :class:`~aerospike_async.Filter`.
+
+        The filter attaches to the query ``Statement``, so the server reaches the
+        records through the index instead of scanning the set, and invokes the UDF
+        only on records in the index range. It combines with :meth:`where`: the
+        index selects the candidates and the predicate decides which of them the
+        UDF runs on. A job carries at most one filter, because the server accepts
+        one index range per query.
+
+        Args:
+            filter_obj: The secondary-index filter (for example ``Filter.range``).
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
+
+        Example::
+
+            task = await (
+                session.background_task()
+                    .execute_udf(DataSet.of("test", "donor"))
+                    .function("donor_udfs", "apply_bonus")
+                    .passing(50)
+                    .filter(Filter.range("age", 30, 65))
+                    .execute()
+            )
+
+        See Also:
+            :meth:`where`
+            :meth:`BackgroundOperationBuilder.filter`
+        """
+        if filter_obj is None:
+            raise TypeError("filter() requires a Filter, got None")
+        if self._filter is not None:
+            raise ValueError("filter() can only be called once per background job")
+        self._filter = filter_obj
+        return self
+
     def records_per_second(self, rps: int) -> BackgroundUdfBuilder:
         """Throttle the background job to *rps* records per second.
 
@@ -784,6 +827,8 @@ class _BackgroundUdfBuilderBase:
             self._dataset.namespace,
             self._dataset.set_name,
         )
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
@@ -808,6 +853,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
         "_package_name",
         "_function_name",
         "_args",
+        "_filter",
         "_filter_expression",
         "_records_per_second",
         "_durable_delete_command_default",
@@ -867,6 +913,8 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             self._dataset.namespace,
             self._dataset.set_name,
         )
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:

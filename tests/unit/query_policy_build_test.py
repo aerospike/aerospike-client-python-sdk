@@ -17,14 +17,13 @@
 
 ``limit()`` and ``records_per_second()`` are builder fields applied when the
 policy is built at execute time, so the Behavior's timeouts and retries still
-reach PAC. The rate also reaches a dataset query's background task.
+reach PAC.
 """
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from aerospike_async import Operation
 
 from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -45,9 +44,9 @@ _BEHAVIOR = Behavior.DEFAULT.derive_with_changes(
 _RUNTIMES = pytest.mark.parametrize("qb_cls", [QueryBuilder, SyncQueryBuilder], ids=["async", "sync"])
 
 
-def _builder(qb_cls, client=None):
+def _builder(qb_cls):
     qb = qb_cls(
-        client=client if client is not None else MagicMock(),
+        client=MagicMock(),
         namespace="test",
         set_name="t",
         behavior=_BEHAVIOR,
@@ -104,36 +103,6 @@ async def test_chunked_query_fetches_per_chunk_and_caps_the_total(qb_cls):
     policy, cap = await _run_dataset_query(_builder(qb_cls).chunk_size(3).limit(10))
     assert policy.max_records == 3
     assert cap == 10
-
-
-@pytest.mark.parametrize("start", [
-    pytest.param(
-        lambda qb: qb.with_write_operations([Operation.put("x", 1)]).execute_background_task(),
-        id="operate",
-    ),
-    pytest.param(lambda qb: qb.execute_udf_background_task("pkg", "fn"), id="udf"),
-])
-async def test_records_per_second_throttles_background_tasks(start):
-    client = MagicMock()
-    client.query_operate = AsyncMock(return_value=MagicMock())
-    client.query_execute_udf = AsyncMock(return_value=MagicMock())
-    await start(_builder(QueryBuilder, client).records_per_second(100))
-    call = client.query_operate.call_args or client.query_execute_udf.call_args
-    assert call.kwargs["write_policy"].records_per_second == 100
-
-
-@pytest.mark.parametrize("start", [
-    pytest.param(
-        lambda qb: qb.with_write_operations([Operation.put("x", 1)]).execute_background_task(),
-        id="operate",
-    ),
-    pytest.param(lambda qb: qb.execute_udf_background_task("pkg", "fn"), id="udf"),
-])
-def test_records_per_second_throttles_sync_background_tasks(start):
-    client = MagicMock()
-    start(_builder(SyncQueryBuilder, client).records_per_second(100))
-    call = client.query_operate_blocking.call_args or client.query_execute_udf_blocking.call_args
-    assert call.kwargs["write_policy"].records_per_second == 100
 
 
 @_RUNTIMES

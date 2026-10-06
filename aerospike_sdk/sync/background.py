@@ -270,6 +270,20 @@ class BackgroundUdfBuilder:
         self._inner.where(expression, *params)
         return self
 
+    def filter(self, filter_obj: Filter) -> BackgroundUdfBuilder:
+        """Restrict the UDF job with a secondary-index ``Filter`` (sync).
+
+        Combines with :meth:`where`; see
+        :meth:`aerospike_sdk.aio.background.BackgroundUdfBuilder.filter`
+        for the full contract.
+
+        Raises:
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
+        """
+        self._inner.filter(filter_obj)
+        return self
+
     def records_per_second(self, rps: int) -> BackgroundUdfBuilder:
         self._inner.records_per_second(rps)
         return self

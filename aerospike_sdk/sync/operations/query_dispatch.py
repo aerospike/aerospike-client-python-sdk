@@ -37,7 +37,6 @@ from typing import (
 from aerospike_async import (
     BatchReadOp,
     BatchWritePolicy,
-    ExecuteTask,
     Key,
     Operation,
     PartitionFilter,
@@ -71,7 +70,6 @@ from aerospike_sdk.exceptions import (
     _convert_pac_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
@@ -123,62 +121,6 @@ class _BlockingQueryDispatch:
         self._batch_namespace_modes = modes
         if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
             self._batch_any_sc = True
-
-    def _execute_background_task_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute_background_task`.
-
-        Uses PAC ``query_operate_blocking`` — zero asyncio.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        self._ensure_namespace_mode_blocking()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if not self._operations:
-            raise ValueError(
-                "At least one write operation is required; use with_write_operations(...).",
-            )
-        self._flush_background_usage(usage.BACKGROUND_OPERATE)
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        try:
-            return self._client.query_operate_blocking(
-                statement, list(self._operations), write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    def _execute_udf_background_task_blocking(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute_udf_background_task`.
-
-        Uses PAC ``query_execute_udf_blocking`` — zero asyncio.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        self._ensure_namespace_mode_blocking()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if self._operations:
-            raise ValueError(
-                "Do not combine with_write_operations with execute_udf_background_task.",
-            )
-        self._flush_background_usage(usage.BACKGROUND_UDF)
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        py_args: Optional[List[Any]] = list(args) if args is not None else None
-        try:
-            return self._client.query_execute_udf_blocking(
-                statement, package_name, function_name, py_args, write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
 
     def _execute_batch_udf_blocking(
         self,
