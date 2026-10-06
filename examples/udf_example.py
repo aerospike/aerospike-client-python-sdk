@@ -137,8 +137,6 @@ async def run_examples(session) -> None:
     except UdfError as exc:
         print(f"caught {type(exc).__name__} (code {exc.result_code}): {exc.base_message}")
 
-    print("Overall: SUCCESS")
-
 
 async def main() -> None:
     async with _env.connect().connect() as cluster:

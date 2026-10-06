@@ -14,7 +14,7 @@ async def main() -> None:
     users = DataSet.of("test", "users")
     print(f"DataSet: namespace={users.namespace}, set={users.set_name}")
 
-    # Single keys (various types)
+    # --- 1) Single keys of each key type ---
     key_str = users.id("user123")
     key_int = users.id(456)
     key_bytes = users.id(b"bytes_key")
@@ -23,11 +23,11 @@ async def main() -> None:
     print(f"  Integer key: {key_int}")
     print(f"  Bytes key: {key_bytes}")
 
-    # Multiple keys
+    # --- 2) Several keys at once ---
     keys = users.ids("user1", "user2", "user3")
     print(f"\nMultiple keys: {len(keys)} keys")
 
-    # Key from digest
+    # --- 3) A key rebuilt from its digest ---
     original = users.id(123)
     digest = original.digest
     from_digest = users.id_from_digest(digest)
@@ -36,7 +36,7 @@ async def main() -> None:
     print(f"  From digest: {from_digest}")
     print(f"  Equal: {original == from_digest}")
 
-    # Use with live server
+    # --- 4) Keys in use against a live server ---
     async with _env.connect().connect() as cluster:
         session = cluster.create_session(Behavior.DEFAULT)
 

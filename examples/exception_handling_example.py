@@ -122,8 +122,6 @@ async def run_examples(session) -> None:
             except RecordNotFoundError as exc:
                 print(f"  code {row.result_code} maps to {type(exc).__name__}")
 
-    print("Overall: SUCCESS")
-
 
 def describe(exc: Exception) -> None:
     """Print the parts of a failure that a caller usually branches on."""

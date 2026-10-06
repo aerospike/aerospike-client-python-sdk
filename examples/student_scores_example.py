@@ -33,7 +33,7 @@ async def run_examples(session) -> None:
 
         await session.truncate(CLASS_10A)
 
-        # --- Write 30 student records ---
+        # --- 1) Write 30 student records ---
         # Scores are seeded from a fixed RNG so runs are reproducible.
         rng = random.Random(42)
         for i in range(1, 31):
@@ -44,7 +44,7 @@ async def run_examples(session) -> None:
                 .execute()
             )
 
-        # --- Query: students with any score >= 90 ---
+        # --- 2) Query the students with any score of 90 or above ---
         # One server-side pass. $.scores.{=90:} selects map values >= 90;
         # .count() > 0 is the filter.
         #

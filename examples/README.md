@@ -62,6 +62,7 @@ Some Java examples have no faithful Python counterpart until a feature ships. Do
   and the object-mapping sections of `QueryExamples` (typed data sets, `toObjectList`, async object
   mapping). PSDK reads records as `dict` bins.
 
-(`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it via the
-low-level `CdtOperation.select_by_path`/`modify_by_path`/`remove` + `CTX.all_children[_with_filter]`
-factories. PSDK only lacks the *fluent* `.on_each_child()` ergonomics.)
+(`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it with the
+fluent path builder: `.on_each_child()` / `.on_each_child_where()` ending in `.modify_by()`,
+`.remove_matches()` or `.collect_values()`. Its expression-read section uses
+`Exp.exp_select_by_path` with `select_from`, since there is no fluent expression-read terminal.)

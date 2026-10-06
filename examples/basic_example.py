@@ -16,30 +16,29 @@ async def main() -> None:
         users = DataSet.of("test", "users")
         key = users.id("user123")
 
-        # PUT
+        # --- 1) Write a record ---
         await session.upsert(key).put({"name": "John", "age": 30}).execute()
         print("Put record")
 
-        # GET
+        # --- 2) Read the whole record ---
         stream = await session.query(key).execute()
         first = await stream.first_or_raise()
         print(f"Got record: {first.record.bins}")
 
-        # GET with selected bins
+        # --- 3) Read selected bins ---
         stream = await session.query(key).bins("name").execute()
         first = await stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
 
-        # EXISTS
+        # --- 4) Check that the record exists ---
         stream = await session.exists(key).execute()
         first = await stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
 
-        # DELETE
+        # --- 5) Delete the record ---
         await session.delete(key).execute()
         print("Deleted record")
 
-        print("\nAll operations completed successfully!")
 
 
 if __name__ == "__main__":

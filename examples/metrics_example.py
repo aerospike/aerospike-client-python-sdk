@@ -33,6 +33,7 @@ async def _traffic(cluster, count: int) -> None:
 
 async def part1_collect_and_read(cluster) -> None:
     """Enable collection, run traffic, and read the snapshot."""
+    # --- 1) Collect latency and read a snapshot ---
     print("\n=== 1. Collecting latency ===")
 
     # Microseconds here because a local cluster answers in well under a
@@ -74,6 +75,7 @@ async def part1_collect_and_read(cluster) -> None:
 
 async def part2_feature_usage(cluster) -> None:
     """Count which SDK features the application exercises."""
+    # --- 2) Count feature usage ---
     print("\n=== 2. Feature usage ===")
 
     cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
@@ -88,6 +90,7 @@ async def part2_feature_usage(cluster) -> None:
 
 async def part3_export(cluster) -> None:
     """Push snapshots to an exporter instead of polling for them."""
+    # --- 3) Push snapshots to an exporter ---
     print("\n=== 3. Exporting ===")
 
     class PrintingExporter:

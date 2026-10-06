@@ -17,6 +17,7 @@ from aerospike_sdk import (
     Behavior,
     BitwiseOverflowActions,
     DataSet,
+    ErrorStrategy,
     Exp,
     IndexType,
     ListOrderType,
@@ -24,6 +25,7 @@ from aerospike_sdk import (
     QueryDuration,
     QueryHint,
     ResultCode,
+    SpecialValue,
 )
 from aerospike_sdk.exceptions import AerospikeError, IndexAlreadyExistsError
 from aerospike_sdk.policy import Settings
@@ -48,6 +50,7 @@ async def _first_bins(session, key) -> dict | None:
 
 
 async def demonstrate_cluster_info(session) -> None:
+    # --- 1) Cluster info: namespaces and secondary indexes ---
     # Namespaces the cluster serves, plus the secondary indexes it knows about.
     info = session.info()
     for ns in sorted(await info.namespaces()):
@@ -60,6 +63,7 @@ async def demonstrate_cluster_info(session) -> None:
 
 
 async def demonstrate_basic_writes_and_errors(session) -> None:
+    # --- 2) Basic writes, write errors, and in-stream errors ---
     await session.truncate(SET)
     await asyncio.sleep(0.2)
 
@@ -76,6 +80,13 @@ async def demonstrate_basic_writes_and_errors(session) -> None:
         print(
             f"Exception caught as expected on node {ae.node}: {ae} ({type(ae).__name__})"
         )
+
+    # The same update with in-stream errors: the failure arrives as a row instead of raising.
+    stream = await (
+        session.update(SET.id(1)).bin("bob").set_to(5).execute(on_error=ErrorStrategy.IN_STREAM)
+    )
+    row = await stream.first()
+    print(f"In-stream error row: {row.result_code.name}")
 
     # Insert a record with several typed bins.
     await (
@@ -100,6 +111,7 @@ async def demonstrate_basic_writes_and_errors(session) -> None:
 
 
 async def seed_data(session) -> None:
+    # --- 3) Seed data: batch writes, TTLs, and a mixed read/write call ---
     # Bump a "holdings" counter on a handful of records with a single batch add.
     await session.upsert(SET.ids(1, 2, 3, 4, 5)).bin("holdings").add(1).execute()
 
@@ -231,6 +243,7 @@ async def seed_data(session) -> None:
 
 
 async def demonstrate_conditional_updates(session) -> None:
+    # --- 4) Background update: add 1 to every age in the set ---
     before = (await _first_bins(session, SET.id(46))).get("age")
     print(f"\nCustomer 46 age before scan: {before}")
 
@@ -243,6 +256,7 @@ async def demonstrate_conditional_updates(session) -> None:
 
 
 async def demonstrate_batch_reads(session) -> None:
+    # --- 5) Batch reads: partition range, filters, missing keys, limit ---
     keys = SET.ids(*range(20, 49))
 
     print("\nRead only records in partitions 0->2047")
@@ -286,6 +300,7 @@ async def demonstrate_batch_reads(session) -> None:
 
 
 async def demonstrate_filtered_updates(session) -> None:
+    # --- 6) Filtered batch updates and fail_on_filtered_out ---
     key_list = SET.ids(20, 21, 22, 23, 24, 25, 26, 27)
 
     print("\nUnfiltered update: add 1 to every age in the list")
@@ -327,6 +342,7 @@ async def demonstrate_filtered_updates(session) -> None:
 
 
 async def demonstrate_point_and_header_reads(session) -> None:
+    # --- 7) Point, header, and projected reads ---
     # With a list of ids and no sort clause, records stream back in id order.
     print("\nRead point records - in the same order as the keys, limit to 3")
     stream = await session.query(SET.ids(1, 3, 5, 7)).limit(3).execute()
@@ -378,6 +394,7 @@ async def demonstrate_point_and_header_reads(session) -> None:
 
 
 async def demonstrate_records_per_second_and_chunking(session) -> None:
+    # --- 8) Rate-limited and chunked set reads ---
     print("\nRecords-per-second check")
     stream = await session.query(SET).records_per_second(1).execute()
     async for rr in stream:
@@ -408,6 +425,7 @@ async def demonstrate_records_per_second_and_chunking(session) -> None:
 
 
 async def demonstrate_sorting_and_pagination(session) -> None:
+    # --- 9) Client-side sorting and pagination ---
     # Records come back as a stream; sort and page client-side with plain Python.
     print("\n\nSorting customers by name with a where clause (client-side sort)")
     stream = await (
@@ -474,6 +492,7 @@ async def demonstrate_sorting_and_pagination(session) -> None:
 
 
 async def demonstrate_reusable_filter(session) -> None:
+    # --- 10) A reusable AEL filter with bound parameters ---
     # A reusable AEL template; where() binds the printf-style parameters per call.
     name_and_age_filter = "$.name == '%s' and $.age > %d"
 
@@ -489,6 +508,7 @@ async def demonstrate_reusable_filter(session) -> None:
 
 
 async def demonstrate_ttl(session) -> None:
+    # --- 11) Record TTL: written, then expired ---
     print("\n--- Test TTL ---")
     await session.delete(SET.id(1)).execute()
 
@@ -508,6 +528,7 @@ async def demonstrate_ttl(session) -> None:
 
 
 async def demonstrate_read_write_expressions(session) -> None:
+    # --- 12) Read and write expressions ---
     print("\n--- Expression testing ---")
     # replace writes the record fresh: only these bins remain afterward.
     await (
@@ -561,6 +582,7 @@ async def demonstrate_read_write_expressions(session) -> None:
 
 
 async def demonstrate_query_hints(session) -> None:
+    # --- 13) Query hints ---
     print("\n--- Query hints ---")
     # A hint can only name an index that exists, so this section owns one.
     try:
@@ -605,6 +627,7 @@ async def count_hinted_query(label: str, query) -> None:
 
 
 async def demonstrate_background_query(session) -> None:
+    # --- 14) Background update restricted by a where clause ---
     # Background set-wide update restricted by a where clause.
     task = await (
         session.background_task()
@@ -624,6 +647,7 @@ async def demonstrate_background_query(session) -> None:
 
 
 async def demonstrate_multi_operation_batches(session) -> None:
+    # --- 15) Multi-operation batches and chain defaults ---
     print("\n--- Multi operation batches ---")
 
     # Reads, writes, existence checks, and deletes mix freely in one round trip.
@@ -712,6 +736,7 @@ async def demonstrate_multi_operation_batches(session) -> None:
 
 
 async def demonstrate_generation_check(session) -> None:
+    # --- 16) Generation check: reject a stale update ---
     print("\n--- Generation check test ----")
 
     first = await (await session.query(SET.id(999)).execute()).first()
@@ -764,7 +789,7 @@ async def demonstrate_complex_cdt(session) -> None:
         .execute()
     )
 
-    # --- Read-only operations via query path (top-level) ---
+    # --- 17) Read-only list and map operations ---
     stream = await session.query(cdt).bin("scores").list_size().execute()
     print(f"List size of 'scores': {(await stream.first()).record.bins['scores']}")
     stream = await session.query(cdt).bin("inventory").map_size().execute()
@@ -776,8 +801,14 @@ async def demonstrate_complex_cdt(session) -> None:
     # Omitting the count reads to the end of the list.
     stream = await session.query(cdt).bin("scores").list_get_range(3).execute()
     print(f"Scores from index 3 onward: {(await stream.first()).record.bins['scores']}")
+    # SpecialValue.INFINITY leaves a range open at the top: every key from "b" upward.
+    stream = await (
+        session.query(cdt).bin("inventory").on_map_key_range("b", SpecialValue.INFINITY).get_keys()
+        .execute()
+    )
+    print(f"Inventory keys from 'b' upward: {(await stream.first()).record.bins['inventory']}")
 
-    # --- Read-only operations via query path with CDT navigation ---
+    # --- 18) Read-only operations through nested CDT navigation ---
     stream = await (
         session.query(cdt).bin("nested").on_map_key("team1").on_map_key("members").list_size().execute()
     )
@@ -793,7 +824,7 @@ async def demonstrate_complex_cdt(session) -> None:
     )
     print(f"Team2 members [0..1]: {(await stream.first()).record.bins['nested']}")
 
-    # --- Write operations: list mutations ---
+    # --- 19) List mutations ---
     await session.update(cdt).bin("scores").list_append_items([77, 65, 99]).execute()
     print(f"After list_append_items: {(await _first_bins(session, cdt))['scores']}")
 
@@ -829,7 +860,7 @@ async def demonstrate_complex_cdt(session) -> None:
     await session.update(cdt).bin("tags").list_clear().execute()
     print(f"After list_clear on tags: {(await _first_bins(session, cdt))['tags']}")
 
-    # --- Write operations: map mutations ---
+    # --- 20) Map mutations ---
     await (
         session.update(cdt)
         .bin("inventory").map_upsert_items({"dates": 15, "elderberries": 8})
@@ -840,7 +871,7 @@ async def demonstrate_complex_cdt(session) -> None:
     await session.update(cdt).bin("inventory").map_set_policy(MapOrder.KEY_ORDERED).execute()
     print(f"After map_set_policy(KEY_ORDERED): {(await _first_bins(session, cdt))['inventory']}")
 
-    # --- Write operations: CDT navigation ---
+    # --- 21) Writes through nested CDT navigation ---
     await (
         session.update(cdt)
         .bin("nested").on_map_key("team1").on_map_key("members").list_append_items(["Diana"])
@@ -895,7 +926,7 @@ async def demonstrate_complex_cdt(session) -> None:
     )
     print(f"Team3 members (ordered): {(await stream.first()).record.bins['nested']}")
 
-    # --- Combined multi-bin CDT operations in one call ---
+    # --- 22) Combined multi-bin CDT operations in one call ---
     stream = await (
         session.update(cdt)
         .bin("scores").list_append_items([50, 60, 70])
@@ -910,6 +941,7 @@ async def demonstrate_complex_cdt(session) -> None:
 
 
 async def demonstrate_bit_operations(session) -> None:
+    # --- 23) Bit (BLOB) operations ---
     print("\n--- Bit (BLOB) operations ---")
     bit_key = SET.id(501)
     await session.delete(bit_key).execute()
@@ -973,6 +1005,7 @@ async def demonstrate_bit_operations(session) -> None:
 
 
 async def demonstrate_heterogeneous_batch(session) -> None:
+    # --- 24) Heterogeneous batch across two sets ---
     # One batch spanning two different sets (person + address).
     await (
         session.upsert(ADDRESS.id(1))
@@ -995,14 +1028,23 @@ async def demonstrate_heterogeneous_batch(session) -> None:
 
 async def main() -> None:
     async with _env.connect().connect() as cluster:
-        # A behavior deriving a longer query timeout from the default.
+        # A behavior derived from the default. Each keyword scopes its settings to
+        # a slice of operations. A narrower scope overrides a broader one, and a
+        # shape scope such as reads_query overrides a mode scope such as reads_ap.
         # Set-wide queries below filter on bins with no secondary index. That is
         # rejected by default so a full scan is never entered by accident, so
         # this behavior opts into the scan fallback for query reads.
         custom_behavior = Behavior.DEFAULT.derive_with_changes(
             "custom-behavior",
-            all=Settings(total_timeout=timedelta(seconds=2)),
-            reads_query=Settings(allow_scans_with_where=True),
+            all=Settings(total_timeout=timedelta(seconds=2), send_key=True),
+            reads_ap=Settings(socket_timeout=timedelta(milliseconds=500), max_retries=2),
+            reads_query=Settings(
+                socket_timeout=timedelta(seconds=2),
+                total_timeout=timedelta(seconds=30),
+                allow_scans_with_where=True,
+            ),
+            reads_batch=Settings(max_retries=6, allow_inline=True),
+            writes_batch=Settings(allow_inline_ssd=True, max_concurrent_nodes=5),
         )
         session = cluster.create_session(custom_behavior)
 

@@ -26,6 +26,7 @@ _CONFIG = Path(__file__).resolve().parent / "behavior-example.yaml"
 
 def show_loaded_behaviors() -> None:
     """Enumerate every behavior the config file registered."""
+    # --- 1) Every behavior the config file registered ---
     behaviors = get_all_behaviors()
     print("=== Loaded behaviors ===")
     print(f"Total behaviors loaded: {len(behaviors)}\n")
@@ -40,6 +41,7 @@ def show_loaded_behaviors() -> None:
 
 def show_profile_detail() -> None:
     """Resolve one profile's settings for two different operation contexts."""
+    # --- 2) One profile resolved for a write and for a query ---
     behavior = get_behavior("high-performance")
     if behavior is None:
         return
@@ -61,6 +63,7 @@ def show_profile_detail() -> None:
 
 def show_inheritance() -> None:
     """Show which fields a child profile overrides and which it inherits."""
+    # --- 3) A child profile's overridden and inherited fields ---
     behavior = get_behavior("batch-optimized")
     if behavior is None:
         return

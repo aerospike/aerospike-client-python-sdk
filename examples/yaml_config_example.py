@@ -47,6 +47,7 @@ system:
 
 def load_from_file() -> None:
     """Read both sections out of a config file on disk."""
+    # --- 1) Load both sections from a config file ---
     print("=== Loading from file ===")
     text = _CONFIG.read_text()
 
@@ -64,6 +65,7 @@ def load_from_file() -> None:
 
 def load_from_string() -> None:
     """Parse config text directly, which suits embedded or generated config."""
+    # --- 2) Load config from a string ---
     print("\n=== Loading from string ===")
     print("Loaded behaviors from string:")
     for name, spec in parse_behaviors(_INLINE_CONFIG).items():
@@ -76,6 +78,7 @@ def load_from_string() -> None:
 
 async def use_with_cluster() -> None:
     """Bind a session to a behavior the config file named."""
+    # --- 3) Bind a session to a behavior the config file named ---
     print("\n=== Using with cluster ===")
     # Behaviors register when the client reads the config at connect.
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_CONFIG)

@@ -50,6 +50,7 @@ _CLUSTER_PROFILES = ("high-performance", "high-reliability", "batch-optimized", 
 
 def display_system_settings() -> None:
     """Print the DEFAULT profile, then any per-cluster profile layered on it."""
+    # --- 1) System settings: DEFAULT and per-cluster profiles ---
     print("=== System settings ===\n")
     profiles = parse_sdk_config(_CONFIG.read_text())
 
@@ -93,6 +94,7 @@ def display_system_settings_details(settings: Optional[SystemSettings]) -> None:
 
 def display_all_behaviors() -> None:
     """Print every profile the config file registered."""
+    # --- 2) Every behavior profile's resolved settings ---
     print("=== Behavior definitions ===\n")
     behaviors = get_all_behaviors()
     print(f"Total behaviors loaded: {len(behaviors)}\n")
@@ -162,6 +164,7 @@ def demonstrate_behavior_inheritance() -> None:
     batch- and query-shaped fields matches its parent for a point read and
     diverges once the batch or query shape is resolved.
     """
+    # --- 3) A child profile compared with its parent ---
     print("=== Behavior inheritance ===\n")
     _compare_with_parent("batch-optimized", (
         ("point reads - total_timeout", OpKind.READ, OpShape.POINT, "total_timeout"),
@@ -205,6 +208,7 @@ def _compare_with_parent(name: str, fields) -> None:
 
 async def perform_cluster_operations(cluster) -> None:
     """Exercise each configured profile against the cluster."""
+    # --- 4) Operations through sessions bound to each profile ---
     print("=== Cluster operations ===\n")
     for name in _CLUSTER_PROFILES:
         await test_with_behavior(cluster, name, SET)

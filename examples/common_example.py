@@ -42,16 +42,12 @@ async def _read_record(session, user_key) -> dict | None:
 
 
 async def run_examples(session) -> None:
-    # ------------------------------------------------------------------
-    # Truncate
-    # ------------------------------------------------------------------
+    # --- 1) Truncate ---
     print("Truncate records")
     await session.truncate(SET)
     await asyncio.sleep(0.2)
 
-    # ------------------------------------------------------------------
-    # Write a single record
-    # ------------------------------------------------------------------
+    # --- 2) Write a single record ---
     print("Write 1 record")
     await (
         session.upsert(SET.id(10))
@@ -60,11 +56,9 @@ async def run_examples(session) -> None:
         .execute()
     )
 
-    # ------------------------------------------------------------------
-    # Write multiple records — one batched call, not a call per record.
+    # --- 3) Write multiple records in one batched call ---
     # Records that share the same bins go in as rows under a bin schema:
     # the verb takes the dataset, each row starts with the record's id.
-    # ------------------------------------------------------------------
     print("Write 3 records")
     await (
         session.upsert(SET).bins("name", "age")
@@ -84,9 +78,7 @@ async def run_examples(session) -> None:
     ]
     await session.upsert(SET).bins("name", "age").rows(people).execute()
 
-    # ------------------------------------------------------------------
-    # Read 1 record (point read)
-    # ------------------------------------------------------------------
+    # --- 4) Read 1 record (point read) ---
     print("\nRead 1 record")
     stream = await session.query(SET.id(10)).execute()
     first = await stream.first()
@@ -96,9 +88,7 @@ async def run_examples(session) -> None:
         print("  Error: No records returned")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Read 2 records (batch read)
-    # ------------------------------------------------------------------
+    # --- 5) Read 2 records (batch read) ---
     print("Read 2 records")
     stream = await session.query(SET.ids(1, 2)).execute()
     async for result in stream:
@@ -106,9 +96,7 @@ async def run_examples(session) -> None:
         print(f"  Record = {rec.bins}")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Write verbs: insert / update / upsert / replace / replace_if_exists
-    # ------------------------------------------------------------------
+    # --- 6) Write verbs: insert / update / upsert / replace / replace_if_exists ---
     print("Write verbs: insert / update / upsert / replace / replace_if_exists")
 
     # insert: create only. Raises RecordExistsError if the record is already there.
@@ -141,51 +129,39 @@ async def run_examples(session) -> None:
     except RecordNotFoundError as exc:
         print(f"replace_if_exists on a missing record: {exc.base_message}")
 
-    # ------------------------------------------------------------------
-    # Exists
-    # ------------------------------------------------------------------
+    # --- 7) Exists ---
     print("Exists 1 record")
     stream = await session.exists(SET.id(13)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
-    # ------------------------------------------------------------------
-    # Touch
-    # ------------------------------------------------------------------
+    # --- 8) Touch ---
     print("Touch 1 record")
     stream = await session.touch(SET.id(13)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
-    # ------------------------------------------------------------------
-    # Delete
-    # ------------------------------------------------------------------
+    # --- 9) Delete ---
     print("Delete 1 record")
     stream = await session.delete(SET.id(18)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
-    # ------------------------------------------------------------------
-    # Batch exists (with include_missing_keys)
-    # ------------------------------------------------------------------
+    # --- 10) Batch exists (with include_missing_keys) ---
     print("Batch exists")
     stream = await session.exists(SET.ids(13, 14, 999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Batch touch (with include_missing_keys)
-    # ------------------------------------------------------------------
+    # --- 11) Batch touch (with include_missing_keys) ---
     print("Batch touch")
     stream = await session.touch(SET.ids(13, 14, 999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Batch delete (with include_missing_keys)
-    # ------------------------------------------------------------------
+    # --- 12) Batch delete (with include_missing_keys) ---
     print("Batch delete")
     stream = await session.delete(SET.ids(13, 14, 999)).include_missing_keys().execute()
     async for rr in stream:
@@ -196,9 +172,7 @@ async def run_examples(session) -> None:
     await session.upsert(SET.id(13)).put({"name": "Tim", "age": 200}).execute()
     await session.upsert(SET.id(14)).put({"name": "User1", "age": 201}).execute()
 
-    # ------------------------------------------------------------------
-    # Query with AEL where (filter expression)
-    # ------------------------------------------------------------------
+    # --- 13) Query with AEL where (filter expression) ---
     print("\nTest filtering out")
     stream = await (
         session.query(SET.id(2))
@@ -224,9 +198,7 @@ async def run_examples(session) -> None:
         print("  Record for Fred does not exist (expected)")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # include_missing_keys + AEL filter
-    # ------------------------------------------------------------------
+    # --- 14) include_missing_keys + AEL filter ---
     stream = await (
         session.query(SET.id(2))
         .where("$.name == 'Fred'")
@@ -241,9 +213,7 @@ async def run_examples(session) -> None:
         print("  ERROR: Record for Fred does not exist")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # fail_on_filtered_out
-    # ------------------------------------------------------------------
+    # --- 15) fail_on_filtered_out ---
     try:
         stream = await (
             session.query(SET.id(2))
@@ -260,9 +230,7 @@ async def run_examples(session) -> None:
     except AerospikeError as ae:
         print(f"  Exception received as expected: {ae}")
 
-    # ------------------------------------------------------------------
-    # Foreground primary index query (full scan)
-    # ------------------------------------------------------------------
+    # --- 16) Foreground primary index query (full scan) ---
     print("\nForeground primary index query")
     stream = await session.query(SET).records_per_second(5000).execute()
     count = 0
@@ -281,9 +249,7 @@ async def run_examples(session) -> None:
     age_over_21 = "$.age > 21"
     print(f"({name_is_tim}) or ({age_over_21})")
 
-    # ------------------------------------------------------------------
-    # Create secondary index
-    # ------------------------------------------------------------------
+    # --- 17) Create secondary index ---
     print("Create index")
     try:
         task = await session.create_index(SET, "ageidx", "age", IndexType.INTEGER)
@@ -293,9 +259,7 @@ async def run_examples(session) -> None:
     except IndexAlreadyExistsError:
         pass  # An earlier run already created it with the same definition.
 
-    # ------------------------------------------------------------------
-    # Secondary index query with AEL where
-    # ------------------------------------------------------------------
+    # --- 18) Secondary index query with AEL where ---
     print("Foreground secondary index query")
     stream = await session.query(SET).where("$.age > 200").execute()
     count = 0
@@ -305,18 +269,14 @@ async def run_examples(session) -> None:
     stream.close()
     print(f"  Query count: {count}")
 
-    # ------------------------------------------------------------------
-    # Batch read after changes
-    # ------------------------------------------------------------------
+    # --- 19) Batch read after changes ---
     stream = await session.query(SET.ids(10, 11)).execute()
     async for result in stream:
         rec = result.record_or_raise()
         print(f"  Record = {rec.bins}")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Paginated secondary index query
-    # ------------------------------------------------------------------
+    # --- 20) Paginated secondary index query ---
     print("Paginated secondary index query")
     stream = await session.query(SET).execute()
     expected = 0
@@ -337,9 +297,7 @@ async def run_examples(session) -> None:
     stream.close()
     print(f"  Actual Query count: {actual}")
 
-    # ------------------------------------------------------------------
-    # Background update with AEL where
-    # ------------------------------------------------------------------
+    # --- 21) Background update with AEL where ---
     print("\nBackground query")
     task = await (
         session.background_task()
@@ -356,9 +314,7 @@ async def run_examples(session) -> None:
         print(f"  Record = {rec.bins}")
     stream.close()
 
-    # ------------------------------------------------------------------
-    # Query hints
-    # ------------------------------------------------------------------
+    # --- 22) Query hints ---
     print("\nQuery with hint")
     stream = await (
         session.query(SET)
@@ -382,9 +338,7 @@ async def run_examples(session) -> None:
     )
     await task.wait_till_complete()
 
-    # ------------------------------------------------------------------
-    # Expression read and write operations
-    # ------------------------------------------------------------------
+    # --- 23) Expression read and write operations ---
     print("\nRead and write operation example")
 
     # Upsert + select_from + upsert_from in one operate
@@ -412,9 +366,7 @@ async def run_examples(session) -> None:
         await session.query(SET.ids(1, 2, 3)).bin("ageIn20Years").select_from("$.age + 20").execute(),
     )
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
+    # Clean up the demo records.
     print("\nCleanup: drop index")
     try:
         await session.drop_index(SET, "ageidx")

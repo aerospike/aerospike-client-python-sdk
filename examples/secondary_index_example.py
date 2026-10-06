@@ -95,8 +95,6 @@ async def run_examples(session) -> None:
     await task.wait_till_complete()
     print(f"dropped {SCORE_INDEX}")
 
-    print("Overall: SUCCESS")
-
 
 async def count(session, ael: str) -> int:
     """Number of records in the set matching an AEL filter."""

@@ -206,7 +206,7 @@ covers every public class and method in detail.
 
 Runnable, self-contained scripts live in [`examples/`](examples/) — one file per
 topic (`query_examples.py`, `string_operations_example.py`, `batch_example.py`,
-`common_example.py`, `multi_record_transaction_example.py`, the SDK-config set, and
+`common_example.py`, `transaction_example.py`, the SDK-config set, and
 more). Each is a standalone program; run one directly or run them all:
 
 ```bash
@@ -231,7 +231,7 @@ directly — as the Quick start does — rather than importing `_env`.
 A few examples need more than a default AP cluster and degrade to a clean skip
 message when it is absent:
 
-- **Strong-consistency examples** (`multi_record_transaction_example.py`,
+- **Strong-consistency examples** (`transaction_example.py`,
   `roster_example.py`) connect via `_env.connect_sc()`, which reads
   `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
   `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).
