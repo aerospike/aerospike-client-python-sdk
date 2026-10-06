@@ -186,15 +186,19 @@ class RecordResult:
                 row.or_raise()
         """
         if not self.is_ok:
-            if self.exception is not None:
-                raise self.exception
-            raise _result_code_to_exception(
-                self.result_code, in_doubt=self.in_doubt,
-                sub_code=self.sub_code,
-                server_message=self.server_message,
-                exp_trace=self.exp_trace,
-            )
+            raise self._as_exception()
         return self
+
+    def _as_exception(self) -> AerospikeError:
+        """The failure as an exception: :attr:`exception` if set, else built with the row's detail."""
+        if self.exception is not None:
+            return self.exception
+        return _result_code_to_exception(
+            self.result_code, in_doubt=self.in_doubt,
+            sub_code=self.sub_code,
+            server_message=self.server_message,
+            exp_trace=self.exp_trace,
+        )
 
     def record_or_raise(self) -> Record:
         """Return :attr:`record`, raising if the result is not OK.

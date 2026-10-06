@@ -15,6 +15,7 @@
 
 """Tests for ErrorStrategy, ErrorHandler, and disposition resolution."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -211,6 +212,34 @@ class TestCodeLessFailureRows:
         )
         assert row.result_code == ResultCode.CLIENT_ERROR
         assert isinstance(row.exception, AerospikeError)
+
+
+class TestFilteredBatchErrorDetail:
+    """A batch row's failure detail reaches the raise and the handler intact."""
+
+    def _rows(self):
+        failed = SimpleNamespace(
+            record=None, result_code=ResultCode.OP_NOT_APPLICABLE, in_doubt=False,
+            sub_code=4, server_message="bin type mismatch", exp_trace=None,
+        )
+        return [failed], [_key(1)]
+
+    def test_throw_carries_row_detail(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        with pytest.raises(AerospikeError) as excinfo:
+            qb._filtered_batch_list(*self._rows(), _ErrorDisposition.THROW)
+        assert excinfo.value.sub_code == 4
+        assert excinfo.value.server_message == "bin type mismatch"
+
+    def test_handler_receives_row_detail(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        captured: list = []
+        out = qb._filtered_batch_list(
+            *self._rows(), _ErrorDisposition.HANDLER, lambda k, i, e: captured.append(e),
+        )
+        assert out == []
+        assert captured[0].sub_code == 4
+        assert captured[0].server_message == "bin type mismatch"
 
 
 # ---------------------------------------------------------------------------
