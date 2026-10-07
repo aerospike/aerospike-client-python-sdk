@@ -16,7 +16,7 @@ task = await (
     .where("$.status == 'inactive'")
     .execute()
 )
-await task.wait_till_complete(sleep_time=0.5, max_attempts=60)
+await task.wait_till_complete(sleep_time=0.5, timeout=30)
 ```
 
 ### Bulk Update
@@ -245,6 +245,6 @@ task = await (
 # Poll with custom intervals
 await task.wait_till_complete(
     sleep_time=0.2,       # seconds between polls
-    max_attempts=100,     # max poll attempts
+    timeout=20,           # seconds before TimeoutError; None waits indefinitely
 )
 ```
