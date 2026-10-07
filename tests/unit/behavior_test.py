@@ -116,6 +116,7 @@ class TestBehaviorGetSettings:
         assert s.retry_delay == timedelta(0)
         assert s.send_key is False
         assert s.read_mode_ap == ReadModeAP.ONE
+        assert s.read_mode_sc == ReadModeSC.SESSION
         assert s.replica == Replica.SEQUENCE
 
     def test_default_read_ap_has_read_touch_ttl_percent(self):
@@ -485,9 +486,9 @@ class TestPreDefinedBehaviors:
         s = Behavior.STRICTLY_CONSISTENT.get_settings(OpKind.READ, OpShape.POINT, Mode.SC)
         assert s.read_mode_sc == ReadModeSC.LINEARIZE
 
-    def test_strictly_consistent_leaves_ap_reads_unset(self):
+    def test_strictly_consistent_leaves_ap_reads_at_default(self):
         s = Behavior.STRICTLY_CONSISTENT.get_settings(OpKind.READ, OpShape.POINT, Mode.AP)
-        assert s.read_mode_sc is None
+        assert s.read_mode_sc == ReadModeSC.SESSION
 
     def test_fast_rack_aware_uses_prefer_rack(self):
         s = Behavior.FAST_RACK_AWARE.get_settings(OpKind.READ, OpShape.POINT)
@@ -762,7 +763,7 @@ class TestSystemTxnSettings:
         assert s.max_retries == 5
         assert s.retry_delay == timedelta(seconds=1)
         assert s.replica == Replica.MASTER
-        assert s.read_mode_sc is None
+        assert s.read_mode_sc == ReadModeSC.SESSION
         assert s.max_concurrent_nodes == 0
 
     def test_derive_overrides_one_phase_only(self):

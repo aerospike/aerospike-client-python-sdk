@@ -102,8 +102,8 @@ class TestNamespaceDetailMapping:
     def test_repr_summarizes_rather_than_dumps(self):
         detail = NamespaceDetail.from_body(SAMPLE_BODY)
         text = repr(detail)
-        assert "NamespaceDetail(keys=10" in text
-        assert "nsup_period=120" in text
+        assert text.startswith("NamespaceDetail(effective_replication_factor=0, objects=17,")
+        assert text.endswith("cache_read_pct=0)")
         # A several-hundred-key document must not be inlined.
         assert "replication-factor" not in text
 
@@ -119,6 +119,19 @@ class TestNamespaceDetailProperties:
         assert detail.nsup_period == 120
         assert detail.allow_ttl_without_nsup is False
         assert detail.default_ttl == 0
+
+    def test_summary_stats(self):
+        detail = NamespaceDetail.from_body(
+            "effective_replication_factor=2;objects=300;master_objects=150;"
+            "prole_objects=150;dead_partitions=1;stop_writes=true;"
+            "data_used_bytes=4096;data_total_bytes=1048576"
+        )
+        assert detail.effective_replication_factor == 2
+        assert (detail.objects, detail.master_objects, detail.prole_objects) == (300, 150, 150)
+        assert detail.dead_partitions == 1
+        assert detail.stop_writes is True
+        assert (detail.data_used_bytes, detail.data_total_bytes) == (4096, 1048576)
+        assert detail.unavailable_partitions == 0
 
     def test_true_values_coerce(self):
         detail = NamespaceDetail.from_body(

@@ -63,7 +63,9 @@ class NamespaceDetail(dict):
 
     A ``dict`` of the raw wire keys, so any key the server reports is reachable
     by name even when this class has no property for it. The properties cover
-    the fields the SDK itself consults and convert on access.
+    the fields the SDK itself consults plus the record-count, partition-health
+    and memory/storage summary, and convert on access. Counts and byte sizes
+    are the answering node's.
 
     Because this *is* a mapping, raw access and typed access mix freely::
 
@@ -176,13 +178,116 @@ class NamespaceDetail(dict):
         """Namespace default TTL in seconds; ``0`` means never expire."""
         return _as_int(self, "default-ttl")
 
+    @property
+    def effective_replication_factor(self) -> int:
+        """Copies kept of each record, which drops below the configured factor on a small cluster."""
+        return _as_int(self, "effective_replication_factor")
+
+    @property
+    def objects(self) -> int:
+        """Records held by the answering node, master and replica copies together."""
+        return _as_int(self, "objects")
+
+    @property
+    def master_objects(self) -> int:
+        """Records for which the answering node holds the master copy."""
+        return _as_int(self, "master_objects")
+
+    @property
+    def prole_objects(self) -> int:
+        """Replica copies held by the answering node."""
+        return _as_int(self, "prole_objects")
+
+    @property
+    def non_replica_objects(self) -> int:
+        """Records held on the answering node that are neither master nor replica, as during migration."""
+        return _as_int(self, "non_replica_objects")
+
+    @property
+    def unreplicated_records(self) -> int:
+        """Records written on the answering node that are not yet replicated."""
+        return _as_int(self, "unreplicated_records")
+
+    @property
+    def dead_partitions(self) -> int:
+        """SC partitions still unavailable with every roster node present; clearing them takes a revive."""
+        return _as_int(self, "dead_partitions")
+
+    @property
+    def unavailable_partitions(self) -> int:
+        """Partitions an SC namespace cannot serve with the current cluster."""
+        return _as_int(self, "unavailable_partitions")
+
+    @property
+    def stop_writes(self) -> bool:
+        """True when the namespace is refusing writes, as when memory or storage is exhausted."""
+        return _as_bool(self, "stop_writes")
+
+    @property
+    def current_time(self) -> int:
+        """The answering node's clock, in seconds since the Aerospike epoch (2010-01-01 UTC)."""
+        return _as_int(self, "current_time")
+
+    @property
+    def expired_objects(self) -> int:
+        """Records the answering node has removed on TTL expiry."""
+        return _as_int(self, "expired_objects")
+
+    @property
+    def evicted_objects(self) -> int:
+        """Records the answering node has evicted ahead of their TTL."""
+        return _as_int(self, "evicted_objects")
+
+    @property
+    def index_used_bytes(self) -> int:
+        """Bytes the primary index uses on the answering node."""
+        return _as_int(self, "index_used_bytes")
+
+    @property
+    def set_index_used_bytes(self) -> int:
+        """Bytes set indexes use on the answering node."""
+        return _as_int(self, "set_index_used_bytes")
+
+    @property
+    def sindex_used_bytes(self) -> int:
+        """Bytes secondary indexes use on the answering node."""
+        return _as_int(self, "sindex_used_bytes")
+
+    @property
+    def data_total_bytes(self) -> int:
+        """Record storage capacity on the answering node."""
+        return _as_int(self, "data_total_bytes")
+
+    @property
+    def data_used_bytes(self) -> int:
+        """Record storage used on the answering node."""
+        return _as_int(self, "data_used_bytes")
+
+    @property
+    def cache_read_pct(self) -> int:
+        """Percentage of reads served from the post-write cache on the answering node."""
+        return _as_int(self, "cache_read_pct")
+
     def __repr__(self) -> str:
-        # The full response runs to several hundred keys, so identify the view
-        # by the fields that decide behavior rather than dumping the document.
+        # The full response runs to several hundred keys, so show the health and
+        # size summary rather than dumping the document.
         return (
-            f"NamespaceDetail(keys={len(self)}, exists={self.exists}, "
-            f"strong_consistency={self.strong_consistency}, "
-            f"nsup_period={self.nsup_period})"
+            f"NamespaceDetail(effective_replication_factor={self.effective_replication_factor}, "
+            f"objects={self.objects}, master_objects={self.master_objects}, "
+            f"prole_objects={self.prole_objects}, "
+            f"non_replica_objects={self.non_replica_objects}, "
+            f"unreplicated_records={self.unreplicated_records}, "
+            f"dead_partitions={self.dead_partitions}, "
+            f"unavailable_partitions={self.unavailable_partitions}, "
+            f"stop_writes={self.stop_writes}, current_time={self.current_time}, "
+            f"expired_objects={self.expired_objects}, "
+            f"evicted_objects={self.evicted_objects}, "
+            f"index_used_bytes={self.index_used_bytes}, "
+            f"set_index_used_bytes={self.set_index_used_bytes}, "
+            f"sindex_used_bytes={self.sindex_used_bytes}, "
+            f"data_total_bytes={self.data_total_bytes}, "
+            f"data_used_bytes={self.data_used_bytes}, "
+            f"cache_read_pct={self.cache_read_pct})"
         )
 
 

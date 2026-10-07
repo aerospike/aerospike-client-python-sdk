@@ -417,8 +417,10 @@ Behavior.DEFAULT = Behavior(
             # Pinned explicitly (not left to the client default) so the wire
             # behavior cannot drift under a dependency upgrade. ONE reads a
             # single replica; ALL would consult duplicate partition copies
-            # during migration windows.
+            # during migration windows. SESSION is pinned for the same
+            # reason: it already is the wire default.
             read_mode_ap=ReadModeAP.ONE,
+            read_mode_sc=ReadModeSC.SESSION,
             durable_delete=False,
             max_concurrent_nodes=1,
             read_touch_ttl_percent=0,
