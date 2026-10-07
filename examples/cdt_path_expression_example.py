@@ -91,7 +91,7 @@ async def run_examples(session) -> None:
         print(f"initial catalog (before 1.10x on each price): {CATALOG}")
         bump = Exp.num_mul([Exp.float_loop_var(LoopVarPart.VALUE), Exp.val(1.10)])
         await (
-            session.update(k4)
+            session.upsert(k4)
             .bin("catalog")
             .on_map_key("book")
             .on_each_child()

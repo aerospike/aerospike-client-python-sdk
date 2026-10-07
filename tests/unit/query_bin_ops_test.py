@@ -427,8 +427,12 @@ class TestShouldIncludeResult:
     def test_filtered_out_included_with_fail_on_filtered(self):
         assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, False, True) is True
 
-    def test_filtered_out_included_with_respond_all_keys(self):
-        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, True, False) is True
+    def test_filtered_out_read_excluded_with_respond_all_keys_alone(self):
+        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, True, False) is False
+
+    def test_filtered_out_write_always_included(self):
+        assert QueryBuilder._should_include_result(
+            ResultCode.FILTERED_OUT, False, False, has_write=True) is True
 
     def test_other_errors_always_included(self):
         assert QueryBuilder._should_include_result(ResultCode.TIMEOUT, False, False) is True

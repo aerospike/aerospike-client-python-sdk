@@ -167,13 +167,11 @@ def demonstrate_behavior_inheritance() -> None:
     # --- 3) A child profile compared with its parent ---
     print("=== Behavior inheritance ===\n")
     _compare_with_parent("batch-optimized", (
-        ("point reads - total_timeout", OpKind.READ, OpShape.POINT, "total_timeout"),
         ("batch reads - max_concurrent_nodes", OpKind.READ, OpShape.BATCH, "max_concurrent_nodes"),
-        ("query - record_queue_size", OpKind.READ, OpShape.QUERY, "record_queue_size"),
+        ("point reads - total_timeout", OpKind.READ, OpShape.POINT, "total_timeout"),
     ))
     _compare_with_parent("analytics", (
         ("query - record_queue_size", OpKind.READ, OpShape.QUERY, "record_queue_size"),
-        ("query - max_concurrent_nodes", OpKind.READ, OpShape.QUERY, "max_concurrent_nodes"),
     ))
 
     # A child can override a single field and inherit everything else.
@@ -201,9 +199,9 @@ def _compare_with_parent(name: str, fields) -> None:
         parent_value = getattr(parent.get_settings(kind, shape, Mode.AP), field)
         verdict = "overridden" if child_value != parent_value else "inherited"
         print(f"{label}:")
-        print(f"  {parent.name}: {_render(parent_value)}")
-        print(f"  {child.name}: {_render(child_value)} ({verdict})")
-    print()
+        print(f"  {parent.name} (parent): {_render(parent_value)}")
+        print(f"  {child.name} (child): {_render(child_value)} ({verdict})")
+        print()
 
 
 async def perform_cluster_operations(cluster) -> None:

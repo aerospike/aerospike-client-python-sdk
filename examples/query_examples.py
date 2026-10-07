@@ -10,6 +10,7 @@ to demonstrate.
 """
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 
 import _env
@@ -34,13 +35,34 @@ SET = DataSet.of("test", "person")
 ADDRESS = DataSet.of("test", "address")
 USERS = DataSet.of("test", "users")
 
+# (id, name, age) of the customers used by the batch, filter, sort, and hint sections.
+CUSTOMERS = [
+    (20, "Jordan", 36), (21, "Alex", 27), (22, "Betty", 27),
+    (23, "Bob", 33), (24, "Fred", 6), (25, "Alex", 28),
+    (26, "Alex", 26), (27, "Jordan", 19), (28, "Gruper", 28),
+    (29, "Bree", 24), (30, "Perry", 44), (31, "Alex", 27),
+    (32, "Betty", 27), (33, "Wilma", 18), (34, "Joran", 82),
+    (35, "Alex", 27), (36, "Fred", 99), (37, "Sydney", 22),
+    (38, "Ita", 99), (39, "Rupert", 83), (40, "Dominic", 53),
+    (41, "Tim", 27), (42, "Tim", 29), (43, "Tim", 31),
+    (44, "Tim", 30), (45, "Tim", 33), (46, "Tim", 35),
+]
+
+
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def _row(rr) -> str:
+    value = rr.record.bins if rr.is_ok and rr.record is not None else rr.result_code.name
+    return f"{rr.key.value}: {value}"
+
 
 async def _print_stream(stream) -> int:
     count = 0
     async for rr in stream:
         count += 1
-        value = rr.record.bins if rr.is_ok and rr.record is not None else rr.result_code
-        print(f"  {count:5d} - {value}")
+        print(f"  {count:5d} - {_row(rr)}")
     return count
 
 
@@ -57,7 +79,9 @@ async def demonstrate_cluster_info(session) -> None:
         detail = await info.namespace_details(ns)
         if detail is not None:
             print(detail)
-    for sindex in await info.secondary_indexes():
+    sindexes = await info.secondary_indexes()
+    print([sindex.name for sindex in sindexes])
+    for sindex in sindexes:
         print(f"Secondary index: {sindex.name} on bin {sindex.bin_name}")
         print(f"   {await info.secondary_index_details(sindex.namespace, sindex.name)}")
 
@@ -85,8 +109,7 @@ async def demonstrate_basic_writes_and_errors(session) -> None:
     stream = await (
         session.update(SET.id(1)).bin("bob").set_to(5).execute(on_error=ErrorStrategy.IN_STREAM)
     )
-    row = await stream.first()
-    print(f"In-stream error row: {row.result_code.name}")
+    stream.close()
 
     # Insert a record with several typed bins.
     await (
@@ -101,11 +124,11 @@ async def demonstrate_basic_writes_and_errors(session) -> None:
         .execute()
     )
 
-    # Read back only a projection of bins.
+    # Read back only a projection of bins; a bin the record lacks projects to nothing.
     await (
         session.upsert(SET.id("bob")).bin("A").set_to(2).bin("B").set_to(2.2).execute()
     )
-    stream = await session.query(SET.id("bob")).bins("A").execute()
+    stream = await session.query(SET.id("bob")).bins("name").execute()
     rr = await stream.first()
     print(f"Projected read of id('bob'): {rr.record.bins if rr and rr.is_ok else None}")
 
@@ -114,88 +137,97 @@ async def seed_data(session) -> None:
     # --- 3) Seed data: batch writes, TTLs, and a mixed read/write call ---
     # Bump a "holdings" counter on a handful of records with a single batch add.
     await session.upsert(SET.ids(1, 2, 3, 4, 5)).bin("holdings").add(1).execute()
-
-    # Named/aged customers used by the batch, filter, sort, and hint sections.
-    customers = [
-        (1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46),
-        (20, "Jordan", 36), (21, "Alex", 27), (22, "Betty", 27),
-        (23, "Bob", 33), (24, "Fred", 6), (25, "Alex", 28),
-        (26, "Alex", 26), (27, "Jordan", 19), (28, "Gruper", 28),
-        (29, "Bree", 24), (30, "Perry", 44), (31, "Alex", 27),
-        (32, "Betty", 27), (33, "Wilma", 18), (34, "Joran", 82),
-        (35, "Alex", 27), (36, "Fred", 99), (37, "Sydney", 22),
-        (38, "Ita", 99), (39, "Rupert", 83), (40, "Dominic", 53),
-        (41, "Tim", 27), (42, "Tim", 29), (43, "Tim", 31),
-        (44, "Tim", 30), (45, "Tim", 33), (46, "Tim", 35),
-    ]
-    await session.upsert(SET).bins("name", "age").rows(customers).execute()
+    await session.upsert(SET).bins("name", "age").rows(
+        [(1, "Tim", 312), (2, "Bob", 25), (3, "Jane", 46)],
+    ).execute()
 
     # Probe for a record's existence, then delete it.
     exists_row = await (await session.exists(SET.ids(2)).execute()).first_or_raise()
     print(f"id(2) exists: {exists_row.as_bool()}")
     await session.delete(SET.ids(2)).execute()
 
+    # A single-key write streams back its result row.
+    stream = await (
+        session.upsert(SET.id(80)).bin("name").set_to("Tim").bin("age").set_to(342).execute()
+    )
+    print((await stream.first_or_raise()).record.bins)
+    await session.upsert(SET.ids(81, 82)).bin("name").set_to("Tim").bin("age").set_to(343).execute()
+    await session.upsert(SET).bins("name", "age").row(83, "Tim", 342).execute()
+    await (
+        session.upsert(SET).bins("name", "age")
+        .row(84, "Tim", 342)
+        .row(85, "Fred", 37)
+        .execute()
+    )
+
     # Absolute-time TTL: the record expires at a fixed calendar date.
     await (
         session.upsert(SET.id(100))
         .bin("name").set_to("Tim")
         .bin("age").set_to(312)
+        .bin("dob").set_to(_now_ms())
         .bin("id2").set_to(100)
         .expire_record_at(datetime(2030, 1, 1))
         .execute()
     )
 
     # One batched insert: one row sets its own TTL, and a chain-level default
-    # covers the rest. The "state" and "value" bins feed the background-query
-    # section later.
+    # covers the rest.
     await session.delete(SET.ids(900, 901, 902, 903, 904, 905)).execute()
     stream = await (
-        session.insert(SET.id(900))
-        .bin("name").set_to("Tim").bin("age").set_to(312).bin("hair").set_to("brown")
-        .insert(SET.id(901))
-        .bin("name").set_to("Jane").bin("age").set_to(28).bin("hair").set_to("blonde")
-        .insert(SET.id(902))
-        .bin("name").set_to("Bob").bin("age").set_to(54).bin("hair").set_to("brown")
-        .expire_record_after(timedelta(days=5))
-        .insert(SET.id(903))
-        .bin("name").set_to("Jordan").bin("age").set_to(45).bin("hair").set_to("red")
-        .bin("state").set_to("nsw").bin("value").set_to(100)
-        .insert(SET.id(904))
-        .bin("name").set_to("Alex").bin("age").set_to(67).bin("hair").set_to("blonde")
-        .bin("state").set_to("nsw").bin("value").set_to(200)
-        .insert(SET.id(905))
-        .bin("name").set_to("Sam").bin("age").set_to(24).bin("hair").set_to("brown")
-        .bin("state").set_to("qld")
+        session.insert(SET).bins("name", "age", "hair", "dob")
+        .row(900, "Tim", 312, "brown", _now_ms())
+        .row(901, "Jane", 28, "blonde", _now_ms())
+        .row(902, "Bob", 54, "brown", _now_ms()).expire_record_after(timedelta(days=5))
+        .row(903, "Jordan", 45, "red", _now_ms())
+        .row(904, "Alex", 67, "blonde", _now_ms())
+        .row(905, "Sam", 24, "brown", _now_ms())
         .default_expire_record_after(timedelta(days=30))
         .execute()
     )
-    count = 0
-    async for _ in stream:
-        count += 1
+    async for rr in stream:
+        print(f"{rr.key.value} -> {rr.record_or_raise().bins}")
     stream.close()
-    print(
-        f"Batched insert of ids 900-905 returned {count} rows "
-        "(902 expires in 5 days, the rest in 30)"
-    )
 
-    # A second block used by the point-read and multi-operation sections.
+    # Two blocks of numbered records, the second with a 30-day TTL.
     for i in range(15):
         await (
-            session.upsert(SET.id(1000 + i))
+            session.upsert(SET.id(i))
             .bin("name").set_to(f"Tim-{i}")
             .bin("age").set_to(312 + i)
             .bin("hair").set_to("brown")
+            .bin("dob").set_to(_now_ms())
+            .execute()
+        )
+        await (
+            session.upsert(SET).bins("name", "age", "hair", "dob")
+            .row(1000 + i, f"Tim-{i}", 312 + i, "brown", _now_ms())
             .expire_record_after(timedelta(days=30))
             .execute()
         )
 
-    # A record with nested map bins, then one call mixing reads and writes on it.
+    await session.delete(SET.ids(1, 2, 3, 5, 7, 11, 13, 17)).execute()
+
+    # insert creates, update changes, delete removes: record 102 goes through all three.
     await session.delete(SET.id(102)).execute()
+    await (
+        session.insert(SET.id(102))
+        .bin("name").set_to("Sue")
+        .bin("age").set_to(27)
+        .bin("id").set_to(102)
+        .bin("dob").set_to(_now_ms())
+        .execute()
+    )
+    await session.update(SET.id(102)).bin("age").set_to(26).execute()
+    await session.delete(SET.id(102)).execute()
+
+    # A record with nested map bins, then one call mixing reads and writes on it.
     await (
         session.upsert(SET.id(102))
         .bin("name").set_to("Sue")
         .bin("age").set_to(27)
         .bin("id").set_to(102)
+        .bin("dob").set_to(_now_ms())
         .bin("rooms").set_to({
             "room1": {"occupied": False, "rates": {1: 100, 2: 150, 3: -1}},
             "room2": {"occupied": True, "rates": {1: 90, 2: -1, 3: -1}},
@@ -213,6 +245,7 @@ async def seed_data(session) -> None:
         .bin("name").set_to("Bob")
         .bin("age").set_to(30)
         .bin("id").get()
+        .bin("dob").set_to(_now_ms())
         .bin("rooms").on_map_index(2).get_values()
         .bin("rooms").on_map_key_range("room1", "room2").count_all_others()
         .bin("rooms").on_map_key("room1").get_values()
@@ -239,11 +272,31 @@ async def seed_data(session) -> None:
     )
     print(f"Record 102 after append/add: {await _first_bins(session, SET.id(102))}")
 
-    print("Seeded customer records")
+    await (
+        session.upsert(SET.id(102))
+        .bin("name").set_to("Sue")
+        .bin("age").set_to(26)
+        .bin("dob").set_to(_now_ms())
+        .execute()
+    )
+
+    dob = _now_ms()
+    await session.insert(SET).bins("id", "age", "dob", "name").rows(
+        [(cid, cid, age, dob, name) for cid, name, age in CUSTOMERS],
+    ).execute()
 
 
 async def demonstrate_conditional_updates(session) -> None:
-    # --- 4) Background update: add 1 to every age in the set ---
+    # --- 4) Filtered update over every customer, then a set-wide background update ---
+    print("Updating all customers called Tim")
+    dob = _now_ms()
+    chain = session
+    for cid, name, age in CUSTOMERS:
+        chain = chain.update(SET.id(cid)).put({"id": cid, "age": age, "dob": dob, "name": name})
+    stream = await chain.default_where("$.name == 'Tim'").execute()
+    await _print_stream(stream)
+    stream.close()
+
     before = (await _first_bins(session, SET.id(46))).get("age")
     print(f"\nCustomer 46 age before scan: {before}")
 
@@ -302,18 +355,25 @@ async def demonstrate_batch_reads(session) -> None:
 
 async def demonstrate_filtered_updates(session) -> None:
     # --- 6) Filtered batch updates and fail_on_filtered_out ---
-    key_list = SET.ids(20, 21, 22, 23, 24, 25, 26, 27)
+    ids = [20, 21, 22, 23, 24, 25, 26, 27]
+    key_list = SET.ids(*ids)
+
+    async def print_key_list() -> None:
+        stream = await session.query(key_list).execute()
+        await _print_stream(stream)
+        stream.close()
 
     print("\nUnfiltered update: add 1 to every age in the list")
-    stream = await session.update(key_list).bin("age").add(1).execute()
-    await _print_stream(stream)
-    stream.close()
-    print("Results now that the update has finished:")
-    stream = await session.query(key_list).execute()
-    await _print_stream(stream)
-    stream.close()
+    update_stream = await session.update(key_list).bin("age").add(1).execute()
+    print("Read back before consuming the update's results:")
+    await print_key_list()
+    print("The update's results:")
+    await _print_stream(update_stream)
+    update_stream.close()
+    print("Read back after consuming them:")
+    await print_key_list()
 
-    print("\nUpdate people in list whose age is < 35")
+    print(f"\nUpdate people in list whose age is < 35 ({ids})")
     stream = await (
         session.update(key_list)
         .bin("age").add(1)
@@ -322,10 +382,11 @@ async def demonstrate_filtered_updates(session) -> None:
     )
     await _print_stream(stream)
     stream.close()
+    await print_key_list()
 
-    # fail_on_filtered_out reports the rows the filter excluded as errors
-    # instead of silently skipping them.
-    print("Same update with fail_on_filtered_out:")
+    # A write batch always reports the rows its filter excluded;
+    # fail_on_filtered_out also treats them as errors.
+    print("Same update with fail_on_filtered_out, then read back:")
     stream = await (
         session.update(key_list)
         .bin("age").add(1)
@@ -333,13 +394,8 @@ async def demonstrate_filtered_updates(session) -> None:
         .fail_on_filtered_out()
         .execute()
     )
-    await _print_stream(stream)
     stream.close()
-
-    print("Results after the filtered updates:")
-    stream = await session.query(key_list).execute()
-    await _print_stream(stream)
-    stream.close()
+    await print_key_list()
 
 
 async def demonstrate_point_and_header_reads(session) -> None:
@@ -396,22 +452,24 @@ async def demonstrate_point_and_header_reads(session) -> None:
 
 async def demonstrate_records_per_second_and_chunking(session) -> None:
     # --- 8) Rate-limited and chunked set reads ---
+    stream = await session.query(SET.ids(20, 21)).execute()
+    print(f"\nCustomers 20 and 21: {[rr.record.bins async for rr in stream if rr.is_ok]}")
+    stream.close()
+
     print("\nRecords-per-second check")
     stream = await session.query(SET).records_per_second(1).execute()
     async for rr in stream:
         if rr.is_ok:
-            print(f"  {rr.record.bins}")
+            print(f"  {_row(rr)}")
     stream.close()
 
-    print("\nServer-side chunking, chunk_size=20 (collect all)")
+    # Iterating a chunked stream yields only its current chunk: the first 20 records here.
+    print("\nServer-side chunking, chunk_size=20 (first chunk)")
     stream = await session.query(SET).chunk_size(20).execute()
-    names = sorted([
-        rr.record.bins["name"]
-        async for rr in stream
-        if rr.is_ok and "name" in rr.record.bins
-    ])
+    async for rr in stream:
+        if rr.is_ok:
+            print(f"  {_row(rr)}")
     stream.close()
-    print(f"  {len(names)} named records: {names}")
 
     print("\nServer-side chunking, chunk_size=10")
     stream = await session.query(SET).chunk_size(10).execute()
@@ -421,7 +479,7 @@ async def demonstrate_records_per_second_and_chunking(session) -> None:
         print(f"Chunk: {chunk}")
         async for rr in stream:
             if rr.is_ok:
-                print(f"  {rr.record.bins}")
+                print(f"  {_row(rr)}")
     stream.close()
 
 
@@ -435,12 +493,12 @@ async def demonstrate_sorting_and_pagination(session) -> None:
         .limit(1000)
         .execute()
     )
-    results = [rr.record async for rr in stream if rr.is_ok]
+    results = [rr async for rr in stream if rr.is_ok]
     stream.close()
 
-    results.sort(key=lambda r: r.bins.get("name", "").lower())
-    for rec in results:
-        print(f"  name={rec.bins.get('name')}, age={rec.bins.get('age')}")
+    results.sort(key=lambda rr: rr.record.bins.get("name", "").lower())
+    for rr in results:
+        print(f"  {_row(rr)}")
     print("---- End sort ---")
 
     # The same predicate built programmatically instead of as an AEL string.
@@ -454,41 +512,43 @@ async def demonstrate_sorting_and_pagination(session) -> None:
         .limit(1000)
         .execute()
     )
-    results = [rr.record async for rr in stream if rr.is_ok]
+    results = [rr async for rr in stream if rr.is_ok]
     stream.close()
-    results.sort(key=lambda r: r.bins.get("name", "").lower())
-    for rec in results:
-        print(f"  name={rec.bins.get('name')}, age={rec.bins.get('age')}")
+    results.sort(key=lambda rr: rr.record.bins.get("name", "").lower())
+    for rr in results:
+        print(f"  {_row(rr)}")
     print("---- End sort ---")
 
     print("\n\nSorting by age (desc) then name (asc), client-side pagination")
     stream = await session.query(SET).limit(13).execute()
-    results = [rr.record async for rr in stream if rr.is_ok]
+    results = [rr async for rr in stream if rr.is_ok]
     stream.close()
 
-    results.sort(key=lambda r: (-r.bins.get("age", 0), r.bins.get("name", "").lower()))
+    results.sort(key=lambda rr: (
+        -rr.record.bins.get("age", 0), rr.record.bins.get("name", "").lower(),
+    ))
     page_size = 5
     pages = [results[i:i + page_size] for i in range(0, len(results), page_size)]
     for page_num, page in enumerate(pages, start=1):
         print(f"---- Page {page_num} -----")
-        for rec in page:
-            print(f"  name={rec.bins.get('name')}, age={rec.bins.get('age')}")
+        for rr in page:
+            print(f"  {_row(rr)}")
     print("---- End sort ---")
 
     # Jump straight back to a specific page.
     if len(pages) > 1:
         print("--- Setting page to 2 ---")
-        for rec in pages[1]:
-            print(f"  name={rec.bins.get('name')}, age={rec.bins.get('age')}")
+        for rr in pages[1]:
+            print(f"  {_row(rr)}")
         print("--- done with page 2 ---")
 
-    # Now re-sort the same records by name only.
+    # Now re-sort the same records by name only, this time case-sensitively.
     print("Re-sorting records by name")
-    results.sort(key=lambda r: r.bins.get("name", "").lower())
+    results.sort(key=lambda rr: rr.record.bins.get("name", ""))
     for page_num, start in enumerate(range(0, len(results), page_size), start=1):
         print(f"---- Page {page_num} -----")
-        for rec in results[start:start + page_size]:
-            print(f"  name={rec.bins.get('name')}, age={rec.bins.get('age')}")
+        for rr in results[start:start + page_size]:
+            print(f"  {_row(rr)}")
     print("---- End sort ---")
 
 
@@ -641,10 +701,6 @@ async def demonstrate_background_query(session) -> None:
         .execute()
     )
     await task.wait_till_complete()
-    stream = await session.query(SET.ids(903, 904, 905)).bins(["state", "age", "bob"]).execute()
-    print("After the background update:")
-    await _print_stream(stream)
-    stream.close()
 
 
 async def demonstrate_multi_operation_batches(session) -> None:
@@ -657,6 +713,7 @@ async def demonstrate_multi_operation_batches(session) -> None:
     stream = await (
         session.update(SET.ids(1000, 1001))
         .bin("age").add(1)
+        .bin("dob").set_to(_now_ms())
         .expire_record_after(timedelta(minutes=5))
         .exists(SET.ids(1000, 1001))
         .query(SET.ids(10, 12))
@@ -723,18 +780,6 @@ async def demonstrate_multi_operation_batches(session) -> None:
             print(f"  active user: {res.record.bins}")
     stream.close()
 
-    # A dataset query can carry bin operations; here they project one bin.
-    stream = await (
-        session.query(SET)
-        .where("$.name == 'Tim'")
-        .bin("age").get()
-        .execute()
-    )
-    async for res in stream:
-        if res.is_ok:
-            print(f"  Tim's age: {res.record.bins}")
-    stream.close()
-
 
 async def demonstrate_generation_check(session) -> None:
     # --- 16) Generation check: reject a stale update ---
@@ -780,6 +825,7 @@ async def demonstrate_complex_cdt(session) -> None:
     await session.delete(cdt).execute()
     await (
         session.upsert(cdt)
+        .bin("name").set_to("CDT-Test")
         .bin("scores").set_to([95, 82, 73, 88, 91])
         .bin("tags").set_to(["python", "rust", "c"])
         .bin("inventory").set_to({"apples": 10, "bananas": 5, "cherries": 20})
@@ -802,12 +848,6 @@ async def demonstrate_complex_cdt(session) -> None:
     # Omitting the count reads to the end of the list.
     stream = await session.query(cdt).bin("scores").list_get_range(3).execute()
     print(f"Scores from index 3 onward: {(await stream.first()).record.bins['scores']}")
-    # SpecialValue.INFINITY leaves a range open at the top: every key from "b" upward.
-    stream = await (
-        session.query(cdt).bin("inventory").on_map_key_range("b", SpecialValue.INFINITY).get_keys()
-        .execute()
-    )
-    print(f"Inventory keys from 'b' upward: {(await stream.first()).record.bins['inventory']}")
 
     # --- 18) Read-only operations through nested CDT navigation ---
     stream = await (
@@ -932,13 +972,20 @@ async def demonstrate_complex_cdt(session) -> None:
         session.update(cdt)
         .bin("scores").list_append_items([50, 60, 70])
         .bin("inventory").map_upsert_items({"figs": 12})
-        .bin("nested").on_map_key("team2").on_map_key("members").list_append_items(["Quinn"])
+        .bin("nested").on_map_key("team2").on_map_key("members").list_append("Quinn")
         .bin("nested").on_map_key("team1").on_map_key("members").list_size()
         .execute()
     )
     print(f"Combined CDT result: {(await stream.first_or_raise()).record.bins}")
     print(f"Final state: {await _first_bins(session, cdt)}")
     print("--- End Complex CDT operations ---")
+
+    # SpecialValue.INFINITY leaves a range open at the top: every key from 5 upward.
+    await (
+        session.upsert(SET.id(1))
+        .bin("test").on_map_key_range(5, SpecialValue.INFINITY).get_keys()
+        .execute()
+    )
 
 
 async def demonstrate_bit_operations(session) -> None:

@@ -22,11 +22,12 @@ Tests both:
 """
 
 import base64
+import uuid
 
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import ErrorDetailVerbosity, Exp, ExpressionTrace, SubCode
+from aerospike_sdk import ErrorDetailVerbosity, ErrorStrategy, Exp, ExpressionTrace, SubCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.behavior import Behavior
@@ -1222,6 +1223,51 @@ class TestBatchFilterExpression:
         assert rows[0].record.bins["v"] == 9
 
     @requires_server_compiled_ael
+    async def test_batch_read_include_missing_keys_omits_filtered_out(
+        self, cluster, users: DataSet,
+    ):
+        session = cluster.create_session()
+        keys = await self._seed(session, users, "bfm", {"lo": 1, "hi": 9})
+        missing = users.id("bfm_missing")
+        await session.delete(missing).execute()
+
+        stream = await (
+            session.query([*keys.values(), missing])
+            .where("$.v >= 5")
+            .include_missing_keys()
+            .execute()
+        )
+        codes = {r.key.value: r.result_code for r in await stream.collect()}
+
+        # Missing and filtered-out are separate opt-ins; only the first is set.
+        assert codes == {
+            keys["hi"].value: ResultCode.OK,
+            missing.value: ResultCode.KEY_NOT_FOUND_ERROR,
+        }
+
+    @requires_server_compiled_ael
+    async def test_batch_read_both_flags_report_every_outcome(self, cluster, users: DataSet):
+        session = cluster.create_session()
+        keys = await self._seed(session, users, "bfb", {"lo": 1, "hi": 9})
+        missing = users.id("bfb_missing")
+        await session.delete(missing).execute()
+
+        stream = await (
+            session.query([*keys.values(), missing])
+            .where("$.v >= 5")
+            .include_missing_keys()
+            .fail_on_filtered_out()
+            .execute(on_error=ErrorStrategy.IN_STREAM)
+        )
+        codes = {r.key.value: r.result_code for r in await stream.collect()}
+
+        assert codes == {
+            keys["hi"].value: ResultCode.OK,
+            keys["lo"].value: ResultCode.FILTERED_OUT,
+            missing.value: ResultCode.KEY_NOT_FOUND_ERROR,
+        }
+
+    @requires_server_compiled_ael
     async def test_batch_write_applies_only_to_matching_rows(self, cluster, users: DataSet):
         session = cluster.create_session()
         keys = await self._seed(session, users, "bfw", {"lo": 1, "hi": 9})
@@ -1295,6 +1341,42 @@ class TestBatchFilterExpression:
 
         assert [r.key.value for r in rows] == [keys["hi"].value]
         assert rows[0].record.bins["v"] == 9
+
+
+class TestBatchWriteSendKey:
+    """Multi-record writes store the user key when the behavior sends it.
+
+    A read by key hands back the key the caller passed, so only a scan shows
+    what the server stored.
+    """
+
+    @pytest.mark.parametrize("send_key", [True, False])
+    async def test_every_batch_write_shape_honors_send_key(self, cluster, send_key):
+        dataset = DataSet.of(general_namespace(), "batch_send_key")
+        session = cluster.create_session(Behavior.DEFAULT.derive_with_changes(
+            f"batch-send-key-{send_key}", all=Settings(send_key=send_key),
+        ))
+        run = uuid.uuid4().hex
+        ids = [f"{run}_{i}" for i in range(6)]
+        try:
+            await session.upsert(dataset.ids(ids[0], ids[1])).put({"run": run}).execute()
+            await session.upsert(dataset).bins("run").row(ids[2], run).row(ids[3], run).execute()
+            await (
+                session.upsert(dataset.id(ids[4])).put({"run": run})
+                .upsert(dataset.id(ids[5])).put({"run": run})
+                .execute()
+            )
+
+            stream = await session.query(dataset).execute()
+            stored = sorted(
+                [rr.key.value async for rr in stream if rr.record.bins.get("run") == run],
+                key=str,
+            )
+            stream.close()
+
+            assert stored == (ids if send_key else [None] * len(ids))
+        finally:
+            await session.delete(dataset.ids(*ids)).execute()
 
 
 def _batch_rows_by_key(results):

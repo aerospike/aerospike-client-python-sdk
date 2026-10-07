@@ -56,6 +56,9 @@ async def run_examples(session) -> None:
         .execute()
     )
 
+    print("Write 1 more record")
+    await session.upsert(SET).bins("name", "age").row(100, "Charlie", 999).execute()
+
     # --- 3) Write multiple records in one batched call ---
     # Records that share the same bins go in as rows under a bin schema:
     # the verb takes the dataset, each row starts with the record's id.
@@ -78,9 +81,22 @@ async def run_examples(session) -> None:
     ]
     await session.upsert(SET).bins("name", "age").rows(people).execute()
 
+    # A batched write streams one result per record.
+    print("Write 10 more records")
+    people = [
+        (110, "Tim", 21), (111, "Bob", 25), (112, "Jane", 46),
+        (113, "Tim", 200), (114, "User1", 201), (115, "User2", 202),
+        (116, "User3", 203), (117, "User4", 204), (118, "User5", 205),
+        (119, "User6", 206),
+    ]
+    stream = await session.upsert(SET).bins("name", "age").rows(people).execute()
+    async for rr in stream:
+        print(f"  Key: {rr.key} -> result code {rr.result_code}")
+    stream.close()
+
     # --- 4) Read 1 record (point read) ---
     print("\nRead 1 record")
-    stream = await session.query(SET.id(10)).execute()
+    stream = await session.query(SET.id(100)).execute()
     first = await stream.first()
     if first and first.is_ok:
         print(f"  Record = {first.record.bins}")
@@ -131,46 +147,42 @@ async def run_examples(session) -> None:
 
     # --- 7) Exists ---
     print("Exists 1 record")
-    stream = await session.exists(SET.id(13)).execute()
+    stream = await session.exists(SET.id(113)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
     # --- 8) Touch ---
     print("Touch 1 record")
-    stream = await session.touch(SET.id(13)).execute()
+    stream = await session.touch(SET.id(113)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
     # --- 9) Delete ---
     print("Delete 1 record")
-    stream = await session.delete(SET.id(18)).execute()
+    stream = await session.delete(SET.id(118)).execute()
     first = await stream.first()
     print(f"  Result: {first.as_bool() if first else None}")
 
     # --- 10) Batch exists (with include_missing_keys) ---
     print("Batch exists")
-    stream = await session.exists(SET.ids(13, 14, 999)).include_missing_keys().execute()
+    stream = await session.exists(SET.ids(113, 114, 999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
     # --- 11) Batch touch (with include_missing_keys) ---
     print("Batch touch")
-    stream = await session.touch(SET.ids(13, 14, 999)).include_missing_keys().execute()
+    stream = await session.touch(SET.ids(113, 114, 999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
 
     # --- 12) Batch delete (with include_missing_keys) ---
     print("Batch delete")
-    stream = await session.delete(SET.ids(13, 14, 999)).include_missing_keys().execute()
+    stream = await session.delete(SET.ids(113, 114, 999)).include_missing_keys().execute()
     async for rr in stream:
         print(f"  Key: {rr.key} -> {rr.as_bool()}")
     stream.close()
-
-    # Re-insert deleted records for remaining examples
-    await session.upsert(SET.id(13)).put({"name": "Tim", "age": 200}).execute()
-    await session.upsert(SET.id(14)).put({"name": "User1", "age": 201}).execute()
 
     # --- 13) Query with AEL where (filter expression) ---
     print("\nTest filtering out")
@@ -270,7 +282,7 @@ async def run_examples(session) -> None:
     print(f"  Query count: {count}")
 
     # --- 19) Batch read after changes ---
-    stream = await session.query(SET.ids(10, 11)).execute()
+    stream = await session.query(SET.ids(10, 11, 110)).execute()
     async for result in stream:
         rec = result.record_or_raise()
         print(f"  Record = {rec.bins}")
@@ -308,25 +320,20 @@ async def run_examples(session) -> None:
     )
     await task.wait_till_complete()
 
-    stream = await session.query(SET.ids(10, 11)).execute()
+    stream = await session.query(SET.ids(10, 11, 110)).execute()
     async for result in stream:
         rec = result.record_or_raise()
         print(f"  Record = {rec.bins}")
     stream.close()
 
     # --- 22) Query hints ---
-    print("\nQuery with hint")
     stream = await (
         session.query(SET)
         .with_hint(QueryHint(query_duration=QueryDuration.LONG))
         .records_per_second(20)
         .execute()
     )
-    count = 0
-    async for _ in stream:
-        count += 1
     stream.close()
-    print(f"  Query count with hint: {count}")
 
     # A background update can be throttled the same way.
     task = await (

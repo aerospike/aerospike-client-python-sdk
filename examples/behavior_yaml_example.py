@@ -33,7 +33,7 @@ def show_loaded_behaviors() -> None:
 
     for name, behavior in sorted(behaviors.items()):
         print(f"--- Behavior: {name} ---")
-        if behavior.parent is not None and behavior.parent is not Behavior.DEFAULT:
+        if behavior.parent is not None:
             print(f"  parent: {behavior.parent.name}")
         demonstrate_settings(behavior)
         print()

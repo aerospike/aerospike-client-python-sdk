@@ -26,7 +26,7 @@ SERVER_PATH = f"{PACKAGE}.lua"
 
 # Registered from a string so the example is self-contained; production code
 # more often ships a .lua file and calls register_udf_from_file().
-LUA_SOURCE = b"""
+LUA_SOURCE = b"""\
 local function balance_of(rec)
     return rec['balance'] or 0
 end

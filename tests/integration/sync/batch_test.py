@@ -17,6 +17,7 @@
 
 import base64
 import time
+import uuid
 
 import pytest
 
@@ -651,6 +652,37 @@ class TestSyncBatchFilterExpression:
 
         assert [r.key.value for r in rows] == [keys["hi"].value]
         assert rows[0].record.bins["v"] == 9
+
+
+class TestSyncBatchWriteSendKey:
+    """The sync dispatchers hand ``send_key`` to every batch write row.
+
+    Only a scan shows the key the server stored.
+    """
+
+    def test_key_list_and_chain_writes_store_the_key(self, cluster):
+        dataset = DataSet.of(general_namespace(), "sync_batch_send_key")
+        session = cluster.create_session(Behavior.DEFAULT.derive_with_changes(
+            "sync-batch-send-key", all=Settings(send_key=True),
+        ))
+        run = uuid.uuid4().hex
+        ids = [f"{run}_{i}" for i in range(4)]
+        try:
+            session.upsert(dataset.ids(ids[0], ids[1])).put({"run": run}).execute()
+            (
+                session.upsert(dataset.id(ids[2])).put({"run": run})
+                .upsert(dataset.id(ids[3])).put({"run": run})
+                .execute()
+            )
+
+            stored = sorted(
+                rr.key.value for rr in session.query(dataset).execute()
+                if rr.record.bins.get("run") == run
+            )
+
+            assert stored == ids
+        finally:
+            session.delete(dataset.ids(*ids)).execute()
 
 
 def _batch_rows_by_key(results):

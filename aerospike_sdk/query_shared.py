@@ -1187,31 +1187,58 @@ class _QueryBuilderBase:
         return self
 
     def fail_on_filtered_out(self) -> Self:
-        """Surface rows that fail a filter as ``FILTERED_OUT`` instead of omitting them.
+        """Surface reads that fail a filter as ``FILTERED_OUT`` rows instead of omitting them.
 
-        Applies to key-based reads where a filter excludes the record. Without this
-        flag, filtered keys may be absent from the stream depending on policy.
+        Applies to key-based reads with a ``where`` filter. Without this flag, a key
+        whose record exists but fails the filter is absent from the stream, whether or
+        not :meth:`include_missing_keys` is set. Writes always report a filtered-out
+        key as a ``FILTERED_OUT`` row.
+
+        Example::
+
+            stream = await (
+                session.query(customers.ids(20, 21, 22))
+                .where("$.name == 'Tim'")
+                .fail_on_filtered_out()
+                .execute()
+            )
+            async for row in stream:
+                if row.result_code == ResultCode.FILTERED_OUT:
+                    print(f"{row.key.value} is not a Tim")
 
         Returns:
             This builder for chaining.
 
         See Also:
-            :meth:`include_missing_keys`: Include missing-key rows in batch reads.
+            :meth:`include_missing_keys`: Rows for keys whose record does not exist.
         """
         self._fail_on_filtered_out = True
         return self
 
     def include_missing_keys(self) -> Self:
-        """Ensure batch/point reads emit one row per requested key, including not-found.
+        """Emit a row for each requested key whose record does not exist.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
-        entries (typically ``KEY_NOT_FOUND``) instead of being skipped.
+        entries (``KEY_NOT_FOUND_ERROR``) instead of being skipped. A key whose record
+        exists but fails a ``where`` filter is a different outcome and stays omitted;
+        add :meth:`fail_on_filtered_out` to surface those too.
+
+        Example::
+
+            stream = await (
+                session.query(customers.ids(46, 47, 48))
+                .include_missing_keys()
+                .execute()
+            )
+            async for row in stream:
+                if row.result_code == ResultCode.KEY_NOT_FOUND_ERROR:
+                    print(f"no customer {row.key.value}")
 
         Returns:
             This builder for chaining.
 
         See Also:
-            :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
+            :meth:`fail_on_filtered_out`: Rows for keys whose record fails the filter.
         """
         self._respond_all_keys = True
         return self
@@ -1689,6 +1716,7 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = bool(settings.send_key)
         has_settings = (
             spec.filter_expression is not None
             or spec.ttl_seconds is not None
@@ -1696,10 +1724,12 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or eff
+            or send_key
         )
         if not has_settings:
             return None
         up = BatchUDFPolicy()
+        up.send_key = send_key
         if spec.filter_expression is not None:
             up.filter_expression = spec.filter_expression
         if spec.ttl_seconds is not None:
@@ -1720,15 +1750,16 @@ class _QueryBuilderBase:
 
         A write row always reports its outcome: the caller named that key and
         asked to change it, so omitting the row would report success by
-        omission. A read row stays opt-in — a missing key is an ordinary
-        outcome there, surfaced with ``include_missing_keys``.
+        omission. A read row stays opt-in, and each flag answers one
+        question: ``include_missing_keys`` surfaces missing keys,
+        ``fail_on_filtered_out`` surfaces keys whose record fails the filter.
         """
         if result_code == ResultCode.OK:
             return True
         if result_code == ResultCode.KEY_NOT_FOUND_ERROR:
             return has_write or respond_all_keys
         if result_code == ResultCode.FILTERED_OUT:
-            return has_write or fail_on_filtered_out or respond_all_keys
+            return has_write or fail_on_filtered_out
         return True
 
     def _filtered_batch_list(
@@ -1995,6 +2026,7 @@ class _QueryBuilderBase:
             if spec.contains_record_delete_op else False
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2003,6 +2035,7 @@ class _QueryBuilderBase:
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
             or commit_level is not None
+            or send_key
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2012,6 +2045,7 @@ class _QueryBuilderBase:
         if not has_settings:
             return None
         bwp = BatchWritePolicy()
+        bwp.send_key = send_key
         if rea is not None:
             bwp.record_exists_action = rea
         if spec.filter_expression is not None:
@@ -2436,6 +2470,17 @@ class _QueryBuilderBase:
             self._batch_commit_level_ap = cl
         return cl
 
+    def _batch_send_key(self, mode: Optional[Mode] = None) -> bool:
+        """Whether a batch write row stores the user key, per the behavior.
+
+        The batch policy has no ``send_key`` of its own: each row policy
+        carries one, so a row built without it never stores the key.
+        """
+        return bool(self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
+        ).send_key)
+
     def _make_batch_delete_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchDeletePolicy]:
@@ -2445,6 +2490,7 @@ class _QueryBuilderBase:
         """
         eff = self._batch_write_effective_dd(spec, mode)
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
@@ -2452,10 +2498,12 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or eff
+            or send_key
         )
         if not has_settings:
             return None
         bdp = BatchDeletePolicy()
+        bdp.send_key = send_key
         if spec.filter_expression is not None:
             bdp.filter_expression = spec.filter_expression
         if spec.generation is not None:
@@ -2600,6 +2648,7 @@ class _QueryBuilderBase:
             if spec.contains_record_delete_op else False
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2608,6 +2657,7 @@ class _QueryBuilderBase:
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
             or commit_level is not None
+            or send_key
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2617,6 +2667,7 @@ class _QueryBuilderBase:
         if not has_settings:
             return None
         bwp = BatchWritePolicy()
+        bwp.send_key = send_key
         if rea is not None:
             bwp.record_exists_action = rea
         if spec.filter_expression is not None:

@@ -64,5 +64,5 @@ Some Java examples have no faithful Python counterpart until a feature ships. Do
 
 (`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it with the
 fluent path builder: `.on_each_child()` / `.on_each_child_where()` ending in `.modify_by()`,
-`.remove_matches()` or `.collect_values()`. Its expression-read section uses
-`Exp.exp_select_by_path` with `select_from`, since there is no fluent expression-read terminal.)
+`.remove_matches()`, `.collect_values()` or, in a query, `.collect_values_as_expression_read()`.
+Its section 6, keys-in with a filter, is an addition with no Java counterpart.)
