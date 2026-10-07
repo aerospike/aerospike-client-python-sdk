@@ -232,6 +232,10 @@ await info.remove_udf("my_module.lua")
 
 ## Monitoring Tasks
 
+`task.task_id` is the id the server tracks the job under. Log it to correlate
+the task with server logs, or inspect the job with the `query-show:id=<task_id>`
+info command.
+
 `ExecuteTask` provides polling-based completion monitoring:
 
 ```python

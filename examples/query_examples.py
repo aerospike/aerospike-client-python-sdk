@@ -249,6 +249,7 @@ async def demonstrate_conditional_updates(session) -> None:
 
     # Background set-wide update: add 1 to every record's age.
     task = await session.background_task().update(SET).bin("age").add(1).execute()
+    print(f"task id = {task.task_id}")
     await task.wait_till_complete()
 
     after = (await _first_bins(session, SET.id(46))).get("age")
