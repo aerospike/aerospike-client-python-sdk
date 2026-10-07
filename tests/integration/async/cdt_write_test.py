@@ -18,6 +18,7 @@
 import pytest
 import pytest_asyncio
 from aerospike_sdk import CTX, CdtOperation, Exp, ExpType, ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import SortedMap
 from aerospike_sdk import LoopVarPart
 
 from aerospike_sdk import DataSet
@@ -493,6 +494,23 @@ class TestProductRatingsWorkflow:
             .execute()
         ).first_or_raise()
         assert result.record.bins["ratings"] == {"alice": 5}
+
+    async def test_read_top_ratings_in_key_order(self, cluster):
+        """A rank selection on an unordered map reads back as a key-ordered SortedMap."""
+        session = cluster.create_session()
+        k = DS.id(114)
+        await session.upsert(k).put({
+            "ratings": {"dave": 2, "carol": 5, "bob": 4, "alice": 3},
+        }).execute()
+
+        result = await (
+            await session.query(k)
+            .bin("ratings").on_map_rank_range(1, 3).get_as_ordered_map()
+            .execute()
+        ).first_or_raise()
+        top = result.record.bins["ratings"]
+        assert isinstance(top, SortedMap)
+        assert list(top.items()) == [("alice", 3), ("bob", 4), ("carol", 5)]
 
     async def test_count_by_value_range(self, cluster):
         """Count entries within a value range [4, 6)."""

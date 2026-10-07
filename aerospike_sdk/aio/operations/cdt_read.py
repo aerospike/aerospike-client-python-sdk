@@ -669,9 +669,42 @@ class CdtReadBuilder(Generic[T]):
 
         Returns:
             The parent builder for chaining.
+
+        See Also:
+            :meth:`get_as_ordered_map`: The same entries as a key-ordered ``SortedMap``.
         """
         self._require_map("get_keys_and_values")
         return self._emit(self._rt.KEY_VALUE)
+
+    def get_as_ordered_map(self) -> T:
+        """Return the selected map entries as a key-ordered :class:`~aerospike_sdk.SortedMap`.
+
+        Unlike :meth:`get_keys_and_values`, which keeps the order the server
+        selected the entries in (rank order for a rank range), the result is
+        ordered by key whatever the bin's own map order. Writing it back to a
+        bin stores that map key-ordered.
+
+        Example::
+
+            stream = await (
+                session.query(players.id("p-1001"))
+                .bin("scores").on_map_rank_range(-3, 3).get_as_ordered_map()
+                .execute()
+            )
+            top_three = (await stream.first_or_raise()).record.bins["scores"]
+            # SortedMap({"amy": 870, "raj": 910, "zoe": 955})
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            TypeError: If the selection is on a list rather than a map.
+
+        See Also:
+            :meth:`get_keys_and_values`: Entries in selection order, as a ``dict``.
+        """
+        self._require_map("get_as_ordered_map")
+        return self._emit(self._rt.ORDERED_MAP)
 
     def count(self) -> T:
         """Return the count of elements at the current CDT selection.

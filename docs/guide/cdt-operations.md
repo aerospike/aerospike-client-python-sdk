@@ -253,6 +253,20 @@ scores == {"amy": 1, "zoe": 3}    # True
 isinstance(scores, dict)          # True
 ```
 
+A selection read with `get_keys_and_values()` is a plain `dict` in the order
+the server selected the entries, such as rank order for a rank range. End it
+with `get_as_ordered_map()` instead to get a `SortedMap` in key order, whatever
+the bin's own order:
+
+```python
+stream = await (
+    session.query(users.id(1))
+    .bin("scores").on_map_rank_range(-3, 3).get_as_ordered_map()
+    .execute()
+)
+top_three = (await stream.first_or_raise()).record.bins["scores"]   # SortedMap
+```
+
 Maps created through the CDT surface take their order from the operation
 instead, so `SortedMap` is not needed there:
 

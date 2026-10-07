@@ -100,6 +100,11 @@ class TestCdtReadBuilder:
         b.get_keys_and_values()
         assert cap == [MapReturnType.KEY_VALUE]
 
+    def test_get_as_ordered_map(self):
+        b, parent, cap = self._build(is_map=True)
+        b.get_as_ordered_map()
+        assert cap == [MapReturnType.ORDERED_MAP]
+
     def test_count(self):
         b, parent, cap = self._build()
         b.count()
@@ -144,6 +149,11 @@ class TestCdtReadBuilder:
         b, _, _ = self._build(is_map=False)
         with pytest.raises(TypeError, match="only supported for map"):
             b.get_keys_and_values()
+
+    def test_get_as_ordered_map_raises_for_list(self):
+        b, _, _ = self._build(is_map=False)
+        with pytest.raises(TypeError, match="only supported for map"):
+            b.get_as_ordered_map()
 
 
 # ===================================================================
