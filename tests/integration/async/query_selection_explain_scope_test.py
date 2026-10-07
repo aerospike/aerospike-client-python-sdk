@@ -15,9 +15,7 @@
 
 """Field ``44`` explain scope across index shapes.
 
-Covers scalar, blob, geo, map-key, CDT-context, and expression indexes. PAC's
-query plan exposes the selection, index name, and collection type but not the
-index-range bytes, so those are not asserted here.
+Covers scalar, blob, geo, map-key, CDT-context, and expression indexes.
 """
 
 from __future__ import annotations
@@ -27,6 +25,7 @@ import pytest
 from aerospike_sdk import CollectionIndexType, DataSet
 
 from tests.integration.query_selection_helpers import (
+    GEOJSON_PARTICLE_TYPE,
     NS,
     QuerySelection,
     SCOPE_AGE_BIN,
@@ -63,6 +62,10 @@ from tests.integration.query_selection_helpers import (
     count_matches_async,
     count_records_async,
     explain_plan_async,
+    index_range_bin_name,
+    index_range_bin_name_len,
+    index_range_bound,
+    index_range_ktype,
 )
 from tests.pac_compat import requires_query_selection
 
@@ -92,6 +95,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_INT_INDEX
+        assert plan.index_range_bytes is not None
 
     @requires_query_selection
     async def test_explain_scalar_string_primary_index_no_index_fields(
@@ -105,6 +109,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
+        assert plan.index_range_bytes is None
 
     @requires_query_selection
     async def test_explain_blob_equality_selects_secondary_index(
@@ -117,6 +122,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_BLOB_INDEX
+        assert plan.index_range_bytes is not None
 
     @requires_query_selection
     async def test_explain_map_keys_exists_selects_map_keys_index(
@@ -129,6 +135,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_MAP_INDEX
+        assert plan.index_range_bytes is not None
 
     @requires_query_selection
     @pytest.mark.parametrize(
@@ -150,6 +157,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == index_name
+        assert plan.index_range_bytes is not None
         assert plan.index_type == CollectionIndexType.DEFAULT
 
     @requires_query_selection
@@ -167,18 +175,42 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_PT_INDEX
+        assert plan.index_range_bytes is not None
         assert plan.index_type == CollectionIndexType.DEFAULT
+
+    @requires_query_selection
+    async def test_explain_large_geo_region_carries_the_whole_bound(
+        self, query_selection_cluster,
+    ):
+        """The full region literal survives into the index range.
+
+        The server carries geo bounds by reference rather than by copy, so a
+        truncated or stale bound would still look like a well-formed range;
+        only the bytes themselves catch it.
+        """
+        pac = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pac, _LARGE_REGION_MATCH, set_name=SCOPE_SET_NAME)
+        range_bytes = plan.index_range_bytes
+
+        assert index_range_bin_name(range_bytes) == SCOPE_PT_BIN
+        assert index_range_ktype(range_bytes) == GEOJSON_PARTICLE_TYPE
+        assert index_range_bound(range_bytes) == SCOPE_LARGE_REGION.encode()
 
     @requires_query_selection
     async def test_explain_expression_arithmetic_selects_expression_index(
         self, query_selection_cluster,
     ):
-        """``$.age + 1`` matches the index built over the same arithmetic expression."""
+        """``$.age + 1`` matches the index built over the same arithmetic expression.
+
+        An expression index has no bin, so its range carries an empty bin name.
+        """
         pac = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(pac, _EXP_ARITH_MATCH, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_AGE_PLUS_INDEX
+        assert plan.index_range_bytes is not None
+        assert index_range_bin_name_len(plan.index_range_bytes) == 0
 
     @requires_query_selection
     async def test_explain_string_path_function_stays_on_primary_index(
@@ -195,6 +227,7 @@ class TestQuerySelectionExplainScope:
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
+        assert plan.index_range_bytes is None
 
     @requires_query_selection
     async def test_execute_blob_equality_returns_matching_row(

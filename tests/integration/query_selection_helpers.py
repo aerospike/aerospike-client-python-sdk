@@ -161,6 +161,31 @@ def blob_hex_literal(blob_bytes: bytes) -> str:
     return blob_bytes.hex()
 
 
+# Server particle type carried in an index range's key-type byte.
+GEOJSON_PARTICLE_TYPE = 23
+
+
+# An explain plan's ``index_range_bytes`` lays out byte 1 as the bin-name length,
+# then the bin name, one key-type byte, and a bound prefixed by a 4-byte
+# big-endian length.
+def index_range_bin_name_len(range_bytes: bytes) -> int:
+    return range_bytes[1]
+
+
+def index_range_bin_name(range_bytes: bytes) -> str:
+    return range_bytes[2:2 + index_range_bin_name_len(range_bytes)].decode()
+
+
+def index_range_ktype(range_bytes: bytes) -> int:
+    return range_bytes[2 + index_range_bin_name_len(range_bytes)]
+
+
+def index_range_bound(range_bytes: bytes) -> bytes:
+    offset = 2 + index_range_bin_name_len(range_bytes) + 1
+    (length,) = struct.unpack_from(">I", range_bytes, offset)
+    return range_bytes[offset + 4:offset + 4 + length]
+
+
 def explain_where_flags(hint: Optional[QueryHint]) -> Optional[int]:
     """Map :class:`QueryHint` to PAC ``explain_where_flags`` (field ``44``)."""
     if hint is None:
