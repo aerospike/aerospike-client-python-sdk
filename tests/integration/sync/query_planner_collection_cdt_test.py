@@ -63,9 +63,10 @@ class TestSyncQueryPlannerCollectionCdt:
         list_where = f"$.{CDT_LIST_BIN}.[0].exists() == true"
 
         map_stream = (
-            # Map-keys exists now plans onto the map-keys index, so this leg no
-            # longer needs the opt-in past the strict default.
-            session.query(ds).bins([CDT_MAP_BIN]).where(map_where).execute()
+            # Map-keys exists plans onto the map-keys index, so this leg runs
+            # with scans disallowed.
+            session.query(ds).bins([CDT_MAP_BIN]).where(map_where)
+            .with_hint(QueryHint(allow_scans_with_where=False)).execute()
         )
         map_count = 0
         try:
@@ -78,10 +79,9 @@ class TestSyncQueryPlannerCollectionCdt:
         assert map_count == 10
 
         list_stream = (
-            # A positional list path stays on the primary index, so this leg
-            # still needs the opt-in past the strict default.
-            session.query(ds).bins([CDT_LIST_BIN]).where(list_where)
-            .with_hint(QueryHint(allow_scans_with_where=True)).execute()
+            # A positional list path stays on the primary index, which the
+            # default allows.
+            session.query(ds).bins([CDT_LIST_BIN]).where(list_where).execute()
         )
         list_count = 0
         try:

@@ -36,11 +36,11 @@ from tests.integration.query_selection_helpers import (
 )
 from tests.pac_compat import requires_query_selection
 
-# Behavior.DEFAULT is strict; this one opens the primary-index fallback so the
+# Behavior.DEFAULT allows the primary-index fallback; this one rejects it so the
 # Behavior leg of the precedence chain can be exercised in both directions.
-PERMISSIVE_SCANS = Behavior.DEFAULT.derive_with_changes(
-    name="permissive_scans",
-    reads_query=Settings(allow_scans_with_where=True),
+INDEX_ONLY = Behavior.DEFAULT.derive_with_changes(
+    name="index_only",
+    reads_query=Settings(allow_scans_with_where=False),
 )
 
 
@@ -128,8 +128,18 @@ class TestQuerySelectionBuilderScanBlocking:
     (``session.query().where().execute()``), not the PAC explain helper."""
 
     @requires_query_selection
-    async def test_disallow_scans_via_builder_rejects_scan(self, query_selection_cluster):
-        # A per-query hint disallowing scans rejects the primary-index fallback.
+    async def test_default_via_builder_permits_scan(self, query_selection_cluster):
+        # No hint: Behavior.DEFAULT allows the primary-index fallback.
+        stream = await (
+            query_selection_cluster.session.query(HINT_DS)
+            .where("$.country == 'US'")
+            .execute()
+        )
+        assert await count_records_async(stream) > 0
+
+    @requires_query_selection
+    async def test_disallow_hint_overrides_default_behavior(self, query_selection_cluster):
+        # A per-query hint rejecting the fallback beats a Behavior that allows it.
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 query_selection_cluster.session.query(HINT_DS)
@@ -140,62 +150,35 @@ class TestQuerySelectionBuilderScanBlocking:
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
     @requires_query_selection
-    async def test_strict_default_via_builder_rejects_scan(self, query_selection_cluster):
-        # No hint: the Behavior.DEFAULT strict setting blocks the fallback.
-        with pytest.raises(AerospikeError) as exc_info:
-            await (
-                query_selection_cluster.session.query(HINT_DS)
-                .where("$.country == 'US'")
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-
-    @requires_query_selection
-    async def test_allow_scans_via_builder_permits_scan(self, query_selection_cluster):
-        # allow_scans_with_where=True permits the primary-index fallback: no raise.
-        stream = await (
-            query_selection_cluster.session.query(HINT_DS)
-            .where("$.country == 'US'")
-            .with_hint(QueryHint(allow_scans_with_where=True))
-            .execute()
-        )
-        await count_records_async(stream)
-
-    @requires_query_selection
-    async def test_permissive_behavior_permits_scan(self, query_selection_cluster):
-        # The Behavior alone opens the fallback — no hint involved.
-        session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
-        stream = await (
-            session.query(HINT_DS)
-            .where("$.country == 'US'")
-            .execute()
-        )
-        await count_records_async(stream)
-
-    @requires_query_selection
-    async def test_disallow_hint_overrides_permissive_behavior(
-        self, query_selection_cluster,
-    ):
-        # Precedence in the direction the strict default cannot show: a hint
-        # rejecting the fallback beats a Behavior that allows it.
-        session = query_selection_cluster.client.create_session(PERMISSIVE_SCANS)
+    async def test_index_only_behavior_rejects_scan(self, query_selection_cluster):
+        # The Behavior alone rejects the fallback — no hint involved.
+        session = query_selection_cluster.client.create_session(INDEX_ONLY)
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(HINT_DS)
                 .where("$.country == 'US'")
-                .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
     @requires_query_selection
-    async def test_strict_behavior_leaves_unfiltered_scan_alone(
+    async def test_allow_hint_overrides_index_only_behavior(self, query_selection_cluster):
+        # A per-query hint allowing the fallback beats a Behavior that rejects it.
+        session = query_selection_cluster.client.create_session(INDEX_ONLY)
+        stream = await (
+            session.query(HINT_DS)
+            .where("$.country == 'US'")
+            .with_hint(QueryHint(allow_scans_with_where=True))
+            .execute()
+        )
+        assert await count_records_async(stream) > 0
+
+    @requires_query_selection
+    async def test_index_only_behavior_leaves_unfiltered_scan_alone(
         self, query_selection_cluster,
     ):
         # The setting is scoped to where-clause queries: a deliberate bare scan
-        # under the strict default still runs.
-        stream = await (
-            query_selection_cluster.session.query(HINT_DS)
-            .execute()
-        )
+        # under a Behavior rejecting the fallback still runs.
+        session = query_selection_cluster.client.create_session(INDEX_ONLY)
+        stream = await session.query(HINT_DS).execute()
         assert await count_records_async(stream) > 0

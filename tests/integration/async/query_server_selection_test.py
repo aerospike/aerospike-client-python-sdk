@@ -52,10 +52,6 @@ from tests.pac_compat import requires_query_selection, requires_server_compiled_
 # Long enough that the planner cannot carry it as index range bytes, so the
 # plan falls back to the primary index instead of a secondary one.
 OVERSIZED_LITERAL = "x" * 2048
-# Scans behind a where() are refused by Behavior.DEFAULT, so the tests that
-# want to observe a primary-index fallback have to permit them.
-PERMIT_SCANS = QueryHint(allow_scans_with_where=True)
-
 
 
 class TestQueryExplain:
@@ -243,9 +239,7 @@ class TestQueryExecute:
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_COUNTRY])
             .where("$.country == 'US'")
-            # No secondary index on country -> primary-index scan; opt into it
-            # past the strict allow_scans_with_where default.
-            .with_hint(QueryHint(allow_scans_with_where=True))
+            # No secondary index on country -> primary-index scan.
             .execute()
         )
         countries = []

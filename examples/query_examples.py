@@ -1032,9 +1032,6 @@ async def main() -> None:
         # A behavior derived from the default. Each keyword scopes its settings to
         # a slice of operations. A narrower scope overrides a broader one, and a
         # shape scope such as reads_query overrides a mode scope such as reads_ap.
-        # Set-wide queries below filter on bins with no secondary index. That is
-        # rejected by default so a full scan is never entered by accident, so
-        # this behavior opts into the scan fallback for query reads.
         custom_behavior = Behavior.DEFAULT.derive_with_changes(
             "custom-behavior",
             all=Settings(total_timeout=timedelta(seconds=2), send_key=True),
@@ -1042,7 +1039,6 @@ async def main() -> None:
             reads_query=Settings(
                 socket_timeout=timedelta(seconds=2),
                 total_timeout=timedelta(seconds=30),
-                allow_scans_with_where=True,
             ),
             reads_batch=Settings(max_retries=6, allow_inline=True),
             writes_batch=Settings(allow_inline_ssd=True, max_concurrent_nodes=5),

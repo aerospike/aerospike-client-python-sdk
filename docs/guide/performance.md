@@ -142,8 +142,8 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
     users = DataSet.of("test", "users")
 
-    # Filtered query — AEL filter expression (assumes an index on "age";
-    # an unindexed .where() is rejected rather than run as a full-set scan)
+    # Filtered query — AEL filter expression (an index on "age" serves it;
+    # without one, the .where() falls back to a full-set scan)
     results = await (
         session.query(users)
         .where("$.age > %s and $.country == '%s'", 25, "US")

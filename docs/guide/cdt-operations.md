@@ -430,17 +430,15 @@ For select flags other than values, build the expression with
 
 AEL supports CDT paths for filtering. A collection predicate like the ones
 below is generally not satisfiable from a secondary index, so it falls back to
-a primary-index (full-set) scan — which is rejected by default. Opt in with
-`allow_scans_with_where` when the scan is intended:
+a primary-index (full-set) scan. That is allowed by default; set
+`allow_scans_with_where=False` on the query or the `Behavior` to reject the
+fallback instead:
 
 ```python
-from aerospike_sdk import QueryHint
-
 # Filter records where the list has more than 5 items
 stream = await (
     session.query(users)
     .where("$.scores:LIST.count() > 5")
-    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 
@@ -448,7 +446,6 @@ stream = await (
 stream = await (
     session.query(users)
     .where('$.settings.theme == "dark"')
-    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 ```

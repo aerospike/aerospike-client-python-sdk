@@ -22,7 +22,7 @@ Tests expression building and usage with actual database operations.
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_values, val
+from aerospike_sdk import Behavior, Exp, in_list, map_keys, map_values, val
 from aerospike_sdk import ExpType, ListReturnType, MapReturnType, ResultCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
@@ -539,7 +539,7 @@ class TestExpWithAel:
 
     These query the seeded keys directly (a filter expression on a keyed read):
     an AEL ``where()`` needs no secondary index and never scans, so it is
-    unaffected by the strict ``allow_scans_with_where`` default. A dedicated
+    unaffected by the ``allow_scans_with_where`` setting. A dedicated
     set-scan-with-``where()`` case lives in ``TestAelScanFilter``.
 
     Type inference: Bin types are automatically inferred from comparison operands.
@@ -711,10 +711,8 @@ class TestAelScanFilter:
 
     The keyed-read cases in :class:`TestExpWithAel` cover AEL correctness; this
     pins the distinct set-scan path, where ``where()`` filters records
-    server-side while scanning the whole set. Under the strict
-    ``allow_scans_with_where`` default a scanning ``where()`` must opt in — via
-    the per-query hint here, exactly as a caller would. This is the one AEL
-    ``where()`` case that legitimately scans (and so still depends on
+    server-side while scanning the whole set. This is the one AEL ``where()``
+    case that legitimately scans (and so still depends on
     ``wait_for_set_visible``).
     """
 
@@ -723,7 +721,6 @@ class TestAelScanFilter:
         stream = await (
             session_with_data.query(EXP_DS)
             .where("$.A == 1")
-            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         records = [result.record async for result in stream]

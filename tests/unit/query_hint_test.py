@@ -51,7 +51,7 @@ class TestQueryHintValidation:
 
     def test_bin_name_is_not_accepted(self):
         """It never selected an index: its only effect was skipping the
-        planner, and with it the strict no-scan default."""
+        planner, and with it the scan policy."""
         with pytest.raises(TypeError, match="bin_name"):
             QueryHint(bin_name="age")
 
@@ -74,9 +74,9 @@ class TestQueryHintValidation:
         assert hint.hard_hint is True
 
     def test_allow_scans_with_where_defaults_to_none(self):
-        # Tri-state: unset inherits the Behavior default (strict), not a bare bool.
+        # Tri-state: unset inherits the Behavior setting, not a bare bool.
         assert QueryHint().allow_scans_with_where is None
-        assert QueryHint(allow_scans_with_where=True).allow_scans_with_where is True
+        assert QueryHint(allow_scans_with_where=False).allow_scans_with_where is False
 
     def test_frozen(self):
         hint = QueryHint(index_name="idx")

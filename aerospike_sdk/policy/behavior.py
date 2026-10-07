@@ -441,12 +441,12 @@ Behavior.DEFAULT = Behavior(
             max_retries=5,
             record_queue_size=5000,
             max_concurrent_nodes=0,
-            # Strict by default: a where-clause query that would fall back to a
-            # primary-index (full-set) scan is rejected on the server-selection
-            # path. Set True (on the Behavior or a per-query hint) to allow the
-            # primary-index fallback. Only affects clusters supporting field 44
-            # query selection; queries without a where clause are unaffected.
-            allow_scans_with_where=False,
+            # A where-clause query that no secondary index can serve falls back
+            # to a primary-index (full-set) scan. Set False (on the Behavior or
+            # a per-query hint) to reject the fallback instead. Only affects
+            # clusters supporting field 44 query selection; queries without a
+            # where clause are unaffected.
+            allow_scans_with_where=True,
         ),
         # Background operations (query-shaped writes). The policy bounds only
         # the per-node job-submit round trip — the job itself runs server-side

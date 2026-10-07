@@ -191,9 +191,9 @@ def explain_where_flags(hint: Optional[QueryHint]) -> Optional[int]:
     if hint is None:
         return None
     flags = QueryWhereFlags.EXPLAIN
-    # PAC-level helper: pass through only an explicit disallow. The strict
-    # Behavior default (unset -> reject fallback) lives in the SDK layer, not
-    # here, so unset hints leave the primary-index fallback available.
+    # PAC-level helper: pass through only an explicit disallow. Resolving an
+    # unset hint against the Behavior happens in the SDK layer, not here, so
+    # unset hints leave the primary-index fallback available.
     if hint.allow_scans_with_where is False:
         flags |= QueryWhereFlags.REQUIRE_INDEX
     if hint.hard_hint:
@@ -364,27 +364,29 @@ async def count_matches_async(
     where: str,
     bin_name: str,
     *,
-    needs_scan_opt_in: bool,
+    needs_scan: bool,
     check: Optional[Callable[[Any], bool]] = None,
 ) -> int:
-    """Count the rows ``where`` returns, after pinning whether it needs the scan opt-in.
+    """Count the rows ``where`` returns, after pinning whether an index serves it.
 
-    A predicate no index can serve falls back to a primary-index scan, which the
-    default behavior refuses. With ``needs_scan_opt_in`` the refusal is asserted
-    first and the rows are then read with ``allow_scans_with_where``; without it
-    the rows are read under the default, which shows an index served them.
-    ``check`` is applied to each returned bin value.
+    A predicate no index can serve falls back to a primary-index scan, which a
+    query disallowing scans refuses. With ``needs_scan`` that refusal is asserted
+    first and the rows are then read under the default, which allows the
+    fallback; without it the rows are read with scans disallowed, which shows an
+    index served them. ``check`` is applied to each returned bin value.
     """
+    index_only = QueryHint(allow_scans_with_where=False)
+
     def query():
         return session.query(dataset).bins([bin_name]).where(where)
 
-    if needs_scan_opt_in:
+    if needs_scan:
         with pytest.raises(AerospikeError) as exc_info:
-            await count_records_async(await query().execute())
+            await count_records_async(await query().with_hint(index_only).execute())
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-        stream = await query().with_hint(QueryHint(allow_scans_with_where=True)).execute()
-    else:
         stream = await query().execute()
+    else:
+        stream = await query().with_hint(index_only).execute()
 
     count = 0
     try:

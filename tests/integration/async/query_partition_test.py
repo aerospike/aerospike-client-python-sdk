@@ -204,10 +204,11 @@ async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     await session.truncate(ds)
     placed = await _seed(session, ds)
 
-    # Indexing the filtered bin keeps both queries on the secondary-index plan;
-    # without it the strict allow_scans_with_where default rejects them. Drop
-    # first: a run killed before its teardown leaves the index behind, and
-    # creating an index that already exists fails.
+    # Indexing the filtered bin puts both queries on the secondary-index plan,
+    # so the partition restriction is exercised on an index query as well as
+    # the primary-index scans above. Drop first: a run killed before its
+    # teardown leaves the index behind, and creating an index that already
+    # exists fails.
     await _drop_index_quiet(session, ds)
     index_task = await (
         session.index(ds).on_bin("v").named(V_INDEX).integer().create()

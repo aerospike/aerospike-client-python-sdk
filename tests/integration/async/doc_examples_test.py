@@ -23,8 +23,8 @@ from tests.integration.general_auth import apply_general_auth, general_seed
 SEEDS = general_seed()
 USERS = DataSet.of(general_namespace(), "doc_smoke")
 
-# The quick example queries "age" with .where(), which needs an index to be
-# served: an unindexed .where() is rejected rather than run as a full-set scan.
+# The quick example indexes "age" before querying it with .where(), so an
+# index serves the query rather than a full-set scan.
 QUICK_EXAMPLE_INDEX = "doc_smoke_age_idx"
 
 

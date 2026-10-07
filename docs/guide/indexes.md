@@ -309,21 +309,32 @@ stream = await (
 
 ### Blocking primary-index (full-set) scans
 
-By default a `.where()` query that no secondary index can satisfy is **rejected**
-rather than allowed to fall back to a primary-index (full-set) scan — a full-set
-scan is dangerous at scale. This is the `allow_scans_with_where` query setting,
-which defaults to `False` in `Behavior.DEFAULT`. Queries **without** a `.where()`
-clause (intentional scans) are unaffected, and this only applies on clusters with
-query selection (field 44).
+By default a `.where()` query that no secondary index can satisfy falls back to
+a primary-index (full-set) scan, so queries work before their indexes exist. At
+scale a full-set scan is expensive, and a dropped or never-created index turns
+into one silently. To fail fast instead, set the `allow_scans_with_where` query
+setting to `False`: the query is then **rejected** with `IndexNotFoundError`
+(`INDEX_NOT_FOUND`). It defaults to `True` in `Behavior.DEFAULT`. Queries
+**without** a `.where()` clause (intentional scans) are unaffected, and this only
+applies on clusters with query selection (field 44).
 
-Allow the fallback per query with a hint, or change it on the `Behavior`:
+Reject the fallback for every query on a `Behavior`, or for one query with a hint:
 
 ```python
-# Permit the primary-index fallback for this one query
+from aerospike_sdk.policy import Settings
+
+# Every where-clause query in these sessions must be served by an index
+index_only = Behavior.DEFAULT.derive_with_changes(
+    "index-only",
+    reads_query=Settings(allow_scans_with_where=False),
+)
+index_only_session = cluster.create_session(index_only)
+
+# Reject the primary-index fallback for this one query on a default session
 stream = await (
     session.query(users)
     .where("$.age > 25")
-    .with_hint(QueryHint(allow_scans_with_where=True))
+    .with_hint(QueryHint(allow_scans_with_where=False))
     .execute()
 )
 ```

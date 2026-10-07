@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_sdk import CollectionIndexType, DataSet
+from aerospike_sdk import CollectionIndexType, DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     GEOJSON_PARTICLE_TYPE,
@@ -255,8 +255,8 @@ class TestQuerySelectionExplainScope:
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
             .bins([SCOPE_MAP_BIN])
             .where(where)
-            # map-keys-exists is served by SCOPE_MAP_INDEX now, so no scan and
-            # no opt-in past the strict allow_scans_with_where default.
+            # Disallowing scans shows SCOPE_MAP_INDEX serves map-keys-exists.
+            .with_hint(QueryHint(allow_scans_with_where=False))
             .execute()
         )
         count = 0
@@ -271,7 +271,7 @@ class TestQuerySelectionExplainScope:
 
     @requires_query_selection
     @pytest.mark.parametrize(
-        ("where", "bin_name", "needs_scan_opt_in"),
+        ("where", "bin_name", "needs_scan"),
         [
             pytest.param(
                 f"$.{SCOPE_TAG_BIN} == '{SCOPE_TAG_MATCH}'", SCOPE_TAG_BIN, False, id="string",
@@ -286,17 +286,16 @@ class TestQuerySelectionExplainScope:
         ],
     )
     async def test_execute_returns_matching_row(
-        self, query_selection_cluster, where, bin_name, needs_scan_opt_in,
+        self, query_selection_cluster, where, bin_name, needs_scan,
     ):
-        """Each shape returns its one matching row; only scan-planned shapes need the opt-in.
+        """Each shape returns its one matching row; only scan-planned shapes need the fallback.
 
-        Every indexed shape here runs under the strict default. The
-        ``.upper()`` predicate is the exception: it plans onto the primary
-        index, so the default refuses it and it reads only with
-        ``allow_scans_with_where``.
+        Every indexed shape here runs with scans disallowed. The ``.upper()``
+        predicate is the exception: it plans onto the primary index, so
+        disallowing scans refuses it and it reads only under the default.
         """
         count = await count_matches_async(
             query_selection_cluster.session, SCOPE_DS, where, bin_name,
-            needs_scan_opt_in=needs_scan_opt_in,
+            needs_scan=needs_scan,
         )
         assert count == 1

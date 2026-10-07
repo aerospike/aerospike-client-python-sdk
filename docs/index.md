@@ -23,8 +23,7 @@ async def main():
         users = DataSet.of("test", "users")
 
         # One-time setup: index the bin the filter below queries on. A
-        # .where() query no index can satisfy is rejected rather than run
-        # as a full-set scan.
+        # .where() query no index can satisfy falls back to a full-set scan.
         await (
             session.index(users)
             .on_bin("age")
@@ -69,7 +68,7 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
     users = DataSet.of("test", "users")
 
     # One-time setup: index the bin the filter below queries on. A .where()
-    # query no index can satisfy is rejected rather than run as a full-set scan.
+    # query no index can satisfy falls back to a full-set scan.
     session.index(users).on_bin("age").named("users_age_idx").integer().create()
 
     # Write

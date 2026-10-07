@@ -243,9 +243,10 @@ stream = await (
 )
 ```
 
-This and the AEL queries below assume a secondary index covers the filtered
-bin. A `.where()` query that no index can satisfy is rejected rather than run
-as a full-set scan — see [Secondary Indexes](indexes.md).
+This and the AEL queries below run fastest when a secondary index covers the
+filtered bin. A `.where()` query that no index can satisfy runs as a full-set
+scan unless the query or `Behavior` rejects that fallback — see
+[Secondary Indexes](indexes.md).
 
 Or with a pre-built `FilterExpression`:
 

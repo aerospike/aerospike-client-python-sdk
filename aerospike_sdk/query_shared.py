@@ -245,8 +245,8 @@ class QueryHint:
     On clusters that support field ``44`` query selection (>= 8.2.0),
     ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
     explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
-    Behavior default (strict — primary-index fallback rejected), ``True``
-    allows the fallback for this query, ``False`` rejects it.
+    Behavior setting (by default the primary-index fallback is allowed),
+    ``True`` allows the fallback for this query, ``False`` rejects it.
 
     Example::
 
@@ -2040,7 +2040,7 @@ class _QueryBuilderBase:
 
         Applies the wire precedence: the query's hint wins when it sets
         ``allow_scans_with_where``, otherwise the resolved Behavior query
-        setting, otherwise the strict default (reject the fallback).
+        setting, otherwise the default (allow the fallback).
 
         Returns:
             ``True`` if a where-clause query may fall back to a primary-index
@@ -2055,14 +2055,14 @@ class _QueryBuilderBase:
         """Whether a where-clause query may fall back to a primary-index scan.
 
         A per-query hint wins; otherwise the resolved Behavior query setting;
-        otherwise the strict default (``False`` — reject the fallback).
+        otherwise the default (``True`` — allow the fallback).
         """
         if hint is not None and hint.allow_scans_with_where is not None:
             return hint.allow_scans_with_where
         resolved = self._behavior.get_settings(
             OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
         ).allow_scans_with_where
-        return resolved if resolved is not None else False
+        return resolved if resolved is not None else True
 
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
         flags = QueryWhereFlags.EXPLAIN

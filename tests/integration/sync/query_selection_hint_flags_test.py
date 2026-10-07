@@ -36,6 +36,10 @@ from tests.integration.query_selection_helpers import (
 )
 from tests.pac_compat import requires_query_selection
 
+INDEX_ONLY = Behavior.DEFAULT.derive_with_changes(
+    name="index_only_sync",
+    reads_query=Settings(allow_scans_with_where=False),
+)
 
 
 class TestSyncQuerySelectionHintFlags:
@@ -111,7 +115,16 @@ class TestSyncQuerySelectionBuilderScanBlocking:
     (``session.query().where().execute()``), not the PAC explain helper."""
 
     @requires_query_selection
-    def test_disallow_scans_via_builder_rejects_scan(self, query_selection_cluster):
+    def test_default_via_builder_permits_scan(self, query_selection_cluster):
+        stream = (
+            query_selection_cluster.session.query(HINT_DS)
+            .where("$.country == 'US'")
+            .execute()
+        )
+        assert count_records_sync(stream) > 0
+
+    @requires_query_selection
+    def test_disallow_hint_overrides_default_behavior(self, query_selection_cluster):
         with pytest.raises(AerospikeError) as exc_info:
             (
                 query_selection_cluster.session.query(HINT_DS)
@@ -122,39 +135,24 @@ class TestSyncQuerySelectionBuilderScanBlocking:
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
     @requires_query_selection
-    def test_strict_default_via_builder_rejects_scan(self, query_selection_cluster):
-        with pytest.raises(AerospikeError) as exc_info:
-            (
-                query_selection_cluster.session.query(HINT_DS)
-                .where("$.country == 'US'")
-                .execute()
-            )
-        assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
-
-    @requires_query_selection
-    def test_allow_scans_via_builder_permits_scan(self, query_selection_cluster):
-        stream = (
-            query_selection_cluster.session.query(HINT_DS)
-            .where("$.country == 'US'")
-            .with_hint(QueryHint(allow_scans_with_where=True))
-            .execute()
-        )
-        count_records_sync(stream)
-
-    @requires_query_selection
-    def test_disallow_hint_overrides_permissive_behavior(self, query_selection_cluster):
-        # Resolution runs through the sync client's own create_session(behavior):
-        # a hint rejecting the fallback beats a Behavior that allows it.
-        permissive = Behavior.DEFAULT.derive_with_changes(
-            name="permissive_scans_sync",
-            reads_query=Settings(allow_scans_with_where=True),
-        )
-        session = query_selection_cluster.client.create_session(permissive)
+    def test_index_only_behavior_rejects_scan(self, query_selection_cluster):
+        # Resolution runs through the sync client's own create_session(behavior).
+        session = query_selection_cluster.client.create_session(INDEX_ONLY)
         with pytest.raises(AerospikeError) as exc_info:
             (
                 session.query(HINT_DS)
                 .where("$.country == 'US'")
-                .with_hint(QueryHint(allow_scans_with_where=False))
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
+
+    @requires_query_selection
+    def test_allow_hint_overrides_index_only_behavior(self, query_selection_cluster):
+        session = query_selection_cluster.client.create_session(INDEX_ONLY)
+        stream = (
+            session.query(HINT_DS)
+            .where("$.country == 'US'")
+            .with_hint(QueryHint(allow_scans_with_where=True))
+            .execute()
+        )
+        assert count_records_sync(stream) > 0
