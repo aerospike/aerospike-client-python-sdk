@@ -174,23 +174,53 @@ class RecordResult:
             This instance when :attr:`is_ok` is true.
 
         Raises:
-            AerospikeError: If :attr:`exception` is set (embedded client error).
-            AerospikeError: Otherwise, from :attr:`result_code` via
-                :func:`~aerospike_sdk.exceptions._result_code_to_exception`
-                (usually a specific subclass; unmapped codes use the base type).
+            AerospikeError: The exception :meth:`to_exception` returns for
+                this row.
 
         Example::
 
             row = await stream.first()
             if row is not None:
                 row.or_raise()
+
+        See Also:
+            :meth:`to_exception`: The same exception, returned instead of raised.
         """
         if not self.is_ok:
-            raise self._as_exception()
+            raise self.to_exception()
         return self
 
-    def _as_exception(self) -> AerospikeError:
-        """The failure as an exception: :attr:`exception` if set, else built with the row's detail."""
+    def to_exception(self) -> AerospikeError | None:
+        """Return this row's failure as an exception, or ``None`` if the row succeeded.
+
+        A row the client failed carries its own :attr:`exception`, which is
+        returned as is. Otherwise the exception is built from the row: the
+        :class:`~aerospike_sdk.exceptions.AerospikeError` subclass for
+        :attr:`result_code` (the base type for an unmapped code), with
+        :attr:`in_doubt`, :attr:`sub_code`, :attr:`server_message` and
+        :attr:`exp_trace` attached. Use it to log or collect failures without
+        raising.
+
+        Returns:
+            The exception for a failed row, or ``None`` when :attr:`is_ok` is
+            true.
+
+        Example::
+
+            from aerospike_sdk.exceptions import RecordNotFoundError
+
+            async for row in stream:
+                exc = row.to_exception()
+                if isinstance(exc, RecordNotFoundError):
+                    missing.append(row.key)
+                elif exc is not None:
+                    failures.append(exc)
+
+        See Also:
+            :meth:`or_raise`: Raise this exception instead of returning it.
+        """
+        if self.is_ok:
+            return None
         if self.exception is not None:
             return self.exception
         return _result_code_to_exception(

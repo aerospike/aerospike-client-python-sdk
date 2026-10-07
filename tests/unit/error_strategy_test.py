@@ -177,6 +177,37 @@ class TestRecordResultException:
         with pytest.raises(TimeoutError, match="client deadline"):
             rr.as_bool()
 
+    def test_to_exception_is_none_for_an_ok_row(self):
+        rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK)
+        assert rr.to_exception() is None
+
+    def test_to_exception_returns_the_stored_exception(self):
+        exc = TimeoutError("timed out")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.TIMEOUT, exception=exc,
+        )
+        assert rr.to_exception() is exc
+
+    def test_to_exception_builds_the_typed_error_from_the_row(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.GENERATION_ERROR,
+            sub_code=7, server_message="generation mismatch",
+        )
+        exc = rr.to_exception()
+        assert type(exc) is GenerationError
+        assert exc.sub_code == 7
+        assert exc.server_message == "generation mismatch"
+
+    def test_to_exception_returns_a_client_side_error_despite_ok_code(self):
+        exc = AerospikeError("client rejected the command")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        assert rr.to_exception() is exc
+
 
 # ---------------------------------------------------------------------------
 # Error funnels: a failure without a result code

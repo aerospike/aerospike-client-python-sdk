@@ -346,13 +346,14 @@ async for result in stream:
         record = result.record
         print(record.key, record.bins, record.generation, record.expiration)
     else:
-        print(f"Error: {result.exception or result.result_code}")
+        print(f"Error: {result.to_exception()}")
 ```
 
-Branch on `is_ok` rather than comparing `result_code` to `OK`: a client-side
-failure never reaches the server to earn a code, so it arrives with `result_code`
-reading `OK` and an `exception` attached. See
-[Error Handling](error-handling.md).
+Branch on `is_ok` rather than comparing `result_code` to `OK`: it checks both
+`result_code` and `exception`. A row that failed client-side, before the server
+answered, carries a negative client code such as `ResultCode.CLIENT_ERROR` (or
+`ResultCode.TIMEOUT` for a client-side deadline), with the `exception` holding
+the detail. See [Error Handling](error-handling.md).
 
 Use `record_or_raise()` to raise on error results:
 
