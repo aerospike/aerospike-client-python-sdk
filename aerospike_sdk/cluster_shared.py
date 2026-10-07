@@ -76,7 +76,8 @@ class _TlsSettings:
         needs.
 
         Raises:
-            ValueError: An unrecognized protocol or cipher-suite name.
+            ValueError: An unrecognized protocol or cipher-suite name, or a
+                protocol and cipher combination that leaves no usable suite.
             aerospike_async.exceptions.IoError: A CA or client file that
                 cannot be read.
         """

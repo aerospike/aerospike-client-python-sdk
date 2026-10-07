@@ -125,7 +125,7 @@ class TestUnsatisfiableRestrictionIsRefused:
             protocols=["TLSv1.2"],
             ciphers=["TLS13_AES_256_GCM_SHA384"],
         )
-        with pytest.raises(AerospikeError, match="no usable cipher suites"):
+        with pytest.raises(ValueError, match="no usable cipher suites"):
             cd.connect()
 
 

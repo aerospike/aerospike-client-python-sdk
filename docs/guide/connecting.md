@@ -159,9 +159,9 @@ Each `with_tls_config()` call replaces any earlier TLS settings.
 
 To restrict the handshake, pass `protocols=["TLSv1.3"]` or a list of
 cipher-suite names in `ciphers=`. An empty list raises `ValueError` right away;
-omit the argument to allow the defaults. At connect, an unknown name raises
-`ValueError`, and a combination that leaves no usable suite (TLS 1.2 with only
-TLS 1.3 suites, for example) raises `AerospikeError`.
+omit the argument to allow the defaults. At connect, an unknown name or a
+combination that leaves no usable suite (TLS 1.2 with only TLS 1.3 suites, for
+example) raises `ValueError`.
 
 For certificate (PKI) authentication, pass `client_cert_file` and
 `client_key_file` here and call `with_certificate_credentials()`; connect
