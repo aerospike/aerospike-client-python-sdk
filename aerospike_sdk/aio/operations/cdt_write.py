@@ -52,6 +52,7 @@ from aerospike_sdk.aio.operations.cdt_read import (
     T,
     _ReturnTypeCls,
     _map_item_pairs,
+    _value_list,
 )
 
 _DEFAULT_MAP_POLICY = MapPolicy(None, None)
@@ -401,7 +402,19 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         )
 
     def on_map_key_list(self, keys: Sequence[Any]) -> CdtWriteInvertableBuilder[T]:
-        """Navigate into map elements matching a list of keys."""
+        """Navigate into map elements matching a list of keys.
+
+        Args:
+            keys: Map keys to match.
+
+        Returns:
+            :class:`CdtWriteInvertableBuilder` for writing the matched elements.
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+        """
+        keys = _value_list(keys, "keys")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_key_list(b, keys, rt).set_context(ctx_l),
@@ -412,7 +425,19 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
     def on_map_value_list(
         self, values: Sequence[Any],
     ) -> CdtWriteInvertableBuilder[T]:
-        """Navigate into map elements matching a list of values."""
+        """Navigate into map elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtWriteInvertableBuilder` for writing the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_value_list(
@@ -497,7 +522,19 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
     def on_list_value_list(
         self, values: Sequence[Any],
     ) -> CdtWriteInvertableBuilder[T]:
-        """Navigate into list elements matching a list of values."""
+        """Navigate into list elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtWriteInvertableBuilder` for writing the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: ListOperation.get_by_value_list(

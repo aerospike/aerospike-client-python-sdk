@@ -107,6 +107,7 @@ from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
     CdtReadInvertableBuilder,
     _map_item_pairs,
+    _value_list,
 )
 from aerospike_sdk.aio.operations.cdt_write import (
     CdtWriteBuilder,
@@ -4749,6 +4750,10 @@ class _BinWriteSteps(Generic[_W]):
             :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
             or a terminal.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
@@ -4757,7 +4762,8 @@ class _BinWriteSteps(Generic[_W]):
             )
         """
         return CdtPathBuilder(
-            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+            self._parent, self._bin, [CTX.map_keys_in(_value_list(keys, "keys"))],
+            filterable=True,
         )
 
     def on_map_key(
@@ -4970,7 +4976,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
         """
+        keys = _value_list(keys, "keys")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -4988,7 +4999,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
         """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -5171,7 +5187,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
         """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -5887,6 +5908,10 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
             or a terminal.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
@@ -5897,7 +5922,8 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             ).first_or_raise()
         """
         return CdtPathBuilder(
-            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+            self._parent, self._bin, [CTX.map_keys_in(_value_list(keys, "keys"))],
+            filterable=True,
         )
 
     def on_map_key(
@@ -6046,7 +6072,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     # -- Map navigation (list selectors -> CdtReadInvertableBuilder) ----------
 
     def on_map_key_list(self, keys: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to map elements matching a list of keys."""
+        """Navigate to map elements matching a list of keys.
+
+        Args:
+            keys: Map keys to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+        """
+        keys = _value_list(keys, "keys")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,
@@ -6057,7 +6095,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )
 
     def on_map_value_list(self, values: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to map elements matching a list of values."""
+        """Navigate to map elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,
@@ -6182,7 +6232,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     # -- List navigation (list selector -> CdtReadInvertableBuilder) ----------
 
     def on_list_value_list(self, values: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to list elements matching a list of values."""
+        """Navigate to list elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,

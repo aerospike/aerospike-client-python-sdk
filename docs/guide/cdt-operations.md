@@ -366,6 +366,12 @@ result = await (
 await session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
 ```
 
+`keys` is any collection, and keys of different types may be mixed. A `bytes`
+element is one blob key. A bare `str` or `bytes` in place of the collection
+raises `TypeError` rather than selecting one key per character or byte; wrap a
+single key in a list: `on_map_keys_in([b"\x01\x02"])`. The same holds for
+`on_map_key_list`, `on_map_value_list` and `on_list_value_list`.
+
 `and_filter` refines the step before it, so it follows `on_map_keys_in` or a
 single-element step such as `on_map_key`, once per level. After a
 single-element step it keeps that element only if it matches, and opens a path

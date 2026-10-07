@@ -72,6 +72,21 @@ def _map_item_pairs(items: Mapping[Any, Any] | Sequence[tuple[Any, Any]]) -> lis
     return list(items)
 
 
+def _value_list(values: Iterable[Any], param: str) -> list[Any]:
+    """Return *values* as a list of keys or values, refusing a bare string or bytes.
+
+    Both are iterable, so taken as a collection a ``str`` would select one
+    entry per character and ``bytes`` one small-integer key per byte. A
+    ``bytes`` *element* of the collection is a single blob key.
+    """
+    if isinstance(values, (str, bytes, bytearray)):
+        raise TypeError(
+            f"{param} must be a collection, not a single {type(values).__name__}; "
+            f"wrap one value in a list: [{values!r}]"
+        )
+    return values if isinstance(values, list) else list(values)
+
+
 class CdtReadBuilder(Generic[T]):
     """Terminal read actions and singular navigation for a CDT path.
 
@@ -157,13 +172,18 @@ class CdtReadBuilder(Generic[T]):
         Returns:
             A :class:`CdtPathBuilder` over the selected entries.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             .bin("catalog").on_map_key("prices").on_map_keys_in(["a", "c"]).collect_values()
         """
         bin_name, new_ctx, _ = self._push_ctx()
         return CdtPathBuilder(
-            self._parent, bin_name, new_ctx + (CTX.map_keys_in(list(keys)),), filterable=True,
+            self._parent, bin_name,
+            new_ctx + (CTX.map_keys_in(_value_list(keys, "keys")),), filterable=True,
         )
 
     def and_filter(self, predicate: Any) -> "CdtPathBuilder[T]":
@@ -498,7 +518,19 @@ class CdtReadBuilder(Generic[T]):
         )
 
     def on_map_key_list(self, keys: Sequence[Any]) -> CdtReadInvertableBuilder[T]:
-        """Navigate into map elements matching a list of keys."""
+        """Navigate into map elements matching a list of keys.
+
+        Args:
+            keys: Map keys to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+        """
+        keys = _value_list(keys, "keys")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_key_list(b, keys, rt).set_context(ctx_l),
@@ -508,7 +540,19 @@ class CdtReadBuilder(Generic[T]):
     def on_map_value_list(
         self, values: Sequence[Any],
     ) -> CdtReadInvertableBuilder[T]:
-        """Navigate into map elements matching a list of values."""
+        """Navigate into map elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_value_list(
@@ -577,7 +621,19 @@ class CdtReadBuilder(Generic[T]):
     def on_list_value_list(
         self, values: Sequence[Any],
     ) -> CdtReadInvertableBuilder[T]:
-        """Navigate into list elements matching a list of values."""
+        """Navigate into list elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: ListOperation.get_by_value_list(
@@ -1165,6 +1221,10 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` over the selected entries. Follow it
             with :meth:`and_filter` to narrow them by a predicate.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             .bin("rows").on_each_child().on_map_keys_in(["id", "total"]).collect_values()
@@ -1172,7 +1232,7 @@ class CdtPathBuilder(Generic[T]):
         return CdtPathBuilder(
             self._parent,
             self._bin_name,
-            self._ctx + (CTX.map_keys_in(list(keys)),),
+            self._ctx + (CTX.map_keys_in(_value_list(keys, "keys")),),
             filterable=True,
         )
 
@@ -1312,8 +1372,21 @@ class CdtPathBuilder(Generic[T]):
     def collect_map_keys(self, *, no_fail: bool = False) -> T:
         """Read the key of every map entry the path selects.
 
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty list.
+
         Returns:
             The parent builder for chaining.
+
+        Example::
+
+            .bin("prices").on_each_child_where(over_10).collect_map_keys()
+
+        See Also:
+            :meth:`collect_map_entries`: the keys together with their values.
         """
         if no_fail:
             return self._emit(
@@ -1329,8 +1402,23 @@ class CdtPathBuilder(Generic[T]):
     def collect_map_entries(self, *, no_fail: bool = False) -> T:
         """Read every selected map entry as a key/value pair.
 
+        The result is one flat list of alternating keys and values.
+
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty list.
+
         Returns:
             The parent builder for chaining.
+
+        Example::
+
+            .bin("prices").on_map_keys_in(["apple", "pear"]).collect_map_entries()
+
+        See Also:
+            :meth:`collect_map_keys`: the keys alone.
         """
         if no_fail:
             return self._emit(
@@ -1346,8 +1434,22 @@ class CdtPathBuilder(Generic[T]):
     def collect_matching_tree(self, *, no_fail: bool = False) -> T:
         """Read the selection as a tree, preserving the nesting it was found in.
 
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty tree.
+
         Returns:
             The parent builder for chaining.
+
+        Example::
+
+            .bin("catalog").on_map_key("items").on_each_child_where(in_stock)
+            .collect_matching_tree()
+
+        See Also:
+            :meth:`collect_values`: the selected values as a flat list.
         """
         if no_fail:
             return self._emit(

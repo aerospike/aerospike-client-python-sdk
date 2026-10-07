@@ -557,6 +557,18 @@ class TestMatchingTree:
         assert isinstance(tree, dict)
         assert [p["name"] for p in tree["items"]] == ["Widget", "Gizmo"]
 
+    @pytest.mark.parametrize("no_fail", [False, True])
+    async def test_a_missing_path_yields_an_empty_tree(self, cluster, no_fail):
+        session = cluster.create_session()
+        k = _key(61)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"m": {"nums": [1, 2, 3]}}).execute()
+
+        assert await _collect(
+            session, k, "m",
+            lambda b: b.on_map_key("missing").on_each_child().collect_matching_tree(no_fail=no_fail),
+        ) == {}
+
 
 # ---------------------------------------------------------------------------
 # Loop-variable forms. A predicate reads the current element through a loop
@@ -882,6 +894,33 @@ class TestMapKeysIn:
             session, k, "m",
             lambda b: b.on_map_keys_in([1, 3]).collect_values(),
         )) == [100, 300]
+
+    async def test_bytes_key_selects_a_blob_key_among_mixed_keys(self, cluster):
+        """Integer keys 1 and 2 would match too if the blob were sent as its bytes."""
+        session = cluster.create_session()
+        k = _key(59)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"m": {b"\x01\x02": 10, "s": 20, 3: 30, 1: 91, 2: 92}}
+        ).execute()
+
+        assert sorted(await _collect(
+            session, k, "m",
+            lambda b: b.on_map_keys_in([b"\x01\x02", "s", 3]).collect_values(),
+        )) == [10, 20, 30]
+
+    async def test_key_list_bytes_key_selects_a_blob_key(self, cluster):
+        session = cluster.create_session()
+        k = _key(60)
+        await session.delete(k).execute()
+        await session.upsert(k).put(
+            {"m": {b"\x01\x02": 10, "s": 20, 3: 30, 1: 91, 2: 92}}
+        ).execute()
+
+        assert sorted(await _collect(
+            session, k, "m",
+            lambda b: b.on_map_key_list([b"\x01\x02", "s", 3]).get_values(),
+        )) == [10, 20, 30]
 
     async def test_and_filter_narrows_the_selected_keys(self, cluster):
         """Keys a, b, c, then only the entries whose value is over 10."""
