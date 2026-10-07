@@ -847,6 +847,18 @@ class TestNestedCollectionOps:
         assert len(segment._qb._operations) == 1
         assert isinstance(segment._qb._operations[0], ListOperation)
 
+    def test_nested_list_append(self):
+        wbb, segment = self._build()
+        wbb.on_map_key("inner").list_append(1, unique=True, bounded=True, no_fail=True)
+        assert len(segment._qb._operations) == 1
+        assert isinstance(segment._qb._operations[0], ListOperation)
+
+    def test_nested_list_add(self):
+        wbb, segment = self._build()
+        wbb.on_map_key("inner").list_add(1, unique=True, bounded=True, no_fail=True)
+        assert len(segment._qb._operations) == 1
+        assert isinstance(segment._qb._operations[0], ListOperation)
+
 
 # ===================================================================
 # Read path: nested map_size / list_size

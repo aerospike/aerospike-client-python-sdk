@@ -179,6 +179,13 @@ await (
     .execute()
 )
 
+# The same list writes work on a list reached by navigation
+await (
+    session.update(users.id(1))
+    .bin("teams").on_map_key("team1").list_append("Diana")
+    .execute()
+)
+
 # Clear a list
 await (
     session.update(users.id(1))

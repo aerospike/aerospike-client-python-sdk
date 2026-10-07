@@ -21,7 +21,7 @@ from aerospike_sdk import CTX, CdtOperation, Exp, ExpType, ListOrderType, ListSo
 from aerospike_sdk import LoopVarPart
 
 from aerospike_sdk import DataSet
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ElementExistsError, ResultCode
 from tests.integration.namespace import general_namespace
 
 
@@ -1286,6 +1286,50 @@ class TestListInsertItems:
 
         result = await (await session.query(k).execute()).first_or_raise()
         assert result.record.bins["outer"]["data"] == [7, 8, 1, 2]
+
+
+class TestNestedSingleValueListWrites:
+    """``list_append`` / ``list_add`` on a list reached by navigation."""
+
+    async def test_nested_list_append(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(111)
+        await session.upsert(k).put({"teams": {"team1": ["Alice", "Bob"]}}).execute()
+
+        await session.update(k).bin("teams").on_map_key("team1").list_append("Diana").execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["teams"]["team1"] == ["Alice", "Bob", "Diana"]
+
+    async def test_nested_list_add_keeps_sorted_order(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(112)
+        await session.upsert(k).put({"m": {"x": 0}}).execute()
+        await (
+            session.update(k).bin("m").on_map_key("scores").list_create(ListOrderType.ORDERED)
+            .execute()
+        )
+        await session.update(k).bin("m").on_map_key("scores").list_add_items([30, 10]).execute()
+
+        await session.update(k).bin("m").on_map_key("scores").list_add(20).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"]["scores"] == [10, 20, 30]
+
+    async def test_nested_list_append_unique_rejects_a_duplicate(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(113)
+        await session.upsert(k).put({"teams": {"team1": ["Alice"]}}).execute()
+
+        with pytest.raises(ElementExistsError):
+            await (
+                session.update(k).bin("teams").on_map_key("team1")
+                .list_append("Alice", unique=True)
+                .execute()
+            )
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["teams"]["team1"] == ["Alice"]
 
 
 class TestListSortDropDuplicates:

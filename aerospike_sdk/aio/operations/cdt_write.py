@@ -719,6 +719,91 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
 
+    def list_append(
+        self, value: Any,
+        *,
+        unique: bool = False,
+        bounded: bool = False,
+        no_fail: bool = False,
+    ) -> T:
+        """Append *value* to the end of the unordered list at the current path.
+
+        Args:
+            value: Value to append.
+            unique: Reject if the value already exists in the list.
+            bounded: Reject if index is beyond the current list bounds.
+            no_fail: Do not raise on write failures.
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            ElementExistsError: At execution, if ``unique`` is set, the value
+                is already in the list, and ``no_fail`` is not set.
+
+        Example::
+
+            await (
+                session.update(key)
+                .bin("teams").on_map_key("team1").list_append("Diana")
+                .execute()
+            )
+
+        See Also:
+            :meth:`list_append_items`: Append several values in one operation.
+            :meth:`list_add`: Insert into an ordered list at its sorted position.
+        """
+        ctx = self._context_list_for_nested_ops()
+        policy = _resolve_list_policy(
+            None, unique=unique, bounded=bounded, no_fail=no_fail,
+        )
+        op = ListOperation.append(self._bin_name, value, policy).set_context(ctx)
+        self._parent.add_operation(op)  # type: ignore[union-attr]
+        return self._parent
+
+    def list_add(
+        self, value: Any,
+        *,
+        unique: bool = False,
+        bounded: bool = False,
+        no_fail: bool = False,
+    ) -> T:
+        """Add *value* to the ordered list at the current path, at its sorted position.
+
+        Args:
+            value: Element to insert in sorted order.
+            unique: Reject if the value already exists in the list.
+            bounded: Reject if index is beyond the current list bounds.
+            no_fail: Do not raise on write failures.
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            ElementExistsError: At execution, if ``unique`` is set, the value
+                is already in the list, and ``no_fail`` is not set.
+
+        Example::
+
+            await (
+                session.update(key)
+                .bin("stats").on_map_key("scores").list_add(87)
+                .execute()
+            )
+
+        See Also:
+            :meth:`list_add_items`: Add several values in one operation.
+            :meth:`list_append`: Append to the end of an unordered list.
+        """
+        ctx = self._context_list_for_nested_ops()
+        policy = _resolve_list_policy(
+            ListOrderType.ORDERED, unique=unique, bounded=bounded,
+            no_fail=no_fail,
+        )
+        op = ListOperation.append(self._bin_name, value, policy).set_context(ctx)
+        self._parent.add_operation(op)  # type: ignore[union-attr]
+        return self._parent
+
     def list_append_items(
         self, items: Sequence[Any],
         *,

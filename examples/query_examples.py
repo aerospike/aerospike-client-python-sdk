@@ -875,13 +875,13 @@ async def demonstrate_complex_cdt(session) -> None:
     # --- 21) Writes through nested CDT navigation ---
     await (
         session.update(cdt)
-        .bin("nested").on_map_key("team1").on_map_key("members").list_append_items(["Diana"])
+        .bin("nested").on_map_key("team1").on_map_key("members").list_append("Diana")
         .execute()
     )
     stream = await (
         session.query(cdt).bin("nested").on_map_key("team1").on_map_key("members").list_size().execute()
     )
-    print(f"Team1 size after nested list_append_items(['Diana']): {(await stream.first()).record.bins['nested']}")
+    print(f"Team1 size after nested list_append('Diana'): {(await stream.first()).record.bins['nested']}")
 
     await (
         session.update(cdt)
