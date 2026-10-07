@@ -375,9 +375,7 @@ class TestPathEdgeCases:
 
         assert await _collect(
             session, k, "d",
-            lambda b: b.on_map_key("empty").on_each_child().collect_values(
-                no_fail=True,
-            ),
+            lambda b: b.on_map_key("empty").on_each_child().collect_values(),
         ) == []
         # the populated sibling is unaffected
         assert await _collect(
@@ -393,14 +391,39 @@ class TestPathEdgeCases:
 
         assert await _collect(
             session, k, "d",
-            lambda b: b.on_map_key("empty").on_each_child().collect_values(
-                no_fail=True,
-            ),
+            lambda b: b.on_map_key("empty").on_each_child().collect_values(),
         ) == []
         assert await _collect(
             session, k, "d",
             lambda b: b.on_map_key("full").on_each_child().collect_values(),
         ) == [1]
+
+    async def test_a_filter_hitting_a_wrong_typed_element_fails_the_read(
+        self, cluster,
+    ):
+        session = cluster.create_session()
+        k = _key(57)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"d": {"mixed": ["a", 7, 9]}}).execute()
+
+        with pytest.raises(AerospikeError):
+            await _collect(
+                session, k, "d",
+                lambda b: b.on_map_key("mixed").on_each_child_where(_value_over(5))
+                .collect_values(),
+            )
+
+    async def test_no_fail_skips_a_wrong_typed_element(self, cluster):
+        session = cluster.create_session()
+        k = _key(58)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"d": {"mixed": ["a", 7, 9]}}).execute()
+
+        assert await _collect(
+            session, k, "d",
+            lambda b: b.on_map_key("mixed").on_each_child_where(_value_over(5))
+            .collect_values(no_fail=True),
+        ) == [7, 9]
 
     async def test_removing_every_element_leaves_an_empty_collection(self, cluster):
         session = cluster.create_session()
@@ -420,6 +443,97 @@ class TestPathEdgeCases:
         add_1 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(1)])
         await session.update(k).bin("nums").on_each_child().modify_by(add_1).execute()
         assert (await _bins(session, k))["nums"] == [8]
+
+
+class TestPathExpressionRead:
+    """``collect_values_as_expression_read`` reads a selection as an expression."""
+
+    async def test_matches_collect_values_and_leaves_the_bin_alone(self, cluster):
+        session = cluster.create_session()
+        k = _key(51)
+        await session.delete(k).execute()
+        await session.upsert(k).bin("cat").set_to(PRODUCTS).execute()
+
+        def names(b):
+            return b.on_map_key("items").on_each_child().on_map_key("name")
+
+        via_expression = await _collect(
+            session, k, "cat",
+            lambda b: names(b).collect_values_as_expression_read(ExpType.MAP),
+        )
+        via_operation = await _collect(
+            session, k, "cat", lambda b: names(b).collect_values(),
+        )
+        assert via_expression == via_operation == [
+            "Widget", "Gadget", "Gizmo", "Doohickey",
+        ]
+        assert (await _bins(session, k))["cat"] == PRODUCTS
+
+    async def test_reads_a_list_bin(self, cluster):
+        session = cluster.create_session()
+        k = _key(52)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"nums": [4, 5, 6]}).execute()
+
+        assert await _collect(
+            session, k, "nums",
+            lambda b: b.on_each_child_where(_value_over(4))
+            .collect_values_as_expression_read(ExpType.LIST),
+        ) == [5, 6]
+
+    async def test_a_wrong_bin_type_fails_the_read(self, cluster):
+        session = cluster.create_session()
+        k = _key(53)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"nums": [4, 5, 6]}).execute()
+
+        with pytest.raises(AerospikeError):
+            await _collect(
+                session, k, "nums",
+                lambda b: b.on_each_child()
+                .collect_values_as_expression_read(ExpType.MAP),
+            )
+
+    async def test_ignore_eval_failure_drops_the_failed_read(self, cluster):
+        session = cluster.create_session()
+        k = _key(54)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"nums": [4, 5, 6]}).execute()
+
+        result = await (
+            await session.query(k)
+            .bin("nums").on_each_child()
+            .collect_values_as_expression_read(ExpType.MAP, ignore_eval_failure=True)
+            .execute()
+        ).first_or_raise()
+        assert "nums" not in result.record.bins
+
+    async def test_a_filter_hitting_a_wrong_typed_element_fails_the_read(
+        self, cluster,
+    ):
+        session = cluster.create_session()
+        k = _key(55)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"d": {"mixed": ["a", 7, 9]}}).execute()
+
+        with pytest.raises(AerospikeError):
+            await _collect(
+                session, k, "d",
+                lambda b: b.on_map_key("mixed").on_each_child_where(_value_over(5))
+                .collect_values_as_expression_read(ExpType.MAP),
+            )
+
+    async def test_no_fail_skips_a_wrong_typed_element(self, cluster):
+        session = cluster.create_session()
+        k = _key(56)
+        await session.delete(k).execute()
+        await session.upsert(k).put({"d": {"mixed": ["a", 7, 9]}}).execute()
+
+        assert await _collect(
+            session, k, "d",
+            lambda b: b.on_map_key("mixed").on_each_child_where(_value_over(5))
+            .collect_values_as_expression_read(ExpType.MAP, no_fail=True),
+        ) == [7, 9]
 
 
 class TestMatchingTree:

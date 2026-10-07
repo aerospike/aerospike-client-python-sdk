@@ -10,7 +10,8 @@ variable*. The path ends in a terminal: ``modify_by(expr)`` rewrites each
 selected element, ``remove_matches()`` drops them, and ``collect_values()``
 reads them back.
 
-Section 5 reads a path as an *expression* with ``Exp.exp_select_by_path``, and
+Section 5 reads a path as an *expression* with
+``collect_values_as_expression_read``, and
 section 6 shows the explicit ``CTX`` list the path builder emits. See
 ``docs/guide/cdt-operations.md``.
 """
@@ -108,13 +109,15 @@ async def run_examples(session) -> None:
         await session.upsert(k5).bin("catalog").set_to(CATALOG).execute()
         print(f"initial catalog (before expression read of all titles): {CATALOG}")
         # Unlike section 3's collect_values() *operation*, this is a read
-        # *expression* over the bin, evaluated by select_from.
-        all_titles = Exp.exp_select_by_path(
-            ExpType.LIST, SelectFlags.VALUE, Exp.map_bin("catalog"),
-            [CTX.map_key("book"), CTX.all_children(), CTX.map_key("title")],
-        )
+        # *expression* over the bin; ExpType.MAP is the type of "catalog".
         result = await (
-            await session.query(k5).bin("catalog").select_from(all_titles).execute()
+            await session.query(k5)
+            .bin("catalog")
+            .on_map_key("book")
+            .on_each_child()
+            .on_map_key("title")
+            .collect_values_as_expression_read(ExpType.MAP)
+            .execute()
         ).first_or_raise()
         print(f"expression read of all titles (projection bin 'catalog'): "
               f"{result.record.bins['catalog']}")

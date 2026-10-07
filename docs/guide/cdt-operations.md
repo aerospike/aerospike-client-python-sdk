@@ -380,13 +380,38 @@ Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elemen
 the expression cannot be applied to — and `remove_matches()`. For explicit
 `SelectFlags`, `collect_by_path(flags)` is the unsugared form.
 
-When the shape varies between records, pass `no_fail=True` so a path that does
-not resolve yields nothing instead of failing the operation:
+An empty or absent collection is never an error; the read yields an empty list.
+A path filter that meets an element it cannot evaluate, such as an integer
+comparison against a string, fails the operation unless you pass `no_fail=True`,
+which skips that element instead:
 
 ```python
-# an absent or empty "items" collection is not an error here
-.bin("d").on_map_key("items").on_each_child().collect_values(no_fail=True)
+# "mixed" holds ["a", 7, 9]: without no_fail the string fails the read
+.bin("d").on_map_key("mixed").on_each_child_where(over_5).collect_values(no_fail=True)
+# -> [7, 9]
 ```
+
+`collect_values_as_expression_read(bin_type)` reads the same selection through
+an expression read instead of a CDT operation. Pass the bin's type,
+`ExpType.MAP` or `ExpType.LIST`; the result is a list under the bin's name. It
+takes `no_fail` as well, and `ignore_eval_failure=True` leaves the bin out of
+the result, rather than failing, when the evaluation itself fails, for example
+because the bin is not of the declared type:
+
+```python
+from aerospike_sdk import ExpType
+
+result = await (
+    await session.query(key)
+    .bin("catalog").on_map_key("book").on_each_child().on_map_key("title")
+    .collect_values_as_expression_read(ExpType.MAP)
+    .execute()
+).first_or_raise()
+titles = result.record.bins["catalog"]
+```
+
+For select flags other than values, build the expression with
+`Exp.exp_select_by_path` and pass it to `select_from`.
 
 ## AEL expressions on CDT
 

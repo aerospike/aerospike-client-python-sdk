@@ -22,7 +22,9 @@ tests pin the entries each step emits and the client-side rules for
 
 import pytest
 
-from aerospike_sdk import Behavior, CTX, Exp, LoopVarPart, MapOrder
+from aerospike_async import ExpOperation
+
+from aerospike_sdk import Behavior, CTX, Exp, ExpType, LoopVarPart, MapOrder
 from aerospike_sdk.aio.operations.cdt_read import CdtPathBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -172,3 +174,24 @@ class TestAndFilter:
     def test_rejected_after_a_range_selection(self):
         with pytest.raises(TypeError, match="and_filter"):
             QueryBinBuilder(_OpCollector(), "m").on_map_key_range("a", "d").and_filter(_over(10))
+
+
+class TestExpressionReadTerminal:
+    """``collect_values_as_expression_read`` emits one expression read op."""
+
+    @pytest.mark.parametrize("bin_type", [ExpType.MAP, ExpType.LIST])
+    def test_emits_one_expression_read(self, bin_type):
+        parent = _OpCollector()
+        result = QueryBinBuilder(parent, "m").on_each_child().collect_values_as_expression_read(
+            bin_type, no_fail=True, ignore_eval_failure=True,
+        )
+        assert result is parent
+        assert len(parent.operations) == 1
+        assert isinstance(parent.operations[0], ExpOperation)
+
+    @pytest.mark.parametrize("bin_type", [ExpType.INT, ExpType.STRING])
+    def test_rejects_a_non_collection_bin_type(self, bin_type):
+        parent = _OpCollector()
+        with pytest.raises(ValueError, match="ExpType.MAP or ExpType.LIST"):
+            QueryBinBuilder(parent, "m").on_each_child().collect_values_as_expression_read(bin_type)
+        assert parent.operations == []

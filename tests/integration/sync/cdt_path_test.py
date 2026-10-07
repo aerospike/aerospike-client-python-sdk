@@ -121,15 +121,15 @@ class TestSyncCdtPath:
 
         assert sync_session.get(k).bins["d"]["x"] == [2, 10, 3]
 
-    def test_collect_values_tolerates_an_empty_collection(self, sync_session):
+    def test_collect_values_no_fail_skips_a_wrong_typed_element(self, sync_session):
         k = _key(6)
         sync_session.delete(k).execute()
-        sync_session.upsert(k).put({"d": {"empty": []}}).execute()
+        sync_session.upsert(k).put({"d": {"mixed": ["a", 7, 9]}}).execute()
 
         rows = list(
             sync_session.query(k)
-            .bin("d").on_map_key("empty").on_each_child()
+            .bin("d").on_map_key("mixed").on_each_child_where(_over(5))
             .collect_values(no_fail=True)
             .execute()
         )
-        assert rows[0].record.bins["d"] == []
+        assert rows[0].record.bins["d"] == [7, 9]

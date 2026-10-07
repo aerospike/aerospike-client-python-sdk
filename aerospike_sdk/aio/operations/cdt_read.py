@@ -43,6 +43,10 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 from aerospike_async import (
     CTX,
     CdtOperation,
+    ExpOperation,
+    ExpReadFlags,
+    ExpType,
+    FilterExpression,
     ListOperation,
     ListOrderType,
     ListReturnType,
@@ -1216,10 +1220,11 @@ class CdtPathBuilder(Generic[T]):
         """Read the value of every element the path selects.
 
         Args:
-            no_fail: When true, a path that does not resolve yields no result
-                instead of failing the operation. Useful when the shape varies
-                between records -- an empty or absent collection is then not an
-                error.
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. Useful when
+                element types vary. An empty or absent collection is never an
+                error; it yields an empty list.
 
         Returns:
             The parent builder for chaining.
@@ -1238,6 +1243,71 @@ class CdtPathBuilder(Generic[T]):
         return self._emit(
             CdtOperation.select_values(self._bin_name, list(self._ctx))
         )
+
+    def collect_values_as_expression_read(
+        self,
+        bin_type: ExpType,
+        *,
+        no_fail: bool = False,
+        ignore_eval_failure: bool = False,
+    ) -> T:
+        """Read the same selection as :meth:`collect_values` through an expression read.
+
+        The path is evaluated as a select expression over the bin, and the
+        resulting list is returned under this bin's name; the stored record is
+        unchanged. Use it for expression-read semantics, or alongside other
+        :meth:`~aerospike_sdk.aio.operations.query.QueryBinBuilder.select_from`
+        projections; otherwise prefer :meth:`collect_values`.
+
+        Args:
+            bin_type: The type of the bin the path starts from,
+                ``ExpType.MAP`` or ``ExpType.LIST``. The expression reads the
+                bin as that type.
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation.
+            ignore_eval_failure: When true, a failed evaluation -- such as a
+                bin that is not of ``bin_type`` -- leaves the bin out of the
+                result instead of failing the operation.
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            ValueError: If ``bin_type`` is not ``ExpType.MAP`` or
+                ``ExpType.LIST``; a path can only select from a collection.
+
+        Example::
+
+            from aerospike_sdk import ExpType
+
+            stream = await (
+                session.query(key)
+                .bin("catalog").on_map_key("book").on_each_child().on_map_key("title")
+                .collect_values_as_expression_read(ExpType.MAP)
+                .execute()
+            )
+            titles = (await stream.first_or_raise()).record.bins["catalog"]
+
+        See Also:
+            :meth:`collect_values`: the same selection as a CDT operation.
+            :meth:`~aerospike_sdk.aio.operations.query.QueryBinBuilder.select_from`:
+            for other select flags, pass ``Exp.exp_select_by_path`` to it.
+        """
+        if bin_type == ExpType.MAP:
+            bin_exp = FilterExpression.map_bin(self._bin_name)
+        elif bin_type == ExpType.LIST:
+            bin_exp = FilterExpression.list_bin(self._bin_name)
+        else:
+            raise ValueError(
+                f"bin_type must be ExpType.MAP or ExpType.LIST, got {bin_type!r}"
+            )
+        select_flags = SelectFlags.VALUE | SelectFlags.NO_FAIL if no_fail else SelectFlags.VALUE
+        read_flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
+        expression = FilterExpression.exp_select_by_path(
+            ExpType.LIST, int(select_flags), bin_exp, list(self._ctx),
+        )
+        return self._emit(ExpOperation.read(self._bin_name, expression, read_flags))
 
     def collect_map_keys(self, *, no_fail: bool = False) -> T:
         """Read the key of every map entry the path selects.
