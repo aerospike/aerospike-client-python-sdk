@@ -15,6 +15,7 @@
 
 """Unit tests for metrics export: fan-out, suspension, the file exporter."""
 
+import asyncio
 import logging
 import re
 
@@ -480,3 +481,85 @@ class TestAsyncExportTimer:
             await timer._export_once()
         assert len(received) == 1 and len(failures) == 1
         assert "raised" in caplog.text
+
+
+class _AsyncRecordingExporter:
+    def __init__(self):
+        self.calls = 0
+
+    async def export(self, snapshot):
+        self.calls += 1
+
+
+class _FailingSnapshotCluster(_StubCluster):
+    def metrics(self):
+        raise RuntimeError("client core is gone")
+
+
+class TestFinalExport:
+    """Stopping the timer for good pushes one last snapshot; restarting it does not."""
+
+    def test_sync_final_stop_pushes_one_snapshot(self):
+        exporter = _RecordingExporter("a")
+        timer = SyncMetricsExportTimer(_StubCluster([exporter]), 3600.0)
+        timer.start()
+        timer.stop(final=True)
+        assert exporter.calls == ["export"]
+
+    def test_sync_plain_stop_pushes_nothing(self):
+        exporter = _RecordingExporter("a")
+        timer = SyncMetricsExportTimer(_StubCluster([exporter]), 3600.0)
+        timer.start()
+        timer.stop()
+        assert exporter.calls == []
+
+    def test_a_failing_final_snapshot_is_logged_not_raised(self, caplog):
+        timer = SyncMetricsExportTimer(
+            _FailingSnapshotCluster([_RecordingExporter("a")]), 3600.0,
+        )
+        timer.start()
+        with caplog.at_level(logging.WARNING):
+            timer.stop(final=True)
+        assert "Final metrics snapshot failed" in caplog.text
+
+    async def test_async_request_stop_snapshots_now_and_delivers_later(self):
+        exporter = _AsyncRecordingExporter()
+        cluster = _StubCluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        timer.start()
+        delivery = timer.request_stop(final=True)
+        # Taken before the caller switches collection off, not when delivered.
+        assert cluster.polls == 1 and exporter.calls == 0
+        await delivery
+        assert exporter.calls == 1
+
+    async def test_async_plain_request_stop_pushes_nothing(self):
+        exporter = _AsyncRecordingExporter()
+        cluster = _StubCluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        timer.start()
+        assert timer.request_stop() is None
+        assert cluster.polls == 0
+
+    async def test_async_final_stop_delivers_before_returning(self):
+        exporter = _AsyncRecordingExporter()
+        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 3600.0)
+        timer.start()
+        await timer.stop(final=True)
+        assert exporter.calls == 1
+
+    async def test_a_new_timer_waits_for_the_pending_final_push(self):
+        exporter = _AsyncRecordingExporter()
+        pending = asyncio.get_running_loop().create_future()
+        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 0.0, after=pending)
+        timer.start()
+        try:
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert exporter.calls == 0
+            pending.set_result(None)
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert exporter.calls > 0
+        finally:
+            await timer.stop()

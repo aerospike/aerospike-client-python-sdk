@@ -34,6 +34,10 @@ An exporter that keeps failing is suspended rather than allowed to fail every
 interval forever: after three consecutive failures it is skipped, then retried
 every tenth interval, and a success puts it back on the normal cadence. Other
 exporters and collection itself are unaffected throughout.
+
+Disabling metrics or closing the cluster pushes one last snapshot, so the
+window since the previous export is not lost. Restarting the timer on a
+policy change does not.
 """
 
 from __future__ import annotations
@@ -44,7 +48,17 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Protocol, Sequence, runtime_checkable
+from typing import (
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.metrics import LatencyType, MetricsSnapshot
@@ -426,6 +440,28 @@ class _MetricsExportTimer:
             if self._health.setdefault(id(exporter), _ExporterHealth()).should_attempt()
         ]
 
+    def take(self) -> Optional[Tuple[Any, List[Any]]]:
+        """This cycle's snapshot and its recipients; ``None`` when nobody would consume it."""
+        runnable = self.exporters_to_run()
+        if not runnable:
+            # Taking a snapshot drains and aggregates per-node state in the
+            # client core; skip that work when nothing would consume it.
+            return None
+        snapshot = self.cluster.metrics()
+        snapshot._mark_departed(self.tracker)
+        return snapshot, runnable
+
+    def take_final(self) -> Optional[Tuple[Any, List[Any]]]:
+        """:meth:`take` for the closing push, which must never fail a disable or close."""
+        try:
+            return self.take()
+        except Exception:
+            log.warning(
+                "Final metrics snapshot failed; the last window is not exported",
+                exc_info=True,
+            )
+            return None
+
     def record_success(self, exporter: Any) -> None:
         health = self._health.get(id(exporter))
         if health is None:
@@ -473,11 +509,23 @@ class AsyncMetricsExportTimer:
 
     Runs as an ``asyncio.Task``. Snapshotting and exporting are both cold-path
     work; nothing here touches a request.
+
+    ``after`` is a final push still in flight from the timer this one
+    replaces; the first export waits for it, so an exporter never sees two
+    exports at once.
     """
 
-    def __init__(self, cluster: Any, interval_seconds: float, settings: Any = None) -> None:
+    def __init__(
+        self,
+        cluster: Any,
+        interval_seconds: float,
+        settings: Any = None,
+        *,
+        after: Optional[asyncio.Future] = None,
+    ) -> None:
         self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
-        self._task: Optional[Any] = None
+        self._task: Optional[asyncio.Task] = None
+        self._after = after
 
     def start(self) -> None:
         """Start the export task; requires a running event loop."""
@@ -486,6 +534,8 @@ class AsyncMetricsExportTimer:
 
     async def _run(self) -> None:
         state = self._state
+        if self._after is not None:
+            await asyncio.wait({self._after})
         while True:
             await asyncio.sleep(state.interval)
             try:
@@ -494,14 +544,12 @@ class AsyncMetricsExportTimer:
                 log.warning("Metrics export failed; will retry next interval", exc_info=True)
 
     async def _export_once(self) -> None:
+        batch = self._state.take()
+        if batch is not None:
+            await self._deliver(*batch)
+
+    async def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
         state = self._state
-        runnable = state.exporters_to_run()
-        if not runnable:
-            # Taking a snapshot drains and aggregates per-node state in the
-            # client core; skip that work when nothing would consume it.
-            return
-        snapshot = state.cluster.metrics()
-        snapshot._mark_departed(state.tracker)
         for exporter in runnable:
             try:
                 await exporter.export(snapshot)
@@ -510,25 +558,48 @@ class AsyncMetricsExportTimer:
             else:
                 state.record_success(exporter)
 
-    def request_stop(self) -> None:
+    async def _deliver_after(
+        self, task: Optional[asyncio.Task], snapshot: Any, runnable: List[Any],
+    ) -> None:
+        if task is not None:
+            await asyncio.wait({task})
+        await self._deliver(snapshot, runnable)
+
+    def _cancel(self) -> Optional[asyncio.Task]:
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+        return task
+
+    def request_stop(self, *, final: bool = False) -> Optional[Coroutine[Any, Any, None]]:
         """Cancel the export task without awaiting it.
 
         For callers that are not coroutines -- ``disable_metrics`` is a plain
         method. :meth:`stop` is the awaiting form used when shutting down.
-        """
-        if self._task is not None:
-            self._task.cancel()
-            self._task = None
 
-    async def stop(self) -> None:
-        """Cancel the export task and wait for it to finish."""
-        if self._task is not None:
-            self._task.cancel()
+        With ``final``, the closing snapshot is taken now, while collection is
+        still on, and the coroutine that delivers it once the cancelled task
+        has unwound is returned for the caller to schedule. ``None`` when
+        nothing would receive it.
+        """
+        task = self._cancel()
+        if not final:
+            return None
+        batch = self._state.take_final()
+        return None if batch is None else self._deliver_after(task, *batch)
+
+    async def stop(self, *, final: bool = False) -> None:
+        """Cancel the export task and wait for it; with ``final``, then push one closing snapshot."""
+        task = self._cancel()
+        if task is not None:
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+        if final:
+            batch = self._state.take_final()
+            if batch is not None:
+                await self._deliver(*batch)
 
 
 class SyncMetricsExportTimer:
@@ -559,12 +630,12 @@ class SyncMetricsExportTimer:
                 log.warning("Metrics export failed; will retry next interval", exc_info=True)
 
     def _export_once(self) -> None:
+        batch = self._state.take()
+        if batch is not None:
+            self._deliver(*batch)
+
+    def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
         state = self._state
-        runnable = state.exporters_to_run()
-        if not runnable:
-            return
-        snapshot = state.cluster.metrics()
-        snapshot._mark_departed(state.tracker)
         for exporter in runnable:
             try:
                 exporter.export(snapshot)
@@ -573,12 +644,23 @@ class SyncMetricsExportTimer:
             else:
                 state.record_success(exporter)
 
-    def stop(self) -> None:
-        """Signal the export thread to exit and join it briefly."""
-        if self._thread is not None and self._stop is not None:
-            self._stop.set()
-            self._thread.join(timeout=2.0)
-            self._thread = None
+    def stop(self, *, final: bool = False) -> None:
+        """Signal the export thread to exit and join it briefly.
+
+        With ``final``, push one closing snapshot once the thread has exited.
+        """
+        if self._thread is None or self._stop is None:
+            return
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        # A thread still inside an export is pushing nearly the same window;
+        # a closing push alongside it would hand exporters two at once.
+        exited = not self._thread.is_alive()
+        self._thread = None
+        if final and exited:
+            batch = self._state.take_final()
+            if batch is not None:
+                self._deliver(*batch)
 
 
 def built_in_exporter(metrics: Any, *, awaitable: bool = False) -> Optional[Any]:

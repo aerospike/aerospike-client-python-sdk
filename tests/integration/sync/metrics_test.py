@@ -305,3 +305,41 @@ class TestCommandCount:
         frozen = metrics_cluster.metrics().command_count
         session.upsert(ds.id(2)).put({"n": 2}).execute()
         assert metrics_cluster.metrics().command_count == frozen
+
+
+class _CommandCounts:
+    """Push exporter recording the command count of every snapshot it receives."""
+
+    def __init__(self):
+        self.counts = []
+
+    def export(self, snapshot):
+        self.counts.append(snapshot.command_count)
+
+
+class TestSyncFinalExport:
+    """Stopping metrics pushes one last snapshot, so the closing window is not lost."""
+
+    def test_disable_pushes_one_snapshot_after_the_last_command(self, metrics_cluster):
+        exporter = _CommandCounts()
+        metrics_cluster.add_exporter(exporter)
+        try:
+            metrics_cluster.enable_metrics(_SHAPE_SAFE)
+            base = metrics_cluster.metrics().command_count
+            _do_some_ops(metrics_cluster, count=3)
+            metrics_cluster.disable_metrics()
+            assert exporter.counts == [base + 6]
+        finally:
+            metrics_cluster.remove_exporter(exporter)
+
+    def test_close_pushes_one_snapshot_after_the_last_command(
+        self, aerospike_host, make_cluster_definition,
+    ):
+        exporter = _CommandCounts()
+        cluster = make_cluster_definition(aerospike_host, sync=True).connect()
+        cluster.add_exporter(exporter)
+        cluster.enable_metrics(_SHAPE_SAFE)
+        base = cluster.metrics().command_count
+        _do_some_ops(cluster, count=3)
+        cluster.close()
+        assert exporter.counts == [base + 6]
