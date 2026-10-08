@@ -90,7 +90,7 @@ cluster_def = (
     ClusterDefinition("localhost", 3000)
     .with_native_credentials("username", "password")
     .using_services_alternate()
-    .with_ip_map({"10.0.0.1": "3.72.54.187"})
+    .ip_map({"10.0.0.1": "3.72.54.187"})
 )
 
 async with cluster_def.connect() as cluster:
@@ -121,10 +121,7 @@ Server-side TLS with CA certificate verification:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-    .done()
+    .with_tls_config(tls_name="myTlsName", ca_file="/path/to/ca.pem")
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )
@@ -139,12 +136,12 @@ Mutual TLS (mTLS) with client certificate authentication:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-        .client_cert_file("/path/to/client-cert.pem")
-        .client_key_file("/path/to/client-key.pem")
-    .done()
+    .with_tls_config(
+        tls_name="myTlsName",
+        ca_file="/path/to/ca.pem",
+        client_cert_file="/path/to/client-cert.pem",
+        client_key_file="/path/to/client-key.pem",
+    )
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )
@@ -156,9 +153,19 @@ async with cluster_def.connect() as cluster:
 
 :::{note}
 The `tls_name` must match the server's configured TLS name for certificate
-validation. Setting `tls_name()` on the `ClusterDefinition` builder
-automatically applies it to all hosts.
+validation. It is applied to every host that has no `tls_name` of its own.
+Each `with_tls_config()` call replaces any earlier TLS settings.
 :::
+
+To restrict the handshake, pass `protocols=["TLSv1.3"]` or a list of
+cipher-suite names in `ciphers=`. An empty list raises `ValueError` right away;
+omit the argument to allow the defaults. At connect, an unknown name or a
+combination that leaves no usable suite (TLS 1.2 with only TLS 1.3 suites, for
+example) raises `ValueError`.
+
+For certificate (PKI) authentication, pass `client_cert_file` and
+`client_key_file` here and call `with_certificate_credentials()`; connect
+refuses PKI without a client certificate.
 
 TLS for the login exchange only, with cleartext data connections, for trusted
 networks where data-plane encryption is not worth its cost:
@@ -166,11 +173,9 @@ networks where data-plane encryption is not worth its cost:
 ```python
 cluster_def = (
     ClusterDefinition("localhost", 4333)
-    .with_tls_config_of()
-        .tls_name("myTlsName")
-        .ca_file("/path/to/ca.pem")
-        .for_login_only()
-    .done()
+    .with_tls_config(
+        tls_name="myTlsName", ca_file="/path/to/ca.pem", for_login_only=True,
+    )
     .with_native_credentials("username", "password")
     .using_services_alternate()
 )
@@ -224,9 +229,10 @@ hot-reloaded on change. See [Dynamic SDK Configuration](dynamic-sdk-config.md).
 
 ## Checking Server Capabilities
 
-Some features require a minimum server version. On a mixed-version or
-mid-upgrade cluster you can guard a feature before using it, rather than
-letting a call fail at runtime. The `Cluster` reports a feature as supported
+Every feature works on every supported server (8.2.0 and later), but a cluster
+in the middle of a rolling upgrade can briefly include nodes on an older
+build. You can guard a feature before using it there, rather than letting a
+call fail at runtime. The `Cluster` reports a feature as supported
 only when *every* connected node supports it, so you always guard against the
 cluster's least-capable node.
 
@@ -268,8 +274,8 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
     print(await node.info("statistics"))
 ```
 
-`cluster_name` is the name the servers report, or `None` when they have none
-configured. If you connected with `validate_cluster_name_is(...)`, it is the
+`cluster.cluster_name` is the name the servers report, or `None` when they have none
+configured. If you connected with `ClusterDefinition.cluster_name(...)`, it is the
 same name, since nodes reporting any other name are rejected. Unknown names
 passed to `get_node()` raise `InvalidNodeError`.
 
@@ -318,12 +324,17 @@ Custom behaviors via derivation:
 ```python
 from datetime import timedelta
 
+from aerospike_sdk.policy import Settings
+
 my_behavior = Behavior.DEFAULT.derive_with_changes(
     "generous-timeouts",
-    total_timeout=timedelta(seconds=5),
-    max_retries=3,
+    all=Settings(total_timeout=timedelta(seconds=5), max_retries=3),
 )
 ```
+
+Each change names the operations it applies to: `all=` covers every
+operation, and narrower scopes such as `reads=`, `reads_batch=`, or
+`writes_sc=` override it for their operations.
 
 ## DataSets
 

@@ -75,7 +75,7 @@ class Scope(Enum):
     SYSTEM_TXN_ROLL = "system_txn_roll"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Settings:
     """Immutable set of operation settings.
 

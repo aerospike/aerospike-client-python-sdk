@@ -18,6 +18,7 @@
 import glob
 import logging
 import os
+import tempfile
 from datetime import timedelta
 
 import pytest
@@ -35,8 +36,12 @@ from aerospike_sdk.policy.sdk_config_loader import (
     parse_sdk_config,
     resolve_for_cluster,
     resolve_from_env,
+    named_profiles,
+    parse_config_bytes,
 )
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
+from aerospike_sdk.metrics import LatencyUnit, policy_from_settings
+from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 
 _FULL = """
 version: "1.0.0"
@@ -467,8 +472,6 @@ system:
 
     def test_strict_mode_raises_on_a_camel_case_key(self):
         """`strict=True` turns the warning into a failure naming the key."""
-        import os
-        import tempfile
 
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "sdk.yaml")
@@ -636,8 +639,6 @@ system:
         assert "metrics.latency_columns" in caplog.text
 
     def test_policy_round_trip(self):
-        from aerospike_sdk.metrics import LatencyUnit
-        from aerospike_sdk.metrics import policy_from_settings
         policy = policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
         assert policy.operational_enabled is True
         assert policy.latency_unit == LatencyUnit.MICROSECONDS
@@ -673,23 +674,14 @@ class TestDiscoveredClusterName:
     )
 
     def test_named_profiles_excludes_default(self):
-        from aerospike_sdk.policy.sdk_config_loader import named_profiles
-
         assert named_profiles(self.YAML.encode(), "sdk.yaml") == {"production", "staging"}
 
     def test_named_profiles_is_fail_soft(self):
-        from aerospike_sdk.policy.sdk_config_loader import named_profiles
-
         assert named_profiles(None, None) == frozenset()
         assert named_profiles(b"\x00not yaml", "sdk.yaml") == frozenset()
 
     def test_a_discovered_name_selects_its_block(self):
         """No declared name: the server-reported one picks the profile."""
-        from aerospike_sdk.sdk_config_monitor import (
-            SdkConfigSource,
-            adopt_discovered_cluster_name,
-        )
-        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 
         doc = (
             "system:\n"
@@ -708,12 +700,6 @@ class TestDiscoveredClusterName:
         assert adopted_source.cluster_name == "production"
 
     def test_a_declared_name_is_never_overridden(self):
-        from aerospike_sdk.sdk_config_monitor import (
-            SdkConfigSource,
-            adopt_discovered_cluster_name,
-        )
-        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
-
         source = SdkConfigSource("sdk.yaml", "staging", None, self.YAML.encode())
         before = fill_hard_defaults(None)
         after, adopted_source = adopt_discovered_cluster_name("production", before, source)
@@ -721,12 +707,6 @@ class TestDiscoveredClusterName:
         assert adopted_source.cluster_name == "staging"
 
     def test_an_unmatched_or_absent_name_changes_nothing(self):
-        from aerospike_sdk.sdk_config_monitor import (
-            SdkConfigSource,
-            adopt_discovered_cluster_name,
-        )
-        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
-
         source = SdkConfigSource("sdk.yaml", None, None, self.YAML.encode())
         before = fill_hard_defaults(None)
         for discovered in ("docker", "", None):
@@ -736,11 +716,6 @@ class TestDiscoveredClusterName:
 
     def test_connect_time_fields_are_reported_and_not_applied(self, caplog):
         """The connection is already open; its pool sizes cannot change now."""
-        from aerospike_sdk.sdk_config_monitor import (
-            SdkConfigSource,
-            adopt_discovered_cluster_name,
-        )
-        from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 
         doc = (
             "system:\n"
@@ -774,8 +749,6 @@ class TestShippedExamplesLoadClean:
         "path", sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "..", "examples", "*.yaml")))
     )
     def test_example_loads_without_warnings(self, path, caplog):
-        from aerospike_sdk.policy.sdk_config_loader import parse_config_bytes
-
         with caplog.at_level(logging.WARNING, logger="aerospike_sdk"):
             assert parse_config_bytes(open(path, "rb").read(), path) is not None
         assert [r.getMessage() for r in caplog.records] == []

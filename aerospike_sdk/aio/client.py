@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union, overload
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from aerospike_async import (
     AdminPolicy,
@@ -31,7 +31,6 @@ from aerospike_async import (
     UDFLang,
     UdfRemoveTask,
     new_client,
-    new_client_blocking,
 )
 
 from aerospike_sdk.dataset import DataSet
@@ -48,6 +47,7 @@ from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import AsyncSdkConfigMonitor, SdkConfigSource
+from aerospike_sdk.session_shared import _dataset_not_strings
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.aio.transactional_session import TransactionalSession
 
@@ -230,57 +230,6 @@ class Client(RoutingCapabilitiesMixin):
         self._namespace_mode_cache.clear()
         self._supports_mrt_cache = None
 
-    def connect_blocking(self) -> None:
-        """Synchronously open a connection without requiring an asyncio loop.
-
-        Uses :func:`aerospike_async.new_client_blocking` to construct the
-        underlying PAC client and sets ``_connected = True``.
-
-        Idempotent: returns early if already connected.
-
-        Raises:
-            ConnectionError: When the PAC blocking connect cannot reach the
-                cluster.
-
-        Example::
-
-            client = Client("localhost:3000")
-            client.connect_blocking()
-            try:
-                ...
-            finally:
-                client.close_blocking()
-        """
-        if self._connected and self._client is not None:
-            return
-        refresh_log_levels()
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
-        try:
-            self._client = new_client_blocking(self._policy, self._seeds)
-        except PacAerospikeError as exc:
-            raise _convert_pac_exception(exc) from exc
-        self._connected = True
-        self._warm_routing_capabilities()
-        log.info(
-            "Connected seeds=%r", self._seeds,
-            extra={"aerospike.cluster": self._policy.cluster_name},
-        )
-
-    def close_blocking(self) -> None:
-        """Synchronously close the underlying client. Pair with :meth:`connect_blocking`.
-
-        Safe to call when already closed.
-        """
-        if self._client is not None:
-            self._client.close_blocking()
-            self._client = None
-            self._connected = False
-            log.info("Client closed")
-        self._clear_routing_capability_cache()
-        self._namespace_mode_cache.clear()
-        self._supports_mrt_cache = None
-
     async def __aenter__(self) -> Client:
         """Async context manager entry."""
         await self.connect()
@@ -344,129 +293,23 @@ class Client(RoutingCapabilitiesMixin):
 
     def _query(
         self,
-        arg1: Optional[Union[DataSet, Key, List[Key], str]] = None,
-        set_name: Optional[str] = None,
-        namespace: Optional[str] = None,
         *,
-        dataset: Optional[DataSet] = None,
-        key: Optional[Key] = None,
-        keys: Optional[List[Key]] = None,
-        behavior: Optional[Behavior] = None,
-        namespace_mode_resolver: Optional[Callable[[str], Awaitable[Mode]]] = None,
-        namespace_mode_resolver_blocking: Optional[Callable[[str], Mode]] = None,
+        dataset: Optional[DataSet],
+        keys: Optional[List[Key]],
+        behavior: Behavior,
+        namespace_mode_resolver: Callable[[str], Awaitable[Mode]],
+        namespace_mode_resolver_blocking: Callable[[str], Mode],
     ) -> QueryBuilder:
+        """Create a dataset or multi-key query builder for a session.
+
+        Single-key queries never come here: the session builds those directly.
+        Exactly one of ``dataset`` and ``keys`` is set.
         """
-        Create a query builder.
-
-        Supports multiple calling styles:
-
-        1. Using a DataSet (positional or keyword)::
-
-              users = DataSet.of("test", "users")
-              async for record in session.query(users).execute():
-              # or
-              async for record in session.query(dataset=users).execute():
-                  print(record.bins)
-
-        2. Using a single Key (positional or keyword)::
-
-              users = DataSet.of("test", "users")
-              key = users.id("user123")
-              recordset = await session.query(key).execute()
-              # or
-              recordset = await session.query(key=key).execute()
-
-        3. Using multiple Keys (positional or keyword)::
-
-              users = DataSet.of("test", "users")
-              keys = users.ids("user1", "user2", "user3")
-              recordset = await session.query(keys).execute()
-              # or
-              recordset = await session.query(keys=keys).execute()
-
-        4. Explicit namespace/set (original style)::
-
-              async for record in session.query(
-                  namespace="test",
-                  set_name="users"
-              ).execute():
-                  print(record.bins)
-
-        Args:
-            arg1: Optional first positional: :class:`~aerospike_sdk.dataset.DataSet`,
-                :class:`~aerospike_async.Key`, list of keys, or namespace string for
-                the ``("namespace", "set")`` pair form.
-            set_name: When ``arg1`` is a namespace string, the set name as the second
-                positional (``session.query("test", "users")``).
-            namespace: Optional third positional; not used for the usual two-string
-                namespace/set pair (that form uses ``arg1`` and ``set_name``).
-            dataset: Keyword-only :class:`~aerospike_sdk.dataset.DataSet`.
-            key: Keyword-only single key for a point read.
-            keys: Keyword-only list of keys for a batch read.
-            behavior: Optional :class:`~aerospike_sdk.policy.behavior.Behavior`
-                for timeouts, retries, and replica settings on this builder. If
-                ``None``, the client uses generic defaults (unlike
-                :meth:`~aerospike_sdk.aio.session.Session.query`, which applies
-                the session's behavior automatically).
-
-        Returns:
-            A :class:`~aerospike_sdk.aio.operations.query.QueryBuilder` for
-            chaining filters, bin selection, and execution.
-
-        Raises:
-            TypeError: If a positional argument is not a dataset, key, or key list.
-            ValueError: If required namespace/set information is missing or key
-                lists are empty.
-
-        See Also:
-            :meth:`~aerospike_sdk.aio.session.Session.query`: Same builder with
-                session-scoped behavior.
-        """
-        # Handle positional arguments
-        # Check if arg1 and arg2 are both strings (namespace, set_name pattern)
-        if isinstance(arg1, str) and set_name is not None:
-            # This is the namespace, set_name pattern - use them directly
-            namespace = arg1
-            # set_name is already set from the parameter
-        elif arg1 is not None:
-            # Handle single positional argument (DataSet, Key, or List[Key])
-            if isinstance(arg1, DataSet):
-                dataset = arg1
-            elif isinstance(arg1, Key):
-                key = arg1
-            elif isinstance(arg1, list):
-                keys = arg1
-            else:
-                raise TypeError(f"Expected DataSet, Key, or List[Key], got {type(arg1)}")
-
-        # Handle single Key
-        if key is not None:
-            namespace = key.namespace
-            set_name = key.set_name
-            # For single key queries, we'll need to handle this in QueryBuilder
-            # For now, create a query builder and store the key
-            builder = QueryBuilder(
-                client=self._async_client,
-                namespace=namespace,
-                set_name=set_name,
-                behavior=behavior,
-                namespace_mode_resolver=namespace_mode_resolver,
-                namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
-                sdk_client=self,
-            )
-            builder._single_key = key
-            return builder
-
-        # Handle multiple Keys
         if keys is not None:
-            if not keys:
-                raise ValueError("keys list cannot be empty")
-            namespace = keys[0].namespace
-            set_name = keys[0].set_name
             builder = QueryBuilder(
                 client=self._async_client,
-                namespace=namespace,
-                set_name=set_name,
+                namespace=keys[0].namespace,
+                set_name=keys[0].set_name,
                 behavior=behavior,
                 namespace_mode_resolver=namespace_mode_resolver,
                 namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
@@ -474,123 +317,37 @@ class Client(RoutingCapabilitiesMixin):
             )
             builder._keys = keys
             return builder
-
-        # Handle DataSet
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        # Handle explicit namespace/set (original style)
-        elif namespace is not None and set_name is not None:
-            pass
-        else:
-            raise ValueError(
-                "Invalid arguments. Use either:\n"
-                "  - query(dataset=DataSet(...))\n"
-                "  - query(key=Key(...))\n"
-                "  - query(keys=[Key(...), ...])\n"
-                "  - query(namespace=..., set_name=...)"
-            )
-
+        assert dataset is not None
         return QueryBuilder(
             client=self._async_client,
-            namespace=namespace,
-            set_name=set_name,
+            namespace=dataset.namespace,
+            set_name=dataset.set_name,
             behavior=behavior,
             namespace_mode_resolver=namespace_mode_resolver,
             namespace_mode_resolver_blocking=namespace_mode_resolver_blocking,
             sdk_client=self,
         )
 
-    @overload
-    def index(
-        self,
-        dataset: DataSet,
-        /,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder from a DataSet."""
-        ...
-
-    @overload
-    def index(
-        self,
-        *,
-        dataset: DataSet,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder from a DataSet."""
-        ...
-
-    @overload
-    def index(
-        self,
-        namespace: str,
-        set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder with explicit namespace/set."""
-        ...
-
-    def index(
-        self,
-        namespace: Optional[Union[str, DataSet]] = None,
-        set_name: Optional[str] = None,
-        *,
-        dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """
-        Create an index builder.
-
-        Supports multiple calling styles:
-
-        1. Using a DataSet, positionally or by keyword::
-
-              users = DataSet.of("test", "users")
-              await client.index(users).on_bin("age").named("age_idx").integer().create()
-
-        2. Explicit namespace/set::
-
-              await client.index(
-                  namespace="test",
-                  set_name="users"
-              ).on_bin("age").named("age_idx").integer().create()
+    def index(self, dataset: DataSet, /) -> IndexBuilder:
+        """Create an index builder for a dataset.
 
         Args:
-            namespace: A dataset, or the namespace name when passing
-                ``set_name`` too.
-            set_name: The set name when ``namespace`` is a namespace string.
-            dataset: Keyword DataSet to use for namespace/set.
-            behavior: Reserved for symmetry with :meth:`query`; not applied to
-                index operations yet.
+            dataset: Namespace and set to index.
 
         Returns:
             An IndexBuilder for chaining index operations.
-        """
-        _ = behavior
-        if isinstance(namespace, DataSet):
-            dataset = namespace
-            namespace = None
-        # Handle DataSet
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        # Handle explicit namespace/set (original style)
-        elif namespace is not None and set_name is not None:
-            pass
-        else:
-            raise ValueError(
-                "Invalid arguments. Use either:\n"
-                "  - index(dataset=DataSet(...))\n"
-                "  - index(namespace=..., set_name=...)"
-            )
 
+        Raises:
+            TypeError: If ``dataset`` is not a :class:`~aerospike_sdk.dataset.DataSet`.
+        """
+        if not isinstance(dataset, DataSet):
+            if isinstance(dataset, str):
+                raise TypeError(_dataset_not_strings("index"))
+            raise TypeError(f"Expected a DataSet, got {type(dataset)}")
         return IndexBuilder(
             client=self,
-            namespace=namespace,
-            set_name=set_name,
+            namespace=dataset.namespace,
+            set_name=dataset.set_name,
         )
 
     def transaction(
@@ -650,9 +407,12 @@ class Client(RoutingCapabilitiesMixin):
         Example::
 
             from datetime import timedelta
+
+            from aerospike_sdk.policy import Settings
+
             fast = Behavior.DEFAULT.derive_with_changes(
                 name="fast",
-                total_timeout=timedelta(seconds=5),
+                all=Settings(total_timeout=timedelta(seconds=5)),
             )
             session = client.create_session(fast)
 

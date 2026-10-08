@@ -50,6 +50,9 @@ an example, keep the contract below.
    `benchmarks/_env.py`. It resolves connection settings from the environment so the scripts run
    with no edits. A real application constructs `ClusterDefinition` directly (as the repo README's
    Quick start does) and does **not** import `_env`.
+   Set `AEROSPIKE_USE_TLS=true` to run every example over TLS: the seed becomes
+   `AEROSPIKE_HOST_TLS` and `AEROSPIKE_TLS_NAME` / `AEROSPIKE_TLS_CA_FILE` (plus the client cert
+   and key, when both are set) go to `with_tls_config()`.
 
 ## Blocked / not yet portable
 
@@ -59,6 +62,7 @@ Some Java examples have no faithful Python counterpart until a feature ships. Do
   and the object-mapping sections of `QueryExamples` (typed data sets, `toObjectList`, async object
   mapping). PSDK reads records as `dict` bins.
 
-(`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it via the
-low-level `CdtOperation.select_by_path`/`modify_by_path`/`remove` + `CTX.all_children[_with_filter]`
-factories. PSDK only lacks the *fluent* `.on_each_child()` ergonomics.)
+(`CdtPathExpressionExample` is **not** blocked — `cdt_path_expression_example.py` ships it with the
+fluent path builder: `.on_each_child()` / `.on_each_child_where()` ending in `.modify_by()`,
+`.remove_matches()`, `.collect_values()` or, in a query, `.collect_values_as_expression_read()`.
+Its section 6, keys-in with a filter, is an addition with no Java counterpart.)

@@ -18,7 +18,7 @@ The primary API. All operations are `async`/`await`.
 | [`RowWriteBuilder`](row-write.md) | Tabular writes: a bin schema, then one row per record |
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
-| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types (8.2.0+) |
+| [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
@@ -44,7 +44,6 @@ Synchronous wrappers for the async API. Same functionality, no `async`/`await`.
 | [`InfoCommands`](sync/info.md) | Sync info protocol commands |
 | [`TransactionalSession`](sync/transactional-session.md) | Sync multi-record transactions |
 | [`RecordStream`](sync/record-stream.md) | Sync iterator over query results |
-| [`TlsBuilder`](sync/tls-builder.md) | Sync TLS configuration builder |
 
 ## Core
 
@@ -60,7 +59,6 @@ Shared types used by both async and sync APIs.
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
-| [`TlsBuilder`](tls-builder.md) | TLS configuration builder |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
@@ -73,10 +71,10 @@ Shared types used by both async and sync APIs.
 
 | Class / Function | Description |
 |-----------------|-------------|
-| [`Exp`](exp.md) | Programmatic expression builder (all server versions) |
+| [`Exp`](exp.md) | Programmatic expression builder |
 
-String AEL for `.where()` is compiled on the server (field 43) when the cluster
-supports it — see the [AEL guide](../guide/expression-ael.md).
+String AEL for `.where()` is compiled on the server (field 43) — see the
+[AEL guide](../guide/expression-ael.md).
 
 ```{toctree}
 :hidden:
@@ -110,7 +108,6 @@ sync/index-builder
 sync/background
 sync/info
 sync/udf
-sync/tls-builder
 dataset
 hll-config
 sorted-map
@@ -119,7 +116,6 @@ operation-result
 record-stream
 behavior
 cluster-definition
-tls-builder
 system-settings
 error-strategy
 expression-trace

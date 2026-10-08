@@ -74,7 +74,7 @@ class TestWriteSegmentBuilder:
 
     @staticmethod
     def _make():
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         qb._op_type = "upsert"
         qb._single_key = _key()
         return WriteSegmentBuilder(qb), qb
@@ -156,7 +156,7 @@ class TestSingleKeyWriteSegment:
         # Force promotion by assigning a QB. Once _qb is set, the methods
         # delegate via super() and write to qb._durable_delete*.
         seg = self._make()
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         qb._op_type = "delete"
         qb._single_key = _key()
         seg._qb = qb
@@ -302,7 +302,7 @@ class TestUdfBuilder:
 
     @staticmethod
     def _make():
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="udf")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="udf", behavior=Behavior.DEFAULT)
         qb._op_type = "execute_udf"
         qb._single_key = _key()
         return UdfBuilder(qb), qb
@@ -338,7 +338,7 @@ class TestSyncWriteSegmentBuilder:
 
     @staticmethod
     def _make():
-        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         qb._op_type = "upsert"
         qb._single_key = _key()
         return SyncWriteSegmentBuilder(qb), qb

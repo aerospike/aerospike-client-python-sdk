@@ -16,7 +16,7 @@ task = await (
     .where("$.status == 'inactive'")
     .execute()
 )
-await task.wait_till_complete(sleep_time=0.5, max_attempts=60)
+await task.wait_till_complete(sleep_time=0.5, timeout=30)
 ```
 
 ### Bulk Update
@@ -70,18 +70,20 @@ read operation, such as `get()` or `select_from()`.
 
 ### Narrowing with an Index and a Predicate
 
-`where()` filters every record the job reaches. `index_filters()` changes *which*
+`where()` filters every record the job reaches. `filter()` changes *which*
 records it reaches at all, by sending the job through a secondary index instead of
 a scan of the set. They combine: the index selects the candidates, and the
-predicate decides which of those the job writes.
+predicate decides which of those the job writes. A job takes one `filter()`, since
+the server accepts one index range per query; a second call raises `ValueError`.
+Put any further conditions in `where()`.
 
 ```python
-from aerospike_async import Filter
+from aerospike_sdk import Filter
 
 task = await (
     session.background_task()
     .update(donors)
-    .index_filters(Filter.range("age", 30, 65))     # reached through the index
+    .filter(Filter.range("age", 30, 65))            # reached through the index
     .where("not($.update_pass.exists()) or $.update_pass < 5")   # and filtered
     .bin("campaign1").add(50)
     .bin("update_pass").set_to(5)
@@ -95,7 +97,7 @@ already processed, so running the job a second time changes nothing. The index k
 the server off a full scan.
 
 Either narrowing works alone. With only `where()`, the server scans the set; with
-only `index_filters()`, every record in the index range is written.
+only `filter()`, every record in the index range is written.
 
 ### Bulk Touch (Reset TTL)
 
@@ -132,6 +134,22 @@ task = await (
     .execute()
 )
 await task.wait_till_complete()
+```
+
+A UDF job narrows the same way as a write job: `filter()` confines it to a
+secondary-index range, and `where()` decides which of those records invoke the UDF.
+
+```python
+from aerospike_sdk import Filter
+
+task = await (
+    session.background_task()
+    .execute_udf(users)
+    .function("my_module", "transform_record")
+    .filter(Filter.range("age", 30, 65))
+    .where("$.status == 'active'")
+    .execute()
+)
 ```
 
 ## Foreground UDF
@@ -214,6 +232,10 @@ await info.remove_udf("my_module.lua")
 
 ## Monitoring Tasks
 
+`task.task_id` is the id the server tracks the job under. Log it to correlate
+the task with server logs, or inspect the job with the `query-show:id=<task_id>`
+info command.
+
 `ExecuteTask` provides polling-based completion monitoring:
 
 ```python
@@ -227,6 +249,6 @@ task = await (
 # Poll with custom intervals
 await task.wait_till_complete(
     sleep_time=0.2,       # seconds between polls
-    max_attempts=100,     # max poll attempts
+    timeout=20,           # seconds before TimeoutError; None waits indefinitely
 )
 ```

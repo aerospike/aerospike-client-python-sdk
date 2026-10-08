@@ -266,28 +266,15 @@ class Session(
     # base routes to. Both delegate to :meth:`_build_sync_query_builder`, which
     # is also reused by :meth:`execute_udf`.
 
-    def _fast_query_builder(self, key: Key, behavior: Behavior) -> QueryBuilder:
+    def _fast_query_builder(self, key: Key) -> QueryBuilder:
         """Single-key query builder (bench-hot ``session.query(key)`` shape)."""
-        return self._build_sync_query_builder(
-            dataset=None, key=key, keys=None,
-            namespace=None, set_name=None, behavior=behavior,
-        )
+        return self._build_sync_query_builder(dataset=None, key=key, keys=None)
 
     def _build_query_builder(
-        self,
-        *,
-        dataset: Optional[DataSet],
-        key: Optional[Key],
-        keys: Optional[List[Key]],
-        namespace: Optional[str],
-        set_name: Optional[str],
-        behavior: Behavior,
+        self, *, dataset: Optional[DataSet], keys: Optional[List[Key]],
     ) -> QueryBuilder:
-        """Dataset / multi-key / namespace query builder (non-single-key shapes)."""
-        return self._build_sync_query_builder(
-            dataset=dataset, key=key, keys=keys,
-            namespace=namespace, set_name=set_name, behavior=behavior,
-        )
+        """Dataset / multi-key query builder (non-single-key shapes)."""
+        return self._build_sync_query_builder(dataset=dataset, key=None, keys=keys)
 
     def _build_sync_query_builder(
         self,
@@ -295,9 +282,6 @@ class Session(
         dataset: Optional[DataSet],
         key: Optional[Key],
         keys: Optional[List[Key]],
-        namespace: Optional[str],
-        set_name: Optional[str],
-        behavior: Behavior,
     ) -> QueryBuilder:
         """Construct a :class:`QueryBuilder` with full session context.
 
@@ -309,11 +293,13 @@ class Session(
                 client=self._pac_client,
                 namespace=key.namespace,
                 set_name=key.set_name,
-                behavior=behavior,
+                behavior=self._behavior,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
                 cached_write_policy_sc=self._cached_write_policy_sc,
+                cached_read_operate_policy=self._cached_read_operate_policy,
+                cached_read_operate_policy_sc=self._cached_read_operate_policy_sc,
                 txn=self._txn,
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
@@ -329,7 +315,7 @@ class Session(
                 client=self._pac_client,
                 namespace=ns,
                 set_name=sn,
-                behavior=behavior,
+                behavior=self._behavior,
                 cached_read_policy=self._cached_read_policy,
                 cached_write_policy=self._cached_write_policy,
                 cached_read_policy_sc=self._cached_read_policy_sc,
@@ -342,19 +328,12 @@ class Session(
             builder._keys = keys
             return builder
 
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        if namespace is None or set_name is None:
-            raise ValueError(
-                "Invalid arguments. Use one of: query(dataset=...), query(key=...), "
-                "query(keys=[...]), or query(namespace=..., set_name=...).",
-            )
+        assert dataset is not None
         return QueryBuilder(
             client=self._pac_client,
-            namespace=namespace,
-            set_name=set_name,
-            behavior=behavior,
+            namespace=dataset.namespace,
+            set_name=dataset.set_name,
+            behavior=self._behavior,
             cached_read_policy=self._cached_read_policy,
             cached_write_policy=self._cached_write_policy,
             cached_read_policy_sc=self._cached_read_policy_sc,
@@ -380,39 +359,18 @@ class Session(
         builder = self._build_sync_query_builder(
             dataset=None, key=keys[0] if len(keys) == 1 else None,
             keys=list(keys) if len(keys) > 1 else None,
-            namespace=None, set_name=None, behavior=self._behavior,
         )
         self._bind_txn(builder)
         builder._op_type = "execute_udf"
         return UdfFunctionBuilder(builder)
 
-    def index(
-        self,
-        namespace: Optional[Union[str, DataSet]] = None,
-        set_name: Optional[str] = None,
-        *,
-        dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Synchronous secondary-index builder."""
-        _ = behavior
-        if isinstance(namespace, DataSet):
-            dataset = namespace
-            namespace = None
-        if dataset is not None:
-            namespace = dataset.namespace
-            set_name = dataset.set_name
-        if not namespace or set_name is None:
-            raise ValueError("namespace and set_name are required (or provide dataset)")
-        return IndexBuilder(
-            async_client=self._client,
-            namespace=namespace,
-            set_name=set_name,
-        )
+    def index(self, dataset: DataSet, /) -> IndexBuilder:
+        """Synchronous secondary-index builder for a dataset."""
+        return self._client.index(dataset)
 
     def _txn_session_cls(self) -> "type[TransactionalSession]":
         """Return the sync transactional-session class (late import breaks the cycle)."""
-        from aerospike_sdk.sync.transactional_session import TransactionalSession
+        from aerospike_sdk.sync.transactional_session import TransactionalSession  # noqa: PLC0415
         return TransactionalSession
 
     def create_index(
@@ -644,56 +602,27 @@ class Session(
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:
         """Dataset-scoped tabular write; rows arrive through ``bins(...)``."""
-        qb = self._build_sync_query_builder(
-            dataset=dataset, key=None, keys=None,
-            namespace=None, set_name=None,
-            behavior=self._behavior,
-        )
+        qb = self._build_sync_query_builder(dataset=dataset, key=None, keys=None)
         self._bind_txn(qb)
         return DataSetWriteBuilder(qb, op_type, dataset)
 
     def _build_write_segment(
-        self,
-        op_type: str,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *more_keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
-        """Build a multi-key / dataset write segment via aio QueryBuilder."""
-        # Reduce overload args to either a single key, a list of keys, or a dataset.
-        single_key: Optional[Key] = None
-        many_keys: Optional[List[Key]] = None
-        if key is not None:
-            single_key = key
-        elif isinstance(arg1, Key) and not more_keys and arg2 is None:
-            single_key = arg1
-        elif isinstance(arg1, list):
-            many_keys = list(arg1)
-        elif isinstance(arg1, Key):
-            many_keys = [arg1]
-            if isinstance(arg2, Key):
-                many_keys.append(arg2)
-            many_keys.extend(more_keys)
-        elif dataset is not None:
-            pass
-        elif namespace is not None and set_name is not None:
-            if key_value is not None:
-                ds = DataSet.of(namespace, set_name)
-                single_key = ds.id(key_value)
-            # else: keyless dataset op (rare for write segments)
-        elif key_value is not None and dataset is None:
-            raise ValueError("key_value requires dataset or namespace+set_name")
-
-        qb = self._build_sync_query_builder(
-            dataset=dataset, key=single_key, keys=many_keys,
-            namespace=namespace, set_name=set_name,
-            behavior=self._behavior,
-        )
+        """Build a multi-key write segment via the sync QueryBuilder."""
+        if isinstance(arg1, Key):
+            if more_keys:
+                qb = self._build_sync_query_builder(
+                    dataset=None, key=None, keys=[arg1, *more_keys],
+                )
+            else:
+                qb = self._build_sync_query_builder(dataset=None, key=arg1, keys=None)
+        elif isinstance(arg1, list) and not more_keys:
+            if not arg1:
+                raise ValueError("keys list cannot be empty")
+            qb = self._build_sync_query_builder(dataset=None, key=None, keys=list(arg1))
+        else:
+            raise TypeError(f"Expected Key or List[Key], got {type(arg1)}")
         self._bind_txn(qb)
         qb._op_type = op_type
         return WriteSegmentBuilder(qb)

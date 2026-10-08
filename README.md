@@ -10,12 +10,15 @@ thread throughput well past what GIL-bound clients can sustain.
 > **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
 > via [GitHub Issues](https://github.com/aerospike/aerospike-client-python-sdk/issues).
 
+> **Server requirement:** The Aerospike Python SDK supports only Aerospike Server
+> 8.2.0 and later.
+
 ## AI coding agent entry point
 
 PyPI package `aerospike-sdk`. Authoritative version: the root `VERSION` file —
 currently `0.9.0-alpha.5`, a public preview whose signatures may change between
-releases. Python 3.11+. Aerospike Server 8.2.0+ (older servers may work but are
-not guaranteed). Async-first: the top-level `aerospike_sdk` package is the async
+releases. Python 3.11+. Aerospike Server 8.2.0 or later only; earlier servers are
+not supported. Async-first: the top-level `aerospike_sdk` package is the async
 surface; `aerospike_sdk.sync` is an independent synchronous implementation of
 the same surface. Both connect through `ClusterDefinition`.
 
@@ -206,7 +209,7 @@ covers every public class and method in detail.
 
 Runnable, self-contained scripts live in [`examples/`](examples/) — one file per
 topic (`query_examples.py`, `string_operations_example.py`, `batch_example.py`,
-`common_example.py`, `multi_record_transaction_example.py`, the SDK-config set, and
+`common_example.py`, `transaction_example.py`, the SDK-config set, and
 more). Each is a standalone program; run one directly or run them all:
 
 ```bash
@@ -231,7 +234,7 @@ directly — as the Quick start does — rather than importing `_env`.
 A few examples need more than a default AP cluster and degrade to a clean skip
 message when it is absent:
 
-- **Strong-consistency examples** (`multi_record_transaction_example.py`,
+- **Strong-consistency examples** (`transaction_example.py`,
   `roster_example.py`) connect via `_env.connect_sc()`, which reads
   `AEROSPIKE_HOST_SC` (+ `AEROSPIKE_AUTH_*` credentials) and the SC namespace from
   `AEROSPIKE_SC_NAMESPACE` (default `test_sc`).

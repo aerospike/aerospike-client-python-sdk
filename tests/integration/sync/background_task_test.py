@@ -16,8 +16,8 @@
 """Integration tests for session.background_task() (sync)."""
 
 import pytest
-from aerospike_sdk import UDFLang
-from aerospike_async import Filter, Operation
+from aerospike_sdk import IndexNotFoundError, ResultCode, UDFLang
+from aerospike_async import Filter
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -29,7 +29,7 @@ DS = DataSet.of(NS, SET)
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
 BG_INDEX = "pfc_bg_idx"
-MARKER = "bg_marker"
+MISSING_INDEX = "pfc_bg_missing_idx"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
 
@@ -210,38 +210,12 @@ def test_sync_background_udf_with_validation(cluster):
         assert rr.record.bins.get(BG_BIN2) == 5
 
 
-def test_sync_query_builder_background_scan(cluster):
-    session = cluster.create_session()
-    for i in range(5):
-        session.upsert(DS.id(f"bgq_{i}")).put({BG_BIN: i}).execute()
-    task = (
-        session.query(DS)
-        .with_write_operations([Operation.put(MARKER, 1)])
-        .execute_background_task()
-    )
-    assert _wait_task(cluster, task)
-    rr = session.query(DS.id("bgq_0")).bins([MARKER]).execute().first_or_raise()
-    assert rr.record is not None
-    assert rr.record.bins.get(MARKER) == 1
-
-
-def test_sync_point_query_rejects_background_task(cluster):
-    session = cluster.create_session()
-    key = DS.id("bgq_point")
-    session.upsert(key).put({BG_BIN: 1}).execute()
-    with pytest.raises(ValueError, match="dataset queries"):
-        (
-            session.query(key)
-            .with_write_operations([Operation.put(MARKER, 1)])
-            .execute_background_task()
-        )
-
 @requires_server_compiled_ael
 def test_sync_background_update_with_index_filter_and_where(cluster):
     """One case per terminal: the sync builder is a facade over the async one.
 
     Async coverage cannot catch a wiring break here, because the sync tree
-    forwards ``index_filters`` and ``where`` through its own methods before the
+    forwards ``filter`` and ``where`` through its own methods before the
     shared blocking terminal ever sees them.
     """
     session = cluster.create_session()
@@ -259,7 +233,7 @@ def test_sync_background_update_with_index_filter_and_where(cluster):
     task = (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("touched")
         .execute()
@@ -270,3 +244,17 @@ def test_sync_background_update_with_index_filter_and_where(cluster):
         rs = session.query(DS.id(f"sbgif_{i}")).bins([BG_BIN2]).execute()
         bins = next(iter(rs)).record.bins
         assert bins.get(BG_BIN2) == ("touched" if 4 <= i <= 8 else "original")
+
+
+def test_sync_background_filter_on_missing_named_index_fails_at_execute(cluster):
+    """The blocking terminal converts the start-up refusal on its own path."""
+    session = cluster.create_session()
+    with pytest.raises(IndexNotFoundError) as exc_info:
+        (
+            session.background_task()
+            .update(DS)
+            .filter(Filter.range_by_index(MISSING_INDEX, 1, 10))
+            .bin(BG_BIN2).set_to("unreachable")
+            .execute()
+        )
+    assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND

@@ -77,7 +77,7 @@ system:
           enabled: false
 
   # Layers on DEFAULT for connections that name this cluster via
-  # ClusterDefinition.validate_cluster_name_is("production").
+  # ClusterDefinition.cluster_name("production").
   production:
     connections:
       minimum_connections_per_node: 50
@@ -175,12 +175,27 @@ behaviors:
       abandon_call_after: 30s
       maximum_number_of_call_attempts: 1
 
+    # The commands a transaction sends at commit: verify re-reads the records
+    # it read, and roll applies (or rolls back) the records it wrote.
+    system_txn_verify:
+      read_consistency: SESSION
+      abandon_call_after: 2s
+      maximum_number_of_call_attempts: 3
+
+    system_txn_roll:
+      abandon_call_after: 5s
+      maximum_number_of_call_attempts: 5
+      delay_between_retries: 200ms
+
   high-reliability:
     all_operations:
       abandon_call_after: 10s
       maximum_number_of_call_attempts: 5
       delay_between_retries: 1s
       wait_for_call_to_complete: 30s
+      # After a call times out, keep reading its reply this long so the
+      # connection can be reused instead of closed.
+      wait_for_socket_response_after_call_fails: 3s
       replica_order: MASTER_PROLES
       send_key: true
       use_compression: true
@@ -256,6 +271,9 @@ behaviors:
       wait_for_call_to_complete: 60s
       send_key: true
       use_compression: false
+      # Ask the server to explain failures: 0=none, 1=subcode, 2=+message,
+      # 3=+expression trace.
+      error_detail_verbosity: 2
 
     retryable_writes:
       use_durable_delete: false

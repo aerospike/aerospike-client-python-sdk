@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Any, Union, overload
 
 
-from aerospike_async import ExecuteTask, FilterExpression
+from aerospike_async import ExecuteTask, Filter, FilterExpression
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder as AsyncBackgroundOperationBuilder,
@@ -78,21 +78,25 @@ class BackgroundOperationBuilder:
     ) -> BackgroundOperationBuilder:
         """Restrict the job with an AEL or filter predicate.
 
-        Combines with :meth:`index_filters`; see
+        Combines with :meth:`filter`; see
         :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.where`
         for the full contract.
         """
         self._inner.where(expression, *params)
         return self
 
-    def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
-        """Restrict the job using secondary-index ``Filter`` objects (sync).
+    def filter(self, filter_obj: Filter) -> BackgroundOperationBuilder:
+        """Restrict the job with a secondary-index ``Filter`` (sync).
 
         Combines with :meth:`where`; see
-        :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.index_filters`
+        :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.filter`
         for the full contract.
+
+        Raises:
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
         """
-        self._inner.index_filters(*filters)
+        self._inner.filter(filter_obj)
         return self
 
     def bin(self, name: str) -> BackgroundWriteBinBuilder[BackgroundOperationBuilder]:
@@ -264,6 +268,20 @@ class BackgroundUdfBuilder:
     ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""
         self._inner.where(expression, *params)
+        return self
+
+    def filter(self, filter_obj: Filter) -> BackgroundUdfBuilder:
+        """Restrict the UDF job with a secondary-index ``Filter`` (sync).
+
+        Combines with :meth:`where`; see
+        :meth:`aerospike_sdk.aio.background.BackgroundUdfBuilder.filter`
+        for the full contract.
+
+        Raises:
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
+        """
+        self._inner.filter(filter_obj)
         return self
 
     def records_per_second(self, rps: int) -> BackgroundUdfBuilder:

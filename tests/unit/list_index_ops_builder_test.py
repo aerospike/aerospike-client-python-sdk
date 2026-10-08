@@ -17,7 +17,7 @@
 
 from unittest.mock import MagicMock
 
-from aerospike_sdk import Key, ListReturnType
+from aerospike_sdk import Behavior, Key, ListReturnType
 from aerospike_async import ListOperation
 
 from aerospike_sdk.aio.operations.cdt_read import CdtReadBuilder
@@ -43,7 +43,7 @@ class _OpCollector:
 
 
 def _make_qb() -> QueryBuilder:
-    return QueryBuilder(client=object(), namespace="test", set_name="unit")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
 
 
 def _make_key(digest: int = 1) -> Key:
@@ -163,7 +163,7 @@ class TestQueryBinBuilderIndexListReads:
 class TestSyncWriteBinBuilderIndexListOps:
 
     def _build(self, bin_name: str = "L"):
-        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t")
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="t", behavior=Behavior.DEFAULT)
         qb._op_type = "upsert"
         qb._single_key = _make_key()
         sync_seg = SyncWriteSegmentBuilder(qb)

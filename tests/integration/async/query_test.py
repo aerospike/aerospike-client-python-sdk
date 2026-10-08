@@ -20,14 +20,16 @@ import time
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import Filter, Key
-from aerospike_async import PartitionFilter, QueryPolicy
+from aerospike_sdk import Behavior, Filter, Key
+from aerospike_async import PartitionFilter
 from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
+
+QUERY_DS = DataSet.of(general_namespace(), "query_test")
 
 
 async def _wait_for_set_count(
@@ -47,7 +49,7 @@ async def _wait_for_set_count(
     last_count = -1
     session = cluster.create_session()
     while time.monotonic() < deadline:
-        stream = await session.query(ns, set_name).execute()
+        stream = await session.query(DataSet.of(ns, set_name)).execute()
         count = 0
         async for _ in stream:
             count += 1
@@ -68,6 +70,7 @@ def _namespace_query(cluster: Cluster, namespace: str) -> QueryBuilder:
         client=sdk.underlying_client,
         namespace=namespace,
         set_name=None,
+        behavior=Behavior.DEFAULT,
         sdk_client=sdk,
     )
 
@@ -105,7 +108,7 @@ async def cluster(aerospike_host, make_cluster_definition):
     """Connect a Cluster and seed test data for query tests."""
     async with make_cluster_definition(aerospike_host).connect() as c:
         session = c.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         await session.truncate(ds)
 
@@ -127,7 +130,7 @@ async def session(cluster):
 
 async def test_query_basic(session):
     """Test basic query operation without filters."""
-    stream = await session.query(general_namespace(), "query_test").execute()
+    stream = await session.query(QUERY_DS).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -141,7 +144,7 @@ async def test_query_basic(session):
 
 async def test_query_with_bins(session):
     """Test query with specific bin selection."""
-    stream = await session.query(general_namespace(), "query_test").bins(["name", "age"]).execute()
+    stream = await session.query(QUERY_DS).bins(["name", "age"]).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -153,24 +156,10 @@ async def test_query_with_bins(session):
     stream.close()
     assert count > 0
 
-async def test_query_with_policy(session):
-    """Test query with custom policy."""
-    policy = QueryPolicy()
-    stream = await session.query(general_namespace(), "query_test").with_policy(policy).execute()
-    count = 0
-    async for result in stream:
-        assert result.is_ok
-        count += 1
-        if count >= 3:
-            break
-
-    stream.close()
-    assert count > 0
-
 async def test_query_with_partition_filter(session):
     """Test query with partition filter."""
     partition_filter = PartitionFilter.all()
-    stream = await session.query(general_namespace(), "query_test").partition(partition_filter).execute()
+    stream = await session.query(QUERY_DS).partition(partition_filter).execute()
     count = 0
     async for result in stream:
         assert result.is_ok
@@ -183,13 +172,12 @@ async def test_query_with_partition_filter(session):
 
 async def test_query_builder_chaining(session):
     """Test method chaining on query builder."""
-    policy = QueryPolicy()
     partition_filter = PartitionFilter.all()
 
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(QUERY_DS)
         .bins(["name", "age"])
-        .with_policy(policy)
+        .limit(10)
         .partition(partition_filter)
         .execute()
     )
@@ -208,7 +196,7 @@ async def test_query_with_range_filter(cluster, session, enterprise):
     """Test query with range filter (requires index)."""
     try:
         index_task = await (
-            session.index(general_namespace(), "query_test")
+            session.index(QUERY_DS)
             .on_bin("age").named("age_idx").integer().create()
         )
     except Exception:
@@ -219,7 +207,7 @@ async def test_query_with_range_filter(cluster, session, enterprise):
 
     try:
         stream = await (
-            session.query(general_namespace(), "query_test")
+            session.query(QUERY_DS)
             .filter(Filter.range("age", 22, 26))
             .execute()
         )
@@ -235,13 +223,13 @@ async def test_query_with_range_filter(cluster, session, enterprise):
         stream.close()
     finally:
         try:
-            await session.index(general_namespace(), "query_test").named("age_idx").drop()
+            await session.index(QUERY_DS).named("age_idx").drop()
         except Exception:
             pass
 
 async def test_query_empty_result(session):
     """Test query that returns no results."""
-    stream = await session.query(general_namespace(), "non_existent_set").execute()
+    stream = await session.query(DataSet.of(general_namespace(), "non_existent_set")).execute()
     count = 0
     async for result in stream:
         count += 1
@@ -251,7 +239,7 @@ async def test_query_empty_result(session):
 
 async def test_query_iteration(session):
     """Test that query builder can execute and return a RecordStream."""
-    query_builder = session.query(general_namespace(), "query_test")
+    query_builder = session.query(QUERY_DS)
     assert hasattr(query_builder, "execute")
 
     stream = await query_builder.execute()
@@ -270,8 +258,8 @@ async def test_query_with_filter_expression(session):
     filter_exp = Exp.ge(Exp.int_bin("age"), Exp.int_val(25))
 
     stream = await (
-        session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        session.query(QUERY_DS)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -290,7 +278,7 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
     """Test query with both Filter (secondary index) and Exp (FilterExpression)."""
     try:
         index_task = await (
-            session.index(general_namespace(), "query_test")
+            session.index(QUERY_DS)
             .on_bin("age").named("age_idx").integer().create()
         )
     except Exception:
@@ -303,9 +291,9 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
 
     try:
         stream = await (
-            session.query(general_namespace(), "query_test")
+            session.query(QUERY_DS)
             .filter(Filter.range("age", 20, 30))
-            .filter_expression(filter_exp)
+            .where(filter_exp)
             .execute()
         )
         count = 0
@@ -321,7 +309,7 @@ async def test_query_with_filter_and_filter_expression(cluster, session, enterpr
         stream.close()
     finally:
         try:
-            await session.index(general_namespace(), "query_test").named("age_idx").drop()
+            await session.index(QUERY_DS).named("age_idx").drop()
         except Exception:
             pass
 
@@ -332,8 +320,8 @@ async def test_query_with_filter_expression_and(session):
     )
 
     stream = await (
-        session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        session.query(QUERY_DS)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -354,7 +342,7 @@ async def test_query_with_filter_expression_and(session):
 # ============================================================================
 
 _QUERY_KEYS = tuple(
-    DataSet.of(general_namespace(), "query_test").id(i) for i in range(10)
+    QUERY_DS.id(i) for i in range(10)
 )
 
 
@@ -417,8 +405,8 @@ async def test_query_digest_modulo(session):
     filter_exp = Exp.eq(Exp.digest_modulo(3), Exp.int_val(1))
 
     stream = await (
-        session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        session.query(QUERY_DS)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -435,8 +423,8 @@ async def test_query_bin_exists(session):
     filter_exp = Exp.bin_exists("age")
 
     stream = await (
-        session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        session.query(QUERY_DS)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -451,11 +439,11 @@ async def test_query_bin_exists(session):
 
 async def test_query_record_size(session):
     """Test query filtering by record size metadata."""
-    filter_exp = Exp.ge(Exp.device_size(), Exp.int_val(0))
+    filter_exp = Exp.ge(Exp.record_size(), Exp.int_val(0))
 
     stream = await (
-        session.query(general_namespace(), "query_test")
-        .filter_expression(filter_exp)
+        session.query(QUERY_DS)
+        .where(filter_exp)
         .execute()
     )
     count = 0
@@ -525,7 +513,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
         await session.upsert(named_key).put({"probe": probe, "kind": "named-set"}).execute()
 
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).filter_expression(
+            lambda: _namespace_query(cluster, namespace).where(
                 Exp.eq(Exp.string_bin("probe"), val(probe)),
             ),
             {"no-set", "named-set"},
@@ -536,7 +524,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
             Exp.ne(Exp.set_name(), val("")),
         ])
         await _wait_for_query_kinds(
-            lambda: _namespace_query(cluster, namespace).filter_expression(named_set_only),
+            lambda: _namespace_query(cluster, namespace).where(named_set_only),
             {"named-set"},
         )
     finally:
@@ -550,7 +538,7 @@ async def test_query_exp_set_name_filters_out_no_set_records(cluster):
 async def test_query_chunked_iteration(session):
     """Server-side chunked iteration via chunk_size + has_more_chunks."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(QUERY_DS)
         .chunk_size(3)
         .execute()
     )
@@ -570,7 +558,7 @@ async def test_query_chunked_iteration(session):
 async def test_query_chunked_single_chunk(session):
     """chunk_size larger than dataset returns everything in one chunk."""
     stream = await (
-        session.query(general_namespace(), "query_test")
+        session.query(QUERY_DS)
         .chunk_size(100)
         .execute()
     )
@@ -588,7 +576,7 @@ async def test_query_chunked_single_chunk(session):
 
 async def test_has_more_chunks_on_non_chunked_stream(session):
     """has_more_chunks on a regular stream returns True once then False."""
-    stream = await session.query(general_namespace(), "query_test").execute()
+    stream = await session.query(QUERY_DS).execute()
     assert await stream.has_more_chunks() is True
     count = 0
     async for _ in stream:
@@ -608,7 +596,7 @@ class TestStreamAcrossBuilders:
         """QueryBuilder.stream on a multi-key read yields the same
         rows (by index) as buffered execute()."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(0, 1, 2)
 
         buffered = await (await session.query(keys).execute()).collect()
@@ -623,7 +611,7 @@ class TestStreamAcrossBuilders:
         """``stream()`` is awaitable and an async context manager, so the
         scoped form needs no second keyword and still closes the stream."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(0, 1, 2)
 
         async with session.query(keys).stream() as stream:
@@ -687,7 +675,7 @@ class TestStreamAcrossBuilders:
     async def test_dataset_query_stream_delegates_to_scan(self, session):
         """stream on a keyless dataset query streams the scan
         lazily (delegates to execute())."""
-        stream = await session.query(general_namespace(), "query_test").stream()
+        stream = await session.query(QUERY_DS).stream()
         count = 0
         async for r in stream:
             assert r.is_ok
@@ -702,7 +690,7 @@ class TestPopVsFirst:
 
     async def test_pop_keeps_stream_open(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = await session.query(ds.ids(0, 1, 2)).stream()
         head = await stream.pop()
         assert head is not None
@@ -711,7 +699,7 @@ class TestPopVsFirst:
 
     async def test_first_closes_stream(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = await session.query(ds.ids(0, 1, 2)).stream()
         head = await stream.first()
         assert head is not None
@@ -720,7 +708,7 @@ class TestPopVsFirst:
 
     async def test_pop_or_raise_and_first_or_raise(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         open_stream = await session.query(ds.ids(0, 1)).stream()
         head = await open_stream.pop_or_raise()
@@ -746,7 +734,7 @@ class TestSingleRecordTerminals:
     async def test_first_or_raise_matches_the_stream_form(self, cluster):
         """Same answer as the three-step form, since it delegates to it."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         via_stream = (
             await (await session.query(ds.id(0)).execute()).first_or_raise()
@@ -758,12 +746,12 @@ class TestSingleRecordTerminals:
 
     async def test_first_returns_none_when_nothing_matches(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         assert await session.query(ds.id("no_such_key_xyz")).first() is None
 
     async def test_first_or_raise_raises_when_nothing_matches(self, cluster):
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         with pytest.raises(StopAsyncIteration):
             await session.query(ds.id("no_such_key_xyz")).first_or_raise()
 
@@ -774,7 +762,7 @@ class TestSingleRecordTerminals:
         which is why the extra ``.record_or_raise()`` stays the caller's step.
         """
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         result = await session.query(ds.id(0)).first()
         assert isinstance(result, RecordResult)
         assert result.is_ok
@@ -788,7 +776,7 @@ class TestSingleRecordTerminals:
         that only looks at the result passes either way.
         """
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         # Deliberately multi-key: a single-key stream closes itself once
         # exhausted, so it cannot tell a closing terminal from a
@@ -823,7 +811,7 @@ class TestStreamClose:
         """After close(), no further rows are delivered even if the batch had
         more buffered/in-flight."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(*range(10))
 
         stream = await session.query(keys).stream()
@@ -842,7 +830,7 @@ class TestStreamClose:
     async def test_close_is_idempotent(self, cluster):
         """Repeated close() calls are safe and keep the stream drained."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = await session.query(ds.ids(0, 1, 2)).stream()
         stream.close()
         stream.close()
@@ -853,7 +841,7 @@ class TestStreamClose:
         """Re-entering ``async for`` on a closed stream terminates immediately
         (a scenario Closeable contracts commonly leave unspecified)."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         stream = await session.query(ds.ids(0, 1, 2, 3)).stream()
         stream.close()
         first_pass = [r async for r in stream]
@@ -864,7 +852,7 @@ class TestStreamClose:
         """Abandoning a stream early must not wedge the cluster — a subsequent
         operation on the same session still succeeds."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
 
         stream = await session.query(ds.ids(*range(10))).stream()
         async for _ in stream:
@@ -878,7 +866,7 @@ class TestStreamClose:
     async def test_async_with_closes_on_normal_exit(self, cluster):
         """``async with`` drains and releases the stream on normal exit."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(0, 1, 2)
 
         seen = []
@@ -892,7 +880,7 @@ class TestStreamClose:
     async def test_async_with_closes_on_early_break(self, cluster):
         """Breaking out of ``async with`` still closes the stream."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(*range(10))
 
         async with (await session.query(keys).stream()) as stream:
@@ -906,7 +894,7 @@ class TestStreamClose:
     async def test_async_with_closes_on_exception(self, cluster):
         """An exception inside ``async with`` closes the stream and propagates."""
         session = cluster.create_session()
-        ds = DataSet.of(general_namespace(), "query_test")
+        ds = QUERY_DS
         keys = ds.ids(*range(10))
 
         stream_ref = {}

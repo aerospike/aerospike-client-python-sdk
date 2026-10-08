@@ -12,14 +12,25 @@
 
 """Integration tests for cluster metrics (enable, snapshot, derived views)."""
 
+import asyncio
+import dataclasses
+import os
+from datetime import timedelta
+
 import pytest
 
-from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
-import os
-
+from aerospike_sdk.metrics import (
+    CommandType,
+    LatencyType,
+    LatencyUnit,
+    MetricsPolicy,
+    MetricsSnapshot,
+    Sampler,
+)
 from aerospike_sdk import UDFLang
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.metrics.export import AsyncMetricsExportTimer
+from aerospike_sdk.metrics.export import AsyncMetricsExportTimer, LearnMetricsFileExporter
+from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 
 from tests.integration.namespace import general_namespace
 
@@ -470,7 +481,6 @@ class TestMetricsExport:
         narrowed instead -- everything downstream of it (the export tick, the
         tracker, the departed section, the exporter call) is the real path.
         """
-        from aerospike_sdk.metrics import MetricsSnapshot
 
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         session = metrics_cluster.create_session()
@@ -535,7 +545,6 @@ class TestMetricsExport:
         self, metrics_cluster, tmp_path
     ):
         """The built-in exporter's output matches the header it emits."""
-        from aerospike_sdk.metrics.export import LearnMetricsFileExporter
 
         exporter = LearnMetricsFileExporter(str(tmp_path))
         try:
@@ -597,3 +606,91 @@ class TestCommandCount:
         frozen = metrics_cluster.metrics().command_count
         await session.upsert(ds.id(2)).put({"n": 2}).execute()
         assert metrics_cluster.metrics().command_count == frozen
+
+
+class _CommandCounts:
+    """Push exporter recording the command count of every snapshot it receives."""
+
+    def __init__(self):
+        self.counts = []
+
+    async def export(self, snapshot):
+        self.counts.append(snapshot.command_count)
+
+
+def _with_metrics_settings(cluster, **fields):
+    settings = cluster._sdk_client._sdk_settings or SystemSettings()
+    cluster._sdk_client._sdk_settings = dataclasses.replace(
+        settings, metrics=MetricsSettings(**fields),
+    )
+
+
+class TestFinalExport:
+    """Stopping metrics pushes one last snapshot, so the closing window is not lost."""
+
+    async def test_disable_pushes_one_snapshot_after_the_last_command(self, metrics_cluster):
+        exporter = _CommandCounts()
+        metrics_cluster.add_exporter(exporter)
+        try:
+            metrics_cluster.enable_metrics(_SHAPE_SAFE)
+            base = metrics_cluster.metrics().command_count
+            await _do_some_ops(metrics_cluster, count=3)
+            metrics_cluster.disable_metrics()
+            await metrics_cluster._final_export
+            assert exporter.counts == [base + 6]
+        finally:
+            metrics_cluster.remove_exporter(exporter)
+
+    async def test_close_pushes_one_snapshot_after_the_last_command(
+        self, aerospike_host, make_cluster_definition,
+    ):
+        exporter = _CommandCounts()
+        cluster = await make_cluster_definition(aerospike_host).connect()
+        cluster.add_exporter(exporter)
+        cluster.enable_metrics(_SHAPE_SAFE)
+        base = cluster.metrics().command_count
+        await _do_some_ops(cluster, count=3)
+        await cluster.close()
+        assert exporter.counts == [base + 6]
+
+    async def test_the_configured_file_gets_its_last_line_before_closing(
+        self, aerospike_host, make_cluster_definition, tmp_path,
+    ):
+        async with make_cluster_definition(aerospike_host).connect() as cluster:
+            _with_metrics_settings(cluster, report_dir=str(tmp_path))
+            cluster.enable_metrics(_SHAPE_SAFE)
+            cluster.disable_metrics()
+            await cluster._final_export
+        (log,) = tmp_path.iterdir()
+        lines = log.read_text().splitlines()
+        assert len(lines) == 2 and lines[1].startswith("cluster[")
+
+    async def test_enable_waits_for_a_pending_final_push(
+        self, aerospike_host, make_cluster_definition,
+    ):
+        release = asyncio.Event()
+        calls = active = peak = 0
+
+        class Gated:
+            async def export(self, snapshot):
+                nonlocal calls, active, peak
+                calls += 1
+                active += 1
+                peak = max(peak, active)
+                try:
+                    await release.wait()
+                finally:
+                    active -= 1
+
+        async with make_cluster_definition(aerospike_host).connect() as cluster:
+            _with_metrics_settings(cluster, export_interval=timedelta(milliseconds=20))
+            cluster.add_exporter(Gated())
+            cluster.enable_metrics(_SHAPE_SAFE)
+            cluster.disable_metrics()
+            cluster.enable_metrics(_SHAPE_SAFE)
+            await asyncio.sleep(0.2)
+            assert calls == 1 and not cluster._final_export.done()
+            release.set()
+            await asyncio.sleep(0.2)
+            assert calls > 1 and peak == 1
+            cluster.disable_metrics()

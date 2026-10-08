@@ -24,12 +24,14 @@ normal use.
 """
 
 import asyncio
+import os
 import pytest
 
 from aerospike_sdk import AsyncPool
 from aerospike_sdk.aio.cluster import Cluster
 from aerospike_sdk.dataset import DataSet
 from tests.integration.namespace import general_namespace
+from aerospike_sdk.aio.pool import _gil_is_enabled, _uvloop_safe_under_ft
 
 
 class TestAsyncPoolLifecycle:
@@ -66,7 +68,6 @@ class TestAsyncPoolLifecycle:
             await pool.aclose()
 
     async def test_default_loop_count_is_cpu_count(self, aerospike_host, make_cluster_definition):
-        import os
         pool = AsyncPool(make_cluster_definition(aerospike_host))
         assert pool.loop_count == (os.cpu_count() or 4)
 
@@ -157,7 +158,6 @@ class TestAsyncPoolLoopType:
         mitigation active (pipe-wake, the default), the pool uses uvloop — the
         unlock that lets a multi-loop pool run uvloop safely, no longer forcing
         the selector loop."""
-        from aerospike_sdk.aio.pool import _gil_is_enabled, _uvloop_safe_under_ft
 
         if _gil_is_enabled():
             pytest.skip("GIL enabled: uvloop is the default regardless of the FT gate")

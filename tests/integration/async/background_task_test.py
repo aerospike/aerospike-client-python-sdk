@@ -15,12 +15,11 @@
 
 """Integration tests for session.background_task() (async)."""
 
-import pytest
-
 from tests.pac_compat import requires_server_compiled_ael
+import pytest
 import pytest_asyncio
-from aerospike_sdk import HllConfig, UDFLang
-from aerospike_async import Filter, MapOperation, MapReturnType, Operation
+from aerospike_sdk import Exp, HllConfig, IndexNotFoundError, ResultCode, UDFLang
+from aerospike_async import Filter, MapOperation, MapReturnType
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
@@ -35,7 +34,7 @@ CUTOFF = [1704067200]
 BG_BIN = "bgval"
 BG_BIN2 = "bgval2"
 BG_INDEX = "pfc_bg_idx"
-MARKER = "bg_marker"
+MISSING_INDEX = "pfc_bg_missing_idx"
 UDF_PATH = "pfc_bg_udf.lua"
 UDF_MODULE = "pfc_bg_udf"
 
@@ -85,6 +84,11 @@ async def cluster(aerospike_host, make_cluster_definition):
             except Exception:
                 pass
         yield c
+
+
+async def _ensure_bg_index(session):
+    task = await session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
+    assert await task.wait_till_complete()
 
 
 async def _seed_profiles(session):
@@ -271,6 +275,33 @@ async def test_background_udf_with_where(cluster):
             assert rr.record.bins.get(BG_BIN2) == "original"
 
 
+async def test_background_udf_with_index_filter(cluster):
+    """The index confines the UDF to its range; records outside it are untouched."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(301, 311)
+    for i in values:
+        await (
+            session.upsert(DS.id(f"bgudf_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+    task = await (
+        session.background_task()
+        .execute_udf(DS)
+        .function(UDF_MODULE, "writeBin")
+        .passing(BG_BIN2, "udf_indexed")
+        .filter(Filter.range(BG_BIN, 304, 308))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+    for i in values:
+        rs = await session.query(DS.id(f"bgudf_{i}")).bins([BG_BIN2]).execute()
+        written = (await rs.first_or_raise()).record.bins[BG_BIN2]
+        assert written == ("udf_indexed" if 304 <= i <= 308 else "original")
+
+
 async def test_background_udf_with_records_per_second(cluster):
     session = cluster.create_session()
     for i in range(1, 11):
@@ -319,57 +350,6 @@ async def test_background_udf_with_validation(cluster):
         assert rr.record.bins.get(BG_BIN2) == 5
 
 
-async def test_legacy_query_builder_background_scan(cluster):
-    session = cluster.create_session()
-    for i in range(5):
-        await session.upsert(DS.id(i)).put({BG_BIN: i}).execute()
-    task = await (
-        session.query(DS)
-        .with_write_operations([Operation.put(MARKER, 1)])
-        .execute_background_task()
-    )
-    assert await task.wait_till_complete()
-    rec = await (
-        await session.query(DS.id(0)).bins([MARKER]).execute()
-    ).first_or_raise()
-    assert rec.record.bins.get(MARKER) == 1
-
-
-@requires_server_compiled_ael
-async def test_query_builder_background_task_honors_a_string_where(cluster):
-    session = cluster.create_session()
-    for i in range(1, 11):
-        await (
-            session.upsert(DS.id(f"bg_{i}"))
-            .bin(BG_BIN).set_to(i)
-            .bin(BG_BIN2).set_to("original")
-            .execute()
-        )
-    task = await (
-        session.query(DS)
-        .where("$.bgval > 5")
-        .with_write_operations([Operation.put(BG_BIN2, "filtered")])
-        .execute_background_task()
-    )
-    assert await task.wait_till_complete()
-    for i in range(1, 11):
-        rs = await session.query(DS.id(f"bg_{i}")).bins([BG_BIN2]).execute()
-        rr = await rs.first_or_raise()
-        assert rr.record.bins.get(BG_BIN2) == ("filtered" if i > 5 else "original")
-
-
-async def test_point_query_rejects_background_task(cluster):
-    session = cluster.create_session()
-    k = DS.id(40)
-    await session.upsert(k).put({BG_BIN: 1}).execute()
-    with pytest.raises(ValueError, match="dataset queries"):
-        await (
-            session.query(k)
-            .with_write_operations([Operation.put(MARKER, 1)])
-            .execute_background_task()
-        )
-
-
 async def test_background_update_with_records_per_second(cluster):
     """A throttled background job still runs to completion and applies its writes.
 
@@ -408,8 +388,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     second run must change nothing.
     """
     session = cluster.create_session()
-    index_task = await session.index(DS).on_bin(BG_BIN).named(BG_INDEX).integer().create()
-    assert await index_task.wait_till_complete()
+    await _ensure_bg_index(session)
     for i in range(1, 11):
         await (
             session.upsert(DS.id(f"bgif_{i}"))
@@ -421,7 +400,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     task = await (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("touched")
         .execute()
@@ -440,7 +419,7 @@ async def test_background_update_with_index_filter_and_where(cluster):
     task = await (
         session.background_task()
         .update(DS)
-        .index_filters(Filter.range(BG_BIN, 4, 8))
+        .filter(Filter.range(BG_BIN, 4, 8))
         .where("not($.bgval2.exists()) or $.bgval2 == 'original'")
         .bin(BG_BIN2).set_to("second_pass")
         .execute()
@@ -448,6 +427,152 @@ async def test_background_update_with_index_filter_and_where(cluster):
     assert await task.wait_till_complete()
     for i in range(4, 9):
         assert await marker(i) == "touched"
+
+
+async def test_background_delete_with_index_filter_and_where(cluster):
+    """Only records inside the index range that also match the predicate are deleted."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(101, 111)
+    for i in values:
+        await session.upsert(DS.id(f"bgdel_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    task = await (
+        session.background_task()
+        .delete(DS)
+        .filter(Filter.range(BG_BIN, 104, 108))
+        .where(Exp.ne(Exp.int_bin(BG_BIN), Exp.int_val(106)))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rr = await (await session.query(DS.id(f"bgdel_{i}")).execute()).first()
+        if 104 <= i <= 108 and i != 106:
+            assert rr is None
+        else:
+            assert rr is not None and rr.is_ok
+
+
+async def test_background_touch_with_index_filter(cluster):
+    """A filter alone confines the job to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(201, 211)
+    for i in values:
+        await session.upsert(DS.id(f"bgtouch_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    async def generation(i):
+        rs = await session.query(DS.id(f"bgtouch_{i}")).execute()
+        return (await rs.first_or_raise()).record.generation
+
+    before = {i: await generation(i) for i in values}
+    task = await (
+        session.background_task()
+        .touch(DS)
+        .filter(Filter.range(BG_BIN, 204, 208))
+        .expire_record_after_seconds(600)
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        touched = 204 <= i <= 208
+        assert await generation(i) == before[i] + (1 if touched else 0)
+
+
+async def test_background_touch_with_index_filter_and_where(cluster):
+    """Only records inside the index range that also match the predicate are touched."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(601, 611)
+    for i in values:
+        await session.upsert(DS.id(f"bgtouchw_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    async def generation(i):
+        rs = await session.query(DS.id(f"bgtouchw_{i}")).execute()
+        return (await rs.first_or_raise()).record.generation
+
+    before = {i: await generation(i) for i in values}
+    task = await (
+        session.background_task()
+        .touch(DS)
+        .filter(Filter.range(BG_BIN, 604, 608))
+        .where(Exp.ne(Exp.int_bin(BG_BIN), Exp.int_val(606)))
+        .expire_record_after_seconds(600)
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        touched = 604 <= i <= 608 and i != 606
+        assert await generation(i) == before[i] + (1 if touched else 0)
+
+
+async def test_background_update_with_index_filter(cluster):
+    """A filter alone confines the update to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(401, 411)
+    for i in values:
+        await (
+            session.upsert(DS.id(f"bgupd_{i}"))
+            .bin(BG_BIN).set_to(i)
+            .bin(BG_BIN2).set_to("original")
+            .execute()
+        )
+
+    task = await (
+        session.background_task()
+        .update(DS)
+        .filter(Filter.range(BG_BIN, 404, 408))
+        .bin(BG_BIN2).set_to("indexed")
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rs = await session.query(DS.id(f"bgupd_{i}")).bins([BG_BIN2]).execute()
+        written = (await rs.first_or_raise()).record.bins[BG_BIN2]
+        assert written == ("indexed" if 404 <= i <= 408 else "original")
+
+
+async def test_background_delete_with_index_filter(cluster):
+    """A filter alone confines the delete to the index range."""
+    session = cluster.create_session()
+    await _ensure_bg_index(session)
+    values = range(501, 511)
+    for i in values:
+        await session.upsert(DS.id(f"bgdelf_{i}")).bin(BG_BIN).set_to(i).execute()
+
+    task = await (
+        session.background_task()
+        .delete(DS)
+        .filter(Filter.range(BG_BIN, 504, 508))
+        .execute()
+    )
+    assert await task.wait_till_complete()
+
+    for i in values:
+        rr = await (await session.query(DS.id(f"bgdelf_{i}")).execute()).first()
+        if 504 <= i <= 508:
+            assert rr is None
+        else:
+            assert rr is not None and rr.is_ok
+
+
+async def test_background_filter_on_missing_named_index_fails_at_execute(cluster):
+    """A filter naming an index that does not exist is refused when the job starts."""
+    session = cluster.create_session()
+    with pytest.raises(IndexNotFoundError) as exc_info:
+        await (
+            session.background_task()
+            .update(DS)
+            .filter(Filter.range_by_index(MISSING_INDEX, 1, 10))
+            .bin(BG_BIN2).set_to("unreachable")
+            .execute()
+        )
+    assert exc_info.value.result_code == ResultCode.INDEX_NOT_FOUND
 
 
 async def test_background_update_map_value_range_remove(cluster):
@@ -509,15 +634,16 @@ async def test_background_update_expression_write(cluster):
         assert (await _bins(session, i, "doubled"))["doubled"] == 20
 
 
-async def test_query_builder_background_task_with_map_operation(cluster):
+async def test_background_update_with_prebuilt_map_operation(cluster):
     session = cluster.create_session()
     await _seed_profiles(session)
     task = await (
-        session.query(CDT_DS)
-        .with_write_operations([MapOperation.remove_by_value_range(
+        session.background_task()
+        .update(CDT_DS)
+        .add_operation(MapOperation.remove_by_value_range(
             "segments", None, CUTOFF, MapReturnType.NONE,
-        )])
-        .execute_background_task()
+        ))
+        .execute()
     )
     assert await task.wait_till_complete()
     for i in range(CDT_KEYS):

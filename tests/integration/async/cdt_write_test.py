@@ -18,10 +18,11 @@
 import pytest
 import pytest_asyncio
 from aerospike_sdk import CTX, CdtOperation, Exp, ExpType, ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import SortedMap
 from aerospike_sdk import LoopVarPart
 
 from aerospike_sdk import DataSet
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ElementExistsError, ResultCode
 from tests.integration.namespace import general_namespace
 
 
@@ -493,6 +494,23 @@ class TestProductRatingsWorkflow:
             .execute()
         ).first_or_raise()
         assert result.record.bins["ratings"] == {"alice": 5}
+
+    async def test_read_top_ratings_in_key_order(self, cluster):
+        """A rank selection on an unordered map reads back as a key-ordered SortedMap."""
+        session = cluster.create_session()
+        k = DS.id(114)
+        await session.upsert(k).put({
+            "ratings": {"dave": 2, "carol": 5, "bob": 4, "alice": 3},
+        }).execute()
+
+        result = await (
+            await session.query(k)
+            .bin("ratings").on_map_rank_range(1, 3).get_as_ordered_map()
+            .execute()
+        ).first_or_raise()
+        top = result.record.bins["ratings"]
+        assert isinstance(top, SortedMap)
+        assert list(top.items()) == [("alice", 3), ("bob", 4), ("carol", 5)]
 
     async def test_count_by_value_range(self, cluster):
         """Count entries within a value range [4, 6)."""
@@ -1288,6 +1306,50 @@ class TestListInsertItems:
         assert result.record.bins["outer"]["data"] == [7, 8, 1, 2]
 
 
+class TestNestedSingleValueListWrites:
+    """``list_append`` / ``list_add`` on a list reached by navigation."""
+
+    async def test_nested_list_append(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(111)
+        await session.upsert(k).put({"teams": {"team1": ["Alice", "Bob"]}}).execute()
+
+        await session.update(k).bin("teams").on_map_key("team1").list_append("Diana").execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["teams"]["team1"] == ["Alice", "Bob", "Diana"]
+
+    async def test_nested_list_add_keeps_sorted_order(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(112)
+        await session.upsert(k).put({"m": {"x": 0}}).execute()
+        await (
+            session.update(k).bin("m").on_map_key("scores").list_create(ListOrderType.ORDERED)
+            .execute()
+        )
+        await session.update(k).bin("m").on_map_key("scores").list_add_items([30, 10]).execute()
+
+        await session.update(k).bin("m").on_map_key("scores").list_add(20).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"]["scores"] == [10, 20, 30]
+
+    async def test_nested_list_append_unique_rejects_a_duplicate(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(113)
+        await session.upsert(k).put({"teams": {"team1": ["Alice"]}}).execute()
+
+        with pytest.raises(ElementExistsError):
+            await (
+                session.update(k).bin("teams").on_map_key("team1")
+                .list_append("Alice", unique=True)
+                .execute()
+            )
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["teams"]["team1"] == ["Alice"]
+
+
 class TestListSortDropDuplicates:
     """List sort flags beyond descending order."""
 
@@ -1431,18 +1493,14 @@ class TestBatchCdtWrite:
 
 
 # ===================================================================
-# Path-expression removal (server >= 8.1.1)
+# Path-expression removal
 # ===================================================================
 
 class TestPathExpressionRemove:
     """Remove nested elements matched by a CTX path filter."""
 
-    async def test_remove_strips_matching_list_elements(
-        self, cluster, supports_cdt_path_expressions
-    ):
+    async def test_remove_strips_matching_list_elements(self, cluster):
         """``CdtOperation.remove`` drops every element the path filter matches."""
-        if not supports_cdt_path_expressions:
-            pytest.skip("CDT path expressions require server >= 8.1.1")
         session = cluster.create_session()
         k = DS.id("path_remove_op")
         await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()
@@ -1455,12 +1513,8 @@ class TestPathExpressionRemove:
         result = await (await session.query(k).execute()).first_or_raise()
         assert result.record.bins["nums"] == [3, 2]
 
-    async def test_exp_remove_strips_matching_list_elements(
-        self, cluster, supports_cdt_path_expressions
-    ):
-        """The expression-level ``Exp.exp_remove`` form works on the same floor."""
-        if not supports_cdt_path_expressions:
-            pytest.skip("CDT path expressions require server >= 8.1.1")
+    async def test_exp_remove_strips_matching_list_elements(self, cluster):
+        """The expression-level ``Exp.exp_remove`` form strips the same elements."""
         session = cluster.create_session()
         k = DS.id("path_remove_exp")
         await session.upsert(k).put({"nums": [3, 7, 2, 9]}).execute()

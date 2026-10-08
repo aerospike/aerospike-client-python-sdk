@@ -21,6 +21,8 @@ from datetime import timedelta
 import pytest
 
 from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.policy import Settings
+from aerospike_sdk.policy.behavior_settings import OpKind, OpShape
 from tests.integration.namespace import general_namespace
 
 log = logging.getLogger(__name__)
@@ -44,14 +46,14 @@ async def test_session_creation_custom_behavior(cluster):
     """Test creating a session with custom behavior."""
     custom_behavior = Behavior.DEFAULT.derive_with_changes(
         name="custom",
-        total_timeout=timedelta(seconds=10),
-        max_retries=5,
+        all=Settings(total_timeout=timedelta(seconds=10), max_retries=5),
     )
     session = cluster.create_session(custom_behavior)
     assert session is not None
     assert session.behavior.name == "custom"
-    assert session.behavior.total_timeout == timedelta(seconds=10)
-    assert session.behavior.max_retries == 5
+    point_reads = session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    assert point_reads.total_timeout == timedelta(seconds=10)
+    assert point_reads.max_retries == 5
     assert session._client is cluster._client
 
 
@@ -91,36 +93,6 @@ async def test_session_upsert_with_key(session):
     async for result in stream:
         rec = result.record_or_raise()
         assert rec.bins == {"name": "John", "age": 30}
-
-
-async def test_session_upsert_with_dataset(session):
-    """Test session.upsert() with DataSet."""
-    users = DataSet.of(general_namespace(), "users")
-
-    await session.upsert(dataset=users, key_value="user456").put(
-        {"name": "Jane", "age": 25}
-    ).execute()
-
-    key = users.id("user456")
-    stream = await session.query(key).execute()
-    async for result in stream:
-        rec = result.record_or_raise()
-        assert rec.bins == {"name": "Jane", "age": 25}
-
-
-async def test_session_upsert_with_namespace_set(session):
-    """Test session.upsert() with explicit namespace/set."""
-    from aerospike_sdk import Key
-
-    key = Key(general_namespace(), "users", "user789")
-    await session.upsert(
-        namespace=general_namespace(), set_name="users", key_value="user789"
-    ).put({"name": "Bob", "age": 35}).execute()
-
-    stream = await session.query(key).execute()
-    async for result in stream:
-        rec = result.record_or_raise()
-        assert rec.bins == {"name": "Bob", "age": 35}
 
 
 async def test_session_insert(session):
@@ -234,25 +206,10 @@ async def test_session_index_delegation(session):
     """Test that session.index() delegates to client correctly."""
     users = DataSet.of(general_namespace(), "users")
 
-    index_builder = session.index(dataset=users)
+    index_builder = session.index(users)
     assert index_builder is not None
     assert index_builder._namespace == general_namespace()
     assert index_builder._set_name == "users"
-
-
-async def test_session_index_accepts_dataset_positionally(session):
-    """A DataSet in the first slot resolves the same as ``dataset=``."""
-    users = DataSet.of(general_namespace(), "users")
-
-    positional = session.index(users)
-    assert positional._namespace == general_namespace()
-    assert positional._set_name == "users"
-
-
-async def test_session_upsert_error_no_key(session):
-    """Test that upsert raises error when no key is provided."""
-    with pytest.raises(ValueError, match="At least one key must be provided"):
-        await session.upsert().put({"name": "Test"}).execute()
 
 
 async def test_session_multiple_sessions_different_behaviors(cluster):
@@ -261,14 +218,16 @@ async def test_session_multiple_sessions_different_behaviors(cluster):
     fast_session = cluster.create_session(
         Behavior.DEFAULT.derive_with_changes(
             name="fast",
-            total_timeout=timedelta(seconds=5),
+            all=Settings(total_timeout=timedelta(seconds=5)),
         )
     )
 
     assert default_session.behavior.name == "DEFAULT"
     assert fast_session.behavior.name == "fast"
-    assert fast_session.behavior.total_timeout == timedelta(seconds=5)
-    assert default_session.behavior.total_timeout == timedelta(seconds=1)
+    fast = fast_session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    default = default_session.behavior.get_settings(OpKind.READ, OpShape.POINT)
+    assert fast.total_timeout == timedelta(seconds=5)
+    assert default.total_timeout == timedelta(seconds=1)
 
 
 async def test_session_transaction(session):
@@ -279,15 +238,18 @@ async def test_session_transaction(session):
 
 async def test_session_behavior_immutability(session):
     """Test that behavior is immutable."""
-    original_timeout = session.behavior.total_timeout
+    def point_read_timeout(behavior):
+        return behavior.get_settings(OpKind.READ, OpShape.POINT).total_timeout
+
+    original_timeout = point_read_timeout(session.behavior)
 
     new_behavior = session.behavior.derive_with_changes(
         name="new",
-        total_timeout=timedelta(seconds=60),
+        all=Settings(total_timeout=timedelta(seconds=60)),
     )
 
-    assert session.behavior.total_timeout == original_timeout
-    assert new_behavior.total_timeout == timedelta(seconds=60)
+    assert point_read_timeout(session.behavior) == original_timeout
+    assert point_read_timeout(new_behavior) == timedelta(seconds=60)
     assert new_behavior.name == "new"
 
 

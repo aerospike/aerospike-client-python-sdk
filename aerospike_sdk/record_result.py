@@ -174,27 +174,61 @@ class RecordResult:
             This instance when :attr:`is_ok` is true.
 
         Raises:
-            AerospikeError: If :attr:`exception` is set (embedded client error).
-            AerospikeError: Otherwise, from :attr:`result_code` via
-                :func:`~aerospike_sdk.exceptions._result_code_to_exception`
-                (usually a specific subclass; unmapped codes use the base type).
+            AerospikeError: The exception :meth:`to_exception` returns for
+                this row.
 
         Example::
 
             row = await stream.first()
             if row is not None:
                 row.or_raise()
+
+        See Also:
+            :meth:`to_exception`: The same exception, returned instead of raised.
         """
         if not self.is_ok:
-            if self.exception is not None:
-                raise self.exception
-            raise _result_code_to_exception(
-                self.result_code, in_doubt=self.in_doubt,
-                sub_code=self.sub_code,
-                server_message=self.server_message,
-                exp_trace=self.exp_trace,
-            )
+            raise self.to_exception()
         return self
+
+    def to_exception(self) -> AerospikeError | None:
+        """Return this row's failure as an exception, or ``None`` if the row succeeded.
+
+        A row the client failed carries its own :attr:`exception`, which is
+        returned as is. Otherwise the exception is built from the row: the
+        :class:`~aerospike_sdk.exceptions.AerospikeError` subclass for
+        :attr:`result_code` (the base type for an unmapped code), with
+        :attr:`in_doubt`, :attr:`sub_code`, :attr:`server_message` and
+        :attr:`exp_trace` attached. Use it to log or collect failures without
+        raising.
+
+        Returns:
+            The exception for a failed row, or ``None`` when :attr:`is_ok` is
+            true.
+
+        Example::
+
+            from aerospike_sdk.exceptions import RecordNotFoundError
+
+            async for row in stream:
+                exc = row.to_exception()
+                if isinstance(exc, RecordNotFoundError):
+                    missing.append(row.key)
+                elif exc is not None:
+                    failures.append(exc)
+
+        See Also:
+            :meth:`or_raise`: Raise this exception instead of returning it.
+        """
+        if self.is_ok:
+            return None
+        if self.exception is not None:
+            return self.exception
+        return _result_code_to_exception(
+            self.result_code, in_doubt=self.in_doubt,
+            sub_code=self.sub_code,
+            server_message=self.server_message,
+            exp_trace=self.exp_trace,
+        )
 
     def record_or_raise(self) -> Record:
         """Return :attr:`record`, raising if the result is not OK.
@@ -316,7 +350,7 @@ class RecordResult:
             raise TypeError(
                 f"Bin {bin_name!r} is not a 2-element list (got {type(value).__name__})",
             )
-        return HllConfig(int(value[0]), int(value[1]))
+        return HllConfig(index_bit_count=int(value[0]), min_hash_bit_count=int(value[1]))
 
     def as_bool(self) -> bool:
         """Interpret the row as an existence check (for example after :meth:`Session.exists`).

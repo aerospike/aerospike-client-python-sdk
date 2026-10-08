@@ -179,6 +179,13 @@ await (
     .execute()
 )
 
+# The same list writes work on a list reached by navigation
+await (
+    session.update(users.id(1))
+    .bin("teams").on_map_key("team1").list_append("Diana")
+    .execute()
+)
+
 # Clear a list
 await (
     session.update(users.id(1))
@@ -244,6 +251,20 @@ scores = record.bins["scores"]
 scores["amy"]                     # 1
 scores == {"amy": 1, "zoe": 3}    # True
 isinstance(scores, dict)          # True
+```
+
+A selection read with `get_keys_and_values()` is a plain `dict` in the order
+the server selected the entries, such as rank order for a rank range. End it
+with `get_as_ordered_map()` instead to get a `SortedMap` in key order, whatever
+the bin's own order:
+
+```python
+stream = await (
+    session.query(users.id(1))
+    .bin("scores").on_map_rank_range(-3, 3).get_as_ordered_map()
+    .execute()
+)
+top_three = (await stream.first_or_raise()).record.bins["scores"]   # SortedMap
 ```
 
 Maps created through the CDT surface take their order from the operation
@@ -359,6 +380,12 @@ result = await (
 await session.update(key).bin("m").on_map_keys_in(["a", "c"]).modify_by(add_10).execute()
 ```
 
+`keys` is any collection, and keys of different types may be mixed. A `bytes`
+element is one blob key. A bare `str` or `bytes` in place of the collection
+raises `TypeError` rather than selecting one key per character or byte; wrap a
+single key in a list: `on_map_keys_in([b"\x01\x02"])`. The same holds for
+`on_map_key_list`, `on_map_value_list` and `on_list_value_list`.
+
 `and_filter` refines the step before it, so it follows `on_map_keys_in` or a
 single-element step such as `on_map_key`, once per level. After a
 single-element step it keeps that element only if it matches, and opens a path
@@ -380,29 +407,52 @@ Writes have `modify_by(expr)`, `modify_no_fail(expr)` — which tolerates elemen
 the expression cannot be applied to — and `remove_matches()`. For explicit
 `SelectFlags`, `collect_by_path(flags)` is the unsugared form.
 
-When the shape varies between records, pass `no_fail=True` so a path that does
-not resolve yields nothing instead of failing the operation:
+An empty or absent collection is never an error; the read yields an empty list.
+A path filter that meets an element it cannot evaluate, such as an integer
+comparison against a string, fails the operation unless you pass `no_fail=True`,
+which skips that element instead:
 
 ```python
-# an absent or empty "items" collection is not an error here
-.bin("d").on_map_key("items").on_each_child().collect_values(no_fail=True)
+# "mixed" holds ["a", 7, 9]: without no_fail the string fails the read
+.bin("d").on_map_key("mixed").on_each_child_where(over_5).collect_values(no_fail=True)
+# -> [7, 9]
 ```
+
+`collect_values_as_expression_read(bin_type)` reads the same selection through
+an expression read instead of a CDT operation. Pass the bin's type,
+`ExpType.MAP` or `ExpType.LIST`; the result is a list under the bin's name. It
+takes `no_fail` as well, and `ignore_eval_failure=True` leaves the bin out of
+the result, rather than failing, when the evaluation itself fails, for example
+because the bin is not of the declared type:
+
+```python
+from aerospike_sdk import ExpType
+
+result = await (
+    await session.query(key)
+    .bin("catalog").on_map_key("book").on_each_child().on_map_key("title")
+    .collect_values_as_expression_read(ExpType.MAP)
+    .execute()
+).first_or_raise()
+titles = result.record.bins["catalog"]
+```
+
+For select flags other than values, build the expression with
+`Exp.exp_select_by_path` and pass it to `select_from`.
 
 ## AEL expressions on CDT
 
 AEL supports CDT paths for filtering. A collection predicate like the ones
 below is generally not satisfiable from a secondary index, so it falls back to
-a primary-index (full-set) scan — which is rejected by default. Opt in with
-`allow_scans_with_where` when the scan is intended:
+a primary-index (full-set) scan. That is allowed by default; set
+`allow_scans_with_where=False` on the query or the `Behavior` to reject the
+fallback instead:
 
 ```python
-from aerospike_sdk import QueryHint
-
 # Filter records where the list has more than 5 items
 stream = await (
     session.query(users)
     .where("$.scores:LIST.count() > 5")
-    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 
@@ -410,7 +460,6 @@ stream = await (
 stream = await (
     session.query(users)
     .where('$.settings.theme == "dark"')
-    .with_hint(QueryHint(allow_scans_with_where=True))
     .execute()
 )
 ```

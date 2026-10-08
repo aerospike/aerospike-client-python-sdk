@@ -15,8 +15,11 @@
 
 """Tests for the SDK exception hierarchy, factory, and dependency converter."""
 
+import aerospike_async
+import aerospike_sdk
 import pytest
 from aerospike_async import Operation, SubCode
+from aerospike_async.exceptions import _RC_TO_CLS
 from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.exceptions import (
     AerospikeError,
@@ -57,6 +60,7 @@ from aerospike_sdk.exceptions import (
     TimeoutError,
     TransactionError,
     UdfError,
+    _RC_TO_TYPE,
 )
 # The dependency-converter tests construct real PAC exceptions. PSDK's own
 # AerospikeError/ConnectionError/TimeoutError shadow the PAC names, so pull
@@ -511,9 +515,6 @@ class TestTypedCoverageMatchesDependency:
     """
 
     def test_pac_typed_codes_are_typed_here(self):
-        from aerospike_async.exceptions import _RC_TO_CLS
-        from aerospike_sdk.exceptions import _RC_TO_TYPE
-
         untyped = [code for code in _RC_TO_CLS if code not in _RC_TO_TYPE]
         # PARAMETER_ERROR is deliberate: PAC types it (InvalidRequest) while
         # this SDK keeps it on the base pending a dedicated class decision.
@@ -525,19 +526,14 @@ class TestSubCodeCatalogReExport:
     """The SubCode catalog is a re-export, never a hand-kept copy."""
 
     def test_identity(self):
-        import aerospike_async
-        import aerospike_sdk
-
         assert aerospike_sdk.SubCode is aerospike_async.SubCode
 
     def test_spec_named_families_present(self):
-        from aerospike_sdk import SubCode
-
         for name in (
             "NONE", "OPNOT_CDT_INDEX_OUT_OF_BOUNDS", "PARAM_TTL_INVALID",
             "FORBID_TRUNCATED", "UNSUPP_FEAT_GENERIC",
         ):
-            assert hasattr(SubCode, name), name
+            assert hasattr(aerospike_sdk.SubCode, name), name
 
 class TestResultCodeGuidance:
     """Local guidance appended to codes whose cause is a known misconfiguration."""

@@ -17,8 +17,8 @@
 
 These assert *which records come back*, not merely that the call succeeds:
 a partition-restriction bug widens or narrows the result set silently, so
-the assertions here are exact counts against independently computed
-digest → partition assignments.
+the assertions here are exact counts against each key's client-side
+``Key.partition_id``, which the server's answers also check.
 """
 
 from collections import Counter
@@ -40,12 +40,6 @@ HOT_PARTITION = 10
 HOT_RECORDS = 30
 HOT_LIMIT = 18
 HOT_CHUNK = 7
-
-
-def _partition_id(key) -> int:
-    """Partition id = low 12 bits of the first two digest bytes (little-endian)."""
-    d = bytes.fromhex(key.digest)
-    return (d[0] | (d[1] << 8)) & 0xFFF
 
 
 async def _count(stream) -> int:
@@ -73,7 +67,7 @@ async def _drain_chunks(stream) -> tuple[int, int]:
 async def _drop_index_quiet(session, ds) -> None:
     """Drop the filter index, tolerating its absence, so a run leaves no residue."""
     try:
-        await session.index(dataset=ds).named(V_INDEX).drop()
+        await session.index(ds).named(V_INDEX).drop()
     except AerospikeError:
         pass
 
@@ -83,7 +77,7 @@ async def _seed(session, ds):
     placed = []
     for i in range(NUM_KEYS):
         key = ds.id(f"pk{i}")
-        placed.append((_partition_id(key), i))
+        placed.append((key.partition_id, i))
         await session.upsert(key).put({"v": i}).execute()
     return placed
 
@@ -99,7 +93,7 @@ async def _seed_hot_partition(session, ds):
     while inserted < HOT_RECORDS:
         key = ds.id(f"hot{candidate}")
         candidate += 1
-        if _partition_id(key) != HOT_PARTITION:
+        if key.partition_id != HOT_PARTITION:
             continue
         await session.upsert(key).put({"v": inserted}).execute()
         inserted += 1
@@ -210,13 +204,14 @@ async def test_on_partition_range_with_where_returns_matching_subset(cluster):
     await session.truncate(ds)
     placed = await _seed(session, ds)
 
-    # Indexing the filtered bin keeps both queries on the secondary-index plan;
-    # without it the strict allow_scans_with_where default rejects them. Drop
-    # first: a run killed before its teardown leaves the index behind, and
-    # creating an index that already exists fails.
+    # Indexing the filtered bin puts both queries on the secondary-index plan,
+    # so the partition restriction is exercised on an index query as well as
+    # the primary-index scans above. Drop first: a run killed before its
+    # teardown leaves the index behind, and creating an index that already
+    # exists fails.
     await _drop_index_quiet(session, ds)
     index_task = await (
-        session.index(dataset=ds).on_bin("v").named(V_INDEX).integer().create()
+        session.index(ds).on_bin("v").named(V_INDEX).integer().create()
     )
     try:
         # The build task is authoritative; a query probe only infers readiness.

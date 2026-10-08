@@ -114,29 +114,6 @@ class TestFromError:
         assert results[0].in_doubt is True
 
 
-# ---------------------------------------------------------------------------
-# _from_batch_records
-# ---------------------------------------------------------------------------
-
-class TestFromBatchRecords:
-
-    async def test_converts_and_iterates(self):
-        br1 = SimpleNamespace(
-            key=_key(1), record=_record(),
-            result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None,
-        )
-        br2 = SimpleNamespace(
-            key=_key(2), record=None,
-            result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None, server_message=None, exp_trace=None,
-        )
-
-        stream = RecordStream._from_batch_records([br1, br2], [br1.key, br2.key])
-        results = await stream.collect()
-        assert len(results) == 2
-        assert results[0].is_ok
-        assert not results[1].is_ok
-
-
 class _FakeBatchStream:
     """Minimal async-iterable stand-in for a PAC ``BatchRecordStream``.
 

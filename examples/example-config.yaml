@@ -60,6 +60,13 @@ system:
     transactions:
       sleep_between_attempts: 250ms
       number_of_attempts: 3
+    metrics:
+      enabled: false
+      export_interval: 31s
+      report_dir: "metrics"
+      report_size_limit: 5000000
+      labels:
+        owner: platform-team
 
   # Production cluster specific settings.
   production:

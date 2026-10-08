@@ -14,30 +14,29 @@ def main() -> None:
         users = DataSet.of("test", "users")
         key = users.id("user123")
 
-        # PUT
+        # --- 1) Write a record ---
         session.upsert(key).put({"name": "John", "age": 30}).execute()
         print("Put record")
 
-        # GET
+        # --- 2) Read the whole record ---
         stream = session.query(key).execute()
         first = stream.first_or_raise()
         print(f"Got record: {first.record.bins}")
 
-        # GET with selected bins
+        # --- 3) Read selected bins ---
         stream = session.query(key).bins("name").execute()
         first = stream.first_or_raise()
         print(f"Got record (name only): {first.record.bins}")
 
-        # EXISTS
+        # --- 4) Check that the record exists ---
         stream = session.exists(key).execute()
         first = stream.first()
         print(f"Record exists: {first.as_bool() if first else None}")
 
-        # DELETE
+        # --- 5) Delete the record ---
         session.delete(key).execute()
         print("Deleted record")
 
-        print("\nAll operations completed successfully!")
 
 
 if __name__ == "__main__":

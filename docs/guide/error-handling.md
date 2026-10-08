@@ -74,15 +74,19 @@ async for result in stream:
     if result.is_ok:
         print(result.record.bins)
     else:
-        print(f"Key failed: {result.exception or result.result_code}")
+        print(f"Key failed: {result.to_exception()}")
 ```
 
 Branch on `is_ok`: it checks both `result_code` and `exception`. A row that
 failed client-side — before the server answered — carries a negative client
 code such as `ResultCode.CLIENT_ERROR` or `ResultCode.SERVER_NOT_AVAILABLE`
 (a client-side deadline reports `ResultCode.TIMEOUT`, the same code a server
-timeout uses) alongside the `exception`, which holds the detail. That is why the
-snippet above reports `exception` first.
+timeout uses) alongside the `exception`, which holds the detail.
+
+`to_exception()` returns the failure as the typed exception `or_raise()` would
+raise — the row's `exception` when the client attached one, otherwise the
+subclass for its `result_code` — or `None` for a row that succeeded. Use it to
+log or collect failures without raising.
 
 Or raise on any failure:
 
@@ -171,8 +175,7 @@ except AerospikeError as err:
 
 A subcode value is scoped to its parent result code — it is **not** globally
 unique, so always interpret the `(result_code, sub_code)` pair together. The
-`SubCode` catalog enumerates the known subcodes. Requires Aerospike server 8.2.0
-or later; older servers ignore the request and leave the attributes `None`.
+`SubCode` catalog enumerates the known subcodes.
 
 Batches report failures per record rather than raising, so the same detail
 travels as data instead: a failed batch row carries the full surface on

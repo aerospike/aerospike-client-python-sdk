@@ -38,8 +38,13 @@ class TestHllConfig:
         assert config.min_hash_bit_count == 20
 
     def test_constructor_direct(self):
-        config = HllConfig(10, -1)
+        config = HllConfig(index_bit_count=10, min_hash_bit_count=-1)
         assert config == HllConfig.of(10)
+
+    def test_constructor_is_keyword_only(self):
+        """Two adjacent ints are easy to transpose; ``of()`` is the positional form."""
+        with pytest.raises(TypeError):
+            HllConfig(10, -1)
 
     def test_equality(self):
         assert HllConfig.of(14) == HllConfig.of(14)

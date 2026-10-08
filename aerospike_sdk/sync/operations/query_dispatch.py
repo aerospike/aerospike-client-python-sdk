@@ -37,11 +37,9 @@ from typing import (
 from aerospike_async import (
     BatchReadOp,
     BatchWritePolicy,
-    ExecuteTask,
     Key,
     Operation,
     PartitionFilter,
-    QueryPolicy,
 )
 from aerospike_async.exceptions import ResultCode
 
@@ -56,7 +54,6 @@ from aerospike_sdk.operations_shared import (
 from aerospike_sdk.query_shared import _OperationSpec
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
-    to_query_policy,
 )
 
 from aerospike_sdk.error_strategy import (
@@ -69,11 +66,7 @@ from aerospike_sdk.implicit_txn import (
     run_in_implicit_txn_blocking,
     stamp_txn,
 )
-from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
-    _result_code_to_exception,
-)
-from aerospike_sdk.metrics import usage
+from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
@@ -105,6 +98,7 @@ class _BlockingQueryDispatch:
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     def _ensure_batch_namespace_modes_blocking(self) -> None:
         """Sync counterpart of the async ``_ensure_batch_namespace_modes``.
@@ -125,62 +119,6 @@ class _BlockingQueryDispatch:
         self._batch_namespace_modes = modes
         if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
             self._batch_any_sc = True
-
-    def _execute_background_task_blocking(self) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute_background_task`.
-
-        Uses PAC ``query_operate_blocking`` — zero asyncio.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        self._ensure_namespace_mode_blocking()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if not self._operations:
-            raise ValueError(
-                "At least one write operation is required; use with_write_operations(...).",
-            )
-        self._flush_background_usage(usage.BACKGROUND_OPERATE)
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        try:
-            return self._client.query_operate_blocking(
-                statement, list(self._operations), write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    def _execute_udf_background_task_blocking(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Sync counterpart of :meth:`execute_udf_background_task`.
-
-        Uses PAC ``query_execute_udf_blocking`` — zero asyncio.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        self._ensure_namespace_mode_blocking()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if self._operations:
-            raise ValueError(
-                "Do not combine with_write_operations with execute_udf_background_task.",
-            )
-        self._flush_background_usage(usage.BACKGROUND_UDF)
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        py_args: Optional[List[Any]] = list(args) if args is not None else None
-        try:
-            return self._client.query_execute_udf_blocking(
-                statement, package_name, function_name, py_args, write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
 
     def _execute_batch_udf_blocking(
         self,
@@ -280,8 +218,6 @@ class _BlockingQueryDispatch:
         results: list[RecordResult] = []
         for i, (key, found) in enumerate(zip(spec.keys, found_list)):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if not found and self._is_actionable(rc, "exists") and disp is _ErrorDisposition.THROW:
-                raise _result_code_to_exception(rc)
             if not self._should_include_result(
                 rc, self._respond_all_keys, self._fail_on_filtered_out,
             ):
@@ -382,9 +318,8 @@ class _BlockingQueryDispatch:
             # Simple read — all bins or projected bins. Fast path: PAC's
             # get_blocking builds the per-call ReadPolicy in Rust from the
             # session-cached base + filter_expression / txn. Falls back to
-            # legacy `_make_read_policy` only when no Behavior is bound or
-            # a user-supplied read_policy is in play.
-            if self._base_read_policy is not None and self._read_policy is None:
+            # `_make_read_policy` when no base is cached (a transaction nulls it).
+            if self._base_read_policy is not None:
                 try:
                     record = self._client.get_blocking(
                         key,
@@ -399,10 +334,26 @@ class _BlockingQueryDispatch:
                 return [RecordResult(
                     key=key, record=record, result_code=ResultCode.OK,
                 )]
-            # Slow path: no base, or user-supplied read_policy.
+            # Slow path: no cached base policy.
             rp = self._make_read_policy(spec)
             try:
                 record = self._client.get_blocking(key, spec.bins, policy=rp)
+            except Exception as e:
+                return self._handle_error_blocking_singlekey(
+                    key, e, None, disp, handler)
+            return [RecordResult(
+                key=key, record=record, result_code=ResultCode.OK,
+            )]
+
+        if has_ops and op_type is None:
+            try:
+                record = self._client.operate_blocking(
+                    key,
+                    spec.operations,
+                    policy=self._read_operate_policy(),
+                    filter_expression=spec.filter_expression,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error_blocking_singlekey(
                     key, e, None, disp, handler)
@@ -416,8 +367,8 @@ class _BlockingQueryDispatch:
             # small set of fields the SDK actually varies. Skips
             # _make_write_policy's Python work on the hot path.
             #
-            # Fall back to the legacy path when:
-            #  - no session-cached base policy (no Behavior bound), or
+            # Fall back to _make_write_policy when:
+            #  - no session-cached base policy (a transaction nulls it), or
             #  - record-delete op present (applies_dd True; needs the spec's
             #    effective_dd resolution inside _make_write_policy).
             if self._base_write_policy is not None and not spec.contains_record_delete_op:
@@ -441,7 +392,7 @@ class _BlockingQueryDispatch:
                 return [RecordResult(
                     key=key, record=record, result_code=ResultCode.OK,
                 )]
-            # Slow path: complex durable-delete or no Behavior — fall back.
+            # Slow path: record-delete op or no cached base policy.
             wp = self._make_write_policy(spec)
             try:
                 record = self._client.operate_blocking(key, spec.operations, policy=wp)
@@ -527,44 +478,6 @@ class _BlockingQueryDispatch:
 
         return None
 
-    def _execute_spec_blocking(
-        self,
-        spec: _OperationSpec,
-        disp: _ErrorDisposition,
-        handler: ErrorHandler | None,
-    ) -> List[RecordResult]:
-        """Sync dispatch for one :class:`_OperationSpec`.
-
-        Mirrors :meth:`_execute_spec` shape-for-shape, routing each
-        (op_type, key-cardinality) combination to its blocking sibling.
-        Single-key dispatches via :meth:`_execute_single_key_direct_blocking`
-        (which itself branches on op_type). Multi-key dispatches via the
-        ``_execute_batch_*_blocking`` family.
-        """
-        keys = spec.keys
-        op_type = spec.op_type
-
-        if len(keys) == 1:
-            result = self._execute_single_key_direct_blocking(spec, disp, handler)
-            if result is None:
-                raise NotImplementedError(
-                    f"blocking single-key dispatch missing for op_type={op_type}")
-            return result
-
-        if op_type is None:
-            if spec.operations:
-                return self._execute_batch_read_operate_blocking(spec, disp, handler)
-            return self._execute_batch_read_blocking(spec, disp, handler)
-        if op_type == "udf":
-            return self._execute_batch_udf_blocking(spec, disp, handler)
-        if op_type == "delete":
-            return self._execute_batch_delete_blocking(spec, disp, handler)
-        if op_type == "touch":
-            return self._execute_batch_touch_blocking(spec, disp, handler)
-        if op_type == "exists":
-            return self._execute_batch_exists_blocking(spec, disp, handler)
-        return self._execute_batch_write_blocking(spec, disp, handler)
-
     def _execute_multispec_blocking(
         self,
         on_error: Optional[OnError] = None,
@@ -575,8 +488,9 @@ class _BlockingQueryDispatch:
         (chained queries), routes through either:
 
         - **Sequential**: when :meth:`_specs_require_sequential_run` is true
-          (e.g. any UDF spec), per-spec dispatch via
-          :meth:`_execute_spec_blocking`, results concatenated.
+          (two or more segments share a key), each key-disjoint run from
+          :meth:`_spec_batch_runs` goes out as its own batch, in chain order,
+          results concatenated.
         - **Mixed batch**: combine all per-spec ops into a single PAC
           ``batch_blocking`` call.
 
@@ -645,8 +559,7 @@ class _BlockingQueryDispatch:
     ) -> Optional[tuple]:
         """Dataset/SI/scan blocking dispatch returning a streaming source.
 
-        For keyless query shapes (``session.query(dataset)`` or
-        ``session.query(namespace, set_name)``), build the policy +
+        For a keyless ``session.query(dataset)``, build the policy +
         statement synchronously and call PAC ``query_blocking``. Returns
         the raw :class:`Recordset` (Python iterator that blocks per
         record) so the caller can wrap it in :class:`RecordStream`
@@ -689,21 +602,11 @@ class _BlockingQueryDispatch:
         :class:`RecordResult` that the caller (the sync builder) wraps with
         :class:`RecordStream.from_list`.
         """
-        batch_read_policy = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
-            batch_read_policy = to_batch_read_policy(settings)
+        batch_read_policy = to_batch_read_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode()))
         batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
-        spec_brp = self._make_batch_read_policy(spec)
-        if spec_brp is not None:
-            # _make_batch_read_policy currently returns a fresh policy
-            # carrying the spec's filter_expression. Merge into the behavior
-            # policy when both exist; otherwise the spec policy wins.
-            if batch_read_policy is None:
-                batch_read_policy = spec_brp
-            else:
-                batch_read_policy.filter_expression = spec_brp.filter_expression
+        if spec.filter_expression is not None:
+            batch_read_policy.filter_expression = spec.filter_expression
         try:
             batch_records = self._client.batch_read_blocking(
                 spec.keys, spec.bins,
@@ -837,23 +740,9 @@ class _BlockingQueryDispatch:
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         self._warn_if_query_in_txn()
-        if self._policy is not None:
-            policy = self._policy
-        elif self._behavior is not None:
-            policy = self._apply_txn(to_query_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
-        else:
-            policy = self._apply_txn(QueryPolicy())
-        chunk_total_limit = 0
-        if self._chunk_size is not None and self._chunk_size > 0:
-            # Capture the caller's limit()/max_records() before chunk_size
-            # overwrites the field with the per-chunk fetch size; the total cap
-            # is enforced client-side by the stream's _chunk_limit below.
-            chunk_total_limit = policy.max_records or 0
-            policy.max_records = self._chunk_size
+        policy, chunk_total_limit = self._build_dataset_query_policy()
         hint = self._query_hint
-        use_server_query_selection = self._use_server_query_selection(hint)
+        use_server_query_selection = self._use_server_query_selection()
         self._apply_dataset_query_policy_filter(
             policy, use_server_query_selection=use_server_query_selection,
         )
@@ -915,8 +804,9 @@ class _BlockingQueryDispatch:
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, 0, pfc_exc)
                 return []
-
-        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
+        elif not self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out,
+        ):
             return []
         return [RecordResult(
             key=key, record=None, result_code=rc,

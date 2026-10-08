@@ -29,15 +29,10 @@ from typing import (
 
 from aerospike_async import (
     BatchReadOp,
-    BatchReadPolicy,
     BatchWritePolicy,
-    ExecuteTask,
     Key,
     Operation,
     PartitionFilter,
-    QueryPolicy,
-    ReadPolicy,
-    WritePolicy,
 )
 from aerospike_async.exceptions import ResultCode
 
@@ -58,7 +53,6 @@ from aerospike_sdk.operations_shared import (
 
 from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
-    to_query_policy,
     to_read_policy,
     to_write_policy,
 )
@@ -102,9 +96,8 @@ log = logging.getLogger(SdkLoggers.QUERY)
 class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     """Chain reads, writes, UDF calls, filters, and policies before ``execute``.
 
-    Start from :meth:`~aerospike_sdk.aio.session.Session.query` or
-    :meth:`~aerospike_sdk.aio.session.Session.query`. Use :meth:`where`
-    or :meth:`filter_expression` for server-side predicates, :meth:`bins` or
+    Start from :meth:`~aerospike_sdk.aio.session.Session.query`. Use
+    :meth:`where` for server-side predicates, :meth:`bins` or
     :meth:`bin` for projections, and transition methods such as :meth:`upsert`
     for writes. Await :meth:`execute` for a :class:`~aerospike_sdk.record_stream.RecordStream`.
 
@@ -153,6 +146,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     async def _ensure_batch_namespace_modes(self) -> None:
         """Resolve modes for every namespace the finalized specs touch.
@@ -176,42 +170,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if not self._batch_any_sc and any(m == Mode.SC for m in modes.values()):
             self._batch_any_sc = True
 
-
-
-
-
-
-    
-
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    
-
-    # -- Chain-level defaults -------------------------------------------------
-    # -- Query stacking -------------------------------------------------------
-    # -- Write transitions (QueryBuilder -> WriteSegmentBuilder) ---------------
     async def execute(
         self, on_error: OnError | None = None,
     ) -> RecordStream:
@@ -282,6 +240,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             and self._default_ttl_seconds is None
             and self._durable_delete is None
             and self._udf_function is None
+            and self._partition_filter is None
             and on_error is None
         ):
             # Hot path: hand AP + SC base policies to PAC, let Rust resolve
@@ -314,6 +273,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             # them): legacy path with explicit mode resolution.
 
         self._finalize_chain()
+        if self._keys_selected and not self._specs:
+            return RecordStream._from_list([])
         if self._record_on:
             self._record_call(usage.API_DEFERRED, self._usage_shape())
         await self._ensure_namespace_mode()
@@ -447,7 +408,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         """
         return await (await self.execute(on_error)).first_or_raise()
 
-
     def stream(
         self, on_error: OnError | None = None,
     ) -> AwaitableContext[RecordStream]:
@@ -507,92 +467,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         # ErrorStrategy enum collapses to inline errors (the stream default).
         return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
 
-    async def execute_background_task(self) -> ExecuteTask:
-        """Run a background write against all records matching this dataset query.
-
-        Returns a server task handle; poll with ``wait_till_complete`` or
-        ``query_status``. Requires :meth:`with_write_operations`.
-
-        Raises:
-            ValueError: If the builder targets keys or has no write operations.
-            RuntimeError: If the builder is bound to a transaction; opt out
-                with ``with_txn(None)``.
-            AerospikeError: If the server rejects the job, for example because
-                it contains a read operation.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if not self._operations:
-            raise ValueError(
-                "At least one write operation is required; use with_write_operations(...).",
-            )
-        self._flush_background_usage(usage.BACKGROUND_OPERATE)
-        log.debug(
-            "background task: %s.%s ops=%d",
-            self._namespace, self._set_name, len(self._operations),
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        try:
-            return await self._client.query_operate(
-                statement, list(self._operations), write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-    async def execute_udf_background_task(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Apply a registered UDF to matching records as a background task.
-
-        Do not use :meth:`with_write_operations` on the same builder.
-
-        Raises:
-            ValueError: If the builder targets keys or has write operations set.
-            RuntimeError: If the builder is bound to a transaction; opt out
-                with ``with_txn(None)``.
-        """
-        self._refuse_background_in_txn()
-        self._finalize_current_spec()
-        await self._ensure_namespace_mode()
-        if self._specs:
-            raise ValueError(
-                "Background task execution applies only to dataset queries.",
-            )
-        if self._operations:
-            raise ValueError(
-                "Do not combine with_write_operations with execute_udf_background_task.",
-            )
-        self._flush_background_usage(usage.BACKGROUND_UDF)
-        log.debug(
-            "background UDF: %s.%s %s.%s",
-            self._namespace, self._set_name, package_name, function_name,
-        )
-        wp = self._make_background_write_policy()
-        statement = self._build_statement()
-        py_args: Optional[List[Any]] = list(args) if args is not None else None
-        try:
-            return await self._client.query_execute_udf(
-                statement, package_name, function_name, py_args, write_policy=wp)
-        except Exception as e:
-            raise _convert_pac_exception(e) from e
-
-
-
     # -- Private helpers -------------------------------------------------------
-
-
-
-
-
-
 
     async def _execute_specs_batch(
         self,
@@ -684,8 +559,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return await self._execute_single_key_write(spec, disp, handler)
         return await self._execute_batch_write(spec, disp, handler)
 
-
-
     async def _execute_single_key_udf(
         self,
         spec: _OperationSpec,
@@ -771,18 +644,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return self._filtered_batch_stream(
             batch_records, spec.keys, disp, handler, op_type="udf")
 
-
-
-
-
-
-
-
-
-
-
-
-
     async def _execute_single_key_direct(
         self, spec: _OperationSpec,
     ) -> Optional[RecordStream]:
@@ -799,73 +660,43 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         has_ops = bool(spec.operations)
 
         if op_type is None and not has_ops:
-            # Simple read — fast path via PAC's get when the session-cached
-            # base ReadPolicy is available. PAC builds the per-call policy
-            # in Rust from base + filter / txn.
-            if self._base_read_policy is None and self._behavior is not None:
+            # Simple read — PAC builds the per-call policy in Rust from the
+            # session-cached base ReadPolicy + filter / txn.
+            if self._base_read_policy is None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
                     self._behavior.get_settings(
                         OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            if self._base_read_policy is not None:
-                try:
-                    record = await self._client.get(
-                        key, spec.bins,
-                        policy=self._base_read_policy,
-                        filter_expression=spec.filter_expression,
-                        txn=self._txn,
-                    )
-                except Exception as e:
-                    return self._handle_error(key, e, _ErrorDisposition.THROW, None)
-                return RecordStream._from_single(key, record)
-            # No base policy — fall back to the legacy build-in-Python path.
-            rp = self._apply_txn(ReadPolicy())
             try:
-                record = await self._client.get(key, spec.bins, policy=rp)
+                record = await self._client.get(
+                    key, spec.bins,
+                    policy=self._base_read_policy,
+                    filter_expression=spec.filter_expression,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error(key, e, _ErrorDisposition.THROW, None)
             return RecordStream._from_single(key, record)
 
+        if has_ops and op_type is None:
+            return await self._execute_single_key_operate(
+                spec, _ErrorDisposition.THROW, None)
+
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
-            # Write via operate — fast path via PAC's operate when the
-            # session-cached base WritePolicy is available. PAC builds the
-            # per-call policy in Rust from base + REA + overrides.
-            if self._base_write_policy is None and self._behavior is not None:
+            # Write via operate — PAC builds the per-call policy in Rust from
+            # the session-cached base WritePolicy + REA + overrides.
+            if self._base_write_policy is None:
                 self._base_write_policy = self._apply_txn(to_write_policy(
                     self._behavior.get_settings(
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
                         self._resolved_namespace_mode())))
-            if self._base_write_policy is not None:
-                # A record-delete op inside the operate must honor the mode-resolved
-                # durable-delete default (Scope.WRITES_SC sets it True) plus any explicit
-                # spec override — a hardcoded False here made non-durable delete_record()
-                # FailForbidden on SC. Non-delete operates keep durable_delete=False.
-                durable_delete = False
-                if spec.contains_record_delete_op and self._behavior is not None:
-                    durable_delete = self._effective_point_durable_delete(
-                        spec,
-                        self._behavior.get_settings(
-                            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                            self._resolved_namespace_mode()))
-                try:
-                    record = await self._client.operate(
-                        key, spec.operations,
-                        policy=self._base_write_policy,
-                        record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                        durable_delete=durable_delete,
-                        txn=self._txn,
-                    )
-                except Exception as e:
-                    return self._handle_error(
-                        key, e, _ErrorDisposition.THROW, None,
-                        op_type=spec.op_type)
-                return RecordStream._from_single(key, record)
-            # No base policy — fall back to the legacy build-in-Python path.
-            rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
-            wp = self._apply_txn(WritePolicy())
-            if rea is not None:
-                wp.record_exists_action = rea
             try:
-                record = await self._client.operate(key, spec.operations, policy=wp)
+                record = await self._client.operate(
+                    key, spec.operations,
+                    policy=self._base_write_policy,
+                    record_exists_action=_OP_TYPE_TO_REA.get(op_type),
+                    durable_delete=False,
+                    txn=self._txn,
+                )
             except Exception as e:
                 return self._handle_error(
                     key, e, _ErrorDisposition.THROW, None,
@@ -875,12 +706,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         # Not a simple case — fall back to normal chain.
         return None
 
-
-
-
-
-
-
     async def _execute_single_key_read(
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
@@ -888,7 +713,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         key = spec.keys[0]
         read_policy = self._make_read_policy(spec)
         try:
-            record = await self._client.get(key, spec.bins, policy=read_policy)
+            record = await self._client.get(
+                key, spec.bins, policy=read_policy, txn=self._txn)
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
         return RecordStream._from_single(key, record)
@@ -898,11 +724,13 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
         key = spec.keys[0]
-        policy = self._apply_txn(WritePolicy())
-        if spec.filter_expression is not None:
-            policy.filter_expression = spec.filter_expression
         try:
-            record = await self._client.operate(key, spec.operations, policy=policy)
+            record = await self._client.operate(
+                key, spec.operations,
+                policy=self._read_operate_policy(),
+                filter_expression=spec.filter_expression,
+                txn=self._txn,
+            )
         except Exception as e:
             return self._handle_error(key, e, disp, handler)
         return RecordStream._from_single(key, record)
@@ -911,15 +739,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_read_policy = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode())
-            batch_read_policy = to_batch_read_policy(settings)
+        batch_read_policy = to_batch_read_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.BATCH, self._resolved_namespace_mode()))
         batch_policy = self._batch_policy_for(OpKind.READ, OpShape.BATCH)
         if spec.filter_expression is not None:
-            if batch_read_policy is None:
-                batch_read_policy = BatchReadPolicy()
             batch_read_policy.filter_expression = spec.filter_expression
         try:
             batch_records = await self._client.batch_read(
@@ -928,7 +751,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
-
 
     async def _execute_batch_read_operate(
         self, spec: _OperationSpec,
@@ -949,11 +771,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         return self._filtered_batch_stream(batch_records, spec.keys, disp, handler)
 
     # -- Write execution helpers ----------------------------------------------
-
-
-
-
-
 
     async def _execute_single_key_write(
         self, spec: _OperationSpec,
@@ -1107,16 +924,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
         key = spec.keys[0]
-        if self._read_policy is not None:
-            rp = self._read_policy
-        elif self._behavior is not None:
-            rp = self._apply_txn(to_read_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-        else:
-            rp = self._apply_txn(ReadPolicy())
-        if spec.filter_expression is not None:
-            rp.filter_expression = spec.filter_expression
+        rp = self._make_read_policy(spec)
         try:
             found = await self._client.exists(key, policy=rp)
         except Exception as e:
@@ -1157,24 +965,9 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             extra={"aerospike.cluster": _cmd_cluster(self._client)},
         )
         self._warn_if_query_in_txn()
-        if self._policy is not None:
-            policy = self._policy
-        elif self._behavior is not None:
-            policy = self._apply_txn(to_query_policy(
-                self._behavior.get_settings(
-                    OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
-        else:
-            policy = self._apply_txn(QueryPolicy())
-        chunk_total_limit = 0
-        if self._chunk_size is not None and self._chunk_size > 0:
-            # limit()/max_records() land on policy.max_records. Capture it as the
-            # overall cap before chunk_size overwrites the field with the per-chunk
-            # fetch size, then hand it to the stream's _chunk_limit below so the
-            # total is enforced across chunks.
-            chunk_total_limit = policy.max_records or 0
-            policy.max_records = self._chunk_size
+        policy, chunk_total_limit = self._build_dataset_query_policy()
         hint = self._query_hint
-        use_server_query_selection = self._use_server_query_selection(hint)
+        use_server_query_selection = self._use_server_query_selection()
         self._apply_dataset_query_policy_filter(
             policy, use_server_query_selection=use_server_query_selection,
         )
@@ -1294,22 +1087,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # __dict__ inherited from the non-slotted base).
     )
 
-
-
-
-    # -- Operation methods ---------------------------------------------------
-    # On the fast path (_qb is None) these use self._ops directly.
-    # After promotion (_qb is set) they delegate to the QB's list.
-
-
-
-
-
-
-
-
-
-
     # -- In-place promotion --------------------------------------------------
 
     def _promote(self) -> None:
@@ -1338,24 +1115,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         qb._record_delete_in_operations = self._record_delete_in_fast_ops
         self._qb = qb
 
-
-
-
-
-
-
-
-
-
-
-    # -- Error handling ------------------------------------------------------
-
-
-    # -- Policy helpers ------------------------------------------------------
-
-
     # -- Execution -----------------------------------------------------------
-
 
     def stream(  # type: ignore[override]
         self, on_error: OnError | None = None,
@@ -1468,12 +1228,9 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # -- exists (uses ReadPolicy, returns bool) --
         if op_type == "exists":
             rp = cached_rp
-            if rp is None and self._behavior_fast is not None:
-                rp = self._apply_txn(to_read_policy(
-                    self._behavior_fast.get_settings(
-                        OpKind.READ, OpShape.POINT, mode)))
             if rp is None:
-                rp = ReadPolicy()
+                rp = to_read_policy(
+                    self._behavior_fast.get_settings(OpKind.READ, OpShape.POINT, mode))
             rp = self._apply_txn(rp)
             try:
                 found = await self._client_fast.exists(key, policy=rp)
@@ -1507,15 +1264,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     self._client_fast)
             return RecordStream._from_single(key, record)
 
-        # Fall back to the legacy build-policy-in-Python path.
+        # No cached policy: build it from behavior.
         rea = _OP_TYPE_TO_REA.get(op_type) if op_type else None
         if rea is not None:
-            if self._behavior_fast is not None:
-                wp = to_write_policy(
-                    self._behavior_fast.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
-            else:
-                wp = WritePolicy()
+            wp = to_write_policy(
+                self._behavior_fast.get_settings(
+                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
             wp.record_exists_action = rea
         else:
             wp = self._get_write_policy(mode)
@@ -1577,6 +1331,6 @@ class DataSetWriteBuilder(_DataSetWriteBuilderBase["QueryBuilder"]):
 
 # Bind the async write-segment class onto the shared base's factory hook so
 # `_start_write_segment` on an async QueryBuilder chains into the async
-# segment type. The sync leaf overrides `_start_write_verb` and never uses
+# segment type. The sync leaf overrides `_start_write_segment` and never uses
 # this binding.
 QueryBuilder._write_segment_cls = WriteSegmentBuilder

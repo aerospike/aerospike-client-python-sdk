@@ -222,7 +222,6 @@ class Behavior:
         self,
         name: str,
         *,
-        # Scope-based (new API)
         all: Optional[Settings] = None,
         reads: Optional[Settings] = None,
         reads_point: Optional[Settings] = None,
@@ -240,45 +239,48 @@ class Behavior:
         writes_sc: Optional[Settings] = None,
         system_txn_verify: Optional[Settings] = None,
         system_txn_roll: Optional[Settings] = None,
-        # Flat shortcuts (backward-compat, applied to the ALL scope)
-        total_timeout: Optional[timedelta] = None,
-        socket_timeout: Optional[timedelta] = None,
-        max_retries: Optional[int] = None,
-        retry_delay: Optional[timedelta] = None,
-        send_key: Optional[bool] = None,
-        use_compression: Optional[bool] = None,
-        compression_threshold: Optional[int] = None,
     ) -> Behavior:
         """Create a child Behavior with the specified overrides.
 
-        Accepts either scope-keyed ``Settings`` objects or flat keyword
-        arguments (which are applied to the ``ALL`` scope).  Both styles
-        can be combined; flat kwargs are merged into the ``all`` Settings.
+        Each keyword names the operations its ``Settings`` apply to.
+        ``all`` covers every operation; narrower scopes such as ``reads``
+        or ``writes_sc`` override it for their operations. Fields left
+        unset inherit from this behavior.
 
         Example::
 
-            fast_reads = default_behavior.derive_with_changes(
+            from datetime import timedelta
+
+            from aerospike_sdk.policy import Settings
+
+            fast_reads = Behavior.DEFAULT.derive_with_changes(
                 "fast_reads",
+                all=Settings(max_retries=1),
                 reads=Settings(total_timeout=timedelta(milliseconds=200)),
             )
+
+        Args:
+            name: Name of the new behavior.
+            all: Settings for every operation.
+            reads: Settings for all reads; ``reads_point``, ``reads_batch``,
+                ``reads_query``, ``reads_ap``, and ``reads_sc`` narrow that
+                by shape or consistency mode.
+            writes: Settings for all writes; ``writes_retryable``,
+                ``writes_non_retryable``, ``writes_point``, ``writes_batch``,
+                ``writes_query``, ``writes_ap``, and ``writes_sc`` narrow
+                that by retryability, shape, or consistency mode.
+            system_txn_verify: Settings for transaction verify commands.
+            system_txn_roll: Settings for transaction roll-forward and
+                roll-back commands.
+
+        Returns:
+            A new :class:`Behavior` whose parent is this behavior.
+
+        See Also:
+            :meth:`get_settings`: Resolve the effective settings for an
+            operation.
         """
         patches: Dict[Scope, Settings] = {}
-
-        # Flat kwargs -> merge into the ALL scope
-        flat = _flat_to_settings(
-            total_timeout=total_timeout,
-            socket_timeout=socket_timeout,
-            max_retries=max_retries,
-            retry_delay=retry_delay,
-            send_key=send_key,
-            use_compression=use_compression,
-            compression_threshold=compression_threshold,
-        )
-        if flat is not None:
-            if all is not None:
-                all = Settings.merge(all, flat)
-            else:
-                all = flat
 
         _set_if(patches, Scope.ALL, all)
         _set_if(patches, Scope.READS, reads)
@@ -377,46 +379,14 @@ class Behavior:
                 base = Settings.merge(base, patch)
         return base
 
-    # -- Backward-compat read-only properties ---------------------------------
-    # These resolve from the (READ, POINT, AP) scope for the common case.
-
-    @property
-    def total_timeout(self) -> timedelta:
-        """Total timeout for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.total_timeout if s.total_timeout is not None else timedelta(0)
-
-    @property
-    def socket_timeout(self) -> timedelta:
-        """Socket timeout for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.socket_timeout if s.socket_timeout is not None else timedelta(0)
-
-    @property
-    def max_retries(self) -> int:
-        """Max retries for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.max_retries if s.max_retries is not None else 0
-
-    @property
-    def retry_delay(self) -> timedelta:
-        """Retry delay for point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.retry_delay if s.retry_delay is not None else timedelta(0)
-
-    @property
-    def send_key(self) -> bool:
-        """Whether to send the user key with point reads (from ``READ:POINT:AP`` scope)."""
-        s = self.get_settings(OpKind.READ, OpShape.POINT)
-        return s.send_key if s.send_key is not None else False
-
     def __repr__(self) -> str:
-        return (
-            f"Behavior(name={self._name!r}, "
-            f"total_timeout={self.total_timeout}, "
-            f"socket_timeout={self.socket_timeout}, "
-            f"max_retries={self.max_retries})"
-        )
+        parts = [f"<Behavior {self._name!r}"]
+        if self._parent is not None:
+            parts.append(f"parent={self._parent._name!r}")
+        parts.append(f"patches={len(self._patches)}")
+        if self._children:
+            parts.append(f"children={len(self._children)}")
+        return " ".join(parts) + ">"
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -424,38 +394,6 @@ class Behavior:
 def _set_if(patches: Dict[Scope, Settings], scope: Scope, settings: Optional[Settings]) -> None:
     if settings is not None:
         patches[scope] = settings
-
-
-def _flat_to_settings(
-    total_timeout: Optional[timedelta] = None,
-    socket_timeout: Optional[timedelta] = None,
-    max_retries: Optional[int] = None,
-    retry_delay: Optional[timedelta] = None,
-    send_key: Optional[bool] = None,
-    use_compression: Optional[bool] = None,
-    compression_threshold: Optional[int] = None,
-) -> Optional[Settings]:
-    """Convert flat keyword arguments to a Settings, or None if all are None."""
-    values = (
-        total_timeout,
-        socket_timeout,
-        max_retries,
-        retry_delay,
-        send_key,
-        use_compression,
-        compression_threshold,
-    )
-    if all(v is None for v in values):
-        return None
-    return Settings(
-        total_timeout=total_timeout,
-        socket_timeout=socket_timeout,
-        max_retries=max_retries,
-        retry_delay=retry_delay,
-        send_key=send_key,
-        use_compression=use_compression,
-        compression_threshold=compression_threshold,
-    )
 
 
 # -- Pre-defined Behaviors ---------------------------------------------------
@@ -479,8 +417,10 @@ Behavior.DEFAULT = Behavior(
             # Pinned explicitly (not left to the client default) so the wire
             # behavior cannot drift under a dependency upgrade. ONE reads a
             # single replica; ALL would consult duplicate partition copies
-            # during migration windows.
+            # during migration windows. SESSION is pinned for the same
+            # reason: it already is the wire default.
             read_mode_ap=ReadModeAP.ONE,
+            read_mode_sc=ReadModeSC.SESSION,
             durable_delete=False,
             max_concurrent_nodes=1,
             read_touch_ttl_percent=0,
@@ -503,12 +443,12 @@ Behavior.DEFAULT = Behavior(
             max_retries=5,
             record_queue_size=5000,
             max_concurrent_nodes=0,
-            # Strict by default: a where-clause query that would fall back to a
-            # primary-index (full-set) scan is rejected on the server-selection
-            # path. Set True (on the Behavior or a per-query hint) to allow the
-            # primary-index fallback. Only affects clusters supporting field 44
-            # query selection; queries without a where clause are unaffected.
-            allow_scans_with_where=False,
+            # A where-clause query that no secondary index can serve falls back
+            # to a primary-index (full-set) scan. Set False (on the Behavior or
+            # a per-query hint) to reject the fallback instead. Only affects
+            # clusters supporting field 44 query selection; queries without a
+            # where clause are unaffected.
+            allow_scans_with_where=True,
         ),
         # Background operations (query-shaped writes). The policy bounds only
         # the per-node job-submit round trip — the job itself runs server-side

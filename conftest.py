@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -17,9 +18,17 @@ import pytest_asyncio
 from pathlib import Path
 
 from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
+from aerospike_sdk import ClusterDefinition, DataSet, Host
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition, Host as SyncHost
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
+from tests.integration.general_auth import (
+    apply_auth_to_definition,
+    general_auth_enabled,
+    general_seed,
+)
+from tests.integration.namespace import general_namespace, requires_mode_skip_reason
 
 
 def load_env_file(env_file_path, *, override: bool = True) -> None:
@@ -139,7 +148,7 @@ def pytest_configure(config):
         # Defaults only for unset keys so CI and explicit exports keep precedence.
         load_env_file(env_example, override=False)
         print(f"Loaded default environment variables from {env_example} (no {env_local.name})\n")
-    
+
     _warn_on_podman_clock_skew()
 
     # Configure logging from AEROSPIKE_LOG_LEVEL / AEROSPIKE_LOG_FILE
@@ -167,7 +176,6 @@ def pytest_configure(config):
                 logger.addHandler(handler)
 
     # Ensure python path includes the tests directory for imports
-    import sys
     tests_dir = Path(__file__).parent / "tests"
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
@@ -259,7 +267,6 @@ def _apply_auth_to_definition(cluster_def) -> None:
     for the definition-path auth contract (raw-definition test sites import
     it directly).
     """
-    from tests.integration.general_auth import apply_auth_to_definition
     apply_auth_to_definition(cluster_def)
 
 
@@ -275,7 +282,6 @@ def _general_auth_enabled() -> bool:
     an auth-required SC seed for the Mode axis. New env var, so it
     is not clobbered by ``aerospike.env`` (which loads ``override=True``).
     """
-    from tests.integration.general_auth import general_auth_enabled
     return general_auth_enabled()
 
 
@@ -294,9 +300,6 @@ def make_cluster_definition():
     general suites can reach an auth-required SC seed on the Mode-axis ``make test-sc``
     leg without disturbing the no-auth AP fast path.
     """
-    from aerospike_sdk import ClusterDefinition, Host
-    from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition
-    from aerospike_sdk.sync import Host as SyncHost
 
     def _make(seed: str, *, auth: bool = False, sync: bool = False):
         if sync:
@@ -374,7 +377,6 @@ def aerospike_host():
     ``AEROSPIKE_HOST``); it falls back to ``AEROSPIKE_HOST`` on single-cluster setups
     where ``AEROSPIKE_HOST_SC`` is unset.
     """
-    from tests.integration.general_auth import general_seed
     return general_seed()
 
 
@@ -388,7 +390,6 @@ def general_namespace_is_sc(aerospike_host, pytestconfig):
     ``AEROSPIKE_NAMESPACE`` string (which would misclassify a differently-named SC
     namespace). Returns ``False`` (treat as AP) on any probe failure.
     """
-    from tests.integration.namespace import general_namespace
 
     ns = general_namespace()
     probe = ClientPolicy()
@@ -461,7 +462,6 @@ def _enforce_requires_mode(request):
     marker = request.node.get_closest_marker("requires_mode")
     if marker is None:
         return
-    from tests.integration.namespace import requires_mode_skip_reason
 
     reason = requires_mode_skip_reason(
         marker.args[0], request.getfixturevalue("general_namespace_is_sc"),
@@ -669,7 +669,7 @@ def wait_for_set_visible():
         deadline = time.monotonic() + timeout
         last_seen = -1
         while time.monotonic() < deadline:
-            stream = await session.query(ns, set_name).execute()
+            stream = await session.query(DataSet.of(ns, set_name)).execute()
             seen = 0
             async for _ in stream:
                 seen += 1
@@ -709,7 +709,7 @@ def sync_wait_for_set_visible():
         deadline = time.monotonic() + timeout
         last_seen = -1
         while time.monotonic() < deadline:
-            stream = session.query(ns, set_name).execute()
+            stream = session.query(DataSet.of(ns, set_name)).execute()
             seen = 0
             for _ in stream:
                 seen += 1
@@ -729,42 +729,15 @@ def sync_wait_for_set_visible():
 
 
 @pytest.fixture(scope="session")
-def aerospike_host_tls():
-    """Fixture providing the TLS-enabled Aerospike host for tests"""
-    return os.environ.get('AEROSPIKE_HOST_TLS', 'localhost:3107')
-
-
-@pytest.fixture(scope="session")
 def aerospike_host_sec():
     """Fixture providing the security-enabled Aerospike host for tests"""
     return os.environ.get('AEROSPIKE_HOST_SEC', 'localhost:3109')
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def aerospike_host_812_required(aerospike_host, server_version):
-    """The default seed, required to be server >= 8.1.2, else skip.
-
-    Single-host model: version-gated tests connect to the default
-    ``AEROSPIKE_HOST`` and skip unless it is 8.1.2+. Point ``AEROSPIKE_HOST``
-    at an 8.1.2+ build to run them; CI covers the version spread via a server
-    matrix rather than a dedicated host var. Skips when the seed is < 8.1.2 or
-    unreachable (``server_version`` probes to ``None``).
-    """
-    if server_version is None or server_version < SERVER_8_1_2:
-        pytest.skip(
-            "default cluster is not 8.1.2+ (or unreachable); point "
-            "AEROSPIKE_HOST at an 8.1.2+ build to run these tests"
-        )
-    return aerospike_host
-
-
 # Named server-version floors for capability gates. Compare against the
 # ``(M, m, p, b)`` tuple from :func:`server_version`. Centralized so feature
-# checks reference an intent-named constant instead of an inline magic tuple
-# (mirrors the Java clients' ``SERVER_VERSION_*`` constants). Add a new floor
-# here rather than inlining a tuple in a new ``supports_*`` gate.
-SERVER_8_1_1 = (8, 1, 1, 0)
-SERVER_8_1_2 = (8, 1, 2, 0)
+# checks reference an intent-named constant instead of an inline magic tuple.
+# Add a new floor here rather than inlining a tuple in a new ``supports_*`` gate.
 SERVER_8_2_0 = (8, 2, 0, 0)
 
 
@@ -850,30 +823,6 @@ async def server_version(aerospike_host, client_policy):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_query_ops_projection_ext(server_version):
-    """``True`` when the seed cluster accepts non-basic-read ops in queries.
-
-    Mirrors the per-node feature in the Rust core (server >= 8.1.2). Tests
-    that need extended reads in ``Statement.set_operations`` (or its PSDK
-    facade ``QueryBuilder.with_op_projection``) should ``pytest.skip``
-    when this is ``False``.
-    """
-    return server_version is not None and server_version >= SERVER_8_1_2
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_cdt_path_expressions(server_version):
-    """``True`` when the cluster supports CDT path expressions. Server >= 8.1.1.
-
-    Covers the operation-level path factories (``select_by_path`` /
-    ``modify_by_path`` / ``remove``), the expression-level path forms
-    (``exp_select_*`` / ``exp_modify_*`` / ``exp_remove``), the loop-variable
-    family, and ``remove_result``.
-    """
-    return server_version is not None and server_version >= SERVER_8_1_1
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def supports_error_detail(server_version):
     """``True`` when the cluster supplies extended server error detail.
 
@@ -883,15 +832,4 @@ async def supports_error_detail(server_version):
     detail should ``pytest.skip`` when this is ``False``.
     """
     return server_version is not None and server_version >= SERVER_8_2_0
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def supports_blob_index(server_version):
-    """``True`` when the cluster supports blob secondary indexes.
-
-    Covers ``IndexBuilder.blob()`` and blob equality filters served by a
-    secondary index. Server >= 7.0. Tests that create blob indexes should
-    ``pytest.skip`` when this is ``False``.
-    """
-    return server_version is not None and server_version >= (7, 0, 0, 0)
 

@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryHint
 
 from tests.integration.query_selection_helpers import (
     NS,
@@ -93,8 +93,8 @@ class TestSyncQuerySelectionExplainScope:
             session.query(DataSet.of(NS, SCOPE_SET_NAME))
             .bins([SCOPE_MAP_BIN])
             .where(where)
-            # map-keys-exists is served by SCOPE_MAP_INDEX now, so no scan and
-            # no opt-in past the strict allow_scans_with_where default.
+            # Disallowing scans shows SCOPE_MAP_INDEX serves map-keys-exists.
+            .with_hint(QueryHint(allow_scans_with_where=False))
             .execute()
         )
         count = 0

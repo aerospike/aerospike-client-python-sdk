@@ -36,6 +36,8 @@ from integration.sc_namespace_resolve import (
     resolve_sc_namespace_sync,
     skip_reason_no_sc_namespace,
 )
+import aerospike_sdk.implicit_txn as impl
+from aerospike_sdk.sync.operations import query_dispatch as query_mod
 
 
 def _namespaces_on_cluster_hint(session) -> str:
@@ -100,8 +102,6 @@ def ds(sc_namespace):
 @pytest.fixture
 def txn_spy(monkeypatch):
     """Record every blocking implicit-transaction wrap, delegating to the real runner."""
-    import aerospike_sdk.implicit_txn as impl
-    from aerospike_sdk.sync.operations import query_dispatch as query_mod
 
     calls: list = []
     real = impl.run_in_implicit_txn_blocking
@@ -145,7 +145,7 @@ def test_multi_segment_write_chain_is_wrapped(session, ds, txn_spy):
     _reset(session, keys)
 
     (
-        session.upsert(key=keys[0]).bin("n").set_to(1)
+        session.upsert(keys[0]).bin("n").set_to(1)
         .upsert(keys[1]).bin("n").set_to(2)
         .execute()
     )

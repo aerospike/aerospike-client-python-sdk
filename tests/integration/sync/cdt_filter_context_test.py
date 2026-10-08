@@ -24,24 +24,22 @@ from aerospike_sdk import CTX, Behavior, Filter
 from aerospike_async import IndexTask, IndexType
 
 from aerospike_sdk import DataSet
+from aerospike_sdk.policy import Settings
 from tests.integration.namespace import general_namespace
 
 # These tests assert the user key round-trips through query results, which
 # requires the key to be stored with the record — an explicit opt-in.
-_SEND_KEY = Behavior.DEFAULT.derive_with_changes("cdt-ctx-send-key-sync", send_key=True)
+_SEND_KEY = Behavior.DEFAULT.derive_with_changes(
+    "cdt-ctx-send-key-sync", all=Settings(send_key=True),
+)
 
 _NS = general_namespace()
 _SET = "cdt_filter_ctx_test"
+_DS = DataSet.of(_NS, _SET)
 _INDEX = "pfc_cdt_fctx_map_num"
 _BIN = "mapbin"
 _OUTER = "outer"
 _INNER = "inner"
-
-
-def _require_filter_context() -> None:
-    probe = Filter.equal("__bin", 1)
-    if not hasattr(probe, "context"):
-        pytest.skip("aerospike_async Filter.context is required; upgrade the native async client.")
 
 
 @pytest.fixture(scope="module")
@@ -101,9 +99,7 @@ def _admin_create_flat(pac, index_name: str) -> IndexTask:
 
 def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     """Sync query with ``Filter.equal(...).context([...])`` on a nested map value."""
-    _require_filter_context()
-
-    ds = DataSet.of(_NS, _SET)
+    ds = _DS
     key_hi = ds.id("cdt_ctx_hi")
     key_lo = ds.id("cdt_ctx_lo")
     key_missing_inner = ds.id("cdt_ctx_no_inner")
@@ -138,18 +134,13 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
         .execute()
     )
 
-    try:
-        index_task = _admin_create_nested(pac)
-    except Exception as e:
-        pytest.skip(f"Could not create nested-map secondary index: {e}")
-
-    # The build task is authoritative; a query probe only infers readiness.
-    index_task.wait_till_complete_blocking()
-
     flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
 
     try:
-        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        # The build task is authoritative; a query probe only infers readiness.
+        _admin_create_nested(pac).wait_till_complete_blocking()
+
+        stream = session.query(_DS).filter(flt).bins([_BIN]).execute()
         try:
             user_keys = sorted(_user_keys_from_stream(stream))
         finally:
@@ -158,7 +149,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
         assert user_keys == ["cdt_ctx_hi"]
 
         flt2 = Filter.equal(_BIN, 9999).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
-        stream2 = session.query(_NS, _SET).filter(flt2).bins([_BIN]).execute()
+        stream2 = session.query(_DS).filter(flt2).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream2)) == ["cdt_ctx_lo"]
         finally:
@@ -173,9 +164,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
 
 def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     """``Filter.equal(bin, value).context([CTX.map_key(...)])`` on a scalar under one map key."""
-    _require_filter_context()
-
-    ds = DataSet.of(_NS, _SET)
+    ds = _DS
     key_match = ds.id("cdt_ctx_flat_a")
     key_other = ds.id("cdt_ctx_flat_b")
     keys = (key_match, key_other)
@@ -203,18 +192,13 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise):
         .execute()
     )
 
-    try:
-        index_task = _admin_create_flat(pac, index_name)
-    except Exception as e:
-        pytest.skip(f"Could not create CDT-path numeric index: {e}")
-
-    # The build task is authoritative; a query probe only infers readiness.
-    index_task.wait_till_complete_blocking()
-
     flt = Filter.equal(_BIN, val).context([CTX.map_key(_INNER)])
 
     try:
-        stream = session.query(_NS, _SET).filter(flt).bins([_BIN]).execute()
+        # The build task is authoritative; a query probe only infers readiness.
+        _admin_create_flat(pac, index_name).wait_till_complete_blocking()
+
+        stream = session.query(_DS).filter(flt).bins([_BIN]).execute()
         try:
             assert sorted(_user_keys_from_stream(stream)) == ["cdt_ctx_flat_a"]
         finally:

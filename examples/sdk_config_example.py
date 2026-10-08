@@ -37,6 +37,7 @@ def _read_total_timeout(behavior: Behavior) -> float | None:
 
 async def part1_named_behaviors() -> None:
     """Load the shipped config file and use a file-defined behavior."""
+    # --- 1) Named behaviors from the shipped config file ---
     print("=== Part 1: named behaviors from the config file ===")
     # The config file is resolved from this env var at connect() time.
     os.environ["AEROSPIKE_SDK_CONFIG_URL"] = str(_SHIPPED_CONFIG)
@@ -62,6 +63,7 @@ async def part1_named_behaviors() -> None:
 
 async def part2_hot_reload() -> None:
     """Edit the config file while connected; watch a live session update."""
+    # --- 2) Hot-reload a config edit into a live session ---
     print("\n=== Part 2: hot-reload into a live session ===")
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "sdk-config.yaml"
@@ -93,7 +95,6 @@ async def main() -> None:
     try:
         await part1_named_behaviors()
         await part2_hot_reload()
-        print("\nAll operations completed successfully!")
     finally:
         os.environ.pop("AEROSPIKE_SDK_CONFIG_URL", None)
 

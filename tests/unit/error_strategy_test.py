@@ -15,11 +15,12 @@
 
 """Tests for ErrorStrategy, ErrorHandler, and disposition resolution."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from aerospike_sdk import Key
+from aerospike_sdk import Behavior, Key
 from aerospike_async import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
@@ -28,7 +29,6 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 from aerospike_sdk.error_strategy import (
     ErrorStrategy,
     _ErrorDisposition,
-    _filter_records_with_handler,
     _resolve_disposition,
 )
 from aerospike_sdk.operations_shared import _to_expiration
@@ -92,83 +92,6 @@ class TestResolveDisposition:
     def test_callable_multi_key_returns_handler(self):
         result = _resolve_disposition(lambda k, i, e: None, is_single_key=False)
         assert result is _ErrorDisposition.HANDLER
-
-
-# ---------------------------------------------------------------------------
-# _filter_records_with_handler
-# ---------------------------------------------------------------------------
-
-class TestFilterRecordsWithHandler:
-    """``_filter_records_with_handler`` routes non-OK rows to the callback
-    and returns successes only. Backs the ``on_error`` parameter on the
-    batch ``execute()`` / ``stream()`` surface."""
-
-    def _ok(self, key_val: int, idx: int) -> RecordResult:
-        return RecordResult(
-            key=_key(key_val), record=None,
-            result_code=ResultCode.OK, index=idx,
-        )
-
-    def _fail(
-        self, key_val: int, idx: int,
-        rc: ResultCode = ResultCode.KEY_NOT_FOUND_ERROR,
-        exception=None,
-    ) -> RecordResult:
-        return RecordResult(
-            key=_key(key_val), record=None,
-            result_code=rc, index=idx, exception=exception,
-        )
-
-    def test_all_successes_pass_through_unchanged(self):
-        rows = [self._ok(1, 0), self._ok(2, 1)]
-        captured: list = []
-        out = _filter_records_with_handler(rows, lambda *a: captured.append(a))
-        assert out == rows
-        assert captured == []
-
-    def test_failures_routed_to_handler_and_excluded(self):
-        rows = [self._ok(1, 0), self._fail(2, 1), self._ok(3, 2)]
-        captured: list = []
-        out = _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append((k, i, e)),
-        )
-        assert [r.index for r in out] == [0, 2]
-        assert len(captured) == 1
-        k, i, exc = captured[0]
-        assert k == _key(2)
-        assert i == 1
-        assert exc.result_code == ResultCode.KEY_NOT_FOUND_ERROR
-
-    def test_handler_receives_stored_exception_when_present(self):
-        stored = TimeoutError("timed out")
-        rows = [self._fail(1, 0, rc=ResultCode.TIMEOUT, exception=stored)]
-        captured: list = []
-        _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append(e),
-        )
-        assert captured[0] is stored
-
-    def test_handler_receives_synthesized_exception_when_no_stored(self):
-        rows = [self._fail(1, 0, rc=ResultCode.KEY_NOT_FOUND_ERROR)]
-        captured: list = []
-        _filter_records_with_handler(
-            rows, lambda k, i, e: captured.append(e),
-        )
-        assert isinstance(captured[0], AerospikeError)
-        assert captured[0].result_code == ResultCode.KEY_NOT_FOUND_ERROR
-
-    def test_synthesized_exception_carries_sub_code(self):
-        """The handler-synthesized exception keeps the row's sub_code —
-        matching what ``RecordResult.or_raise`` raises for the same row."""
-        row = RecordResult(
-            key=_key(1), record=None,
-            result_code=ResultCode.OP_NOT_APPLICABLE, index=0, sub_code=2,
-        )
-        captured: list = []
-        _filter_records_with_handler(
-            [row], lambda k, i, e: captured.append(e),
-        )
-        assert captured[0].sub_code == 2
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +177,37 @@ class TestRecordResultException:
         with pytest.raises(TimeoutError, match="client deadline"):
             rr.as_bool()
 
+    def test_to_exception_is_none_for_an_ok_row(self):
+        rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK)
+        assert rr.to_exception() is None
+
+    def test_to_exception_returns_the_stored_exception(self):
+        exc = TimeoutError("timed out")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.TIMEOUT, exception=exc,
+        )
+        assert rr.to_exception() is exc
+
+    def test_to_exception_builds_the_typed_error_from_the_row(self):
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.GENERATION_ERROR,
+            sub_code=7, server_message="generation mismatch",
+        )
+        exc = rr.to_exception()
+        assert type(exc) is GenerationError
+        assert exc.sub_code == 7
+        assert exc.server_message == "generation mismatch"
+
+    def test_to_exception_returns_a_client_side_error_despite_ok_code(self):
+        exc = AerospikeError("client rejected the command")
+        rr = RecordResult(
+            key=_key(), record=None,
+            result_code=ResultCode.OK, exception=exc, index=1,
+        )
+        assert rr.to_exception() is exc
+
 
 # ---------------------------------------------------------------------------
 # Error funnels: a failure without a result code
@@ -264,7 +218,7 @@ class TestCodeLessFailureRows:
     ``ValueError`` escaping PAC) reports ``CLIENT_ERROR``, never ``OK``."""
 
     async def test_single_key_in_stream_row(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         stream = qb._handle_error(
             _key(), ValueError("bad argument"), _ErrorDisposition.IN_STREAM, None,
         )
@@ -273,7 +227,7 @@ class TestCodeLessFailureRows:
         assert isinstance(row.exception, AerospikeError)
 
     def test_batch_in_stream_rows(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         rows = qb._handle_batch_error_list(
             [_key(1), _key(2)], ValueError("bad argument"),
             _ErrorDisposition.IN_STREAM, None,
@@ -282,13 +236,41 @@ class TestCodeLessFailureRows:
         assert all(not r.is_ok for r in rows)
 
     def test_blocking_single_key_in_stream_row(self):
-        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = SyncQueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         [row] = qb._handle_error_blocking_singlekey(
             _key(), ValueError("bad argument"), "upsert",
             _ErrorDisposition.IN_STREAM, None,
         )
         assert row.result_code == ResultCode.CLIENT_ERROR
         assert isinstance(row.exception, AerospikeError)
+
+
+class TestFilteredBatchErrorDetail:
+    """A batch row's failure detail reaches the raise and the handler intact."""
+
+    def _rows(self):
+        failed = SimpleNamespace(
+            record=None, result_code=ResultCode.OP_NOT_APPLICABLE, in_doubt=False,
+            sub_code=4, server_message="bin type mismatch", exp_trace=None,
+        )
+        return [failed], [_key(1)]
+
+    def test_throw_carries_row_detail(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
+        with pytest.raises(AerospikeError) as excinfo:
+            qb._filtered_batch_list(*self._rows(), _ErrorDisposition.THROW)
+        assert excinfo.value.sub_code == 4
+        assert excinfo.value.server_message == "bin type mismatch"
+
+    def test_handler_receives_row_detail(self):
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
+        captured: list = []
+        out = qb._filtered_batch_list(
+            *self._rows(), _ErrorDisposition.HANDLER, lambda k, i, e: captured.append(e),
+        )
+        assert out == []
+        assert captured[0].sub_code == 4
+        assert captured[0].server_message == "bin type mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +285,7 @@ class TestBuilderFlagWiring:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
         qb._op_type = "upsert"
@@ -399,6 +382,7 @@ class TestBuilderValidation:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
         )
         qb._op_type = "upsert"
         qb._single_key = _key()
@@ -429,7 +413,7 @@ class TestBuilderValidation:
         assert qb._ttl_seconds == -1
 
     def test_default_expire_record_after_seconds_passes_zero_through(self):
-        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
         qb.default_expire_record_after_seconds(0)
         assert qb._default_ttl_seconds == 0
 
@@ -438,6 +422,7 @@ class TestBuilderValidation:
             client=MagicMock(),
             namespace="test",
             set_name="test",
+            behavior=Behavior.DEFAULT,
         )
         with pytest.raises(ValueError, match="must not be empty"):
             qb.bins([])
@@ -470,7 +455,7 @@ class TestToExpiration:
 class TestDefaultTtlMethods:
 
     def _make_qb(self):
-        return QueryBuilder(client=MagicMock(), namespace="test", set_name="test")
+        return QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)
 
     def test_default_never_expire(self):
         qb = self._make_qb()

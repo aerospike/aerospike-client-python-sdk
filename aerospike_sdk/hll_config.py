@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class HllConfig:
     """Configuration describing an HLL bin's index and minhash bit widths.
 
@@ -69,4 +69,4 @@ class HllConfig:
             config = HllConfig.of(14)
             assert config == HllConfig(index_bit_count=14, min_hash_bit_count=-1)
         """
-        return HllConfig(index_bit_count, min_hash_bit_count)
+        return HllConfig(index_bit_count=index_bit_count, min_hash_bit_count=min_hash_bit_count)

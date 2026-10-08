@@ -21,8 +21,9 @@ has recorded, and confirms PSDK's is present — proving the id reaches the
 server, not merely that it is set on the policy (the client sends it
 fire-and-forget, so a broken send is invisible to a plain round-trip).
 
-Requires a server that supports the ``user-agents`` info command (>= 8.1);
-skips cleanly on older servers.
+The probe sends ``user-agents`` without logging in, so it skips when the
+general suites authenticate (``AEROSPIKE_GENERAL_AUTH``), which a
+security-enabled server answers with ``not authenticated``.
 """
 
 import base64
@@ -34,7 +35,7 @@ import pytest
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
-from tests.integration.general_auth import apply_general_auth, general_seed
+from tests.integration.general_auth import apply_general_auth, general_auth_enabled, general_seed
 
 
 def _host_port() -> tuple[str, int]:
@@ -45,9 +46,11 @@ def _host_port() -> tuple[str, int]:
 def _server_user_agents(host: str, port: int) -> list[str]:
     """Return the client identifiers the server currently tracks (decoded).
 
-    Sends the raw ``user-agents`` info command; skips if the server does not
-    support it. Each returned entry is the decoded ``version,client_id,app_id``.
+    Sends the raw ``user-agents`` info command. Each returned entry is the
+    decoded ``version,client_id,app_id``.
     """
+    if general_auth_enabled():
+        pytest.skip("the raw `user-agents` probe does not authenticate")
     conn = socket.create_connection((host, port), 3)
     try:
         body = b"user-agents\n"
@@ -61,8 +64,7 @@ def _server_user_agents(host: str, port: int) -> list[str]:
         conn.close()
 
     payload = data.decode(errors="replace").split("\t", 1)[-1].strip()
-    if not payload or "ERROR" in payload:
-        pytest.skip("server does not support the `user-agents` info command (needs >= 8.1)")
+    assert payload and "ERROR" not in payload, f"`user-agents` info failed: {payload!r}"
     return [
         base64.b64decode(entry.split("user-agent=")[1].split(":")[0]).decode(errors="replace")
         for entry in payload.split(";")

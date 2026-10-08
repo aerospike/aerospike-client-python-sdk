@@ -17,15 +17,20 @@
 
 from __future__ import annotations
 
+import time
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import FilterExpression, QueryPolicy, QueryWhereFlags
+from aerospike_async import ClientPolicy, FilterExpression, QueryPolicy, QueryWhereFlags
 
-from aerospike_sdk import Filter, QueryHint, ResultCode
+from aerospike_sdk import Behavior, Filter, Key, QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy.behavior_settings import Mode, Settings
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
+from aerospike_sdk.aio.client import Client
+from aerospike_sdk.aio.session import Session
 
 
 class _ClientSupportsSelection:
@@ -41,14 +46,19 @@ def _async_builder(
     *,
     supports_query_selection: bool = True,
     supports_server_compiled_ael: bool = False,
+    behavior: Behavior = Behavior.DEFAULT,
 ) -> QueryBuilder:
-    return QueryBuilder(
+    qb = QueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=behavior,
         supports_query_selection=supports_query_selection,
         supports_server_compiled_ael=supports_server_compiled_ael,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 def _sync_builder(
@@ -57,39 +67,43 @@ def _sync_builder(
     supports_query_selection: bool = True,
     supports_server_compiled_ael: bool = False,
 ) -> SyncQueryBuilder:
-    return SyncQueryBuilder(
+    qb = SyncQueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         supports_query_selection=supports_query_selection,
         supports_server_compiled_ael=supports_server_compiled_ael,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 class TestUseServerQuerySelection:
     def test_true_with_string_ael_and_support(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
-        assert qb._use_server_query_selection(None) is True
+        assert qb._use_server_query_selection() is True
 
     def test_false_without_where_ael(self):
         qb = _async_builder(_ClientSupportsSelection())
-        assert qb._use_server_query_selection(None) is False
+        assert qb._use_server_query_selection() is False
 
     def test_false_with_explicit_filter(self):
         qb = _async_builder(_ClientSupportsSelection()).where("$.age > 30")
         qb.filter(Filter.equal("age", 30))
-        assert qb._use_server_query_selection(None) is False
+        assert qb._use_server_query_selection() is False
 
     def test_false_when_capability_off(self):
         qb = _async_builder(
             _ClientNoSelection(),
             supports_query_selection=False,
         ).where("$.age > 30")
-        assert qb._use_server_query_selection(None) is False
+        assert qb._use_server_query_selection() is False
 
     def test_false_when_capability_not_enabled_on_builder(self):
         qb = _async_builder(object(), supports_query_selection=False).where("$.age > 30")
-        assert qb._use_server_query_selection(None) is False
+        assert qb._use_server_query_selection() is False
 
     def test_index_name_hint_still_uses_server_path(self):
         qb = (
@@ -97,57 +111,91 @@ class TestUseServerQuerySelection:
             .where("$.age > 30")
             .with_hint(QueryHint(index_name="age_idx"))
         )
-        assert qb._use_server_query_selection(qb._query_hint) is True
+        assert qb._use_server_query_selection() is True
 
-    def test_false_with_bin_name_hint(self):
-        """``bin_name`` opts out of explain→execute (Java ``forBin`` parity)."""
+    def test_duration_only_hint_still_uses_server_path(self):
+        """No hint field skips the planner, so none skips its scan-policy flag."""
         qb = (
             _async_builder(_ClientSupportsSelection())
             .where("$.age > 30")
-            .with_hint(QueryHint(bin_name="alt"))
+            .with_hint(QueryHint(query_duration=QueryDuration.SHORT))
         )
-        assert qb._use_server_query_selection(qb._query_hint) is False
+        assert qb._use_server_query_selection() is True
 
     def test_sync_builder_inherits_routing(self):
         qb = _sync_builder(_ClientSupportsSelection()).where("$.score >= 10")
-        assert qb._use_server_query_selection(None) is True
+        assert qb._use_server_query_selection() is True
+
+
+def _scan_policy_builder(behavior_setting: Optional[bool]) -> QueryBuilder:
+    """A builder whose Behavior leaves the scan policy at the default, or sets it."""
+    behavior = Behavior.DEFAULT
+    if behavior_setting is not None:
+        behavior = Behavior.DEFAULT.derive_with_changes(
+            "scan-policy", reads_query=Settings(allow_scans_with_where=behavior_setting),
+        )
+    return _async_builder(_ClientSupportsSelection(), behavior=behavior)
+
+
+def _requires_index(qb: QueryBuilder, hint: Optional[QueryHint]) -> bool:
+    flags = qb._query_explain_where_flags(hint) or 0
+    return bool(flags & QueryWhereFlags.REQUIRE_INDEX)
+
+
+_NEUTRAL_HINT = QueryHint(query_duration=QueryDuration.LONG)
+_ALLOW_HINT = QueryHint(allow_scans_with_where=True)
+_DENY_HINT = QueryHint(allow_scans_with_where=False)
 
 
 class TestExplainWhereFlags:
-    def test_strict_default_sets_require_index(self):
-        # No hint (and no Behavior) resolves to the strict default: reject the
-        # primary-index fallback.
-        qb = _async_builder(_ClientSupportsSelection())
-        flags = qb._query_explain_where_flags(None)
-        assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)
+    """``REQUIRE_INDEX`` is set exactly when the effective scan policy rejects the fallback.
 
-    def test_disallow_scans_sets_require_index(self):
-        qb = _async_builder(_ClientSupportsSelection())
-        hint = QueryHint(allow_scans_with_where=False)
-        flags = qb._query_explain_where_flags(hint)
-        assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.REQUIRE_INDEX)
+    The effective policy is the hint's value when it states one, otherwise the
+    Behavior's. ``Behavior.DEFAULT`` allows the fallback.
+    """
 
-    def test_allow_scans_clears_require_index(self):
-        qb = _async_builder(_ClientSupportsSelection())
-        hint = QueryHint(allow_scans_with_where=True)
-        assert qb._query_explain_where_flags(hint) is None
+    @pytest.mark.parametrize(("behavior_setting", "hint", "expect_require_index"), [
+        (None, None, False),
+        (None, _NEUTRAL_HINT, False),
+        (None, _ALLOW_HINT, False),
+        (None, _DENY_HINT, True),
+        (False, None, True),
+        (False, _NEUTRAL_HINT, True),
+        (False, _ALLOW_HINT, False),
+        (False, _DENY_HINT, True),
+        (True, None, False),
+        (True, _NEUTRAL_HINT, False),
+        (True, _ALLOW_HINT, False),
+        (True, _DENY_HINT, True),
+    ], ids=[
+        "default-no-hint", "default-neutral-hint", "default-allow-hint", "default-deny-hint",
+        "false-no-hint", "false-neutral-hint", "false-allow-hint", "false-deny-hint",
+        "true-no-hint", "true-neutral-hint", "true-allow-hint", "true-deny-hint",
+    ])
+    def test_require_index_follows_the_effective_scan_policy(
+        self, behavior_setting, hint, expect_require_index,
+    ):
+        qb = _scan_policy_builder(behavior_setting)
+        assert _requires_index(qb, hint) is expect_require_index
 
-    def test_hard_hint_with_index_name(self):
-        qb = _async_builder(_ClientSupportsSelection())
-        # allow_scans_with_where=True isolates HARD_HINT from the strict
-        # REQUIRE_INDEX default.
-        hint = QueryHint(
-            index_name="age_idx", hard_hint=True, allow_scans_with_where=True
-        )
-        flags = qb._query_explain_where_flags(hint)
+    def test_hintless_query_under_default_behavior_allows_the_fallback(self):
+        assert _requires_index(_scan_policy_builder(None), None) is False
+
+    def test_hintless_query_still_explains_and_does_not_hard_hint(self):
+        # Only EXPLAIN is left, which PAC sends when the flags are omitted.
+        assert _scan_policy_builder(None)._query_explain_where_flags(None) is None
+
+    def test_hard_hint_sets_hard_hint_flag(self):
+        hint = QueryHint(index_name="age_idx", hard_hint=True)
+        flags = _scan_policy_builder(None)._query_explain_where_flags(hint)
         assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.HARD_HINT)
 
     def test_effective_allow_scans_with_where_accessor(self):
         # Public accessor resolves the builder's stored hint against the default.
         qb = _async_builder(_ClientSupportsSelection())
-        assert qb.effective_allow_scans_with_where() is False  # strict default
-        qb._query_hint = QueryHint(allow_scans_with_where=True)
         assert qb.effective_allow_scans_with_where() is True
+        qb._query_hint = QueryHint(allow_scans_with_where=False)
+        assert qb.effective_allow_scans_with_where() is False
 
 
 class TestApplyDatasetQueryPolicyFilter:
@@ -301,8 +349,6 @@ class TestExecuteDatasetQueryBlockingRouting:
 
 class TestServerCompiledAelWhere:
     def test_where_uses_server_filter_helper_when_gate_on(self):
-        from unittest.mock import patch
-
         sentinel = object()
         with patch(
             "aerospike_sdk.query_shared.filter_expression_from_ael_string",
@@ -330,21 +376,11 @@ class TestServerCompiledAelWhere:
             policy, use_server_query_selection=True,
         )
         assert policy.filter_expression is None
-        assert qb._use_server_query_selection(None) is True
+        assert qb._use_server_query_selection() is True
 
 
 class TestAsyncSessionSingleKeyCapabilityFlags:
     def test_fast_path_inherits_server_compiled_ael(self):
-        from unittest.mock import MagicMock
-        import time
-
-        from aerospike_async import ClientPolicy
-        from aerospike_sdk import Key
-
-        from aerospike_sdk.aio.client import Client
-        from aerospike_sdk.aio.session import Session
-        from aerospike_sdk.policy.behavior import Behavior
-
         sdk_client = Client("127.0.0.1:3000", policy=ClientPolicy())
         sdk_client._client = MagicMock()
         sdk_client._connected = True

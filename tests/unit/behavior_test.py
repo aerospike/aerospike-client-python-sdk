@@ -17,6 +17,7 @@
 
 from datetime import timedelta
 
+import pytest
 from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy.behavior import Behavior
@@ -115,6 +116,7 @@ class TestBehaviorGetSettings:
         assert s.retry_delay == timedelta(0)
         assert s.send_key is False
         assert s.read_mode_ap == ReadModeAP.ONE
+        assert s.read_mode_sc == ReadModeSC.SESSION
         assert s.replica == Replica.SEQUENCE
 
     def test_default_read_ap_has_read_touch_ttl_percent(self):
@@ -219,15 +221,10 @@ class TestDeriveWithChanges:
         w = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
         assert w.total_timeout == timedelta(seconds=1)
 
-    def test_flat_kwargs_apply_to_all_scope(self):
-        child = Behavior.DEFAULT.derive_with_changes(
-            "child",
-            total_timeout=timedelta(seconds=3),
-        )
-        r = child.get_settings(OpKind.READ, OpShape.POINT)
-        assert r.total_timeout == timedelta(seconds=3)
-        w = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT)
-        assert w.total_timeout == timedelta(seconds=3)
+    def test_flat_settings_are_not_accepted(self):
+        """Every change names its scope; all= is the everything scope."""
+        with pytest.raises(TypeError, match="total_timeout"):
+            Behavior.DEFAULT.derive_with_changes("child", total_timeout=timedelta(seconds=3))
 
     def test_specific_scope_overrides_general(self):
         child = Behavior.DEFAULT.derive_with_changes(
@@ -489,9 +486,9 @@ class TestPreDefinedBehaviors:
         s = Behavior.STRICTLY_CONSISTENT.get_settings(OpKind.READ, OpShape.POINT, Mode.SC)
         assert s.read_mode_sc == ReadModeSC.LINEARIZE
 
-    def test_strictly_consistent_leaves_ap_reads_unset(self):
+    def test_strictly_consistent_leaves_ap_reads_at_default(self):
         s = Behavior.STRICTLY_CONSISTENT.get_settings(OpKind.READ, OpShape.POINT, Mode.AP)
-        assert s.read_mode_sc is None
+        assert s.read_mode_sc == ReadModeSC.SESSION
 
     def test_fast_rack_aware_uses_prefer_rack(self):
         s = Behavior.FAST_RACK_AWARE.get_settings(OpKind.READ, OpShape.POINT)
@@ -589,9 +586,9 @@ class TestCoreV3Fields:
         s = child.get_settings(OpKind.READ, OpShape.POINT, Mode.SC)
         assert s.read_mode_sc == ReadModeSC.LINEARIZE
 
-    def test_use_compression_flat_kwarg(self):
+    def test_use_compression_resolves_for_writes(self):
         child = Behavior.DEFAULT.derive_with_changes(
-            "compressed", use_compression=True,
+            "compressed", all=Settings(use_compression=True),
         )
         s = child.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.AP)
         assert s.use_compression is True
@@ -605,29 +602,24 @@ class TestCoreV3Fields:
             assert s.replica == variant
 
 
-class TestBackwardCompatProperties:
-    """Verify the backward-compatible read-only properties (total_timeout,
-    socket_timeout, max_retries, retry_delay, send_key) that resolve
-    from (READ, POINT, AP) scope, preserving the original flat-field API."""
-    def test_total_timeout(self):
-        assert Behavior.DEFAULT.total_timeout == timedelta(seconds=1)
+class TestIntrospection:
+    def test_no_single_scope_setting_properties(self):
+        """Settings vary by operation; only get_settings() can answer for one."""
+        for attr in ("total_timeout", "socket_timeout", "max_retries", "retry_delay", "send_key"):
+            assert not hasattr(Behavior.DEFAULT, attr), attr
 
-    def test_max_retries(self):
-        assert Behavior.DEFAULT.max_retries == 2
-
-    def test_socket_timeout(self):
-        assert Behavior.DEFAULT.socket_timeout == timedelta(seconds=30)
-
-    def test_retry_delay(self):
-        assert Behavior.DEFAULT.retry_delay == timedelta(0)
-
-    def test_send_key(self):
-        assert Behavior.DEFAULT.send_key is False
-
-    def test_repr(self):
+    def test_repr_root_omits_parent(self):
         r = repr(Behavior.DEFAULT)
-        assert "DEFAULT" in r
-        assert "total_timeout" in r
+        assert r.startswith("<Behavior 'DEFAULT' patches=")
+        assert "parent=" not in r
+
+    def test_repr_counts_children_only_when_present(self):
+        child = Behavior.DEFAULT.derive_with_changes(
+            "repr-child", all=Settings(max_retries=1),
+        )
+        assert repr(child) == "<Behavior 'repr-child' parent='DEFAULT' patches=1>"
+        child.derive_with_changes("repr-grandchild")
+        assert repr(child) == "<Behavior 'repr-child' parent='DEFAULT' patches=1 children=1>"
 
 
 class TestCaching:
@@ -771,7 +763,7 @@ class TestSystemTxnSettings:
         assert s.max_retries == 5
         assert s.retry_delay == timedelta(seconds=1)
         assert s.replica == Replica.MASTER
-        assert s.read_mode_sc is None
+        assert s.read_mode_sc == ReadModeSC.SESSION
         assert s.max_concurrent_nodes == 0
 
     def test_derive_overrides_one_phase_only(self):
@@ -807,3 +799,11 @@ class TestSystemTxnSettings:
         text = Behavior.DEFAULT.explain()
         assert "system_txn_verify =>" in text
         assert "system_txn_roll =>" in text
+
+
+class TestSettingsKeywordOnly:
+
+    def test_positional_arguments_are_refused(self):
+        """Every field is optional, so a positional value would bind by declaration order."""
+        with pytest.raises(TypeError):
+            Settings(timedelta(seconds=1))

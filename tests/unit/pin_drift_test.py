@@ -65,7 +65,7 @@ def _pac_is_editable() -> bool:
 
 def _versions_equal(a: str, b: str) -> bool:
     try:
-        from packaging.version import Version
+        from packaging.version import Version  # noqa: PLC0415
 
         return Version(a) == Version(b)
     except Exception:

@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_sdk import Exp, StringOperation, StringRegexFlags, StringWriteFlags
+from aerospike_sdk import Behavior, Exp, StringOperation, StringRegexFlags, StringWriteFlags
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
     QueryBuilder,
@@ -27,14 +27,9 @@ from aerospike_sdk.aio.operations.query import (
 
 
 def _make_wbb(bin_name: str = "s") -> tuple[WriteBinBuilder, WriteSegmentBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
     segment = WriteSegmentBuilder(qb)
     return WriteBinBuilder(segment, bin_name), segment
-
-
-def _make_qbb(bin_name: str = "s") -> tuple[QueryBinBuilder, QueryBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
-    return QueryBinBuilder(qb, bin_name), qb
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +170,13 @@ class TestExpVal:
 class TestChainableAddOperation:
 
     def test_query_builder_add_operation_chains(self):
-        qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+        qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
         result = qb.add_operation(StringOperation.strlen("s"))
         assert result is qb
         assert len(qb._operations) == 1
 
     def test_query_builder_add_operation_multi_chain(self):
-        qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+        qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
         result = (qb
             .add_operation(StringOperation.strlen("s"))
             .add_operation(StringOperation.upper("s"))
@@ -190,7 +185,7 @@ class TestChainableAddOperation:
         assert len(qb._operations) == 3
 
     def test_write_segment_add_operation_chains(self):
-        qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+        qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
         seg = WriteSegmentBuilder(qb)
         result = seg.add_operation(StringOperation.upper("s"))
         assert result is seg

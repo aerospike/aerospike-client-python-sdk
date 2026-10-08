@@ -16,18 +16,15 @@
 """Unit tests for QueryHint dataclass and QueryBuilder.with_hint()."""
 
 import pytest
-from aerospike_sdk import Filter, QueryDuration
+from aerospike_sdk import Behavior, Filter, QueryDuration
 
-from aerospike_sdk import (
-    Exp,
-    QueryHint,
-)
+from aerospike_sdk import QueryHint
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 def _query_builder():
     """Return a QueryBuilder with a fake client (no real connection)."""
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit_test", behavior=Behavior.DEFAULT)
 
 
 class TestQueryHintValidation:
@@ -50,22 +47,18 @@ class TestQueryHintValidation:
     def test_all_none_is_valid(self):
         hint = QueryHint()
         assert hint.index_name is None
-        assert hint.bin_name is None
         assert hint.query_duration is None
 
-    def test_bin_name_only(self):
-        hint = QueryHint(bin_name="alt_bin")
-        assert hint.bin_name == "alt_bin"
-        assert hint.index_name is None
+    def test_bin_name_is_not_accepted(self):
+        """It never selected an index: its only effect was skipping the
+        planner, and with it the scan policy."""
+        with pytest.raises(TypeError, match="bin_name"):
+            QueryHint(bin_name="age")
 
-    def test_bin_name_with_query_duration(self):
-        hint = QueryHint(bin_name="b", query_duration=QueryDuration.SHORT)
-        assert hint.bin_name == "b"
-        assert hint.query_duration == QueryDuration.SHORT
-
-    def test_index_name_and_bin_name_raises(self):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            QueryHint(index_name="idx", bin_name="b")
+    def test_fields_are_keyword_only(self):
+        """Keyword-only fields can be added later without shifting positions."""
+        with pytest.raises(TypeError):
+            QueryHint("age_idx")
 
     def test_hard_hint_without_index_name_raises(self):
         with pytest.raises(ValueError, match="hard_hint requires index_name"):
@@ -81,9 +74,9 @@ class TestQueryHintValidation:
         assert hint.hard_hint is True
 
     def test_allow_scans_with_where_defaults_to_none(self):
-        # Tri-state: unset inherits the Behavior default (strict), not a bare bool.
+        # Tri-state: unset inherits the Behavior setting, not a bare bool.
         assert QueryHint().allow_scans_with_where is None
-        assert QueryHint(allow_scans_with_where=True).allow_scans_with_where is True
+        assert QueryHint(allow_scans_with_where=False).allow_scans_with_where is False
 
     def test_frozen(self):
         hint = QueryHint(index_name="idx")
@@ -128,12 +121,6 @@ class TestWithHint:
         builder = _query_builder()
         builder.where("$.age > 30")
         assert builder._where_ael == "$.age > 30"
-
-    def test_where_filter_expression_clears_ael_string(self):
-        builder = _query_builder()
-        builder.where("$.age > 30")
-        builder.where(Exp.gt(Exp.int_bin("age"), Exp.int_val(30)))
-        assert builder._where_ael is None
 
 
 class TestExplicitFilter:

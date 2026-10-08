@@ -1,298 +1,80 @@
 #!/usr/bin/env python3
-"""Removing and reading map entries by key range, and what each return type gives back.
+"""What the remove-by-key-range read expression returns for each return type.
 
-A map operation reports back through its ``return_type``: the same
-remove-by-key-range can yield nothing, a count, the keys, the values, or the
-key/value pairs it acted on. This walks those return types over one known map,
-then covers the surrounding surface — reading a key through AEL, reading by
-index, counting a range and its complement, and clearing the map.
+``Exp.map_remove_by_key_range`` evaluated through ``select_from`` is a *read*:
+the server computes the map as it would be after the removal and returns it in
+the projection bin, leaving the stored record untouched. The expression always
+yields the resulting map, so the return type decides only which side of the
+range goes: ``INVERTED`` keeps the range and removes everything outside it,
+and every other return type removes the range itself.
+
+To remove entries from the stored record and get a count, keys or values back,
+use the write form instead:
+``session.update(key).bin("m").on_map_key_range("b", "e").remove(return_type=...)``.
 """
 
 import asyncio
 
 import _env
-from aerospike_sdk import Behavior, DataSet, MapReturnType
+from aerospike_sdk import DataSet, Exp, MapReturnType
 
 SET = DataSet.of("test", "map_remove_test")
+KEY = SET.id(1)
+SOURCE_MAP = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+
+
+async def run_examples(session) -> None:
+    await session.upsert(KEY).bin("m").set_to(SOURCE_MAP).execute()
+    print(f"Source map: {SOURCE_MAP}")
+    # The range is "b" (inclusive) to "e" (exclusive): keys b, c and d.
+    try:
+        # --- 1) Return type NONE: the map with keys b..e removed ---
+        print("\n--- 1) Return type NONE: the map with keys b..e removed ---")
+        print(f"result: {await _remove_range(session, MapReturnType.NONE)}")
+
+        # --- 2) Return type INVERTED: the map with everything outside b..e removed ---
+        print("\n--- 2) Return type INVERTED: the map with everything outside b..e removed ---")
+        print(f"result: {await _remove_range(session, MapReturnType.INVERTED)}")
+
+        # --- 3) Return type COUNT: still the resulting map, not a count ---
+        print("\n--- 3) Return type COUNT: still the resulting map, not a count ---")
+        print(f"result: {await _remove_range(session, MapReturnType.COUNT)}")
+
+        # --- 4) Return type KEY: still the resulting map, not the removed keys ---
+        print("\n--- 4) Return type KEY: still the resulting map, not the removed keys ---")
+        print(f"result: {await _remove_range(session, MapReturnType.KEY)}")
+
+        # --- 5) Return type VALUE: still the resulting map, not the removed values ---
+        print("\n--- 5) Return type VALUE: still the resulting map, not the removed values ---")
+        print(f"result: {await _remove_range(session, MapReturnType.VALUE)}")
+
+        # --- 6) Return type KEY_VALUE: still the resulting map, not the removed pairs ---
+        print("\n--- 6) Return type KEY_VALUE: still the resulting map, not the removed pairs ---")
+        print(f"result: {await _remove_range(session, MapReturnType.KEY_VALUE)}")
+
+        # --- 7) The stored map is unchanged: a read expression never writes ---
+        print("\n--- 7) The stored map is unchanged: a read expression never writes ---")
+        record = (await (await session.query(KEY).execute()).first_or_raise()).record
+        print(f"stored map: {record.bins['m']}")
+
+    finally:
+        await session.delete(KEY).execute()
+
+
+async def _remove_range(session, return_type: MapReturnType) -> dict:
+    """Evaluate the removal over keys b..e as a read into the ``result`` bin."""
+    removal = Exp.map_remove_by_key_range(
+        return_type, Exp.val("b"), Exp.val("e"), Exp.map_bin("m"), [],
+    )
+    stream = await session.query(KEY).bin("result").select_from(removal).execute()
+    return (await stream.first_or_raise()).record.bins["result"]
 
 
 async def main() -> None:
     async with _env.connect().connect() as cluster:
-        session = cluster.create_session(Behavior.DEFAULT)
+        session = cluster.create_session()
 
         await run_examples(session)
-
-
-async def run_examples(session) -> None:
-    errors = 0
-    await session.truncate(SET)
-    await asyncio.sleep(0.2)
-
-    source_map = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
-
-    await (
-        session.upsert(SET.id(1))
-        .bin("m").set_to(source_map)
-        .execute()
-    )
-    print(f"Source map: {source_map}\n")
-
-    # Tests 1-6: one remove-by-key-range, six return types.
-    #
-    # on_map_key_range("b", "e") selects keys b, c, d (begin inclusive, end
-    # exclusive). The removal itself is identical every time; only what the
-    # server reports back changes. The map is restored between each so every
-    # return type sees the same starting point.
-    for position, (label, return_type, expected) in enumerate(
-        (
-            ("NONE", MapReturnType.NONE, "nothing reported"),
-            ("VALUE (inverted)", MapReturnType.VALUE, "[1, 5] — a and e, the keys NOT in range"),
-            ("COUNT", MapReturnType.COUNT, "3 (b, c, d were removed)"),
-            ("KEY", MapReturnType.KEY, "['b', 'c', 'd']"),
-            ("VALUE", MapReturnType.VALUE, "[2, 3, 4]"),
-            ("KEY_VALUE", MapReturnType.KEY_VALUE, "the removed pairs"),
-        ),
-        start=1,
-    ):
-        print(f"=== Test {position}: remove by key range 'b'..'e', "
-              f"return_type={label} ===")
-        print(f"Expected: {expected}")
-        try:
-            selection = session.upsert(SET.id(1)).bin("m").on_map_key_range("b", "e")
-            # Inversion is its own terminal rather than a return-type flag: it
-            # removes everything the range did *not* select.
-            removal = (
-                selection.remove_all_others(return_type=return_type)
-                if "inverted" in label
-                else selection.remove(return_type=return_type)
-            )
-            stream = await removal.execute()
-            first = await stream.first()
-            reported = first.record.bins.get("m") if first and first.is_ok else None
-            print(f"Actual:   {reported!r}")
-            print(f"Type:     {type(reported).__name__}")
-        except Exception as e:
-            print(f"ERROR:    {type(e).__name__}: {e}")
-            errors += 1
-
-        # Restore the map so the next return type starts from the same state.
-        await session.upsert(SET.id(1)).bin("m").set_to(source_map).execute()
-        print()
-
-    # ==================================================================
-    # Test 7: Read map key by AEL
-    # ==================================================================
-    print("=== Test 7: Read map key 'c' via AEL ===")
-    print("Expected: 3")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("result").select_from("$.m.c:INT")
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins.get('result')}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 8: Read map key range via chainable CDT builder
-    # ==================================================================
-    print("=== Test 8: Read map key 'b' values via chainable builder ===")
-    print("Expected: value for key 'b' = 2")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("m").on_map_key("b").get_values()
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 9: Count map elements
-    # ==================================================================
-    print("=== Test 9: Count map elements ===")
-    print("Expected: 5")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("m").map_size()
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 10: Read map index 0
-    # ==================================================================
-    print("=== Test 10: Read map index 0 values ===")
-    print("Expected: value at index 0 of key-ordered map")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("m").on_map_index(0).get_values()
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 11: Remove map key via chainable CDT write builder
-    # ==================================================================
-    print("=== Test 11: Remove map key 'c' via chainable write builder ===")
-    print("Expected: map becomes {a: 1, b: 2, d: 4, e: 5}")
-    try:
-        await (
-            session.upsert(SET.id(1))
-            .bin("m").on_map_key("c").remove()
-            .execute()
-        )
-        stream = await session.query(SET.id(1)).execute()
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins.get('m')}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # Restore original map
-    await (
-        session.upsert(SET.id(1))
-        .bin("m").set_to(source_map)
-        .execute()
-    )
-
-    # ==================================================================
-    # Test 12: Map key range read via chainable CDT
-    # ==================================================================
-    print("=== Test 12: Map key range 'b'..'d' count ===")
-    print("Expected: count of keys in range [b, d) = 2 (b, c)")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("m").on_map_key_range("b", "d").count()
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 13: Map key range count all others
-    # ==================================================================
-    print("=== Test 13: Map key range 'b'..'d' count all others ===")
-    print("Expected: count of keys NOT in range [b, d) = 3 (a, d, e)")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .bin("m").on_map_key_range("b", "d").count_all_others()
-            .execute()
-        )
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 14: Map clear via chainable CDT write
-    # ==================================================================
-    print("=== Test 14: Map clear ===")
-    print("Expected: map becomes empty {}")
-    # Use a copy so we don't destroy the original for the verification
-    await (
-        session.upsert(SET.id(2))
-        .bin("m").set_to(dict(source_map))
-        .execute()
-    )
-    try:
-        await (
-            session.upsert(SET.id(2))
-            .bin("m").map_clear()
-            .execute()
-        )
-        stream = await session.query(SET.id(2)).execute()
-        first = await stream.first()
-        if first and first.is_ok:
-            print(f"Actual:   {first.record.bins.get('m')}")
-        else:
-            print("Actual:   no result")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Test 15: AEL comparison on map value
-    # ==================================================================
-    print("=== Test 15: AEL filter on map key value ===")
-    print("Filter: $.m.c:INT > 2")
-    print("Expected: record passes filter (m.c = 3 > 2)")
-    try:
-        stream = await (
-            session.query(SET.id(1))
-            .where("$.m.c:INT > 2")
-            .execute()
-        )
-        first = await stream.first()
-        found = first is not None and first.is_ok
-        print(f"Actual:   {'record returned (filter passed)' if found else 'filtered out'}")
-    except Exception as e:
-        print(f"ERROR:    {type(e).__name__}: {e}")
-        errors += 1
-    print()
-
-    # ==================================================================
-    # Verify original map is unchanged
-    # ==================================================================
-    print("=== Verify original map (record 1) is unchanged ===")
-    stream = await session.query(SET.id(1)).execute()
-    first = await stream.first()
-    if first and first.is_ok:
-        print(f"Original map after all tests: {first.record.bins.get('m')}")
-
-    if errors:
-        raise AssertionError(f"{errors} test(s) reported ERROR")
 
 
 if __name__ == "__main__":

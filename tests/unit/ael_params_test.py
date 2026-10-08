@@ -16,12 +16,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.server_filter import bind_ael_params
 
 
 def _query_builder():
-    return QueryBuilder(client=object(), namespace="test", set_name="unit_test")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit_test", behavior=Behavior.DEFAULT)
 
 
 class TestPassthrough:

@@ -23,8 +23,8 @@ from tests.integration.general_auth import apply_general_auth, general_seed
 SEEDS = general_seed()
 USERS = DataSet.of(general_namespace(), "doc_smoke")
 
-# The quick example queries "age" with .where(), which needs an index to be
-# served: an unindexed .where() is rejected rather than run as a full-set scan.
+# The quick example indexes "age" before querying it with .where(), so an
+# index serves the query rather than a full-set scan.
 QUICK_EXAMPLE_INDEX = "doc_smoke_age_idx"
 
 
@@ -37,7 +37,7 @@ def _use_services_alternate() -> bool:
 async def _drop_index_quiet(session, index_name: str) -> None:
     """Drop an index, tolerating its absence, so a run leaves no residue."""
     try:
-        await session.index(dataset=USERS).named(index_name).drop()
+        await session.index(USERS).named(index_name).drop()
     except AerospikeError:
         pass
 
@@ -45,7 +45,7 @@ async def _drop_index_quiet(session, index_name: str) -> None:
 def _drop_index_quiet_sync(session, index_name: str) -> None:
     """Blocking sibling of :func:`_drop_index_quiet`."""
     try:
-        session.index(dataset=USERS).named(index_name).drop()
+        session.index(USERS).named(index_name).drop()
     except AerospikeError:
         pass
 
@@ -95,7 +95,7 @@ async def test_quick_example_async(session):
     key = USERS.id("qe_async")
     await _drop_index_quiet(session, QUICK_EXAMPLE_INDEX)
     index_task = await (
-        session.index(dataset=USERS)
+        session.index(USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
         .integer()
@@ -145,7 +145,7 @@ def test_quick_example_sync(doc_sync_cluster):
 
     _drop_index_quiet_sync(s, QUICK_EXAMPLE_INDEX)
     index_task = (
-        s.index(dataset=USERS)
+        s.index(USERS)
         .on_bin("age")
         .named(QUICK_EXAMPLE_INDEX)
         .integer()

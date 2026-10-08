@@ -155,10 +155,8 @@ def cluster_def_from_config(cfg: object):
     cert = getattr(cfg, "tls_cert_file", None)
     key = getattr(cfg, "tls_key_file", None)
     if ca:
-        tls = cluster_def.with_tls_config_of().ca_file(ca)
-        if cert and key:
-            tls.client_cert_file(cert).client_key_file(key)
-        tls.done()
+        client_auth = {"client_cert_file": cert, "client_key_file": key} if cert and key else {}
+        cluster_def.with_tls_config(ca_file=ca, **client_auth)
 
     mode_str = getattr(cfg, "auth_mode", None)
     user = getattr(cfg, "auth_user", None)

@@ -24,7 +24,7 @@ from typing import Dict, Optional
 from aerospike_async import ClientPolicy
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class TransactionSettings:
     """SDK-runtime transaction behavior, read at operation time.
 
@@ -70,7 +70,7 @@ class TransactionSettings:
     number_of_attempts: Optional[int] = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MetricsSettings:
     """Client metrics configuration from the ``system.<cluster>.metrics`` block.
 
@@ -121,7 +121,7 @@ class MetricsSettings:
     usage_enabled: Optional[bool] = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class SystemSettings:
     """Cluster-wide settings that apply to an entire cluster instance.
 

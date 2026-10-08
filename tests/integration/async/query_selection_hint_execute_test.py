@@ -26,15 +26,15 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_sdk import QueryDuration, QueryHint, ResultCode
+from aerospike_sdk import ErrorStrategy, QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.namespace import requires_mode
 from tests.integration.query_selection_helpers import (
+    HINT_DS,
     HINT_BOGUS_INDEX_NAME,
+    HINT_INDEX_NAME,
     HINT_SCORE_INDEX_NAME,
-    HINT_SET_NAME,
-    NS,
     count_records_async,
 )
 from tests.pac_compat import requires_query_selection
@@ -45,7 +45,7 @@ INDEXED_PREDICATE = "$.age >= 25"
 
 def _query(state, predicate, hint=None):
     builder = (
-        state.session.query(namespace=NS, set_name=HINT_SET_NAME).where(predicate)
+        state.session.query(HINT_DS).where(predicate)
     )
     return builder.with_hint(hint) if hint is not None else builder
 
@@ -75,6 +75,40 @@ class TestHardHintAtExecute:
                 QueryHint(index_name=HINT_BOGUS_INDEX_NAME, hard_hint=True),
             ).execute()
         assert excinfo.value.result_code == ResultCode.INDEX_NOT_FOUND
+
+    @requires_query_selection
+    @pytest.mark.parametrize("disposition", ["in_stream", "handler"])
+    async def test_failure_raises_under_every_disposition(
+        self, query_selection_cluster, disposition,
+    ):
+        """The failure belongs to the whole query, so no disposition turns it into a row."""
+        calls = []
+        on_error = (
+            ErrorStrategy.IN_STREAM if disposition == "in_stream"
+            else lambda *args: calls.append(args)
+        )
+        with pytest.raises(AerospikeError) as excinfo:
+            stream = await _query(
+                query_selection_cluster,
+                INDEXED_PREDICATE,
+                QueryHint(index_name=HINT_BOGUS_INDEX_NAME, hard_hint=True),
+            ).execute(on_error=on_error)
+            await count_records_async(stream)
+        assert excinfo.value.result_code == ResultCode.INDEX_NOT_FOUND
+        assert calls == []
+
+    @requires_query_selection
+    async def test_handler_stays_silent_when_the_hint_is_honored(
+        self, query_selection_cluster,
+    ):
+        calls = []
+        stream = await _query(
+            query_selection_cluster,
+            INDEXED_PREDICATE,
+            QueryHint(index_name=HINT_INDEX_NAME, hard_hint=True),
+        ).execute(on_error=lambda *args: calls.append(args))
+        assert await count_records_async(stream) > 0
+        assert calls == []
 
 
 class TestSoftHintAtExecute:

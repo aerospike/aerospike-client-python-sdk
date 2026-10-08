@@ -108,9 +108,17 @@ query to confirm that is intended and silence the warning.
 Background tasks write, and the server applies them to every matching record
 outside any transaction, so their writes would escape the commit and abort.
 Starting one inside a transaction therefore raises `RuntimeError` instead of
-warning: `tx.background_task()` refuses outright, and a dataset query's
-`execute_background_task()` / `execute_udf_background_task()` refuse unless the
-query opts out with `.with_txn(None)`. Start the task from a regular session.
+warning: `tx.background_task()` refuses outright, and there is no per-call
+opt-out. Start the task from a non-transactional session:
+
+```python
+task = await (
+    session.background_task()
+    .update(accounts)
+    .bin("audited").set_to(True)
+    .execute()
+)
+```
 
 ## When a Commit Fails In Doubt
 

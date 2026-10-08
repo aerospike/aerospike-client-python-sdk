@@ -17,7 +17,7 @@
 
 import pytest
 
-from aerospike_sdk import ListOrderType, MapOrder
+from aerospike_sdk import ListOrderType, MapOrder, SpecialValue
 
 from aerospike_sdk import DataSet, MapReturnType
 from tests.integration.namespace import general_namespace
@@ -260,8 +260,6 @@ class TestValueSelectorChainingSync:
 class TestSpecialValueOpenRangeSync:
 
     def test_nested_map_key_range_to_infinity(self, cluster):
-        from aerospike_sdk import SpecialValue
-
         session = cluster.create_session()
         k = _key(13)
         session.upsert(k).put({"m": {"a": 1, "m": 2, "z": 3}}).execute()
@@ -276,7 +274,6 @@ class TestSpecialValueOpenRangeSync:
 
     def test_wildcard_in_map_value_list(self, cluster):
         """WILDCARD matches all values in a value-list selector."""
-        from aerospike_sdk import SpecialValue
 
         session = cluster.create_session()
         k = _key(14)
@@ -295,7 +292,6 @@ class TestSpecialValueOpenRangeSync:
 
     def test_list_value_range_to_infinity(self, cluster):
         """SpecialValue.INFINITY as upper bound on list value range."""
-        from aerospike_sdk import SpecialValue
 
         session = cluster.create_session()
         k = _key(15)

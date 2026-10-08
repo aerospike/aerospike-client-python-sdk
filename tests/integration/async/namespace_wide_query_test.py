@@ -20,17 +20,17 @@ namespace-wide secondary index -- one created without a set, which since server
 6.1 indexes every record in the namespace.
 
 Index use is asserted rather than assumed, and without reading server counters:
-``Behavior.DEFAULT`` refuses a ``where()`` query that would fall back to a
-primary-index scan, so a query that merely *succeeds* here proves the server
-chose the index. No set-scoped index could serve these queries, because none can
-span two named sets and the null set at once.
+a query with ``allow_scans_with_where=False`` is refused rather than fall back
+to a primary-index scan, so such a query that merely *succeeds* here proves the
+server chose the index. No set-scoped index could serve these queries, because
+none can span two named sets and the null set at once.
 """
 
 from __future__ import annotations
 
 import pytest_asyncio
 
-from aerospike_sdk import DataSet
+from aerospike_sdk import DataSet, QueryHint
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import requires_server_compiled_ael
 
@@ -93,11 +93,11 @@ async def test_a_set_scoped_query_sees_only_its_own_set(cluster):
 
 @requires_server_compiled_ael
 async def test_the_namespace_index_is_what_served_it(cluster):
-    """No counters needed: a scan behind where() is refused by Behavior.DEFAULT.
+    """No counters needed: disallowing scans refuses a primary-index fallback.
 
     So this query cannot have fallen back to the primary index, and no
     set-scoped index exists that could reach the null set.
     """
     stream = await cluster.create_session().query(WHOLE_NAMESPACE).where(
-        f"$.{BIN} >= 65").execute()
+        f"$.{BIN} >= 65").with_hint(QueryHint(allow_scans_with_where=False)).execute()
     assert await _scores(stream) == {70}

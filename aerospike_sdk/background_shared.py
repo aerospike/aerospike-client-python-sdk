@@ -48,7 +48,7 @@ def ttl_to_expiration(ttl: int) -> Expiration:
 
 
 def make_background_write_policy(
-    behavior: Optional[Behavior],
+    behavior: Behavior,
     filter_expression: Optional[FilterExpression],
     ttl_seconds: Optional[int],
     record_exists_action: Optional[RecordExistsAction] = None,
@@ -59,21 +59,13 @@ def make_background_write_policy(
     records_per_second: Optional[int] = None,
 ) -> WritePolicy:
     """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``."""
-    if behavior is not None:
-        settings = behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
-        wp = to_write_policy(settings)
-        wp.durable_delete = resolve_durable_delete(
-            settings.durable_delete,
-            durable_delete_command_default,
-            durable_delete_override,
-        )
-    else:
-        wp = WritePolicy()
-        wp.durable_delete = resolve_durable_delete(
-            None,
-            durable_delete_command_default,
-            durable_delete_override,
-        )
+    settings = behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
+    wp = to_write_policy(settings)
+    wp.durable_delete = resolve_durable_delete(
+        settings.durable_delete,
+        durable_delete_command_default,
+        durable_delete_override,
+    )
     if filter_expression is not None:
         wp.filter_expression = filter_expression
     if ttl_seconds is not None:

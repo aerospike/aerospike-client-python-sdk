@@ -73,8 +73,6 @@ async def run_transfers(session, accounts) -> None:
         print(f"caught {exc}; transaction was rolled back")
     await report(session, accounts, "after failed transaction (unchanged)")
 
-    print("Overall: SUCCESS")
-
 
 async def balance(session, accounts, who: str) -> int:
     result = await (

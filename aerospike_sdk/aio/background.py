@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 from aerospike_async import (
     Client,
     ExecuteTask,
+    Filter,
     FilterExpression,
     Operation,
     RecordExistsAction,
@@ -208,7 +209,7 @@ class _BackgroundOperationBuilderBase:
         self._op_type = op_type
         self._operations: List[Any] = []
         self._filter_expression: Optional[FilterExpression] = None
-        self._index_filters: List[Any] = []
+        self._filter: Optional[Filter] = None
         self._ttl_seconds: Optional[int] = None
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
@@ -251,7 +252,7 @@ class _BackgroundOperationBuilderBase:
         """Restrict the job with an AEL or ``FilterExpression`` predicate.
 
         The predicate travels as the write policy's filter expression and decides
-        which records the job writes. It combines with :meth:`index_filters`, which
+        which records the job writes. It combines with :meth:`filter`, which
         selects the candidates through a secondary index; without one, the server
         reaches the records by scanning the set.
 
@@ -264,10 +265,17 @@ class _BackgroundOperationBuilderBase:
         Returns:
             This builder for chaining.
 
+        Raises:
+            ValueError: If ``where`` has already been called on this builder.
+
         Example::
-            builder.where("$.status == 'inactive'")
-            builder.where("$.status == '%s'", status)
+
+            await session.background_task().delete(users).where(
+                "$.status == '%s'", status,
+            ).execute()
         """
+        if self._filter_expression is not None:
+            raise ValueError("where() can only be called once per background task")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
@@ -278,31 +286,33 @@ class _BackgroundOperationBuilderBase:
             self._filter_expression = expression
         return self
 
-    def index_filters(self, *filters: Any) -> BackgroundOperationBuilder:
-        """Restrict the job using secondary-index :class:`~aerospike_async.Filter` objects.
+    def filter(self, filter_obj: Filter) -> BackgroundOperationBuilder:
+        """Restrict the job with a secondary-index :class:`~aerospike_async.Filter`.
 
-        These attach to the query ``Statement``, so the server reaches the records
-        through the index instead of scanning the set. They combine with
+        The filter attaches to the query ``Statement``, so the server reaches the
+        records through the index instead of scanning the set. It combines with
         :meth:`where`, which travels separately as the write policy's filter
         expression: the index selects the candidates and the predicate decides
         which of them the job writes. Use both when the index covers part of the
-        condition and an expression covers the rest.
+        condition and an expression covers the rest. A job carries at most one
+        filter, because the server accepts one index range per query.
 
         Args:
-            *filters: One or more ``Filter`` instances (for example ``Filter.range``).
+            filter_obj: The secondary-index filter (for example ``Filter.range``).
 
         Returns:
             This builder for chaining.
 
         Raises:
-            ValueError: If no filter is supplied.
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
 
         Example::
 
             task = await (
                 session.background_task()
                     .update(DataSet.of("test", "donor"))
-                    .index_filters(Filter.range("age", 30, 65))
+                    .filter(Filter.range("age", 30, 65))
                     .where("not($.update_pass.exists()) or $.update_pass < 5")
                     .bin("campaign1").add(50)
                     .execute()
@@ -311,9 +321,11 @@ class _BackgroundOperationBuilderBase:
         See Also:
             :meth:`where`
         """
-        if not filters:
-            raise ValueError("index_filters requires at least one Filter")
-        self._index_filters.extend(filters)
+        if filter_obj is None:
+            raise TypeError("filter() requires a Filter, got None")
+        if self._filter is not None:
+            raise ValueError("filter() can only be called once per background job")
+        self._filter = filter_obj
         return self
 
     def bin(self, name: str) -> BackgroundWriteBinBuilder[BackgroundOperationBuilder]:
@@ -463,7 +475,7 @@ class _BackgroundOperationBuilderBase:
 
     def _record_background_usage(self) -> None:
         extra = []
-        if self._index_filters:
+        if self._filter is not None:
             extra.append(usage.FILTER_SECONDARY_INDEX)
         if self._durable_delete_override or self._durable_delete_command_default:
             extra.append(usage.WRITE_DURABLE_DELETE)
@@ -504,8 +516,8 @@ class _BackgroundOperationBuilderBase:
             self._dataset.namespace,
             self._dataset.set_name,
         )
-        if self._index_filters:
-            statement.filters = list(self._index_filters)
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         try:
             return client.query_operate_blocking(statement, ops, write_policy=wp)
@@ -527,7 +539,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
         "_op_type",
         "_operations",
         "_filter_expression",
-        "_index_filters",
+        "_filter",
         "_ttl_seconds",
         "_records_per_second",
         "_durable_delete_command_default",
@@ -577,8 +589,8 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             self._dataset.namespace,
             self._dataset.set_name,
         )
-        if self._index_filters:
-            statement.filters = list(self._index_filters)
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         try:
             return await client.query_operate(statement, ops, write_policy=wp)
@@ -642,6 +654,7 @@ class _BackgroundUdfBuilderBase:
         self._package_name = package_name
         self._function_name = function_name
         self._args: Optional[List[Any]] = None
+        self._filter: Optional[Filter] = None
         self._filter_expression: Optional[FilterExpression] = None
         self._records_per_second: Optional[int] = None
         self._durable_delete_command_default: Optional[bool] = None
@@ -693,7 +706,13 @@ class _BackgroundUdfBuilderBase:
         expression: Union[str, FilterExpression],
         *params: Any,
     ) -> BackgroundUdfBuilder:
-        """Optional predicate limiting which records invoke the UDF."""
+        """Optional predicate limiting which records invoke the UDF.
+
+        Raises:
+            ValueError: If ``where`` has already been called on this builder.
+        """
+        if self._filter_expression is not None:
+            raise ValueError("where() can only be called once per background task")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._filter_expression = filter_expression_from_ael_string(
@@ -702,6 +721,48 @@ class _BackgroundUdfBuilderBase:
             )
         else:
             self._filter_expression = expression
+        return self
+
+    def filter(self, filter_obj: Filter) -> BackgroundUdfBuilder:
+        """Restrict the UDF job with a secondary-index :class:`~aerospike_async.Filter`.
+
+        The filter attaches to the query ``Statement``, so the server reaches the
+        records through the index instead of scanning the set, and invokes the UDF
+        only on records in the index range. It combines with :meth:`where`: the
+        index selects the candidates and the predicate decides which of them the
+        UDF runs on. A job carries at most one filter, because the server accepts
+        one index range per query.
+
+        Args:
+            filter_obj: The secondary-index filter (for example ``Filter.range``).
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            TypeError: If ``filter_obj`` is ``None``.
+            ValueError: If ``filter`` has already been called on this builder.
+
+        Example::
+
+            task = await (
+                session.background_task()
+                    .execute_udf(DataSet.of("test", "donor"))
+                    .function("donor_udfs", "apply_bonus")
+                    .passing(50)
+                    .filter(Filter.range("age", 30, 65))
+                    .execute()
+            )
+
+        See Also:
+            :meth:`where`
+            :meth:`BackgroundOperationBuilder.filter`
+        """
+        if filter_obj is None:
+            raise TypeError("filter() requires a Filter, got None")
+        if self._filter is not None:
+            raise ValueError("filter() can only be called once per background job")
+        self._filter = filter_obj
         return self
 
     def records_per_second(self, rps: int) -> BackgroundUdfBuilder:
@@ -766,6 +827,8 @@ class _BackgroundUdfBuilderBase:
             self._dataset.namespace,
             self._dataset.set_name,
         )
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
@@ -790,6 +853,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
         "_package_name",
         "_function_name",
         "_args",
+        "_filter",
         "_filter_expression",
         "_records_per_second",
         "_durable_delete_command_default",
@@ -849,6 +913,8 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
             self._dataset.namespace,
             self._dataset.set_name,
         )
+        if self._filter is not None:
+            statement.filters = [self._filter]
         client = self._pac_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:

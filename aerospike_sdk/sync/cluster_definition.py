@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from aerospike_sdk.cluster_shared import ClusterDefinitionBase, Host
 from aerospike_sdk.sync.cluster import Cluster
-from aerospike_sdk.sync.tls_builder import TlsBuilder
 from aerospike_sdk.policy.sdk_config_loader import (
     load_at_connect,
 )
@@ -28,14 +27,14 @@ from aerospike_sdk.sdk_config_monitor import SdkConfigSource
 __all__ = ["ClusterDefinition", "Host"]
 
 
-class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
+class ClusterDefinition(ClusterDefinitionBase):
     """Sync builder for seeds, auth, TLS, and validation; :meth:`connect` returns :class:`Cluster`.
 
     Mirrors :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`
     with a blocking :meth:`connect` and context-manager support on
     :class:`~aerospike_sdk.sync.cluster.Cluster`. Every builder method is
     inherited from :class:`~aerospike_sdk.cluster_shared.ClusterDefinitionBase`;
-    only the blocking :meth:`connect` and TLS-builder factory live here.
+    only the blocking :meth:`connect` lives here.
 
     Example::
 
@@ -49,10 +48,6 @@ class ClusterDefinition(ClusterDefinitionBase[TlsBuilder]):
     See Also:
         :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`
     """
-
-    def _new_tls_builder(self) -> TlsBuilder:
-        """Return a sync ``TlsBuilder`` bound to this definition."""
-        return TlsBuilder(self)
 
     def connect(self) -> Cluster:
         """

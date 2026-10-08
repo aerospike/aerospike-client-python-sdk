@@ -16,7 +16,8 @@
 """Tests for InfoCommands."""
 
 import pytest
-from aerospike_sdk import Behavior
+from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.info_types import NamespaceDetail, SetDetail, Sindex, SindexDetail
 
 
 @pytest.fixture
@@ -46,7 +47,7 @@ async def secondary_index(session):
 
     try:
         task = await (
-            session.index(namespace, set_name)
+            session.index(DataSet.of(namespace, set_name))
             .on_bin("idx_bin").named(index_name).integer().create()
         )
     except Exception:
@@ -58,7 +59,7 @@ async def secondary_index(session):
     yield namespace, index_name
 
     try:
-        await session.index(namespace, set_name).named(index_name).drop()
+        await session.index(DataSet.of(namespace, set_name)).named(index_name).drop()
     except Exception:
         pass
 
@@ -137,8 +138,6 @@ async def test_sets(session):
     test_namespace = list(namespaces)[0]
     sets = await info.sets(test_namespace)
 
-    from aerospike_sdk.info_types import SetDetail
-
     assert isinstance(sets, list)
     assert all(isinstance(s, SetDetail) for s in sets)
     # A shape-only check passes when the whole raw body arrives as one element,
@@ -156,7 +155,6 @@ async def test_sets(session):
 
 async def test_sets_returns_detail(session):
     """Per-set detail, typed."""
-    from aerospike_sdk.info_types import SetDetail
 
     info = session.info()
     namespaces = await info.namespaces()
@@ -226,8 +224,6 @@ async def test_secondary_index_details(session, secondary_index):
 
     # Details might be None if the index doesn't support detailed info
     if details is not None:
-        from aerospike_sdk.info_types import SindexDetail
-
         assert isinstance(details, SindexDetail)
         # Parsed counters, not the raw {command: body} envelope -- the envelope
         # also satisfies isinstance(dict), which is how that shape survived.
@@ -361,7 +357,6 @@ async def test_per_node_views_agree_with_the_merged_ones(session):
     assert here -- the divergence they exist to expose only appears with more
     than one node, and this suite does not require one.
     """
-    from aerospike_sdk.info_types import NamespaceDetail, SetDetail, Sindex
 
     info = session.info()
     namespaces = await info.namespaces()
@@ -393,7 +388,6 @@ async def test_per_node_views_agree_with_the_merged_ones(session):
 
 async def test_secondary_index_details_per_node(session, secondary_index):
     """Build progress is per node, so this is the view that shows it."""
-    from aerospike_sdk.info_types import SindexDetail
 
     info = session.info()
     namespace, index_name = secondary_index

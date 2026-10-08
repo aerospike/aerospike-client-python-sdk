@@ -84,7 +84,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_2")
         _cleanup(session, k1, k2)
 
-        session.upsert(key=k1).put({"name": "Alice", "age": 21}).execute()
+        session.upsert(k1).put({"name": "Alice", "age": 21}).execute()
 
         results = (
             session
@@ -352,7 +352,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_2")
         _cleanup(session, k)
 
-        session.upsert(key=k).put({"v": 1}).execute()
+        session.upsert(k).put({"v": 1}).execute()
 
         results = (
             session

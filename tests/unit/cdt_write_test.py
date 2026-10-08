@@ -27,6 +27,7 @@ Covers:
 import pytest
 
 from aerospike_sdk import (
+    Behavior,
     CTX,
     Key,
     ListOrderType,
@@ -75,7 +76,7 @@ class _OpCollector:
 
 
 def _make_qb() -> QueryBuilder:
-    return QueryBuilder(client=object(), namespace="test", set_name="unit")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
 
 
 def _make_key(digest: int = 1) -> Key:
@@ -843,6 +844,18 @@ class TestNestedCollectionOps:
     def test_nested_list_append_items(self):
         wbb, segment = self._build()
         wbb.on_map_key("inner").list_append_items([1, 2])
+        assert len(segment._qb._operations) == 1
+        assert isinstance(segment._qb._operations[0], ListOperation)
+
+    def test_nested_list_append(self):
+        wbb, segment = self._build()
+        wbb.on_map_key("inner").list_append(1, unique=True, bounded=True, no_fail=True)
+        assert len(segment._qb._operations) == 1
+        assert isinstance(segment._qb._operations[0], ListOperation)
+
+    def test_nested_list_add(self):
+        wbb, segment = self._build()
+        wbb.on_map_key("inner").list_add(1, unique=True, bounded=True, no_fail=True)
         assert len(segment._qb._operations) == 1
         assert isinstance(segment._qb._operations[0], ListOperation)
 

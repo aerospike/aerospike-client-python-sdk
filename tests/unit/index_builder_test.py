@@ -15,14 +15,22 @@
 
 """Unit tests for the secondary-index builder chain (expression-based creation)."""
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
+import aerospike_async
 import pytest
+import aerospike_sdk
 from aerospike_sdk import CollectionIndexType, CTX, Exp
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_async import FilterExpression, IndexType
 
+from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.operations.index import IndexBuilder
+from aerospike_sdk.aio.session import Session
+from aerospike_sdk.sync.client import SyncClient
+from aerospike_sdk.sync.session import Session as SyncSession
+from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
 
 
 def _async_builder(supports_server_compiled_ael: bool = True) -> IndexBuilder:
@@ -253,8 +261,6 @@ class TestConfigureFromArguments:
 class TestSetIndexCreateSync:
 
     def test_routes_to_blocking_set_index_entry(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         b = SyncIB(sync_client, "test", "users").on_set().named("users_set_idx")
         task = b.create()
@@ -265,8 +271,6 @@ class TestSetIndexCreateSync:
         assert task is pac.create_set_index_blocking.return_value
 
     def test_sync_index_type_rejected(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         b = SyncIB(MagicMock(), "test", "users").on_set().named("idx").string()
         with pytest.raises(ValueError, match="no index type"):
             b.create()
@@ -277,8 +281,6 @@ class TestExpressionCreateSync:
     def test_routes_to_blocking_expression_entry(self):
         # Sync-specific dispatch: the blocking terminal must hit PAC's
         # `*_blocking` sibling, not the async entry.
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         exp = Exp.int_bin("age")
         b = (
@@ -348,8 +350,6 @@ class TestAelStringCreate:
         assert client.gate_reads == 0
 
     def test_sync_string_routes_to_blocking_expression_entry(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
-
         sync_client = MagicMock()
         sync_client.supports_server_compiled_ael = True
         b = (
@@ -387,7 +387,6 @@ class TestSyncBinPathValidation:
     """Bin-path create()/drop() validation and error conversion (sync)."""
 
     def _sync_builder(self):
-        from aerospike_sdk.sync.operations.index import IndexBuilder as SyncIB
         client = MagicMock()
         client._usage_on = False
         return client, SyncIB(client, "test", "users")
@@ -431,3 +430,19 @@ class TestSyncBinPathValidation:
         client._async_client.drop_index_blocking.side_effect = RuntimeError("boom")
         with pytest.raises(AerospikeError):
             b.named("idx_age").drop()
+
+
+class TestIndexEntryPoints:
+
+    def test_index_type_is_exported_from_the_package(self):
+        """create_index() takes an IndexType, so callers need not import it from PAC."""
+        assert "IndexType" in aerospike_sdk.__all__
+        assert aerospike_sdk.IndexType is aerospike_async.IndexType
+
+    @pytest.mark.parametrize(
+        "owner", [Session, SyncSession, Client, SyncClient],
+        ids=["async-session", "sync-session", "async-client", "sync-client"],
+    )
+    def test_index_takes_no_behavior(self, owner):
+        """Index admin calls take no policy, so there is nothing for a Behavior to set."""
+        assert "behavior" not in inspect.signature(owner.index).parameters

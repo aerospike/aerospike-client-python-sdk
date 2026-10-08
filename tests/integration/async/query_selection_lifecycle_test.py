@@ -81,7 +81,7 @@ async def lifecycle_set(query_selection_cluster):
 
 async def _ages(session, hint=None):
     builder = (
-        session.query(namespace=NS, set_name=LIFECYCLE_SET).where(AGE_RANGE_WHERE)
+        session.query(DataSet.of(NS, LIFECYCLE_SET)).where(AGE_RANGE_WHERE)
     )
     if hint is not None:
         builder = builder.with_hint(hint)
@@ -104,23 +104,23 @@ class TestIndexLifecycle:
     ):
         """The scan fallback answers the same, but only where it is permitted.
 
-        ``Behavior.DEFAULT`` refuses a primary-index scan behind a ``where()``,
-        so dropping the index turns the default query into ``INDEX_NOT_FOUND``
-        rather than a silent fallback. Permitting scans restores the original
-        rows, which is what shows the answer never depended on the index.
+        With scans disallowed, dropping the index turns the query into
+        ``INDEX_NOT_FOUND`` rather than a silent fallback. The default permits
+        the fallback and returns the original rows, which is what shows the
+        answer never depended on the index.
         """
         session, _, client, _ = lifecycle_set
-        with_index = await _ages(session)
+        index_only = QueryHint(allow_scans_with_where=False)
+        with_index = await _ages(session, index_only)
         assert with_index == EXPECTED_AGES
 
         await drop_index_quiet_async(client, NS, LIFECYCLE_SET, AGE_INDEX)
 
         with pytest.raises(AerospikeError) as excinfo:
-            await _ages(session)
+            await _ages(session, index_only)
         assert excinfo.value.result_code == ResultCode.INDEX_NOT_FOUND
 
-        permitted = await _ages(session, QueryHint(allow_scans_with_where=True))
-        assert permitted == with_index
+        assert await _ages(session) == with_index
 
     @requires_query_selection
     async def test_rows_are_unchanged_after_an_index_is_created(self, lifecycle_set):
@@ -144,7 +144,7 @@ class TestIndexLifecycle:
         session, pac, _, _ = lifecycle_set
         created: set[str] = set()
         stream = await (
-            session.query(namespace=NS, set_name=LIFECYCLE_SET)
+            session.query(DataSet.of(NS, LIFECYCLE_SET))
             .where(AGE_RANGE_WHERE)
             .chunk_size(3)
             .execute()

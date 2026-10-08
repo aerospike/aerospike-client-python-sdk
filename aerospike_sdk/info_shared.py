@@ -250,23 +250,6 @@ class InfoCommandsBase:
         return out
 
     @staticmethod
-    def _interpret_sindex_details(
-        response: Optional[Dict[str, str]], namespace: str, index_name: str
-    ) -> Optional[Dict[str, str]]:
-        """Return the sindex-details response, or ``None`` when missing.
-
-        A non-existent index reports ``{"sindex/<ns>/<name>": "ERROR:201:..."}``;
-        the info error form is ``ERROR:<code>:<message>``, and 201 is the
-        index-not-found code.
-        """
-        if not response:
-            return None
-        expected_key = f"sindex/{namespace}/{index_name}"
-        if expected_key in response and str(response[expected_key]).startswith("ERROR:201:"):
-            return None
-        return response
-
-    @staticmethod
     def _all_nodes_stable(responses: Dict[str, Dict[str, str]]) -> bool:
         """Return whether every node reported ``cluster-stable=true``."""
         if not responses:

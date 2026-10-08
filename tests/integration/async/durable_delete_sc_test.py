@@ -294,12 +294,12 @@ def ds_bg(sc_namespace) -> DataSet:
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def bgtest_bgval_index(cluster_sc, sc_namespace):
-    """Numeric secondary index on ``bgtest.bgval`` for background jobs using ``index_filters``."""
+    """Numeric secondary index on ``bgtest.bgval`` for background jobs using ``filter``."""
     session = cluster_sc.create_session()
     idx_name = "bgtest_bgval_ix"
     try:
         await (
-            session.index(sc_namespace, BG_TEST_SET)
+            session.index(DataSet.of(sc_namespace, BG_TEST_SET))
             .on_bin(BG_BIN)
             .named(idx_name)
             .integer()
@@ -321,7 +321,7 @@ async def prepare_dd_udf_background(session_sc, ds_sc, enterprise_sc):
 
     try:
         await (
-            client.index(ds_sc.namespace, ds_sc.set_name)
+            client.index(ds_sc)
             .on_bin(DD_UDF_BIN1)
             .named(DD_UDF_INDEX_NAME)
             .integer()
@@ -340,7 +340,7 @@ async def prepare_dd_udf_background(session_sc, ds_sc, enterprise_sc):
     yield True
 
     try:
-        await client.index(ds_sc.namespace, ds_sc.set_name).named(DD_UDF_INDEX_NAME).drop()
+        await client.index(ds_sc).named(DD_UDF_INDEX_NAME).drop()
     except Exception:
         pass
 
@@ -354,7 +354,7 @@ async def prepare_query_execute(session_sc, ds_sc, enterprise_sc):
 
     try:
         await (
-            client.index(ds_sc.namespace, ds_sc.set_name)
+            client.index(ds_sc)
             .on_bin(TQE_BIN1)
             .named(TQE_INDEX_NAME)
             .integer()
@@ -373,7 +373,7 @@ async def prepare_query_execute(session_sc, ds_sc, enterprise_sc):
     yield True
 
     try:
-        await client.index(ds_sc.namespace, ds_sc.set_name).named(TQE_INDEX_NAME).drop()
+        await client.index(ds_sc).named(TQE_INDEX_NAME).drop()
     except Exception:
         pass
 
@@ -777,13 +777,13 @@ class TestBackgroundTaskDelete:
         """Background delete by predicate; SC uses default durable delete on the job.
 
         Strong-consistency namespaces need partition pruning via ``Statement.filters``
-        (``index_filters`` on the builder). Policy-level expression filters alone do not
+        (``filter`` on the builder). Policy-level expression filters alone do not
         reliably drive durable background deletes on every server build.
         """
         session = session_sc
         is_sc = await session.is_namespace_sc(ds_bg.namespace)
 
-        b = session.background_task().delete(ds_bg).index_filters(
+        b = session.background_task().delete(ds_bg).filter(
             Filter.range(BG_BIN, 9, 10),
         )
         if is_sc:

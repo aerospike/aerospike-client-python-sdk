@@ -300,6 +300,16 @@ others: the error is logged and the rest still run. An exporter that fails
 three exports in a row is suspended, then retried every tenth interval until
 it succeeds, at which point its normal cadence resumes.
 
+Disabling metrics and closing the cluster each push one last snapshot, so the
+activity since the previous interval is not lost. It is taken before
+collection stops. The sync client's `disable_metrics()` returns once every
+exporter has received it. The async client's `disable_metrics()` is a plain
+method that returns straight away, while the closing snapshot is delivered in
+the background; `await cluster.close()` waits for that delivery, and
+re-enabling holds the next export until it finishes, so an exporter never
+sees two exports at once. Changing the policy with `enable_metrics()` while
+metrics are on restarts the push without a closing snapshot.
+
 A node that has left the cluster appears once under the snapshot's
 `nodes_departed`, same shape as `nodes` with its final counters, so an
 exporter can flush that node's series. Only the export push tracks

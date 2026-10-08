@@ -173,7 +173,7 @@ class TestSingleNamespaceUnchanged:
 
     def test_sc_only_delete_stays_on_batch_delete_entry(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=SC_NS).delete(_k_sc(1), _k_sc(2)).execute()
+        _builder(pac, namespace=SC_NS)._start_write_segment("delete", _k_sc(1), _k_sc(2)).execute()
         assert len(pac.batch_delete_calls) == 1
         assert pac.batch_mixed_calls == []
         _, _, bdp = pac.batch_delete_calls[0]
@@ -181,7 +181,7 @@ class TestSingleNamespaceUnchanged:
 
     def test_ap_only_delete_stays_on_batch_delete_entry(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS).delete(_k_ap(1), _k_ap(2)).execute()
+        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
         assert len(pac.batch_delete_calls) == 1
         assert pac.batch_mixed_calls == []
         _, _, bdp = pac.batch_delete_calls[0]
@@ -199,7 +199,7 @@ class TestMixedModeDelete:
 
     def test_ap_first_ordering_resolves_per_row(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS).delete(_k_ap(), _k_sc()).execute()
+        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(), _k_sc()).execute()
         ops = self._rows(pac)
         assert [op.key.namespace for op in ops] == [AP_NS, SC_NS]
         assert all(isinstance(op, _CapturedDeleteOp) for op in ops)
@@ -209,7 +209,7 @@ class TestMixedModeDelete:
 
     def test_sc_first_ordering_resolves_per_row(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=SC_NS).delete(_k_sc(), _k_ap()).execute()
+        _builder(pac, namespace=SC_NS)._start_write_segment("delete", _k_sc(), _k_ap()).execute()
         ops = self._rows(pac)
         assert [op.key.namespace for op in ops] == [SC_NS, AP_NS]
         sc_policy, ap_policy = ops[0].policy, ops[1].policy
@@ -223,7 +223,7 @@ class TestMixedModeWriteWithRecordDelete:
         pac = _RecordingClient()
         (
             _builder(pac, namespace=AP_NS)
-            .upsert(_k_ap(), _k_sc())
+            ._start_write_segment("upsert", _k_ap(), _k_sc())
             .delete_record()
             .execute()
         )
@@ -241,7 +241,7 @@ class TestMixedModeWriteWithRecordDelete:
         pac = _RecordingClient()
         (
             _builder(pac, namespace=AP_NS)
-            .upsert(_k_ap(), _k_sc())
+            ._start_write_segment("upsert", _k_ap(), _k_sc())
             .bin("a").set_to(1)
             .execute()
         )
@@ -261,15 +261,15 @@ class TestParentPolicyEscalation:
 
     def test_mixed_batch_parent_policy_uses_sc_settings(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS, behavior=self._behavior()).delete(
-            _k_ap(), _k_sc()).execute()
+        builder = _builder(pac, namespace=AP_NS, behavior=self._behavior())
+        builder._start_write_segment("delete", _k_ap(), _k_sc()).execute()
         _, bp = pac.batch_mixed_calls[0]
         assert bp is not None and bp.total_timeout == 5000
 
     def test_ap_only_batch_parent_policy_stays_ap(self):
         pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS, behavior=self._behavior()).delete(
-            _k_ap(1), _k_ap(2)).execute()
+        builder = _builder(pac, namespace=AP_NS, behavior=self._behavior())
+        builder._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
         _, _, bdp = pac.batch_delete_calls[0]
         # Parent policy comes back through the batch_delete entry.
         _, bp, _ = pac.batch_delete_calls[0]
@@ -329,7 +329,7 @@ class TestCommitLevel:
         pac = _RecordingClient()
         (
             _builder(pac, behavior=_commit_master())
-            .insert(_k_ap(1)).put({"b": 1})
+            ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .insert(_k_ap(2)).put({"b": 2})
             .execute()
         )
@@ -338,7 +338,11 @@ class TestCommitLevel:
 
     def test_batch_delete_carries_non_default_commit_level(self):
         pac = _RecordingClient()
-        _builder(pac, behavior=_commit_master()).delete(_k_ap(1), _k_ap(2)).execute()
+        (
+            _builder(pac, behavior=_commit_master())
+            ._start_write_segment("delete", _k_ap(1), _k_ap(2))
+            .execute()
+        )
         _, _, bdp = pac.batch_delete_calls[0]
         assert bdp is not None and bdp.commit_level == CommitLevel.COMMIT_MASTER
 
@@ -351,7 +355,7 @@ class TestCommitLevel:
         # AP default resolves COMMIT_ALL, which equals core's own default, so a
         # plain batch delete needs no policy object at all.
         pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS).delete(_k_ap(1), _k_ap(2)).execute()
+        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
         _, _, bdp = pac.batch_delete_calls[0]
         assert bdp is None
 
@@ -363,7 +367,7 @@ class TestPlainWritePolicyReuse:
         pac = _RecordingClient()
         (
             _builder(pac, behavior=_commit_master())
-            .insert(_k_ap(1)).put({"b": 1})
+            ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .insert(_k_ap(2)).put({"b": 2})
             .insert(_k_ap(3)).put({"b": 3})
             .execute()
@@ -377,7 +381,7 @@ class TestPlainWritePolicyReuse:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .insert(_k_ap(1)).put({"b": 1})
+            ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .update(_k_ap(2)).put({"b": 2})
             .insert(_k_ap(3)).put({"b": 3}).expire_record_after_seconds(600)
             .execute()
@@ -397,7 +401,8 @@ class TestPutBinsHandoff:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .upsert(_k_ap(1)).put({"name": "Tim", "age": 31}).put({"age": 32})
+            ._start_write_segment("upsert", _k_ap(1))
+            .put({"name": "Tim", "age": 31}).put({"age": 32})
             .upsert(_k_ap(2)).put({"name": "Bob"})
             .execute()
         )
@@ -409,7 +414,7 @@ class TestPutBinsHandoff:
     def test_caller_changes_after_put_do_not_leak(self):
         pac = _RecordingClient()
         profile = {"name": "Tim"}
-        chain = _builder(pac).upsert(_k_ap(1)).put(profile)
+        chain = _builder(pac)._start_write_segment("upsert", _k_ap(1)).put(profile)
         profile["name"] = "Bob"
         chain.upsert(_k_ap(2)).put(profile).execute()
         ops, _ = pac.batch_mixed_calls[0]
@@ -420,7 +425,8 @@ class TestPutBinsHandoff:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .upsert(_k_ap(1)).put({"name": "Tim"}).bin("visits").add(1).put({"name": "Bob"})
+            ._start_write_segment("upsert", _k_ap(1))
+            .put({"name": "Tim"}).bin("visits").add(1).put({"name": "Bob"})
             .upsert(_k_ap(2)).put({"name": "Jane"})
             .execute()
         )
@@ -434,7 +440,12 @@ class TestGenerationPolicy:
 
     def test_batch_delete_with_expected_generation(self):
         pac = _RecordingClient()
-        _builder(pac).delete(_k_ap(1), _k_ap(2)).ensure_generation_is(7).execute()
+        (
+            _builder(pac)
+            ._start_write_segment("delete", _k_ap(1), _k_ap(2))
+            .ensure_generation_is(7)
+            .execute()
+        )
         _, _, bdp = pac.batch_delete_calls[0]
         assert bdp.generation_policy == GenerationPolicy.EXPECT_GEN_EQUAL
         assert bdp.generation == 7
@@ -443,7 +454,7 @@ class TestGenerationPolicy:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .update(_k_ap(1)).put({"b": 1}).ensure_generation_is(3)
+            ._start_write_segment("update", _k_ap(1)).put({"b": 1}).ensure_generation_is(3)
             .update(_k_ap(2)).put({"b": 2}).ensure_generation_is(3)
             .execute()
         )
@@ -453,7 +464,12 @@ class TestGenerationPolicy:
 
     def test_batch_delete_without_generation_leaves_policy_gen_none(self):
         pac = _RecordingClient()
-        _builder(pac).delete(_k_ap(1), _k_ap(2)).with_durable_delete().execute()
+        (
+            _builder(pac)
+            ._start_write_segment("delete", _k_ap(1), _k_ap(2))
+            .with_durable_delete()
+            .execute()
+        )
         _, _, bdp = pac.batch_delete_calls[0]
         assert bdp.generation_policy == GenerationPolicy.NONE
 
@@ -490,7 +506,7 @@ class TestSameKeyChainFolding:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            ._start_write_segment("upsert", _k_ap(1), _k_ap(2)).bin("a").set_to(1)
             .upsert(_k_ap(2), _k_ap(3)).bin("a").set_to(2)
             .execute()
         )
@@ -507,7 +523,7 @@ class TestSameKeyChainFolding:
         # trips rather than one per segment.
         pac = _RecordingClient()
         builder = _builder(pac)
-        cur = builder.upsert(_k_ap(1)).bin("a").set_to(1)
+        cur = builder._start_write_segment("upsert", _k_ap(1)).bin("a").set_to(1)
         for i in range(2, 64):
             cur = cur.upsert(_k_ap(i)).bin("a").set_to(1)
         cur.upsert(_k_ap(40)).bin("a").set_to(1).execute()
@@ -519,7 +535,7 @@ class TestSameKeyChainFolding:
         pac = _RecordingClient()
         (
             _builder(pac)
-            .upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+            ._start_write_segment("upsert", _k_ap(1), _k_ap(2)).bin("a").set_to(1)
             .upsert(_k_ap(3), _k_ap(4)).bin("a").set_to(2)
             .execute()
         )
@@ -532,7 +548,10 @@ class TestSameKeyChainFolding:
         # still different records and must not split the chain.
         assert _k_ap(1).digest == _k_sc(1).digest
         builder = _builder(_RecordingClient())
-        builder.upsert(_k_ap(1)).bin("a").set_to(1).upsert(_k_sc(1)).bin("a").set_to(2)
+        (
+            builder._start_write_segment("upsert", _k_ap(1)).bin("a").set_to(1)
+            .upsert(_k_sc(1)).bin("a").set_to(2)
+        )
         builder._finalize_current_spec()
         assert builder._specs_overlap_on_a_key() is False
 
@@ -540,6 +559,6 @@ class TestSameKeyChainFolding:
         # The common high-volume shape is one segment; the check short-circuits
         # before touching any key.
         builder = _builder(_RecordingClient())
-        builder.upsert(_k_ap(1), _k_ap(2)).bin("a").set_to(1)
+        builder._start_write_segment("upsert", _k_ap(1), _k_ap(2)).bin("a").set_to(1)
         builder._finalize_current_spec()
         assert builder._specs_overlap_on_a_key() is False

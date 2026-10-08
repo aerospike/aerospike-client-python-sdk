@@ -37,9 +37,11 @@ async def demonstrate_dynamic_reloading() -> None:
     print(f"Watching config file: {_CONFIG}")
 
     async with _env.connect().connect():
+        # --- 1) Resolve every profile as loaded at connect ---
         print(f"\n{timestamp()} === Initial configuration ===")
         display_current_settings()
 
+        # --- 2) Wait for an edit to the config file ---
         print("\n" + "=" * 70)
         print("Monitoring for changes... Modify the config file to see dynamic reloading.")
         print("=" * 70)
@@ -48,6 +50,7 @@ async def demonstrate_dynamic_reloading() -> None:
         # pass pick the change up.
         await asyncio.sleep(2)
 
+        # --- 3) Resolve every profile again, picking up the edit ---
         print(f"\n{timestamp()} === Current configuration ===")
         display_current_settings()
 

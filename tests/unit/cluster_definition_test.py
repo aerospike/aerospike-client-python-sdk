@@ -28,6 +28,9 @@ from aerospike_sdk.sync.cluster_definition import (
     ClusterDefinition as SyncClusterDefinition,
     Host as SyncHost,
 )
+import aerospike_sdk.sync.cluster as sync_cluster
+from aerospike_sdk.aio.cluster import Cluster
+from aerospike_sdk.exceptions import ConnectionError, ResultCode
 
 
 class TestAuthMode:
@@ -85,19 +88,17 @@ class TestAuthMode:
         assert cd._user_name is None
         assert cd._password is None
 
-    def test_certificate_credentials_auto_enables_tls(self):
-        cd = ClusterDefinition("localhost", 3000)
-        assert cd._tls_builder is None
-        cd.with_certificate_credentials()
-        assert cd._tls_builder is not None
-        assert cd._tls_builder.is_tls_enabled()
+    def test_certificate_credentials_does_not_enable_tls(self):
+        """The certificate comes from with_tls_config(); empty TLS settings
+        could never authenticate."""
+        cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()
+        assert cd._tls is None
 
     def test_certificate_credentials_preserves_existing_tls(self):
-        cd = ClusterDefinition("localhost", 3000)
-        cd.with_tls_config_of().tls_name("myTls").done()
-        original_builder = cd._tls_builder
+        cd = ClusterDefinition("localhost", 3000).with_tls_config(tls_name="myTls")
+        original = cd._tls
         cd.with_certificate_credentials()
-        assert cd._tls_builder is original_builder
+        assert cd._tls is original
 
     def test_switching_auth_modes(self):
         cd = ClusterDefinition("localhost", 3000)
@@ -139,24 +140,46 @@ class TestAuthModePolicy:
         assert policy.auth_mode == AuthMode.NONE
 
 
+_CLIENT_PAIR = {"client_cert_file": "/certs/client.pem", "client_key_file": "/certs/client.key"}
+
+
 class TestPkiValidation:
-    def test_pki_without_tls_names_raises(self):
+    def test_pki_without_tls_config_raises(self):
         cd = ClusterDefinition("localhost", 3000).with_certificate_credentials()
+        with pytest.raises(ValueError, match="client certificate"):
+            cd._validate()
+
+    def test_pki_without_client_certificate_raises(self):
+        """Otherwise the only signal is the server refusing the handshake."""
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_tls_config(tls_name="myTls", ca_file="/certs/ca.pem")
+            .with_certificate_credentials()
+        )
+        with pytest.raises(ValueError, match="client certificate"):
+            cd._validate()
+
+    def test_pki_without_tls_names_raises(self):
+        cd = (
+            ClusterDefinition("localhost", 3000)
+            .with_tls_config(**_CLIENT_PAIR)
+            .with_certificate_credentials()
+        )
         with pytest.raises(ValueError, match="Missing TLS name"):
             cd._validate()
 
     def test_pki_with_tls_names_passes(self):
-        cd = ClusterDefinition(
-            hosts=[Host("localhost", 3000, tls_name="myTls")]
-        ).with_certificate_credentials()
+        cd = (
+            ClusterDefinition(hosts=[Host("localhost", 3000, tls_name="myTls")])
+            .with_tls_config(**_CLIENT_PAIR)
+            .with_certificate_credentials()
+        )
         cd._validate()
 
-    def test_pki_with_tls_builder_name_passes(self):
+    def test_pki_with_tls_config_name_passes(self):
         cd = (
             ClusterDefinition("localhost", 3000)
-            .with_tls_config_of()
-            .tls_name("myTls")
-            .done()
+            .with_tls_config(tls_name="myTls", **_CLIENT_PAIR)
             .with_certificate_credentials()
         )
         cd._validate()
@@ -173,7 +196,7 @@ class TestClusterDefinitionChaining:
             .with_native_credentials("admin", "password")
             .using_services_alternate()
             .preferring_racks(1, 2)
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
         )
         assert cd.auth_mode == AuthMode.INTERNAL
         assert cd._use_services_alternate is True
@@ -191,11 +214,12 @@ class TestClusterDefinitionChaining:
     def test_full_chain_with_certificate_credentials(self):
         cd = (
             ClusterDefinition(hosts=[Host("localhost", 3000, tls_name="myTls")])
+            .with_tls_config(**_CLIENT_PAIR)
             .with_certificate_credentials()
             .using_services_alternate()
         )
         assert cd.auth_mode == AuthMode.PKI
-        assert cd._tls_builder is not None
+        assert cd._tls is not None
 
 
 class TestIpMap:
@@ -205,20 +229,20 @@ class TestIpMap:
 
     def test_set_ip_map(self):
         mapping = {"10.0.0.1": "3.72.54.187", "10.0.0.2": "3.72.54.188"}
-        cd = ClusterDefinition("localhost", 3000).with_ip_map(mapping)
+        cd = ClusterDefinition("localhost", 3000).ip_map(mapping)
         assert cd._ip_map == mapping
 
     def test_empty_dict_clears_ip_map(self):
         cd = (
             ClusterDefinition("localhost", 3000)
-            .with_ip_map({"10.0.0.1": "1.2.3.4"})
-            .with_ip_map({})
+            .ip_map({"10.0.0.1": "1.2.3.4"})
+            .ip_map({})
         )
         assert cd._ip_map is None
 
     def test_ip_map_propagates_to_policy(self):
         mapping = {"10.0.0.1": "3.72.54.187"}
-        cd = ClusterDefinition("localhost", 3000).with_ip_map(mapping)
+        cd = ClusterDefinition("localhost", 3000).ip_map(mapping)
         policy = cd._get_policy()
         assert policy.ip_map == mapping
 
@@ -231,7 +255,7 @@ class TestIpMap:
         cd = (
             ClusterDefinition("localhost", 3000)
             .with_native_credentials("admin", "pass")
-            .with_ip_map({"10.0.0.1": "1.2.3.4"})
+            .ip_map({"10.0.0.1": "1.2.3.4"})
             .using_services_alternate()
         )
         assert cd._ip_map == {"10.0.0.1": "1.2.3.4"}
@@ -339,7 +363,7 @@ class TestSyncBuilderSmoke:
             .with_external_credentials("ldap_user", "ldap_pass")
             .using_services_alternate()
             .preferring_racks(1, 2)
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
             .fail_if_not_connected(False)
         )
         assert cd.auth_mode == AuthMode.EXTERNAL
@@ -349,15 +373,9 @@ class TestSyncBuilderSmoke:
         assert cd._cluster_name == "my-cluster"
         assert cd._fail_if_not_connected is False
 
-    def test_sync_with_tls_config_of(self):
-        cd = (
-            SyncClusterDefinition("localhost", 3000)
-            .with_tls_config_of()
-            .tls_name("myTls")
-            .done()
-        )
-        assert cd._tls_builder is not None
-        assert cd._tls_builder.is_tls_enabled()
+    def test_sync_with_tls_config(self):
+        cd = SyncClusterDefinition("localhost", 3000).with_tls_config(tls_name="myTls")
+        assert cd._tls is not None
 
     def test_sync_host_of_and_parse_hosts(self):
         h = SyncHost.of("node-a", 3000)
@@ -439,7 +457,7 @@ class TestForceSingleNode:
             ClusterDefinition("localhost", 3000)
             .with_native_credentials("admin", "password")
             .force_single_node()
-            .validate_cluster_name_is("my-cluster")
+            .cluster_name("my-cluster")
         )
         assert cd._get_policy().seed_only_cluster is True
         assert cd._cluster_name == "my-cluster"
@@ -468,9 +486,6 @@ class TestConnectValidationCarriesACode:
 
     @pytest.mark.asyncio
     async def test_async_not_connected_reports_server_not_available(self):
-        from aerospike_sdk.aio.cluster import Cluster
-        from aerospike_sdk.exceptions import ConnectionError, ResultCode
-
         class _Pac:
             def is_connected(self):
                 return False
@@ -490,9 +505,6 @@ class TestConnectValidationCarriesACode:
         assert excinfo.value.result_code == ResultCode.SERVER_NOT_AVAILABLE
 
     def test_sync_not_connected_reports_server_not_available(self, monkeypatch):
-        import aerospike_sdk.sync.cluster as sync_cluster
-        from aerospike_sdk.exceptions import ConnectionError, ResultCode
-
         class _Pac:
             def is_connected(self):
                 return False

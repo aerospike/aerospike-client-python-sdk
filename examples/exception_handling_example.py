@@ -109,7 +109,7 @@ async def run_examples(session) -> None:
     # --- 7) Mapping a result code to its exception type ---
     print("--- 7) Mapping a result code to its exception type ---")
     # A batch does not raise for one bad row; each row carries its own
-    # result code, and record_or_raise() turns that code into the very
+    # result code, and to_exception() turns that code into the very
     # exception type sections 1-6 caught directly.
     async with await (
         session.query([alice, missing]).include_missing_keys().execute()
@@ -117,12 +117,9 @@ async def run_examples(session) -> None:
         async for row in stream:
             status = "no error" if row.is_ok else "failed"
             print(f"  {row.key.value} -> code {row.result_code} ({status})")
-            try:
-                row.record_or_raise()
-            except RecordNotFoundError as exc:
+            exc = row.to_exception()
+            if exc is not None:
                 print(f"  code {row.result_code} maps to {type(exc).__name__}")
-
-    print("Overall: SUCCESS")
 
 
 def describe(exc: Exception) -> None:

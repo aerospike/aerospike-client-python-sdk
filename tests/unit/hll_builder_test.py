@@ -23,7 +23,7 @@ vs ``update_only`` surfaces a ``ValueError`` at the builder level.
 
 import pytest
 
-from aerospike_sdk import Key
+from aerospike_sdk import Behavior, Key
 
 from aerospike_sdk import HllConfig
 from aerospike_sdk.aio.operations.query import (
@@ -68,7 +68,7 @@ class TestAllBuildersHaveAllHllMethods:
 # ---------------------------------------------------------------------------
 
 def _make_wbb(bin_name: str = "h"):
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
     qb._single_key = Key("test", "unit", 1)
     segment = WriteSegmentBuilder(qb)
     return WriteBinBuilder(segment, bin_name), segment

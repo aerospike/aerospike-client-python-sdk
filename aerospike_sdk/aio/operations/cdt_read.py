@@ -43,6 +43,10 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 from aerospike_async import (
     CTX,
     CdtOperation,
+    ExpOperation,
+    ExpReadFlags,
+    ExpType,
+    FilterExpression,
     ListOperation,
     ListOrderType,
     ListReturnType,
@@ -66,6 +70,21 @@ def _map_item_pairs(items: Mapping[Any, Any] | Sequence[tuple[Any, Any]]) -> lis
     if isinstance(items, Mapping):
         return list(items.items())
     return list(items)
+
+
+def _value_list(values: Iterable[Any], param: str) -> list[Any]:
+    """Return *values* as a list of keys or values, refusing a bare string or bytes.
+
+    Both are iterable, so taken as a collection a ``str`` would select one
+    entry per character and ``bytes`` one small-integer key per byte. A
+    ``bytes`` *element* of the collection is a single blob key.
+    """
+    if isinstance(values, (str, bytes, bytearray)):
+        raise TypeError(
+            f"{param} must be a collection, not a single {type(values).__name__}; "
+            f"wrap one value in a list: [{values!r}]"
+        )
+    return values if isinstance(values, list) else list(values)
 
 
 class CdtReadBuilder(Generic[T]):
@@ -153,13 +172,18 @@ class CdtReadBuilder(Generic[T]):
         Returns:
             A :class:`CdtPathBuilder` over the selected entries.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             .bin("catalog").on_map_key("prices").on_map_keys_in(["a", "c"]).collect_values()
         """
         bin_name, new_ctx, _ = self._push_ctx()
         return CdtPathBuilder(
-            self._parent, bin_name, new_ctx + (CTX.map_keys_in(list(keys)),), filterable=True,
+            self._parent, bin_name,
+            new_ctx + (CTX.map_keys_in(_value_list(keys, "keys")),), filterable=True,
         )
 
     def and_filter(self, predicate: Any) -> "CdtPathBuilder[T]":
@@ -494,7 +518,19 @@ class CdtReadBuilder(Generic[T]):
         )
 
     def on_map_key_list(self, keys: Sequence[Any]) -> CdtReadInvertableBuilder[T]:
-        """Navigate into map elements matching a list of keys."""
+        """Navigate into map elements matching a list of keys.
+
+        Args:
+            keys: Map keys to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+        """
+        keys = _value_list(keys, "keys")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_key_list(b, keys, rt).set_context(ctx_l),
@@ -504,7 +540,19 @@ class CdtReadBuilder(Generic[T]):
     def on_map_value_list(
         self, values: Sequence[Any],
     ) -> CdtReadInvertableBuilder[T]:
-        """Navigate into map elements matching a list of values."""
+        """Navigate into map elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: MapOperation.get_by_value_list(
@@ -573,7 +621,19 @@ class CdtReadBuilder(Generic[T]):
     def on_list_value_list(
         self, values: Sequence[Any],
     ) -> CdtReadInvertableBuilder[T]:
-        """Navigate into list elements matching a list of values."""
+        """Navigate into list elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b, new_ctx, ctx_l = self._push_ctx()
         return self._build_invertable(
             lambda rt: ListOperation.get_by_value_list(
@@ -609,9 +669,42 @@ class CdtReadBuilder(Generic[T]):
 
         Returns:
             The parent builder for chaining.
+
+        See Also:
+            :meth:`get_as_ordered_map`: The same entries as a key-ordered ``SortedMap``.
         """
         self._require_map("get_keys_and_values")
         return self._emit(self._rt.KEY_VALUE)
+
+    def get_as_ordered_map(self) -> T:
+        """Return the selected map entries as a key-ordered :class:`~aerospike_sdk.SortedMap`.
+
+        Unlike :meth:`get_keys_and_values`, which keeps the order the server
+        selected the entries in (rank order for a rank range), the result is
+        ordered by key whatever the bin's own map order. Writing it back to a
+        bin stores that map key-ordered.
+
+        Example::
+
+            stream = await (
+                session.query(players.id("p-1001"))
+                .bin("scores").on_map_rank_range(-3, 3).get_as_ordered_map()
+                .execute()
+            )
+            top_three = (await stream.first_or_raise()).record.bins["scores"]
+            # SortedMap({"amy": 870, "raj": 910, "zoe": 955})
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            TypeError: If the selection is on a list rather than a map.
+
+        See Also:
+            :meth:`get_keys_and_values`: Entries in selection order, as a ``dict``.
+        """
+        self._require_map("get_as_ordered_map")
+        return self._emit(self._rt.ORDERED_MAP)
 
     def count(self) -> T:
         """Return the count of elements at the current CDT selection.
@@ -1161,6 +1254,10 @@ class CdtPathBuilder(Generic[T]):
             A :class:`CdtPathBuilder` over the selected entries. Follow it
             with :meth:`and_filter` to narrow them by a predicate.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             .bin("rows").on_each_child().on_map_keys_in(["id", "total"]).collect_values()
@@ -1168,7 +1265,7 @@ class CdtPathBuilder(Generic[T]):
         return CdtPathBuilder(
             self._parent,
             self._bin_name,
-            self._ctx + (CTX.map_keys_in(list(keys)),),
+            self._ctx + (CTX.map_keys_in(_value_list(keys, "keys")),),
             filterable=True,
         )
 
@@ -1216,10 +1313,11 @@ class CdtPathBuilder(Generic[T]):
         """Read the value of every element the path selects.
 
         Args:
-            no_fail: When true, a path that does not resolve yields no result
-                instead of failing the operation. Useful when the shape varies
-                between records -- an empty or absent collection is then not an
-                error.
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. Useful when
+                element types vary. An empty or absent collection is never an
+                error; it yields an empty list.
 
         Returns:
             The parent builder for chaining.
@@ -1239,11 +1337,89 @@ class CdtPathBuilder(Generic[T]):
             CdtOperation.select_values(self._bin_name, list(self._ctx))
         )
 
-    def collect_map_keys(self, *, no_fail: bool = False) -> T:
-        """Read the key of every map entry the path selects.
+    def collect_values_as_expression_read(
+        self,
+        bin_type: ExpType,
+        *,
+        no_fail: bool = False,
+        ignore_eval_failure: bool = False,
+    ) -> T:
+        """Read the same selection as :meth:`collect_values` through an expression read.
+
+        The path is evaluated as a select expression over the bin, and the
+        resulting list is returned under this bin's name; the stored record is
+        unchanged. Use it for expression-read semantics, or alongside other
+        :meth:`~aerospike_sdk.aio.operations.query.QueryBinBuilder.select_from`
+        projections; otherwise prefer :meth:`collect_values`.
+
+        Args:
+            bin_type: The type of the bin the path starts from,
+                ``ExpType.MAP`` or ``ExpType.LIST``. The expression reads the
+                bin as that type.
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation.
+            ignore_eval_failure: When true, a failed evaluation -- such as a
+                bin that is not of ``bin_type`` -- leaves the bin out of the
+                result instead of failing the operation.
 
         Returns:
             The parent builder for chaining.
+
+        Raises:
+            ValueError: If ``bin_type`` is not ``ExpType.MAP`` or
+                ``ExpType.LIST``; a path can only select from a collection.
+
+        Example::
+
+            from aerospike_sdk import ExpType
+
+            stream = await (
+                session.query(key)
+                .bin("catalog").on_map_key("book").on_each_child().on_map_key("title")
+                .collect_values_as_expression_read(ExpType.MAP)
+                .execute()
+            )
+            titles = (await stream.first_or_raise()).record.bins["catalog"]
+
+        See Also:
+            :meth:`collect_values`: the same selection as a CDT operation.
+            :meth:`~aerospike_sdk.aio.operations.query.QueryBinBuilder.select_from`:
+            for other select flags, pass ``Exp.exp_select_by_path`` to it.
+        """
+        if bin_type == ExpType.MAP:
+            bin_exp = FilterExpression.map_bin(self._bin_name)
+        elif bin_type == ExpType.LIST:
+            bin_exp = FilterExpression.list_bin(self._bin_name)
+        else:
+            raise ValueError(
+                f"bin_type must be ExpType.MAP or ExpType.LIST, got {bin_type!r}"
+            )
+        select_flags = SelectFlags.VALUE | SelectFlags.NO_FAIL if no_fail else SelectFlags.VALUE
+        read_flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
+        expression = FilterExpression.exp_select_by_path(
+            ExpType.LIST, int(select_flags), bin_exp, list(self._ctx),
+        )
+        return self._emit(ExpOperation.read(self._bin_name, expression, read_flags))
+
+    def collect_map_keys(self, *, no_fail: bool = False) -> T:
+        """Read the key of every map entry the path selects.
+
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty list.
+
+        Returns:
+            The parent builder for chaining.
+
+        Example::
+
+            .bin("prices").on_each_child_where(over_10).collect_map_keys()
+
+        See Also:
+            :meth:`collect_map_entries`: the keys together with their values.
         """
         if no_fail:
             return self._emit(
@@ -1259,8 +1435,23 @@ class CdtPathBuilder(Generic[T]):
     def collect_map_entries(self, *, no_fail: bool = False) -> T:
         """Read every selected map entry as a key/value pair.
 
+        The result is one flat list of alternating keys and values.
+
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty list.
+
         Returns:
             The parent builder for chaining.
+
+        Example::
+
+            .bin("prices").on_map_keys_in(["apple", "pear"]).collect_map_entries()
+
+        See Also:
+            :meth:`collect_map_keys`: the keys alone.
         """
         if no_fail:
             return self._emit(
@@ -1276,8 +1467,22 @@ class CdtPathBuilder(Generic[T]):
     def collect_matching_tree(self, *, no_fail: bool = False) -> T:
         """Read the selection as a tree, preserving the nesting it was found in.
 
+        Args:
+            no_fail: When true, a path filter that cannot evaluate an element
+                -- such as an integer comparison against a string -- skips
+                that element instead of failing the operation. An empty or
+                absent collection is never an error; it yields an empty tree.
+
         Returns:
             The parent builder for chaining.
+
+        Example::
+
+            .bin("catalog").on_map_key("items").on_each_child_where(in_stock)
+            .collect_matching_tree()
+
+        See Also:
+            :meth:`collect_values`: the selected values as a flat list.
         """
         if no_fail:
             return self._emit(

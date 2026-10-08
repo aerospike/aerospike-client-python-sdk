@@ -31,6 +31,7 @@ from aerospike_async import (
     WritePolicy,
 )
 
+from aerospike_sdk.exceptions import PacValueError
 from aerospike_sdk.policy.policy_mapper import (
     apply_to_read_policy,
     apply_to_write_policy,
@@ -38,6 +39,7 @@ from aerospike_sdk.policy.policy_mapper import (
     to_batch_read_policy,
     to_read_policy,
     to_query_policy,
+    to_read_operate_policy,
     to_txn_roll_policy,
     to_txn_verify_policy,
     to_write_policy,
@@ -92,7 +94,6 @@ class TestToReadPolicy:
         # surfaces this as a built-in ValueError (matching the rest of the
         # SDK's input validation), NOT a leaked aerospike_async exception, and
         # preserves the original PAC error as the cause.
-        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             to_read_policy(Settings(read_touch_ttl_percent=bad))
         assert not isinstance(exc_info.value, PacValueError)
@@ -130,6 +131,31 @@ class TestToWritePolicy:
         p = to_write_policy(s)
         assert p.use_compression is True
         assert p.compression_threshold == 2048
+
+
+class TestToReadOperatePolicy:
+    """Verify to_read_operate_policy() carries read settings, read modes and
+    read-touch TTL included, on the WritePolicy an operate call takes."""
+    def test_read_fields(self):
+        s = Settings(
+            total_timeout=timedelta(seconds=3),
+            max_retries=5,
+            read_mode_ap=ReadModeAP.ALL,
+            read_mode_sc=ReadModeSC.LINEARIZE,
+            read_touch_ttl_percent=80,
+        )
+        p = to_read_operate_policy(s)
+        assert isinstance(p, WritePolicy)
+        assert p.total_timeout == 3_000
+        assert p.max_retries == 5
+        assert p.read_mode_ap == ReadModeAP.ALL
+        assert p.read_mode_sc == ReadModeSC.LINEARIZE
+        assert p.read_touch_ttl == 80
+
+    def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
+        with pytest.raises(ValueError) as exc_info:
+            to_read_operate_policy(Settings(read_touch_ttl_percent=101))
+        assert not isinstance(exc_info.value, PacValueError)
 
 
 class TestToQueryPolicy:
@@ -264,7 +290,6 @@ class TestToBatchReadPolicy:
 
     @pytest.mark.parametrize("bad", [-2, 101, 3600])
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
-        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             to_batch_read_policy(Settings(read_touch_ttl_percent=bad))
         assert not isinstance(exc_info.value, PacValueError)
@@ -295,7 +320,6 @@ class TestApplyToReadPolicy:
         assert result.read_touch_ttl == 50
 
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
-        from aerospike_sdk.exceptions import PacValueError
         with pytest.raises(ValueError) as exc_info:
             apply_to_read_policy(Settings(read_touch_ttl_percent=101), ReadPolicy())
         assert not isinstance(exc_info.value, PacValueError)

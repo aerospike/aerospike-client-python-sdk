@@ -17,11 +17,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import weakref
 
 import types
 import typing
-from typing import Any, Optional
+from typing import Any, Coroutine, Optional
 
 from aerospike_async import ClientPolicy, UDFLang
 
@@ -51,6 +52,30 @@ if typing.TYPE_CHECKING:
     from aerospike_sdk.aio.transactional_session import TransactionalSession  # noqa: F401
 
 
+def _close_built_in(installed: Any) -> None:
+    if installed is not None:
+        try:
+            installed.close()
+        except OSError:
+            pass
+
+
+async def _push_final(
+    previous: Optional[asyncio.Task],
+    delivery: Coroutine[Any, Any, None],
+    installed: Any,
+) -> None:
+    """Deliver a closing snapshot, then close the config-installed exporter it reached."""
+    try:
+        # A disable that follows a quick re-enable must not overlap the
+        # previous disable's push.
+        if previous is not None:
+            await asyncio.wait({previous})
+        await delivery
+    finally:
+        _close_built_in(installed)
+
+
 class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     """Live connection to a cluster, obtained from :meth:`ClusterDefinition.connect`.
 
@@ -74,10 +99,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def __init__(self, sdk_client: Client) -> None:
         """
         Initialize a Cluster instance.
-        
+
         Args:
             sdk_client: The underlying Client instance
-        
+
         Note:
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
@@ -89,8 +114,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         # to one the application registered: the only one the cluster closes.
         self._installed_exporter: Any = None
         self._export_timer: Any = None
+        # The latest closing push still being delivered, if any.
+        self._final_export: Optional[asyncio.Task] = None
         sdk_client._owner_cluster = weakref.ref(self)
-    
+
     @classmethod
     async def _create(
         cls,
@@ -159,11 +186,11 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
                 result_code=ResultCode.SERVER_NOT_AVAILABLE,
             )
         return cls(sdk_client)
-    
+
     async def __aenter__(self) -> Cluster:
         """Async context manager entry."""
         return self
-    
+
     async def __aexit__(
         self,
         exc_type: Optional[type[BaseException]],
@@ -172,7 +199,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     ) -> None:
         """Async context manager exit."""
         await self.close()
-    
+
     @property
     def _client(self) -> Client:
         """Get the underlying Client."""
@@ -281,8 +308,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
     # -- Metrics ---------------------------------------------------------------
     # Collection lives in the client core and is cluster-scoped; these
-    # configure it and pull snapshots. Enable/disable/enabled are instant
-    # (no IO) and therefore plain methods even on the async surface.
+    # configure it and pull snapshots. Enable/disable/enabled are plain
+    # methods even on the async surface, because the configuration reload
+    # calls them synchronously; the one piece of IO, disable's closing push,
+    # runs as a task.
 
     @property
     def exporters(self) -> tuple:
@@ -357,7 +386,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         made after enabling still takes effect.
         """
         self._stop_export_timer()
-        self._uninstall_built_in()
         settings = getattr(self._sdk_client, "_sdk_settings", None)
         metrics = getattr(settings, "metrics", None)
         interval = DEFAULT_EXPORT_INTERVAL_SECONDS
@@ -368,34 +396,39 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
             if built_in is not None:
                 self._exporters.append(built_in)
                 self._installed_exporter = built_in
-        self._export_timer = AsyncMetricsExportTimer(self, interval, metrics)
+        self._export_timer = AsyncMetricsExportTimer(
+            self, interval, metrics, after=self._final_export,
+        )
         self._export_timer.start()
 
-    def _uninstall_built_in(self) -> None:
-        """Retire the config-installed exporter, closing what it opened.
+    def _detach_built_in(self) -> Any:
+        """Unregister the config-installed exporter and hand it back for closing.
 
         Only ever the cluster's own install: exporters the application
         registered are its to close.
         """
         installed, self._installed_exporter = self._installed_exporter, None
-        if installed is None:
-            return
-        if installed in self._exporters:
+        if installed is not None and installed in self._exporters:
             self._exporters.remove(installed)
-        try:
-            installed.close()
-        except OSError:
-            pass
+        return installed
 
-    def _stop_export_timer(self) -> None:
-        """Stop the export timer if one is running.
+    def _stop_export_timer(self, *, final: bool = False) -> None:
+        """Stop the export timer and retire the config-installed exporter.
 
-        Cancellation is awaited by :meth:`close`; this only
-        signals, so it is safe from a synchronous caller.
+        Only signals, so it is safe from a synchronous caller. With
+        ``final``, the closing snapshot is taken now and delivered by a task
+        that :meth:`close` and the next timer both wait for; the
+        config-installed exporter is closed once it has received it.
         """
-        if self._export_timer is not None:
-            self._export_timer.request_stop()
-            self._export_timer = None
+        timer, self._export_timer = self._export_timer, None
+        delivery = timer.request_stop(final=final) if timer is not None else None
+        installed = self._detach_built_in()
+        if delivery is None:
+            _close_built_in(installed)
+            return
+        self._final_export = asyncio.get_running_loop().create_task(
+            _push_final(self._final_export, delivery, installed),
+        )
 
     def enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
         """Enable metrics collection for this cluster.
@@ -432,17 +465,36 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def disable_metrics(self) -> None:
         """Disable metrics collection. Accumulated data is retained.
 
-        Stops the export push; exporters the application registered stay
-        registered and are not closed -- their lifecycle belongs to the
-        application.
+        Stops the export push after one last snapshot, so the window since the
+        previous export still reaches the exporters. The snapshot is taken
+        before collection stops; delivering it is IO, so it runs as a task
+        and this method returns before the exporters have received it.
+        :meth:`close` waits for that delivery. Exporters the application
+        registered stay registered and are not closed -- their lifecycle
+        belongs to the application.
+
+        Call it from the event loop's thread: the closing delivery is
+        scheduled on the running loop.
+
+        Raises:
+            RuntimeError: If called off the event loop's thread while
+                metrics are enabled and an exporter is registered.
+
+        Example::
+
+            cluster.disable_metrics()
+            # ... the closing snapshot is delivered in the background ...
+            await cluster.close()  # returns once it has been
+
+        See Also:
+            :meth:`enable_metrics`, :meth:`add_exporter`
         """
+        self._stop_export_timer(final=True)
         client = self._sdk_client
         client.underlying_client.disable_metrics()
         client._usage_on = False
         client._cmd_count_on = False
         client._record_on = False
-        self._stop_export_timer()
-        self._uninstall_built_in()
 
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
@@ -451,14 +503,16 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     async def close(self) -> None:
         """Close the SDK client and release cluster resources.
 
-        Invoked automatically when used as an async context manager.
+        Invoked automatically when used as an async context manager. With
+        metrics enabled, exporters receive one closing snapshot first.
         """
-        # Stop exporting before the client goes away: the timer polls the
-        # client every interval and would otherwise keep firing against a
-        # closed one.
+        # Finish exporting before the client goes away: the closing snapshot
+        # reads it, and a running timer would keep firing against a closed one.
+        if self._final_export is not None:
+            await asyncio.wait({self._final_export})
         if self._export_timer is not None:
             timer, self._export_timer = self._export_timer, None
-            await timer.stop()
-        self._uninstall_built_in()
+            await timer.stop(final=True)
+        _close_built_in(self._detach_built_in())
         await self._sdk_client.close()
 

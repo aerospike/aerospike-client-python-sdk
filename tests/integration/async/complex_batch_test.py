@@ -78,7 +78,7 @@ class TestMixedReadWrite:
         k2 = ds.id("cb_rw_2")
         await _cleanup(session, k1, k2)
 
-        await session.upsert(key=k1).put({"name": "Alice", "age": 21}).execute()
+        await session.upsert(k1).put({"name": "Alice", "age": 21}).execute()
 
         rs = await (
             session
@@ -391,7 +391,7 @@ class TestPerSpecSettings:
         k = ds.id("cb_gen_2")
         await _cleanup(session, k)
 
-        await session.upsert(key=k).put({"v": 1}).execute()
+        await session.upsert(k).put({"v": 1}).execute()
 
         rs = await (
             session
@@ -716,7 +716,7 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-            .upsert(key=k1).bin(BIN_NAME2).set_to(100)
+            .upsert(k1).bin(BIN_NAME2).set_to(100)
             .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
             .upsert(k6).bin(BIN_NAME3).upsert_from(f"$.{BIN_NAME} + 1000")
             .delete(k_del)
@@ -758,7 +758,7 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-            .upsert(key=k1).bin(BIN_NAME2).set_to(100)
+            .upsert(k1).bin(BIN_NAME2).set_to(100)
             .upsert(k_invalid).bin(BIN_NAME2).set_to(100)
             .execute()
         )
@@ -775,7 +775,7 @@ class TestBatchWriteComplex:
 
         rs = await (
             session
-            .upsert(key=k_good).bin(BIN_NAME2).set_to(200)
+            .upsert(k_good).bin(BIN_NAME2).set_to(200)
             .delete(k_gone)
             .execute()
         )

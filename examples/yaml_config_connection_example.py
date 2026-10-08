@@ -33,6 +33,7 @@ _PROFILES = (
 
 def demonstrate_behavior_loading() -> None:
     """Report which of the config's profiles actually registered."""
+    # --- 1) The config file's profiles, as registered at connect ---
     print("=== Behavior configuration status ===")
     print(f"Config file: {os.environ.get(_ENV_CONFIG_URL, '(not set)')}")
 
@@ -47,6 +48,7 @@ def demonstrate_behavior_loading() -> None:
 
 async def perform_example_operations(session) -> None:
     """Run ordinary operations through a session bound to a config behavior."""
+    # --- 2) Operations through a session bound to a config behavior ---
     print("=== Performing example operations ===")
 
     print("Writing a test record...")
@@ -88,6 +90,7 @@ async def perform_example_operations(session) -> None:
 
 def demonstrate_behavior_switching(cluster) -> None:
     """One session per workload shape, each bound to its own profile."""
+    # --- 3) One session per workload shape ---
     print("=== Demonstrating behavior switching ===")
     print("Different behaviors can serve different operation types:\n")
 

@@ -18,15 +18,15 @@
 Tests expression building and usage with actual database operations.
 """
 
-import base64
 
 import pytest
 from aerospike_async import FilterExpression
 
-from aerospike_sdk import Behavior, Exp, QueryHint, in_list, map_keys, map_values, val
-from aerospike_sdk import ResultCode
+from aerospike_sdk import Behavior, Exp, in_list, map_keys, map_values, val
+from aerospike_sdk import ExpType, ListReturnType, MapReturnType, ResultCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.policy import Settings
 
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_async,
@@ -36,6 +36,8 @@ from tests.pac_compat import (
 from tests.integration.namespace import general_namespace
 
 DS = DataSet.of(general_namespace(), "filter_exp_test")
+EXP_DS = DataSet.of(general_namespace(), "exp_test")
+CDT_DS = DataSet.of(general_namespace(), "cdt_test")
 
 class TestExpAlias:
     """Test that Exp is properly aliased to FilterExpression."""
@@ -353,7 +355,7 @@ async def session_with_data(shared_cluster, enterprise, wait_for_set_visible):
     """Setup test data for expression tests."""
     cluster = shared_cluster
     session = cluster.create_session()
-    ds = DataSet.of(general_namespace(), "exp_test")
+    ds = EXP_DS
 
     for key in ["A", "B", "C"]:
         try:
@@ -384,8 +386,8 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.int_bin("A"), val(1))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -401,8 +403,8 @@ class TestExpWithQuery:
         filter_exp = Exp.gt(Exp.int_bin("A"), val(1))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -418,8 +420,8 @@ class TestExpWithQuery:
         filter_exp = Exp.and_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("D"), val(1))])
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -436,8 +438,8 @@ class TestExpWithQuery:
         filter_exp = Exp.or_([Exp.eq(Exp.int_bin("A"), val(1)), Exp.eq(Exp.int_bin("A"), val(2))])
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -452,8 +454,8 @@ class TestExpWithQuery:
         filter_exp = Exp.not_(Exp.eq(Exp.int_bin("A"), val(0)))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -470,8 +472,8 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.num_add([Exp.int_bin("A"), Exp.int_bin("D")]), val(2))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -487,8 +489,8 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.string_bin("C"), val("abcde"))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -504,8 +506,8 @@ class TestExpWithQuery:
         filter_exp = Exp.eq(Exp.int_bin("A"), val(999))
 
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
-            .filter_expression(filter_exp)
+            session_with_data.query(EXP_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -537,7 +539,7 @@ class TestExpWithAel:
 
     These query the seeded keys directly (a filter expression on a keyed read):
     an AEL ``where()`` needs no secondary index and never scans, so it is
-    unaffected by the strict ``allow_scans_with_where`` default. A dedicated
+    unaffected by the ``allow_scans_with_where`` setting. A dedicated
     set-scan-with-``where()`` case lives in ``TestAelScanFilter``.
 
     Type inference: Bin types are automatically inferred from comparison operands.
@@ -709,19 +711,16 @@ class TestAelScanFilter:
 
     The keyed-read cases in :class:`TestExpWithAel` cover AEL correctness; this
     pins the distinct set-scan path, where ``where()`` filters records
-    server-side while scanning the whole set. Under the strict
-    ``allow_scans_with_where`` default a scanning ``where()`` must opt in — via
-    the per-query hint here, exactly as a caller would. This is the one AEL
-    ``where()`` case that legitimately scans (and so still depends on
+    server-side while scanning the whole set. This is the one AEL ``where()``
+    case that legitimately scans (and so still depends on
     ``wait_for_set_visible``).
     """
 
     @requires_server_compiled_ael
     async def test_scan_with_where_filters_server_side(self, session_with_data):
         stream = await (
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(EXP_DS)
             .where("$.A == 1")
-            .with_hint(QueryHint(allow_scans_with_where=True))
             .execute()
         )
         records = [result.record async for result in stream]
@@ -732,15 +731,9 @@ class TestAelScanFilter:
 
 
 async def _seed_cdt_data(cluster, *, wait_for_set_visible):
-    """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests.
-
-    Used by both ``session_with_cdt_data`` (ungated) and
-    ``session_with_cdt_data_812`` (skips unless the default seed is 8.1.2+)
-    so the gated and ungated tests see the exact same shape.
-
-    """
+    """Seed three records into ``test/cdt_test`` for CDT path / wrapper tests."""
     session = cluster.create_session()
-    ds = DataSet.of(general_namespace(), "cdt_test")
+    ds = CDT_DS
 
     for key in ["rec1", "rec2", "rec3"]:
         try:
@@ -780,30 +773,8 @@ async def _drop_cdt_data(session, ds):
 
 
 @pytest.fixture(scope="module")
-async def session_with_cdt_data_812(aerospike_host_812_required, make_cluster_definition, wait_for_set_visible):
-    """Connected cluster + CDT dataset on the default 8.1.2+ seed.
-
-
-    Used by tests that exercise convenience wrappers around server-8.2.0
-    ExpOps (``in_list`` / ``map_keys`` / ``map_values``). The dependent
-    ``aerospike_host_812_required`` fixture connects to the default
-    ``AEROSPIKE_HOST`` and skips the test cleanly unless it is 8.1.2+.
-    """
-    async with make_cluster_definition(aerospike_host_812_required).connect() as cluster:
-        session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
-        yield cluster.create_session()
-        await _drop_cdt_data(session, ds)
-
-
-@pytest.fixture(scope="module")
 async def session_with_cdt_data(aerospike_host, make_cluster_definition, wait_for_set_visible):
-    """Connected cluster + CDT dataset on the broad-surface seed.
-
-    Tests that exercise convenience wrappers around server-8.1.2 ExpOps
-    should consume ``session_with_cdt_data_812`` instead, which uses the
-    default ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+.
-
-    """
+    """Connected cluster + CDT dataset on the default seed."""
     async with make_cluster_definition(aerospike_host).connect() as cluster:
         session, ds = await _seed_cdt_data(cluster, wait_for_set_visible=wait_for_set_visible)
         yield cluster.create_session()
@@ -815,7 +786,6 @@ class TestCdtPathWithExp:
 
     async def test_list_get_by_index(self, session_with_cdt_data):
         """Test list_get_by_index using Exp builder."""
-        from aerospike_sdk import ExpType, ListReturnType
 
         # Filter: numbers[0] == 10
         filter_exp = Exp.eq(
@@ -830,8 +800,8 @@ class TestCdtPathWithExp:
         )
 
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -844,7 +814,6 @@ class TestCdtPathWithExp:
 
     async def test_map_get_by_key(self, session_with_cdt_data):
         """Test map_get_by_key using Exp builder."""
-        from aerospike_sdk import ExpType, MapReturnType
 
         # Filter: info.age == 30
         filter_exp = Exp.eq(
@@ -859,8 +828,8 @@ class TestCdtPathWithExp:
         )
 
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -879,7 +848,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_index_access(self, session_with_cdt_data):
         """Test AEL list index access: $.numbers.[0] == 10
-        
+
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
@@ -898,7 +867,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_negative_index(self, session_with_cdt_data):
         """Test AEL list negative index access: $.numbers.[-1] == 50
-        
+
         Note: The AEL grammar requires a dot before brackets: .[-1] not [-1]
         """
         stream = await (
@@ -950,7 +919,7 @@ class TestCdtPathWithAel:
     @requires_server_compiled_ael
     async def test_list_index_greater_than(self, session_with_cdt_data):
         """Test AEL list index with greater than: $.numbers.[0] > 50
-        
+
         Note: The AEL grammar requires a dot before brackets: .[0] not [0]
         """
         stream = await (
@@ -1769,7 +1738,7 @@ class TestAelErrorHandling:
     async def test_dataset_invalid_ael_rejected(self, session_with_data):
         """Malformed dataset AEL surfaces as ``PARAMETER_ERROR`` from the server."""
         await assert_dataset_invalid_ael_rejected_async(
-            session_with_data.query(general_namespace(), "exp_test")
+            session_with_data.query(EXP_DS)
             .where("$.age >")
             .execute()
         )
@@ -1777,7 +1746,7 @@ class TestAelErrorHandling:
     @requires_server_compiled_ael
     async def test_point_invalid_ael_rejected(self, session_with_data):
         """Malformed point-query AEL uses field **43** and raises ``PARAMETER_ERROR``."""
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         await assert_point_invalid_ael_rejected_async(
             session_with_data.query(ds.id("A")).where("$.A >").execute()
         )
@@ -1788,13 +1757,13 @@ class TestPointReadStringFilter:
 
     @requires_server_compiled_ael
     async def test_point_read_honors_string_where(self, session_with_data):
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await session_with_data.query(ds.id("A")).where("$.A > 100").execute()
         assert await rs.first() is None
 
     @requires_server_compiled_ael
     async def test_point_read_honors_string_default_where(self, session_with_data):
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await session_with_data.query(ds.id("A")).default_where("$.A > 100").execute()
         assert await rs.first() is None
 
@@ -1807,13 +1776,13 @@ class TestAelParamBinding:
 
     @requires_server_compiled_ael
     async def test_int_param_matches(self, session_with_data):
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await session_with_data.query(ds.id("A")).where("$.A == %d", 1).execute()
         assert await rs.first() is not None
 
     @requires_server_compiled_ael
     async def test_string_param_matches(self, session_with_data):
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await (
             session_with_data.query(ds.id("A")).where("$.C == '%s'", "abcde").execute()
         )
@@ -1821,14 +1790,14 @@ class TestAelParamBinding:
 
     @requires_server_compiled_ael
     async def test_param_that_does_not_match_filters_out(self, session_with_data):
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await session_with_data.query(ds.id("A")).where("$.A > %d", 100).execute()
         assert await rs.first() is None
 
     @requires_server_compiled_ael
     async def test_escaped_modulo_with_param(self, session_with_data):
         """``%%`` reaches the server as AEL's modulo operator, not a format spec."""
-        ds = DataSet.of(general_namespace(), "exp_test")
+        ds = EXP_DS
         rs = await (
             session_with_data.query(ds.id("A"))
             .where("$.A %% 2 == 1 and $.A == %d", 1)
@@ -1883,8 +1852,6 @@ class TestAdvancedExpFilters:
 
     async def _assert_filtered_out(self, session, key, ael):
         """Query with AEL filter that should NOT match, expect FILTERED_OUT."""
-        from aerospike_sdk.exceptions import ResultCode
-        from aerospike_sdk.exceptions import AerospikeError
 
         with pytest.raises(AerospikeError) as exc_info:
             rs = await (
@@ -1985,7 +1952,6 @@ class TestInExpression:
 
     async def test_string_in_list_bin_with_exp(self, session_with_cdt_data):
         """Filter: "bob" in $.names — should match rec1 only."""
-        from aerospike_sdk import ListReturnType
         filter_exp = Exp.list_get_by_value(
             ListReturnType.EXISTS,
             Exp.string_val("bob"),
@@ -1993,8 +1959,8 @@ class TestInExpression:
             [],
         )
         stream = await (
-            session_with_cdt_data.query(general_namespace(), "cdt_test")
-            .filter_expression(filter_exp)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filter_exp)
             .execute()
         )
         records = []
@@ -2079,26 +2045,19 @@ class TestInExpressionAel:
 class TestConvenienceWrappers:
     """Tests for in_list(), map_keys(), map_values() convenience functions.
 
-    These helpers are thin pass-throughs to the native 8.2.0 ExpOps (see
-    the docstrings in ``aerospike_sdk/exp.py``). Server versions older
-    than 8.1.2 reject the opcodes with ``ParameterError``, so the tests
-    consume ``session_with_cdt_data_812`` which uses the default
-    ``AEROSPIKE_HOST`` and skips cleanly unless it is 8.1.2+. Callers
-
-    that need broader compatibility should build the equivalent expression
-    explicitly with ``Exp.list_get_by_value`` /
-    ``Exp.map_get_by_index_range`` rather than using these wrappers.
+    These helpers are thin pass-throughs to native ExpOps (see the
+    docstrings in ``aerospike_sdk/exp.py``).
     """
 
-    async def test_in_list_string_match(self, session_with_cdt_data_812):
+    async def test_in_list_string_match(self, session_with_cdt_data):
         """in_list finds "bob" in the names list bin (rec1 only)."""
         filt = Exp.eq(
             in_list(Exp.string_val("bob"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2106,15 +2065,15 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert "bob" in records[0].bins["names"]
 
-    async def test_in_list_int_match(self, session_with_cdt_data_812):
+    async def test_in_list_int_match(self, session_with_cdt_data):
         """in_list finds 200 in the numbers list bin (rec3 only)."""
         filt = Exp.eq(
             in_list(Exp.int_val(200), Exp.list_bin("numbers")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2122,45 +2081,45 @@ class TestConvenienceWrappers:
         assert len(records) == 1
         assert 200 in records[0].bins["numbers"]
 
-    async def test_in_list_no_match(self, session_with_cdt_data_812):
+    async def test_in_list_no_match(self, session_with_cdt_data):
         """in_list returns false when the value is not present."""
         filt = Exp.eq(
             in_list(Exp.string_val("zzz"), Exp.list_bin("names")),
             Exp.bool_val(True),
         )
         stream = await (
-            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
         stream.close()
         assert len(records) == 0
 
-    async def test_map_keys(self, session_with_cdt_data_812):
+    async def test_map_keys(self, session_with_cdt_data):
         """map_keys returns the key set of the info map."""
         filt = Exp.eq(
             Exp.list_size(map_keys(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
         stream.close()
         assert len(records) == 3
 
-    async def test_map_values(self, session_with_cdt_data_812):
+    async def test_map_values(self, session_with_cdt_data):
         """map_values returns values; filter on list size == 3."""
         filt = Exp.eq(
             Exp.list_size(map_values(Exp.map_bin("info")), []),
             Exp.int_val(3),
         )
         stream = await (
-            session_with_cdt_data_812.query(general_namespace(), "cdt_test")
-            .filter_expression(filt)
+            session_with_cdt_data.query(CDT_DS)
+            .where(filt)
             .execute()
         )
         records = [r.record async for r in stream]
@@ -2170,11 +2129,6 @@ class TestConvenienceWrappers:
 
 def _hex_blob_expr(payload: bytes) -> str:
     return f"$.payload:BLOB == X'{payload.hex()}'"
-
-
-def _b64_blob_expr(payload: bytes) -> str:
-    enc = base64.b64encode(payload).decode("ascii")
-    return f'$.payload.get(type: BLOB) == "{enc}"'
 
 
 @pytest.fixture(scope="module")
@@ -2268,7 +2222,9 @@ _METADATA_STR_KEY, _METADATA_NO_TTL_KEY = _set_keys(_METADATA_SET, "strkey", "no
 @pytest.fixture(scope="module")
 async def session_with_metadata(aerospike_host, make_cluster_definition):
     """A keyed record with a TTL, and a second one that never expires."""
-    behavior = Behavior.DEFAULT.derive_with_changes(name="ael_metadata", send_key=True)
+    behavior = Behavior.DEFAULT.derive_with_changes(
+        name="ael_metadata", all=Settings(send_key=True),
+    )
     keys = (_METADATA_STR_KEY, _METADATA_INT_KEY, _METADATA_NO_TTL_KEY)
     async with make_cluster_definition(aerospike_host).connect() as cluster:
         session = cluster.create_session(behavior=behavior)

@@ -36,6 +36,7 @@ REGION_SET = "georeg_psdk"
 INDEX_NAME = "geoidx_psdk"
 BIN_NAME = "loc"
 NAMESPACE = general_namespace()
+REGION_DS = DataSet.of(NAMESPACE, REGION_SET)
 # 3 km AeroCircles clustered around the San Francisco Peninsula.
 STARBUCKS = [
     (-122.1708441, 37.4241193),
@@ -76,7 +77,7 @@ async def geo_seeded_cluster(shared_cluster, enterprise):
     """Set up a GEO2DSPHERE index plus 15 AeroCircle regions. Tear down on exit."""
     cluster = shared_cluster
     session = cluster.create_session()
-    regions = DataSet.of(NAMESPACE, REGION_SET)
+    regions = REGION_DS
 
     # Clean any leftover data from a previous run.
     for i in range(len(STARBUCKS)):
@@ -85,14 +86,14 @@ async def geo_seeded_cluster(shared_cluster, enterprise):
         except Exception:
             pass
     try:
-        await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+        await session.index(REGION_DS).named(INDEX_NAME).drop()
     except Exception:
         pass
 
     # Create the GEO2DSPHERE index.
     try:
         await (
-            session.index(NAMESPACE, REGION_SET)
+            session.index(REGION_DS)
             .named(INDEX_NAME)
             .on_bin(BIN_NAME)
             .geo2dsphere()
@@ -120,7 +121,7 @@ async def geo_seeded_cluster(shared_cluster, enterprise):
         except Exception:
             pass
     try:
-        await session.index(NAMESPACE, REGION_SET).named(INDEX_NAME).drop()
+        await session.index(REGION_DS).named(INDEX_NAME).drop()
     except Exception:
         pass
 
@@ -136,7 +137,7 @@ class TestGeoQuery:
     @requires_server_compiled_ael
     async def test_ael_geo_compare_returns_5_intersecting_regions(self, session):
         """AEL ``geoCompare($.loc, geoJson('...'))`` matches 5 of the 15 regions."""
-        regions = DataSet.of(NAMESPACE, REGION_SET)
+        regions = REGION_DS
         stream = await (
             session.query(*(regions.id(i) for i in range(len(STARBUCKS))))
             .where(f"geoCompare($.{BIN_NAME}, geoJson('{QUERY_POINT}'))")
@@ -159,7 +160,7 @@ class TestGeoQuery:
             Exp.geo_val(QUERY_POINT),
         )
         stream = await (
-            session.query(NAMESPACE, REGION_SET)
+            session.query(REGION_DS)
             .where(filter_exp)
             .execute()
         )

@@ -75,6 +75,7 @@ if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.op
     from aerospike_sdk.aio.operations.query import WriteBinBuilder
     from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
     from aerospike_sdk.error_strategy import OnError
+    from aerospike_sdk.policy.behavior import Behavior
     from aerospike_sdk.query_shared import _QueryBuilderBase
     from aerospike_sdk.record_result import RecordResult
 
@@ -214,6 +215,8 @@ class _WriteVerbs(Generic[_WSB]):
     Implemented on :class:`QueryBuilder` (chain from a read query) and
     :class:`WriteBinBuilder` (chain from a bin-scoped write). Each method
     finalizes the prior segment when applicable and targets new key(s).
+    Chaining a write onto a dataset query raises ``ValueError``: only
+    key-based queries stack.
 
     Generic over the ``WriteSegmentBuilder`` type each mixer opens so a
     sync mixer's verbs return the sync builder (and vice versa) rather than a
@@ -584,12 +587,19 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
 
         Returns:
             self for method chaining.
+
+        Raises:
+            ValueError: If ``where`` has already been called on this operation.
+                Each chained operation takes its own.
         """
+        qb = self._qb
+        if qb._filter_expression is not None or qb._where_ael is not None:
+            raise ValueError("where() can only be called once per operation")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
+            qb._filter_expression = qb._filter_expression_from_ael(expression)
         else:
-            self._qb._filter_expression = expression
+            qb._filter_expression = expression
         return self
 
     def ensure_generation_is(self, generation: int) -> Self:
@@ -1204,7 +1214,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         client: Client,
         key: Key,
         op_type: str,
-        behavior: Any,
+        behavior: Behavior,
         write_policy: Optional[WritePolicy],
         read_policy: Optional[ReadPolicy] = None,
         txn: Optional[Txn] = None,
@@ -1423,7 +1433,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         cached policies to force fresh derivation.
         """
         cached = self._write_policy_sc if mode == Mode.SC else self._write_policy
-        if cached is None and self._behavior_fast is not None:
+        if cached is None:
             cached = self._apply_txn(to_write_policy(
                 self._behavior_fast.get_settings(
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode)))
@@ -1433,7 +1443,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                 self._write_policy_sc = cached
             else:
                 self._write_policy = cached
-        return self._apply_txn(cached or WritePolicy())
+        return self._apply_txn(cached)
 
     def _execute_blocking_fast_path(
         self,

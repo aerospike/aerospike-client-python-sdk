@@ -13,12 +13,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, and query-stream rejection paths."""
+"""Sync integration tests mirroring async idempotent-op, TTL guard, bad-AEL, unknown-namespace, query-stream rejection, and missing-key in-stream write paths."""
 
 import pytest
-from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.exceptions import AerospikeError, InvalidNamespaceError, ResultCode
 
-from aerospike_sdk import DataSet, QueryDuration, QueryHint
+from aerospike_sdk import DataSet, ErrorStrategy, QueryDuration, QueryHint
 from tests.integration.namespace import general_namespace
 from tests.pac_compat import (
     assert_dataset_invalid_ael_rejected_sync,
@@ -124,7 +124,7 @@ class TestSyncAelErrorHandling:
     def test_dataset_invalid_ael_rejected(self, session_with_ael_row):
         """Malformed dataset AEL surfaces as ``PARAMETER_ERROR`` from the server."""
         assert_dataset_invalid_ael_rejected_sync(
-            lambda: session_with_ael_row.query(general_namespace(), AEL_ERROR_SET)
+            lambda: session_with_ael_row.query(DataSet.of(general_namespace(), AEL_ERROR_SET))
             .where("$.age >")
             .execute()
         )
@@ -157,36 +157,6 @@ class TestSyncPointReadStringFilter:
         ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
         rs = session_with_ael_row.query(ds.id("row")).default_where("$.A > 100").execute()
         assert rs.first() is None
-
-
-class TestSyncAelParamBinding:
-    """Sync twin of ``async/exp_test.py::TestAelParamBinding``.
-
-    The seeded row is ``{age: 30, A: 1}``.
-    """
-
-    @requires_server_compiled_ael
-    def test_int_param_matches(self, session_with_ael_row):
-        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
-        rs = session_with_ael_row.query(ds.id("row")).where("$.age == %d", 30).execute()
-        assert rs.first() is not None
-
-    @requires_server_compiled_ael
-    def test_param_that_does_not_match_filters_out(self, session_with_ael_row):
-        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
-        rs = session_with_ael_row.query(ds.id("row")).where("$.age > %d", 100).execute()
-        assert rs.first() is None
-
-    @requires_server_compiled_ael
-    def test_escaped_modulo_with_param(self, session_with_ael_row):
-        """``%%`` reaches the server as AEL's modulo operator, not a format spec."""
-        ds = DataSet.of(general_namespace(), AEL_ERROR_SET)
-        rs = (
-            session_with_ael_row.query(ds.id("row"))
-            .where("$.age %% 4 == 2 and $.A == %d", 1)
-            .execute()
-        )
-        assert rs.first() is not None
 
 
 @pytest.fixture
@@ -236,3 +206,44 @@ class TestQueryStreamRejection:
         assert excinfo.value.result_code == ResultCode.PARAMETER_ERROR
         stream.close()
         _cleanup(session, key)
+
+
+def _point_op(session, key, op):
+    if op == "read":
+        return session.query(key)
+    return session.upsert(key).put({"v": 1})
+
+
+class TestUnknownNamespace:
+    """A namespace the cluster lacks fails fast instead of exhausting retries."""
+
+    @pytest.mark.parametrize("op", ["read", "write"])
+    def test_raises_invalid_namespace(self, cluster, op):
+        key = DataSet.of("no_such_ns", "sync_error_handling").id(1)
+        with pytest.raises(InvalidNamespaceError) as excinfo:
+            _point_op(cluster.create_session(), key, op).execute().collect()
+        assert excinfo.value.result_code == ResultCode.INVALID_NAMESPACE
+
+    @pytest.mark.parametrize("op", ["read", "write"])
+    def test_in_stream_row(self, cluster, op):
+        key = DataSet.of("no_such_ns", "sync_error_handling").id(1)
+        results = _point_op(cluster.create_session(), key, op).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        ).collect()
+
+        assert [r.result_code for r in results] == [ResultCode.INVALID_NAMESPACE]
+        assert isinstance(results[0].exception, InvalidNamespaceError)
+
+
+class TestMissingKeyWriteInStream:
+    """Single-key writes that require the record report the missing key in stream."""
+
+    @pytest.mark.parametrize("verb", ["update", "replace_if_exists"])
+    def test_reports_a_row(self, cluster, ds, verb):
+        k = ds.id(f"smk_{verb}_miss")
+        session = cluster.create_session()
+        _cleanup(session, k)
+        results = getattr(session, verb)(k).put({"v": 1}).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        ).collect()
+        assert [r.result_code for r in results] == [ResultCode.KEY_NOT_FOUND_ERROR]

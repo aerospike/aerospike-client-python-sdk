@@ -40,6 +40,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
     TypeVar,
     Union,
     cast,
@@ -49,7 +50,6 @@ from typing import (
 from typing import Self
 
 from aerospike_async import (
-    BasePolicy,
     BatchDeleteOp,
     BatchDeletePolicy,
     BatchPolicy,
@@ -91,7 +91,6 @@ from aerospike_async import (
     QueryPolicy,
     QueryWhereFlags,
     ReadPolicy,
-    Replica,
     Statement,
     StringNumericType,
     StringOperation,
@@ -108,6 +107,7 @@ from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
     CdtReadInvertableBuilder,
     _map_item_pairs,
+    _value_list,
 )
 from aerospike_sdk.aio.operations.cdt_write import (
     CdtWriteBuilder,
@@ -134,10 +134,11 @@ from aerospike_sdk.operations_shared import (
 from aerospike_sdk.policy.policy_mapper import (
     resolve_durable_delete,
     to_batch_policy,
+    to_query_policy,
+    to_read_operate_policy,
     to_read_policy,
     to_write_policy,
 )
-from aerospike_sdk.background_shared import make_background_write_policy
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
@@ -233,28 +234,19 @@ def _resolve_hll_flags(
     return flags
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class QueryHint:
     """Hint for influencing secondary index selection and query scheduling.
 
-    Provide ``index_name`` as a soft explain hint on the server-led path, or
-    ``bin_name`` to opt out of server-led selection and send the AEL on the
-    plain field ``43`` path instead. ``index_name`` and ``bin_name`` are
-    mutually exclusive.
+    Provide ``index_name`` as a soft explain hint on the server-led path. To
+    bypass server-led selection and choose the access path yourself, attach an
+    explicit index filter with :meth:`QueryBuilder.filter` instead.
 
     On clusters that support field ``44`` query selection (>= 8.2.0),
     ``allow_scans_with_where`` and ``hard_hint`` set Tier-D WHERE flags on
     explain. ``allow_scans_with_where`` is tri-state: ``None`` inherits the
-    Behavior default (strict — primary-index fallback rejected), ``True``
-    allows the fallback for this query, ``False`` rejects it.
-
-    .. deprecated:: alpha
-        ``bin_name`` is a legacy opt-out that skips server-led selection in
-        favor of the field ``43`` route. The bin name itself is not sent
-        anywhere. The Query Optimizer PRD specifies the index *name* as the sole
-        hint shape, so this is expected to be removed once product signs off.
-        Prefer ``index_name``, or :meth:`QueryBuilder.filter` when you want to
-        bypass the planner.
+    Behavior setting (by default the primary-index fallback is allowed),
+    ``True`` allows the fallback for this query, ``False`` rejects it.
 
     Example::
 
@@ -271,7 +263,6 @@ class QueryHint:
 
     Args:
         index_name: Soft index name hint (field ``21`` on explain).
-        bin_name: Opt out of explain; send the AEL on field ``43``. Deprecated.
         query_duration: Override ``expected_duration`` on the query policy.
         allow_scans_with_where: Tri-state override for whether a where-clause
             query may fall back to a primary-index scan. ``None`` (default)
@@ -280,25 +271,18 @@ class QueryHint:
         hard_hint: Explain flag — require ``index_name`` to be selected.
 
     Raises:
-        ValueError: If both ``index_name`` and ``bin_name`` are provided, or
-            ``hard_hint`` is set without ``index_name``.
+        ValueError: If ``hard_hint`` is set without ``index_name``.
 
     See Also:
         :meth:`QueryBuilder.with_hint`
     """
 
     index_name: Optional[str] = None
-    bin_name: Optional[str] = None
     query_duration: Optional[QueryDuration] = None
     allow_scans_with_where: Optional[bool] = None
     hard_hint: bool = False
 
     def __post_init__(self) -> None:
-        if self.index_name is not None and self.bin_name is not None:
-            raise ValueError(
-                "index_name and bin_name are mutually exclusive; "
-                "provide one or neither, not both"
-            )
         if self.hard_hint and not self.index_name:
             raise ValueError("hard_hint requires index_name")
 
@@ -429,12 +413,13 @@ class _QueryBuilderBase:
     _filter_expression: Optional[FilterExpression] = None
     _query_hint: Optional[QueryHint] = None
     _where_ael: Optional[str] = None
-    _policy: Optional[QueryPolicy] = None
+    _limit: Optional[int] = None
+    _records_per_second: Optional[int] = None
     _partition_filter: Optional[PartitionFilter] = None
+    _keys_selected: bool = False
     _chunk_size: Optional[int] = None
     _fail_on_filtered_out: bool = False
     _respond_all_keys: bool = False
-    _read_policy: Optional[ReadPolicy] = None
     _op_type: Optional[str] = None
     _generation: Optional[int] = None
     _ttl_seconds: Optional[int] = None
@@ -485,11 +470,13 @@ class _QueryBuilderBase:
         client: Client,
         namespace: str,
         set_name: str,
-        behavior: Optional[Behavior] = None,
+        behavior: Behavior,
         cached_read_policy: Optional[ReadPolicy] = None,
         cached_write_policy: Optional[WritePolicy] = None,
         cached_read_policy_sc: Optional[ReadPolicy] = None,
         cached_write_policy_sc: Optional[WritePolicy] = None,
+        cached_read_operate_policy: Optional[WritePolicy] = None,
+        cached_read_operate_policy_sc: Optional[WritePolicy] = None,
         txn: Optional[Txn] = None,
         namespace_mode_resolver: NamespaceModeResolver = None,
         namespace_mode_resolver_blocking: Optional[Callable[[str], "Mode"]] = None,
@@ -504,9 +491,11 @@ class _QueryBuilderBase:
             client: The underlying async client.
             namespace: The namespace name.
             set_name: The set name.
-            behavior: Optional Behavior for deriving policies.
+            behavior: The Behavior every policy this builder sends is derived from.
             cached_read_policy: Pre-computed read policy from the session.
             cached_write_policy: Pre-computed write policy from the session.
+            cached_read_operate_policy: Pre-computed policy for single-key
+                operate calls that only read, from the session.
             txn: Optional active :class:`~aerospike_async.Txn` captured from
                 a transactional session at construction; every policy this
                 builder hands to the PAC gets stamped with it. ``None``
@@ -574,11 +563,16 @@ class _QueryBuilderBase:
             # mode at use time and pick the right cached policy.
             self._base_read_policy_sc: Optional[ReadPolicy] = cached_read_policy_sc
             self._base_write_policy_sc: Optional[WritePolicy] = cached_write_policy_sc
+            self._base_read_operate_policy: Optional[WritePolicy] = cached_read_operate_policy
+            self._base_read_operate_policy_sc: Optional[WritePolicy] = (
+                cached_read_operate_policy_sc)
         else:
             self._base_read_policy = None
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+            self._base_read_operate_policy = None
+            self._base_read_operate_policy_sc = None
 
     def _filter_expression_from_ael(self, ael: str) -> FilterExpression:
         return filter_expression_from_ael_string(
@@ -706,28 +700,6 @@ class _QueryBuilderBase:
                 return True
         return False
 
-    def _make_batch_policy(
-        self, settings: Optional[Any],
-    ) -> Optional[BatchPolicy]:
-        """Build a BatchPolicy from settings and stamp the captured txn.
-
-        Returns ``None`` when neither a settings bundle nor an active
-        transaction is in play (the PAC tolerates a ``None`` batch policy
-        in that case). Under MRT, always materializes a policy so the txn
-        can ride along.
-
-        Args:
-            settings: Settings bundle from behavior (may be ``None``).
-
-        Returns:
-            A txn-stamped :class:`~aerospike_async.BatchPolicy`, or
-            ``None`` when no policy is needed.
-        """
-        bp = to_batch_policy(settings) if settings is not None else None
-        if self._txn is not None and bp is None:
-            bp = BatchPolicy()
-        return self._apply_txn(bp)
-
     def _warn_if_query_in_txn(self) -> None:
         """Warn that a dataset query cannot participate in its transaction.
 
@@ -740,16 +712,6 @@ class _QueryBuilderBase:
         """
         if self._txn is not None:
             log.warning(_QUERY_IN_TXN_WARNING)
-
-    def _refuse_background_in_txn(self) -> None:
-        """Raise when a background task would start inside a transaction.
-
-        Unlike a query, whose reads are harmless outside the transaction, a
-        background task writes, and those writes would escape its commit and
-        abort. ``with_txn(None)`` opts out explicitly.
-        """
-        if self._txn is not None:
-            raise RuntimeError(_BACKGROUND_IN_TXN_ERROR)
 
     def with_txn(self, txn: Optional[Txn]) -> Self:
         """Opt this builder into (or out of) a specific transaction.
@@ -786,6 +748,10 @@ class _QueryBuilderBase:
         # txn stamped on.
         self._base_read_policy = None
         self._base_write_policy = None
+        self._base_read_policy_sc = None
+        self._base_write_policy_sc = None
+        self._base_read_operate_policy = None
+        self._base_read_operate_policy_sc = None
         return self
 
     def bins(self, *bin_names: Union[str, Sequence[str]]) -> Self:
@@ -870,15 +836,15 @@ class _QueryBuilderBase:
     def with_no_bins(self) -> Self:
         """
         Specify that no bins should be read (header-only query).
-        
+
         This method is useful when you only need to check for record existence
         or get metadata like generation numbers, without reading the actual data.
-        
+
         This method cannot be used together with bins().
-        
+
         Returns:
             self for method chaining.
-            
+
         Raises:
             ValueError: If used together with bins().
         """
@@ -894,10 +860,10 @@ class _QueryBuilderBase:
         The filter is authoritative: it is sent to the server unchanged as the
         index access path, bypassing server-side index selection. Any
         :meth:`where` clause on the same builder travels beside it as a
-        residual filter expression. Index-selection hints
-        (:attr:`QueryHint.index_name`, :attr:`QueryHint.bin_name`) do not
-        rewrite an explicit filter; :attr:`QueryHint.query_duration` still
-        applies. A query carries at most one filter.
+        residual filter expression. An index-selection hint
+        (:attr:`QueryHint.index_name`) does not rewrite an explicit filter;
+        :attr:`QueryHint.query_duration` still applies. A query carries at most
+        one filter.
 
         Example::
 
@@ -923,39 +889,6 @@ class _QueryBuilderBase:
         if self._filter is not None:
             raise ValueError("filter() can only be called once per query builder")
         self._filter = filter_obj
-        return self
-
-    def filter_expression(self, expression: FilterExpression) -> Self:
-        """
-        Set a FilterExpression for server-side filtering.
-
-        FilterExpression allows complex server-side filtering that doesn't
-        require secondary indexes. This is more efficient than client-side
-        filtering as it reduces network traffic and processing.
-
-        Args:
-            expression: The FilterExpression to apply.
-
-        Returns:
-            self for method chaining.
-
-        Example::
-
-            # Filter by multiple conditions server-side
-            filter_exp = FilterExpression.and_([
-                FilterExpression.eq(
-                    FilterExpression.string_bin("category"),
-                    FilterExpression.string_val("Shoes")
-                ),
-                FilterExpression.eq(
-                    FilterExpression.string_bin("usage"),
-                    FilterExpression.string_val("Sports")
-                )
-            ])
-            recordset = await session.query("test", "products").filter_expression(filter_exp).execute()
-
-        """
-        self._filter_expression = expression
         return self
 
     @overload
@@ -988,7 +921,8 @@ class _QueryBuilderBase:
 
         Raises:
             TypeError: If *params* accompany a ``FilterExpression``.
-            ValueError: If the template is not a valid printf format string.
+            ValueError: If the template is not a valid printf format string,
+                or ``where`` has already been called for this operation.
 
         Example::
 
@@ -998,52 +932,39 @@ class _QueryBuilderBase:
 
         See Also:
             :meth:`default_where`: Default filter for chained operations without their own.
-            :meth:`filter_expression`: Attach an expression without AEL parsing.
         """
+        if self._where_ael is not None or self._filter_expression is not None:
+            raise ValueError("where() can only be called once per operation")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
             self._where_ael = expression
         else:
-            self._where_ael = None
             self._filter_expression = expression
         return self
 
-    def with_policy(self, policy: QueryPolicy) -> Self:
-        """
-        Set the query policy.
-        
-        Args:
-            policy: The query policy to use.
-        
-        Returns:
-            self for method chaining.
-        """
-        self._policy = policy
-        return self
-
-    def with_read_policy(self, policy: ReadPolicy) -> Self:
-        """
-        Set the read policy (for single key or batch key queries).
-        
-        Args:
-            policy: The read policy to use.
-        
-        Returns:
-            self for method chaining.
-        """
-        self._read_policy = policy
-        return self
-
     def partition(self, partition_filter: PartitionFilter) -> Self:
-        """Restrict a dataset query using a PAC :class:`~aerospike_async.PartitionFilter`.
+        """Restrict the query using a PAC :class:`~aerospike_async.PartitionFilter`.
 
-        Prefer :meth:`on_partition` or :meth:`on_partition_range` for common cases.
+        Prefer :meth:`on_partition` or :meth:`on_partition_range` for common
+        cases. A filter reused from an earlier dataset query resumes where that
+        query stopped. On a key query only the filter's partition range applies:
+        keys outside it are skipped before anything is sent.
+
+        Example::
+
+                part = PartitionFilter.by_range(0, 2048)
+                stream = await session.query(users).partition(part).execute()
 
         Args:
             partition_filter: Built filter (all partitions, by id, by range, etc.).
 
         Returns:
             This builder for chaining.
+
+        Raises:
+            ValueError: At execute, on a key query, if the filter carries resume
+                state (``PartitionFilter.by_key`` or progress from an earlier
+                query), or if the chain also writes or calls a UDF.
 
         See Also:
             :meth:`on_partition_range`: Inclusive start, exclusive end partition ids.
@@ -1057,6 +978,8 @@ class _QueryBuilderBase:
 
         This method restricts the query to a single partition. This can be useful
         for load balancing or when you know the data distribution across partitions.
+        On a key query, keys in other partitions are skipped before anything is
+        sent.
 
         Args:
             part_id: The partition ID to target (0-4095)
@@ -1065,7 +988,8 @@ class _QueryBuilderBase:
             self for method chaining
 
         Raises:
-            ValueError: If part_id is out of range
+            ValueError: If part_id is out of range, or at execute if a key query
+                chain also writes or calls a UDF.
 
         Example::
 
@@ -1088,6 +1012,9 @@ class _QueryBuilderBase:
         The partition range can only be set once per query. Subsequent calls
         with different ranges will overwrite the previous range.
 
+        On a key query, keys outside the range are skipped before anything is
+        sent, and :meth:`limit` then counts only the keys that remain.
+
         Args:
             start_incl: Start partition (inclusive, 0-4095)
             end_excl: End partition (exclusive, 1-4096)
@@ -1096,7 +1023,8 @@ class _QueryBuilderBase:
             self for method chaining
 
         Raises:
-            ValueError: If partition range is invalid
+            ValueError: If partition range is invalid, or at execute if a key
+                query chain also writes or calls a UDF.
 
         Example::
 
@@ -1162,7 +1090,7 @@ class _QueryBuilderBase:
                     stream.close()
 
         See Also:
-            :meth:`max_records`: Cap total records returned.
+            :meth:`limit`: Cap total records returned.
             :meth:`~aerospike_sdk.record_stream.RecordStream.has_more_chunks`:
             Advance to the next server chunk.
         """
@@ -1172,80 +1100,56 @@ class _QueryBuilderBase:
         return self
 
     def records_per_second(self, rps: int) -> Self:
-        """
-        Set the maximum records per second for the query.
-        
-        Args:
-            rps: Maximum records per second to process.
-        
-        Returns:
-            self for method chaining.
-            
+        """Throttle the query to at most *rps* records per second on each server node.
+
         Example::
 
-                query = session.query(dataset).records_per_second(1000)
-        """
-        self._ensure_policy().records_per_second = rps
-        return self
+                stream = await session.query(users).records_per_second(1000).execute()
 
-    def max_records(self, max_records: int) -> Self:
-        """
-        Set the maximum number of records to return.
-        
         Args:
-            max_records: Maximum number of records to return.
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
+            rps: Maximum records per second; ``0`` means unthrottled.
 
-                query = session.query(dataset).max_records(10000)
+        Returns:
+            This builder for chaining.
+
+        See Also:
+            :meth:`limit`: Cap the total records returned.
         """
-        self._ensure_policy().max_records = max_records
+        self._records_per_second = rps
         return self
 
     def limit(self, limit: int) -> Self:
-        """
-        Set the maximum number of records to return (alias for max_records).
-        
-        This method is an alias for max_records().
-        It limits the total number of records returned by the query.
-        Once the limit is reached, the query will stop processing.
-        
-        Args:
-            limit: Maximum number of records to return (must be > 0).
-        
-        Returns:
-            self for method chaining.
-            
-        Raises:
-            ValueError: If limit is <= 0.
-            
+        """Cap the total number of records the query returns.
+
+        Once the limit is reached, the query stops. A query without a limit
+        returns every matching record; there is no value that means
+        "unlimited", so leave the limit unset instead.
+
+        On a key query, only the first ``limit`` keys are read, in order across
+        chained reads. A missing key still counts, so ``ids(1, 3, 5, 7)`` with
+        ``limit(3)`` returns two records when key 5 does not exist.
+
         Example::
 
-                query = session.query(dataset).limit(100)
+                stream = await session.query(users).where("$.age > 18").limit(100).execute()
+
+        Args:
+            limit: Maximum number of records to return; must be positive.
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            ValueError: If ``limit <= 0``, or at execute if a key query chain
+                also writes or calls a UDF.
+
+        See Also:
+            :meth:`chunk_size`: Records per server round trip, rather than in
+            total.
         """
         if limit <= 0:
             raise ValueError(f"Limit must be > 0, not {limit}")
-        return self.max_records(limit)
-
-    def expected_duration(self, duration: "QueryDuration") -> Self:
-        """
-        Set the expected duration of the query.
-        
-        Args:
-            duration: Expected duration (QueryDuration.LONG, QueryDuration.SHORT, or QueryDuration.LONG_RELAX_AP).
-        
-        Returns:
-            self for method chaining.
-            
-        Example::
-
-                from aerospike_async import QueryDuration
-                query = session.query(dataset).expected_duration(QueryDuration.SHORT)
-        """
-        self._ensure_policy().expected_duration = duration
+        self._limit = limit
         return self
 
     def with_hint(self, hint: QueryHint) -> Self:
@@ -1282,70 +1186,59 @@ class _QueryBuilderBase:
         self._query_hint = hint
         return self
 
-    def replica(self, replica: "Replica") -> Self:
-        """
-        Set the replica preference for the query.
-        
-        Args:
-            replica: Replica preference. One of ``Replica.MASTER``, ``Replica.MASTER_PROLES``,
-                ``Replica.RANDOM``, ``Replica.SEQUENCE``, or ``Replica.PREFER_RACK``.
-        
-        Returns:
-            self for method chaining.
-        
-        Example::
-
-                from aerospike_async import Replica
-                query = session.query(dataset).replica(Replica.SEQUENCE)
-        """
-        self._ensure_policy().replica = replica
-        return self
-
-    def base_policy(self, base_policy: "BasePolicy") -> Self:
-        """
-        Set the base policy for the query.
-        
-        Args:
-            base_policy: The base policy to use.
-        
-        Returns:
-            self for method chaining.
-        
-        Example::
-
-                from aerospike_async import BasePolicy
-                base = BasePolicy()
-                query = session.query(dataset).base_policy(base)
-        """
-        self._ensure_policy().base_policy = base_policy
-        return self
-
     def fail_on_filtered_out(self) -> Self:
-        """Surface rows that fail a filter as ``FILTERED_OUT`` instead of omitting them.
+        """Surface reads that fail a filter as ``FILTERED_OUT`` rows instead of omitting them.
 
-        Applies to key-based reads where a filter excludes the record. Without this
-        flag, filtered keys may be absent from the stream depending on policy.
+        Applies to key-based reads with a ``where`` filter. Without this flag, a key
+        whose record exists but fails the filter is absent from the stream, whether or
+        not :meth:`include_missing_keys` is set. Writes always report a filtered-out
+        key as a ``FILTERED_OUT`` row.
+
+        Example::
+
+            stream = await (
+                session.query(customers.ids(20, 21, 22))
+                .where("$.name == 'Tim'")
+                .fail_on_filtered_out()
+                .execute()
+            )
+            async for row in stream:
+                if row.result_code == ResultCode.FILTERED_OUT:
+                    print(f"{row.key.value} is not a Tim")
 
         Returns:
             This builder for chaining.
 
         See Also:
-            :meth:`include_missing_keys`: Include missing-key rows in batch reads.
+            :meth:`include_missing_keys`: Rows for keys whose record does not exist.
         """
         self._fail_on_filtered_out = True
         return self
 
     def include_missing_keys(self) -> Self:
-        """Ensure batch/point reads emit one row per requested key, including not-found.
+        """Emit a row for each requested key whose record does not exist.
 
         Missing keys appear as non-OK :class:`~aerospike_sdk.record_result.RecordResult`
-        entries (typically ``KEY_NOT_FOUND``) instead of being skipped.
+        entries (``KEY_NOT_FOUND_ERROR``) instead of being skipped. A key whose record
+        exists but fails a ``where`` filter is a different outcome and stays omitted;
+        add :meth:`fail_on_filtered_out` to surface those too.
+
+        Example::
+
+            stream = await (
+                session.query(customers.ids(46, 47, 48))
+                .include_missing_keys()
+                .execute()
+            )
+            async for row in stream:
+                if row.result_code == ResultCode.KEY_NOT_FOUND_ERROR:
+                    print(f"no customer {row.key.value}")
 
         Returns:
             This builder for chaining.
 
         See Also:
-            :meth:`fail_on_filtered_out`: Filter mismatch vs missing key.
+            :meth:`fail_on_filtered_out`: Rows for keys whose record fails the filter.
         """
         self._respond_all_keys = True
         return self
@@ -1471,11 +1364,23 @@ class _QueryBuilderBase:
         self._default_ttl_seconds = _TTL_SERVER_DEFAULT
         return self
 
-    def _ensure_policy(self) -> QueryPolicy:
-        """Return the existing policy or create a default one."""
-        if self._policy is None:
-            self._policy = self._apply_txn(QueryPolicy())
-        return self._policy
+    def _build_dataset_query_policy(self) -> Tuple[QueryPolicy, int]:
+        """Build the dataset query policy; also return the overall cap for a chunked query.
+
+        A chunked query fetches ``chunk_size`` records per round trip, so the
+        ``limit()`` total is enforced by the stream across chunks; ``0`` means
+        no cap.
+        """
+        policy = self._apply_txn(to_query_policy(self._behavior.get_settings(
+            OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode())))
+        if self._records_per_second is not None:
+            policy.records_per_second = self._records_per_second
+        if self._chunk_size is not None:
+            policy.max_records = self._chunk_size
+            return policy, self._limit or 0
+        if self._limit is not None:
+            policy.max_records = self._limit
+        return policy, 0
 
     def _set_current_keys(
         self,
@@ -1559,25 +1464,6 @@ class _QueryBuilderBase:
             features.append(usage.TRANSACTION)
         usage.record(self._sdk_client, features)
 
-    def _flush_background_usage(self, kind: str) -> None:
-        """Record a background job that has passed validation.
-
-        Dataset queries never hit :meth:`_finalize_current_spec`'s collect
-        (no keys), so the current segment's filters and ops are folded in
-        here. ``kind`` is :data:`~aerospike_sdk.metrics.usage.BACKGROUND_OPERATE`
-        or :data:`~aerospike_sdk.metrics.usage.BACKGROUND_UDF`.
-        """
-        if not self._record_on:
-            return
-        if self._usage_on:
-            self._collect_segment_usage()
-            features = self._usage_features
-            if features is None:
-                self._usage_features = [kind]
-            else:
-                features.append(kind)
-        self._record_call(usage.API_BACKGROUND, usage.SHAPE_QUERY)
-
     def _finalize_current_spec(self) -> None:
         """Package the current key/ops/bins/filter/op_type state into an _OperationSpec."""
         if self._single_key is not None:
@@ -1643,6 +1529,47 @@ class _QueryBuilderBase:
             or self._default_ttl_seconds is not None
         ):
             self._apply_chain_defaults()
+        if (
+            self._specs
+            and not self._keys_selected
+            and (self._limit is not None or self._partition_filter is not None)
+        ):
+            self._select_keys()
+
+    def _select_keys(self) -> None:
+        """Narrow the chain to the keys the partition filter, then ``limit()``, allow.
+
+        Selection is client-side and in chain order. If no key survives the
+        partition filter, ``_specs`` ends up empty with ``_keys_selected`` set,
+        which terminals must treat as an empty result, not a dataset query.
+        """
+        self._keys_selected = True
+        for spec in self._specs:
+            if spec.op_type is not None and spec.op_type != "exists":
+                raise ValueError(
+                    "limit() and partition filters on a key query cannot be "
+                    "combined with a chained write or UDF call"
+                )
+        pf = self._partition_filter
+        if pf is not None:
+            if pf.digest is not None or pf.partitions is not None:
+                raise ValueError(
+                    "A PartitionFilter with resume state applies only to dataset "
+                    "queries, not to a key query"
+                )
+            begin = pf.begin
+            end = begin + pf.count
+            for spec in self._specs:
+                spec.keys = [key for key in spec.keys if begin <= key.partition_id < end]
+            self._specs = [spec for spec in self._specs if spec.keys]
+        remaining = self._limit
+        if remaining is not None:
+            for i, spec in enumerate(self._specs):
+                if len(spec.keys) >= remaining:
+                    spec.keys = spec.keys[:remaining]
+                    del self._specs[i + 1:]
+                    break
+                remaining -= len(spec.keys)
 
     def _apply_chain_defaults(self) -> None:
         self._resolve_default_filter_expression()
@@ -1778,20 +1705,18 @@ class _QueryBuilderBase:
     def _make_batch_udf_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchUDFPolicy]:
-        settings = (
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE,
-                OpShape.BATCH,
-                mode if mode is not None else self._resolved_namespace_mode(),
-            )
-            if self._behavior is not None else None
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE,
+            OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
         )
         eff = resolve_durable_delete(
-            settings.durable_delete if settings is not None else None,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = bool(settings.send_key)
         has_settings = (
             spec.filter_expression is not None
             or spec.ttl_seconds is not None
@@ -1799,10 +1724,12 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or eff
+            or send_key
         )
         if not has_settings:
             return None
         up = BatchUDFPolicy()
+        up.send_key = send_key
         if spec.filter_expression is not None:
             up.filter_expression = spec.filter_expression
         if spec.ttl_seconds is not None:
@@ -1823,15 +1750,16 @@ class _QueryBuilderBase:
 
         A write row always reports its outcome: the caller named that key and
         asked to change it, so omitting the row would report success by
-        omission. A read row stays opt-in — a missing key is an ordinary
-        outcome there, surfaced with ``include_missing_keys``.
+        omission. A read row stays opt-in, and each flag answers one
+        question: ``include_missing_keys`` surfaces missing keys,
+        ``fail_on_filtered_out`` surfaces keys whose record fails the filter.
         """
         if result_code == ResultCode.OK:
             return True
         if result_code == ResultCode.KEY_NOT_FOUND_ERROR:
             return has_write or respond_all_keys
         if result_code == ResultCode.FILTERED_OUT:
-            return has_write or fail_on_filtered_out or respond_all_keys
+            return has_write or fail_on_filtered_out
         return True
 
     def _filtered_batch_list(
@@ -1865,10 +1793,9 @@ class _QueryBuilderBase:
             row_op = per_row[i] if per_row is not None else op_type
             if not r.is_ok and self._is_actionable(r.result_code, row_op):
                 if disp is _ErrorDisposition.THROW:
-                    raise _result_code_to_exception(r.result_code, in_doubt=r.in_doubt)
+                    raise r.to_exception()
                 if disp is _ErrorDisposition.HANDLER and handler is not None:
-                    handler(r.key, r.index, _result_code_to_exception(
-                        r.result_code, in_doubt=r.in_doubt))
+                    handler(r.key, r.index, r.to_exception())
                     continue
 
             if not self._should_include_result(
@@ -1927,7 +1854,9 @@ class _QueryBuilderBase:
         The PAC raises ``ServerError`` for ``KEY_NOT_FOUND_ERROR`` and
         ``FILTERED_OUT`` rather than returning a sentinel. Whether these
         codes are routed through disposition depends on the operation
-        context (see ``_is_actionable``).
+        context (see ``_is_actionable``). An actionable code under IN_STREAM
+        is always embedded; only non-actionable codes go through
+        :meth:`_should_include_result`.
         """
         pfc_exc = _convert_pac_exception(exc)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
@@ -1940,8 +1869,9 @@ class _QueryBuilderBase:
             if disp is _ErrorDisposition.HANDLER and handler is not None:
                 handler(key, index, pfc_exc)
                 return RecordStream._from_list([])
-
-        if not self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
+        elif not self._should_include_result(
+            rc, self._respond_all_keys, self._fail_on_filtered_out,
+        ):
             return RecordStream._from_list([])
 
         return RecordStream._from_error(key, rc, in_doubt, exception=pfc_exc)
@@ -2012,61 +1942,59 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> ReadPolicy:
         """Build a ``ReadPolicy`` for single-key reads."""
-        if self._read_policy is not None:
-            rp = self._read_policy
-        elif self._behavior is not None:
-            if self._base_read_policy is None:
-                self._base_read_policy = self._apply_txn(to_read_policy(
-                    self._behavior.get_settings(
-                        OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-            if spec.filter_expression is None:
-                return self._base_read_policy
-            rp = self._apply_txn(to_read_policy(
+        if self._base_read_policy is None:
+            self._base_read_policy = self._apply_txn(to_read_policy(
                 self._behavior.get_settings(
                     OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
-        else:
-            rp = self._apply_txn(ReadPolicy())
-        if spec.filter_expression is not None:
-            rp.filter_expression = spec.filter_expression
+        if spec.filter_expression is None:
+            return self._base_read_policy
+        rp = self._apply_txn(to_read_policy(
+            self._behavior.get_settings(
+                OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+        rp.filter_expression = spec.filter_expression
         return rp
+
+    def _read_operate_policy(self) -> WritePolicy:
+        """Base ``WritePolicy`` for a single-key operate with no write verb.
+
+        Callers pass the spec's filter and the transaction to PAC per call, so
+        the base is shared across filters.
+        """
+        if self._base_read_operate_policy is None:
+            self._base_read_operate_policy = self._apply_txn(to_read_operate_policy(
+                self._behavior.get_settings(
+                    OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
+        return self._base_read_operate_policy
 
     def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
         """Build a ``WritePolicy`` for single-key writes."""
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        settings = (
-            self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                self._resolved_namespace_mode(),
-            )
-            if self._behavior is not None else None
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
+            self._resolved_namespace_mode(),
         )
         applies_dd = op_type == "delete" or spec.contains_record_delete_op
         effective_dd = self._effective_point_durable_delete(spec, settings)
 
-        if self._behavior is not None:
-            if self._base_write_policy is None:
-                base_settings = settings
-                if base_settings is not None and base_settings.durable_delete:
-                    base_settings = Settings.merge(
-                        base_settings, Settings(durable_delete=False))
-                self._base_write_policy = self._apply_txn(to_write_policy(
-                    base_settings) if base_settings is not None else WritePolicy())
-            if (
-                rea is None
-                and spec.filter_expression is None
-                and spec.generation is None
-                and spec.ttl_seconds is None
-                and spec.durable_delete is None
-                and spec.durable_delete_command_default is None
-                and not spec.contains_record_delete_op
-                and not applies_dd
-            ):
-                return self._base_write_policy
-            wp = self._apply_txn(to_write_policy(
-                settings) if settings is not None else WritePolicy())
-        else:
-            wp = self._apply_txn(WritePolicy())
+        if self._base_write_policy is None:
+            base_settings = settings
+            if base_settings.durable_delete:
+                base_settings = Settings.merge(
+                    base_settings, Settings(durable_delete=False))
+            self._base_write_policy = self._apply_txn(to_write_policy(base_settings))
+        if (
+            rea is None
+            and spec.filter_expression is None
+            and spec.generation is None
+            and spec.ttl_seconds is None
+            and spec.durable_delete is None
+            and spec.durable_delete_command_default is None
+            and not spec.contains_record_delete_op
+            and not applies_dd
+        ):
+            return self._base_write_policy
+        wp = self._apply_txn(to_write_policy(settings))
         if rea is not None:
             wp.record_exists_action = rea
         if spec.filter_expression is not None:
@@ -2098,6 +2026,7 @@ class _QueryBuilderBase:
             if spec.contains_record_delete_op else False
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2106,6 +2035,7 @@ class _QueryBuilderBase:
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
             or commit_level is not None
+            or send_key
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2115,6 +2045,7 @@ class _QueryBuilderBase:
         if not has_settings:
             return None
         bwp = BatchWritePolicy()
+        bwp.send_key = send_key
         if rea is not None:
             bwp.record_exists_action = rea
         if spec.filter_expression is not None:
@@ -2143,7 +2074,7 @@ class _QueryBuilderBase:
 
         Applies the wire precedence: the query's hint wins when it sets
         ``allow_scans_with_where``, otherwise the resolved Behavior query
-        setting, otherwise the strict default (reject the fallback).
+        setting, otherwise the default (allow the fallback).
 
         Returns:
             ``True`` if a where-clause query may fall back to a primary-index
@@ -2158,17 +2089,14 @@ class _QueryBuilderBase:
         """Whether a where-clause query may fall back to a primary-index scan.
 
         A per-query hint wins; otherwise the resolved Behavior query setting;
-        otherwise the strict default (``False`` — reject the fallback).
+        otherwise the default (``True`` — allow the fallback).
         """
         if hint is not None and hint.allow_scans_with_where is not None:
             return hint.allow_scans_with_where
-        if self._behavior is not None:
-            resolved = self._behavior.get_settings(
-                OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
-            ).allow_scans_with_where
-            if resolved is not None:
-                return resolved
-        return False
+        resolved = self._behavior.get_settings(
+            OpKind.READ, OpShape.QUERY, self._resolved_namespace_mode()
+        ).allow_scans_with_where
+        return resolved if resolved is not None else True
 
     def _query_explain_where_flags(self, hint: Optional[QueryHint]) -> Optional[int]:
         flags = QueryWhereFlags.EXPLAIN
@@ -2188,13 +2116,11 @@ class _QueryBuilderBase:
                 "Query plan filtered out by server",
             )
 
-    def _use_server_query_selection(self, hint: Optional[QueryHint]) -> bool:
+    def _use_server_query_selection(self) -> bool:
         """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
         if self._where_ael is None:
             return False
         if self._filter is not None:
-            return False
-        if hint is not None and hint.bin_name is not None:
             return False
         return self._supports_query_selection
 
@@ -2287,19 +2213,15 @@ class _QueryBuilderBase:
 
     def _batch_policy_for(
         self, op_kind: "OpKind", op_shape: "OpShape",
-    ) -> Optional[BatchPolicy]:
-        """Shorthand: :meth:`_make_batch_policy` keyed off behavior settings.
+    ) -> BatchPolicy:
+        """The txn-stamped parent BatchPolicy resolved from behavior settings.
 
         Resolves with :meth:`_resolved_batch_mode` — SC-escalated when the
         batch spans an SC namespace — since the parent policy applies to
         every key in the batch.
         """
-        settings = (
-            self._behavior.get_settings(
-                op_kind, op_shape, self._resolved_batch_mode())
-            if self._behavior is not None else None
-        )
-        return self._make_batch_policy(settings)
+        return self._apply_txn(to_batch_policy(self._behavior.get_settings(
+            op_kind, op_shape, self._resolved_batch_mode())))
 
     def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
         """Start a bin-level read operation.
@@ -2327,27 +2249,6 @@ class _QueryBuilderBase:
     def add_operation(self, op: Any) -> Self:
         """Append a read operation. Returns ``self`` so calls can chain."""
         self._operations.append(op)
-        return self
-
-    def with_write_operations(
-        self, operations: Sequence[Any],
-    ) -> Self:
-        """Attach write operations for a background dataset task.
-
-        Prefer :meth:`aerospike_sdk.aio.session.Session.background_task` for
-        chained bin writes. Use with :meth:`execute_background_task` on a dataset
-        query (no keys). Any write operation is valid, including list, map,
-        bit, HLL and string operations; the server rejects read operations in a
-        background job.
-
-        Args:
-            operations: Sequence of write operations (e.g. ``Operation.put``,
-                ``MapOperation.remove_by_value_range``).
-
-        Returns:
-            self for method chaining.
-        """
-        self._operations.extend(operations)
         return self
 
     def query(
@@ -2381,12 +2282,7 @@ class _QueryBuilderBase:
                 .execute()
             )
         """
-        if self._single_key is None and self._keys is None and not self._specs:
-            raise ValueError(
-                "Dataset (index) queries cannot be stacked. "
-                "Query stacking is only supported for key-based queries."
-            )
-
+        self._reject_dataset_stacking()
         self._finalize_current_spec()
         self._op_type = None
         self._set_current_keys(arg1, *more_keys)
@@ -2427,17 +2323,23 @@ class _QueryBuilderBase:
         """
         if not keys:
             raise ValueError("At least one key is required")
+        self._reject_dataset_stacking()
+        self._finalize_current_spec()
+        self._set_current_keys_from_varargs(keys)
+        return self._udf_function_builder_cls(self)
+
+    def _reject_dataset_stacking(self) -> None:
+        # A dataset query never becomes a spec, so a segment chained onto it
+        # would inherit its filter, projection, and ops while the query itself
+        # is dropped at execute().
         if self._single_key is None and self._keys is None and not self._specs:
             raise ValueError(
                 "Dataset (index) queries cannot be stacked. "
                 "Query stacking is only supported for key-based queries."
             )
-        self._finalize_current_spec()
-        self._set_current_keys_from_varargs(keys)
-        return self._udf_function_builder_cls(self)
 
     # Bound by the async leaf module to its write-segment class (the sync
-    # leaf overrides `_start_write_verb` outright, constructing its own
+    # leaf overrides `_start_write_segment` outright, constructing its own
     # segment type). Same pattern as
     # ``_WriteSegmentBuilderBase._bin_builder_cls``.
     _write_segment_cls: type
@@ -2454,7 +2356,11 @@ class _QueryBuilderBase:
         arg1: Union[Key, List[Key]],
         *more_keys: Key,
     ) -> "WriteSegmentBuilder":
-        """Finalize current spec, set up a write segment, return builder."""
+        """Finalize current spec, set up a write segment, return builder.
+
+        Unchecked: session entry points open fresh builders here, while a
+        write verb on an existing query goes through :meth:`_start_write_verb`.
+        """
         self._finalize_current_spec()
         self._op_type = op_type
         self._set_current_keys(arg1, *more_keys)
@@ -2463,6 +2369,7 @@ class _QueryBuilderBase:
     def _start_write_verb(
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
+        self._reject_dataset_stacking()
         return self._start_write_segment(op_type, arg1, *more_keys)
 
     def _build_statement(self) -> Statement:
@@ -2489,32 +2396,15 @@ class _QueryBuilderBase:
             statement.set_operations(projection + list(self._operations))
         return statement
 
-    def _make_background_write_policy(self) -> WritePolicy:
-        # A keyless query never reaches a segment finalizer, which is where a
-        # string where() is otherwise materialized.
-        self._resolve_where_filter_expression()
-        return make_background_write_policy(
-            self._behavior,
-            self._filter_expression,
-            None,
-            None,
-            namespace_mode=self._resolved_namespace_mode(),
-        )
-
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
-        settings = None
-        if self._behavior is not None:
-            settings = self._behavior.get_settings(
-                OpKind.WRITE_NON_RETRYABLE,
-                OpShape.POINT,
-                self._resolved_namespace_mode(),
-            )
-            wp = to_write_policy(settings)
-        else:
-            wp = WritePolicy()
-        self._apply_txn(wp)
+        settings = self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE,
+            OpShape.POINT,
+            self._resolved_namespace_mode(),
+        )
+        wp = self._apply_txn(to_write_policy(settings))
         wp.durable_delete = resolve_durable_delete(
-            settings.durable_delete if settings is not None else None,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
@@ -2525,13 +2415,12 @@ class _QueryBuilderBase:
         return wp
 
     def _effective_point_durable_delete(
-        self, spec: _OperationSpec, settings: Optional[Settings],
+        self, spec: _OperationSpec, settings: Settings,
     ) -> bool:
         if spec.op_type == "touch":
             return False
-        setting_dd = settings.durable_delete if settings is not None else None
         return resolve_durable_delete(
-            setting_dd,
+            settings.durable_delete,
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
@@ -2544,12 +2433,6 @@ class _QueryBuilderBase:
         *mode* is the row's namespace mode; ``None`` falls back to the
         builder's resolved mode (single-namespace batches).
         """
-        if self._behavior is None:
-            return resolve_durable_delete(
-                None,
-                spec.durable_delete_command_default,
-                spec.durable_delete,
-            )
         bset = self._behavior.get_settings(
             OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
             mode if mode is not None else self._resolved_namespace_mode(),
@@ -2570,8 +2453,6 @@ class _QueryBuilderBase:
         zero-allocation no-policy fast path. Only a non-default level (e.g.
         ``COMMIT_MASTER``) is threaded through.
         """
-        if self._behavior is None:
-            return None
         if mode is None:
             mode = self._resolved_namespace_mode()
         is_sc = mode is Mode.SC
@@ -2589,6 +2470,17 @@ class _QueryBuilderBase:
             self._batch_commit_level_ap = cl
         return cl
 
+    def _batch_send_key(self, mode: Optional[Mode] = None) -> bool:
+        """Whether a batch write row stores the user key, per the behavior.
+
+        The batch policy has no ``send_key`` of its own: each row policy
+        carries one, so a row built without it never stores the key.
+        """
+        return bool(self._behavior.get_settings(
+            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            mode if mode is not None else self._resolved_namespace_mode(),
+        ).send_key)
+
     def _make_batch_delete_policy(
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchDeletePolicy]:
@@ -2598,6 +2490,7 @@ class _QueryBuilderBase:
         """
         eff = self._batch_write_effective_dd(spec, mode)
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
@@ -2605,10 +2498,12 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or eff
+            or send_key
         )
         if not has_settings:
             return None
         bdp = BatchDeletePolicy()
+        bdp.send_key = send_key
         if spec.filter_expression is not None:
             bdp.filter_expression = spec.filter_expression
         if spec.generation is not None:
@@ -2753,6 +2648,7 @@ class _QueryBuilderBase:
             if spec.contains_record_delete_op else False
         )
         commit_level = self._batch_commit_level(mode)
+        send_key = self._batch_send_key(mode)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2761,6 +2657,7 @@ class _QueryBuilderBase:
             or spec.durable_delete is not None
             or spec.durable_delete_command_default is not None
             or commit_level is not None
+            or send_key
             or (spec.contains_record_delete_op and (
                 eff
                 or spec.durable_delete is not None
@@ -2770,6 +2667,7 @@ class _QueryBuilderBase:
         if not has_settings:
             return None
         bwp = BatchWritePolicy()
+        bwp.send_key = send_key
         if rea is not None:
             bwp.record_exists_action = rea
         if spec.filter_expression is not None:
@@ -4903,6 +4801,10 @@ class _BinWriteSteps(Generic[_W]):
             :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
             or a terminal.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             add_10 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10)])
@@ -4911,7 +4813,8 @@ class _BinWriteSteps(Generic[_W]):
             )
         """
         return CdtPathBuilder(
-            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+            self._parent, self._bin, [CTX.map_keys_in(_value_list(keys, "keys"))],
+            filterable=True,
         )
 
     def on_map_key(
@@ -5124,7 +5027,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
         """
+        keys = _value_list(keys, "keys")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -5142,7 +5050,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
         """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -5325,7 +5238,12 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteInvertableBuilder` for writing the targeted element(s).
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
         """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtWriteInvertableBuilder(
             self._parent,
@@ -6041,6 +5959,10 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             :class:`CdtPathBuilder` for further navigation, an ``and_filter``,
             or a terminal.
 
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+
         Example::
 
             over_10 = Exp.gt(Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(10))
@@ -6051,7 +5973,8 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             ).first_or_raise()
         """
         return CdtPathBuilder(
-            self._parent, self._bin, [CTX.map_keys_in(list(keys))], filterable=True,
+            self._parent, self._bin, [CTX.map_keys_in(_value_list(keys, "keys"))],
+            filterable=True,
         )
 
     def on_map_key(
@@ -6200,7 +6123,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     # -- Map navigation (list selectors -> CdtReadInvertableBuilder) ----------
 
     def on_map_key_list(self, keys: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to map elements matching a list of keys."""
+        """Navigate to map elements matching a list of keys.
+
+        Args:
+            keys: Map keys to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *keys* is a bare ``str``, ``bytes`` or ``bytearray``
+                rather than a collection of keys.
+        """
+        keys = _value_list(keys, "keys")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,
@@ -6211,7 +6146,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         )
 
     def on_map_value_list(self, values: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to map elements matching a list of values."""
+        """Navigate to map elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,
@@ -6336,7 +6283,19 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
     # -- List navigation (list selector -> CdtReadInvertableBuilder) ----------
 
     def on_list_value_list(self, values: List[Any]) -> CdtReadInvertableBuilder[_T]:
-        """Navigate to list elements matching a list of values."""
+        """Navigate to list elements matching a list of values.
+
+        Args:
+            values: Values to match.
+
+        Returns:
+            :class:`CdtReadInvertableBuilder` for reading the matched elements.
+
+        Raises:
+            TypeError: If *values* is a bare ``str``, ``bytes`` or
+                ``bytearray`` rather than a collection of values.
+        """
+        values = _value_list(values, "values")
         b = self._bin
         return CdtReadInvertableBuilder(
             self._parent,

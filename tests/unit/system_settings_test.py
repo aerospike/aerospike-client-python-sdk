@@ -21,7 +21,11 @@ import pytest
 from aerospike_async import ClientPolicy
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition as AsyncClusterDefinition
-from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
+from aerospike_sdk.policy.system_settings import (
+    MetricsSettings,
+    SystemSettings,
+    TransactionSettings,
+)
 from aerospike_sdk.sync.cluster_definition import ClusterDefinition as SyncClusterDefinition
 
 
@@ -164,7 +168,16 @@ class TestClusterDefinitionWithSystemSettings:
     def test_chaining(self):
         cd = AsyncClusterDefinition("localhost", 3000) \
             .with_system_settings(SystemSettings(max_connections_per_node=400)) \
-            .validate_cluster_name_is("test")
+            .cluster_name("test")
         policy = cd._get_policy()
         assert policy.max_conns_per_node == 400
         assert policy.cluster_name == "test"
+
+
+class TestKeywordOnly:
+
+    @pytest.mark.parametrize("cls", [SystemSettings, TransactionSettings, MetricsSettings])
+    def test_positional_arguments_are_refused(self, cls):
+        """Every field is optional, so a positional value would bind by declaration order."""
+        with pytest.raises(TypeError):
+            cls(1)

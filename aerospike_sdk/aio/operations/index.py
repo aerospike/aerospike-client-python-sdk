@@ -52,8 +52,9 @@ class IndexBuilder(_IndexBuilderBase):
 
     Example::
 
+            users = DataSet.of("test", "users")
             await (
-                client.index(namespace="test", set_name="users")
+                session.index(users)
                 .on_bin("email")
                 .named("email_idx")
                 .string()
@@ -91,7 +92,7 @@ class IndexBuilder(_IndexBuilderBase):
         Example::
 
             task = await (
-                client.index(namespace="test", set_name="users")
+                session.index(users)
                 .on_bin("email")
                 .named("email_idx")
                 .string()
@@ -159,7 +160,7 @@ class IndexBuilder(_IndexBuilderBase):
         Example::
 
             task = await (
-                client.index(namespace="test", set_name="users")
+                session.index(users)
                 .named("email_idx")
                 .drop()
             )

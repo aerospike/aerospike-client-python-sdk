@@ -66,40 +66,54 @@ def _configure_logging() -> None:
 _configure_logging()
 
 
-def _host_and_port() -> tuple[str, int]:
-    host = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("true", "1", "yes")
+
+
+def _split_host(host: str) -> tuple[str, int]:
     if ":" in host:
         hostname, port_str = host.split(":", 1)
         return hostname, int(port_str)
     return host, 3000
 
 
-def _services_alternate() -> bool:
-    return os.environ.get(
-        "AEROSPIKE_USE_SERVICES_ALTERNATE", "",
-    ).lower() in ("true", "1", "yes")
+def _host_and_port() -> tuple[str, int]:
+    # The TLS seed is separate because aerospike.env usually points
+    # AEROSPIKE_HOST at a cleartext node and AEROSPIKE_HOST_TLS at a TLS one.
+    host = os.environ.get("AEROSPIKE_HOST", "localhost:3000")
+    if _flag("AEROSPIKE_USE_TLS"):
+        host = os.environ.get("AEROSPIKE_HOST_TLS", host)
+    return _split_host(host)
+
+
+def _apply_transport(cluster_def, *, tls: bool = True):
+    """Apply services-alternate and, with ``AEROSPIKE_USE_TLS``, the TLS settings."""
+    if _flag("AEROSPIKE_USE_SERVICES_ALTERNATE"):
+        cluster_def.using_services_alternate()
+    if tls and _flag("AEROSPIKE_USE_TLS"):
+        cert = os.environ.get("AEROSPIKE_TLS_CLIENT_CERT_FILE")
+        key = os.environ.get("AEROSPIKE_TLS_CLIENT_KEY_FILE")
+        client_auth = {"client_cert_file": cert, "client_key_file": key} if cert and key else {}
+        cluster_def.with_tls_config(
+            tls_name=os.environ.get("AEROSPIKE_TLS_NAME"),
+            ca_file=os.environ.get("AEROSPIKE_TLS_CA_FILE"),
+            **client_auth,
+        )
+    return cluster_def
 
 
 def connect():
     """Build an async ClusterDefinition from environment variables."""
     from aerospike_sdk import ClusterDefinition
 
-    hostname, port = _host_and_port()
-    cluster_def = ClusterDefinition(hostname, port)
-    if _services_alternate():
-        cluster_def = cluster_def.using_services_alternate()
-    return cluster_def
+    return _apply_transport(ClusterDefinition(*_host_and_port()))
 
 
 def sync_connect():
     """Build a sync ClusterDefinition from environment variables."""
     from aerospike_sdk.sync import ClusterDefinition
 
-    hostname, port = _host_and_port()
-    cluster_def = ClusterDefinition(hostname, port)
-    if _services_alternate():
-        cluster_def = cluster_def.using_services_alternate()
-    return cluster_def
+    return _apply_transport(ClusterDefinition(*_host_and_port()))
 
 
 def _apply_auth(cluster_def):
@@ -137,12 +151,10 @@ def connect_sc():
     """
     from aerospike_sdk import ClusterDefinition
 
-    host = sc_host() or os.environ.get("AEROSPIKE_HOST", "localhost:3000")
-    hostname, port_str = host.split(":", 1) if ":" in host else (host, "3000")
-    cluster_def = ClusterDefinition(hostname, int(port_str))
-    if _services_alternate():
-        cluster_def = cluster_def.using_services_alternate()
-    return _apply_auth(cluster_def)
+    host = sc_host()
+    cluster_def = ClusterDefinition(*(_split_host(host) if host else _host_and_port()))
+    # A dedicated SC seed is its own node; the TLS settings belong to AEROSPIKE_HOST_TLS.
+    return _apply_auth(_apply_transport(cluster_def, tls=host is None))
 
 
 async def server_at_least(session, version: tuple[int, ...]) -> bool:

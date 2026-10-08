@@ -25,6 +25,8 @@ Covers:
 - Query-stream failures surfacing as SDK exceptions
 """
 
+import asyncio
+
 import pytest
 
 from aerospike_sdk import ErrorDetailVerbosity, QueryDuration, QueryHint
@@ -33,6 +35,7 @@ from aerospike_sdk.error_strategy import ErrorStrategy
 from aerospike_sdk.exceptions import (
     AerospikeError,
     GenerationError,
+    InvalidNamespaceError,
     RecordNotFoundError,
     RecordTooBigError,
     ResultCode,
@@ -55,12 +58,23 @@ async def session(cluster):
     return cluster.create_session()
 
 
+@pytest.fixture
+def missing_ns_ds():
+    return DataSet.of("no_such_ns", "error_handling")
+
+
 async def _cleanup(session, *keys):
     for k in keys:
         try:
             await session.delete(k).execute()
         except Exception:
             pass
+
+
+def _point_op(session, key, op):
+    if op == "read":
+        return session.query(key)
+    return session.upsert(key).put({"v": 1})
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +121,14 @@ class TestDefaultDisposition:
 
         await _cleanup(session, k1)
 
+    @pytest.mark.parametrize("op", ["read", "write"])
+    async def test_unknown_namespace_raises_invalid_namespace(self, session, missing_ns_ds, op):
+        """A namespace the cluster lacks fails fast instead of exhausting retries."""
+        with pytest.raises(InvalidNamespaceError) as excinfo:
+            stream = await _point_op(session, missing_ns_ds.id(1), op).execute()
+            await stream.collect()
+        assert excinfo.value.result_code == ResultCode.INVALID_NAMESPACE
+
 
 # ---------------------------------------------------------------------------
 # ErrorStrategy.IN_STREAM: single-key errors embedded
@@ -140,6 +162,17 @@ class TestInStreamStrategy:
         assert not write_result.is_ok
 
         await _cleanup(session, k)
+
+    @pytest.mark.parametrize("op", ["read", "write"])
+    async def test_unknown_namespace_in_stream(self, session, missing_ns_ds, op):
+        """With IN_STREAM, the unknown namespace arrives as its own result code."""
+        stream = await _point_op(session, missing_ns_ds.id(1), op).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        )
+        results = await stream.collect()
+
+        assert [r.result_code for r in results] == [ResultCode.INVALID_NAMESPACE]
+        assert isinstance(results[0].exception, InvalidNamespaceError)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +330,18 @@ class TestOpTypeErrors:
         with pytest.raises(AerospikeError) as exc_info:
             await session.replace_if_exists(k).put({"v": 1}).execute()
         assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    @pytest.mark.parametrize("verb", ["update", "replace_if_exists"])
+    async def test_missing_key_write_in_stream(self, session, ds, verb):
+        """A write that requires the record reports its missing key as a row."""
+        k = ds.id(f"ot_{verb}_miss_is")
+        await _cleanup(session, k)
+
+        rs = await getattr(session, verb)(k).put({"v": 1}).execute(
+            on_error=ErrorStrategy.IN_STREAM,
+        )
+        results = await rs.collect()
+        assert [r.result_code for r in results] == [ResultCode.KEY_NOT_FOUND_ERROR]
 
     async def test_batch_insert_partial_failure_in_stream(self, session, ds):
         """Batch insert: existing key gets KEY_EXISTS_ERROR, new key succeeds."""
@@ -855,7 +900,6 @@ class TestTtlExpiry:
 
     async def test_record_expires_after_ttl(self, session, ds):
         """Record with short TTL is gone after expiry."""
-        import asyncio
         k = ds.id("ttl_expire")
         await _cleanup(session, k)
 
@@ -877,7 +921,6 @@ class TestTtlExpiry:
 
     async def test_record_with_no_ttl_persists(self, session, ds):
         """A record written with ``never_expire()`` persists beyond a short wait."""
-        import asyncio
         k = ds.id("ttl_persist")
         await _cleanup(session, k)
 
@@ -892,7 +935,6 @@ class TestTtlExpiry:
 
     async def test_touch_extends_ttl(self, session, ds):
         """Write with short TTL, touch to extend, verify it survives."""
-        import asyncio
         k = ds.id("ttl_touch_ext")
         await _cleanup(session, k)
 

@@ -243,9 +243,10 @@ stream = await (
 )
 ```
 
-This and the AEL queries below assume a secondary index covers the filtered
-bin. A `.where()` query that no index can satisfy is rejected rather than run
-as a full-set scan — see [Secondary Indexes](indexes.md).
+This and the AEL queries below run fastest when a secondary index covers the
+filtered bin. A `.where()` query that no index can satisfy runs as a full-set
+scan unless the query or `Behavior` rejects that fallback — see
+[Secondary Indexes](indexes.md).
 
 Or with a pre-built `FilterExpression`:
 
@@ -258,6 +259,10 @@ expr = Exp.and_([
 ])
 stream = await session.query(users).where(expr).execute()
 ```
+
+Each query or chained operation takes one `where()`. A second call raises
+`ValueError` rather than replacing the first, so combine conditions in a single
+expression (`and`, `or`) instead.
 
 ## Partition Filtering
 
@@ -283,21 +288,33 @@ stream = await (
 )
 ```
 
+On a key query, a partition filter and `limit()` choose which keys are read,
+before anything is sent: keys outside the partition range are skipped, then
+only the first `limit` remaining keys are read. A missing key still counts
+toward the limit. Because skipped keys would never be written, a key chain that
+also writes or calls a UDF raises `ValueError` when either is set.
+
 ## Query Policies
 
 Fine-tune query behavior:
 
 ```python
-from aerospike_sdk import QueryDuration
+from aerospike_sdk import QueryDuration, QueryHint
 
 stream = await (
     session.query(users)
     .where("$.age > 18")
-    .expected_duration(QueryDuration.LONG)
+    .with_hint(QueryHint(query_duration=QueryDuration.LONG))
+    .records_per_second(5000)
     .chunk_size(500)
     .execute()
 )
 ```
+
+These tweaks layer onto the session's `Behavior`, so its query timeouts,
+retries, and replica preference still apply. To change those, derive a
+`Behavior` with a `reads_query=Settings(...)` scope (see
+[Connecting](connecting.md)).
 
 ### Draining a chunked query
 
@@ -318,7 +335,7 @@ finally:
 ```
 
 To cap how many records you get in total — rather than how many arrive per trip
-— use `max_records()`.
+— use `limit()`.
 
 ## RecordResult
 
@@ -330,13 +347,14 @@ async for result in stream:
         record = result.record
         print(record.key, record.bins, record.generation, record.expiration)
     else:
-        print(f"Error: {result.exception or result.result_code}")
+        print(f"Error: {result.to_exception()}")
 ```
 
-Branch on `is_ok` rather than comparing `result_code` to `OK`: a client-side
-failure never reaches the server to earn a code, so it arrives with `result_code`
-reading `OK` and an `exception` attached. See
-[Error Handling](error-handling.md).
+Branch on `is_ok` rather than comparing `result_code` to `OK`: it checks both
+`result_code` and `exception`. A row that failed client-side, before the server
+answered, carries a negative client code such as `ResultCode.CLIENT_ERROR` (or
+`ResultCode.TIMEOUT` for a client-side deadline), with the `exception` holding
+the detail. See [Error Handling](error-handling.md).
 
 Use `record_or_raise()` to raise on error results:
 

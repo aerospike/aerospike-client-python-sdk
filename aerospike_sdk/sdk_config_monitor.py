@@ -83,7 +83,7 @@ def adopt_discovered_cluster_name(
     """Re-resolve *settings* against the cluster name the server reports.
 
     Profile selection normally uses the name declared through
-    ``validate_cluster_name_is()``. When nothing was declared, a
+    ``ClusterDefinition.cluster_name()``. When nothing was declared, a
     ``system.<clusterName>`` block naming the real cluster is well-formed YAML
     that simply never matches, so the operator gets ``DEFAULT`` everywhere with
     nothing in the log to explain it. This closes that by selecting on the
@@ -127,7 +127,7 @@ def adopt_discovered_cluster_name(
             "SDK config: block system.%s was selected by the cluster's "
             "server-reported name, but %s in it cannot take effect on a "
             "connected client — declare the name with "
-            "validate_cluster_name_is(%r) to have them applied at connect",
+            "ClusterDefinition.cluster_name(%r) to have them applied at connect",
             discovered, ", ".join(spent), discovered,
         )
         # Those fields keep the values the connection was actually built with,

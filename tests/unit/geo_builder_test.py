@@ -15,7 +15,7 @@
 
 """Unit tests for ``set_to_geo_json(...)`` on the write bin builders."""
 
-from aerospike_sdk import Key
+from aerospike_sdk import Behavior, Key
 
 
 from aerospike_sdk.aio.operations.query import (
@@ -29,7 +29,7 @@ POINT = '{"type":"Point","coordinates":[-122.4,37.7]}'
 
 
 def _make_qb() -> QueryBuilder:
-    return QueryBuilder(client=object(), namespace="test", set_name="unit")
+    return QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
 
 
 def _make_key() -> Key:

@@ -1,5 +1,6 @@
 # Sphinx configuration for Aerospike Python SDK docs
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -100,7 +101,6 @@ autodoc_preserve_defaults = True
 
 def setup(app):
     """Filter out 'duplicate object description' warnings for dataclass fields."""
-    import logging
 
     class _DuplicateFilter(logging.Filter):
         def filter(self, record):

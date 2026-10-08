@@ -72,7 +72,7 @@ arguments and drives the builder for you. Each argument stands in for one chain
 step, so the same rules apply:
 
 ```python
-from aerospike_async import IndexType
+from aerospike_sdk import IndexType
 
 task = await session.create_index(users, "users_city_idx", "city", IndexType.STRING)
 await task.wait_till_complete()
@@ -192,7 +192,7 @@ navigation inside the expression instead.
 
 ### From an AEL string
 
-On server 8.2.0+, `on_expression()` also accepts an AEL string. The client
+`on_expression()` also accepts an AEL string. The client
 sends the string as-is and the server parses and compiles it when the index
 is created, so the AEL dialect is the server's:
 
@@ -218,9 +218,9 @@ stream = await session.query(users).filter(flt).execute()
 
 The same rules apply as for prebuilt expressions: the AEL must produce a
 value of the index's type, so a boolean predicate like `"$.age > 21"` is
-rejected by the server. If any node is older than 8.2.0, `create()` raises
-with result code `OP_NOT_APPLICABLE` — build the expression with `Exp`
-instead on those clusters.
+rejected by the server. While any node runs a build older than 8.2.0 (during
+a rolling upgrade, for example), `create()` raises with result code
+`OP_NOT_APPLICABLE`.
 
 ### Indexing only some records (sparse indexes)
 
@@ -309,21 +309,32 @@ stream = await (
 
 ### Blocking primary-index (full-set) scans
 
-By default a `.where()` query that no secondary index can satisfy is **rejected**
-rather than allowed to fall back to a primary-index (full-set) scan — a full-set
-scan is dangerous at scale. This is the `allow_scans_with_where` query setting,
-which defaults to `False` in `Behavior.DEFAULT`. Queries **without** a `.where()`
-clause (intentional scans) are unaffected, and this only applies on clusters with
-query selection (field 44).
+By default a `.where()` query that no secondary index can satisfy falls back to
+a primary-index (full-set) scan, so queries work before their indexes exist. At
+scale a full-set scan is expensive, and a dropped or never-created index turns
+into one silently. To fail fast instead, set the `allow_scans_with_where` query
+setting to `False`: the query is then **rejected** with `IndexNotFoundError`
+(`INDEX_NOT_FOUND`). It defaults to `True` in `Behavior.DEFAULT`. Queries
+**without** a `.where()` clause (intentional scans) are unaffected, and this only
+applies on clusters with query selection (field 44).
 
-Allow the fallback per query with a hint, or change it on the `Behavior`:
+Reject the fallback for every query on a `Behavior`, or for one query with a hint:
 
 ```python
-# Permit the primary-index fallback for this one query
+from aerospike_sdk.policy import Settings
+
+# Every where-clause query in these sessions must be served by an index
+index_only = Behavior.DEFAULT.derive_with_changes(
+    "index-only",
+    reads_query=Settings(allow_scans_with_where=False),
+)
+index_only_session = cluster.create_session(index_only)
+
+# Reject the primary-index fallback for this one query on a default session
 stream = await (
     session.query(users)
     .where("$.age > 25")
-    .with_hint(QueryHint(allow_scans_with_where=True))
+    .with_hint(QueryHint(allow_scans_with_where=False))
     .execute()
 )
 ```
@@ -332,26 +343,20 @@ stream = await (
 `Behavior`, `True` permits the fallback, `False` rejects it. A per-query hint
 always wins over the `Behavior` setting.
 
-### Opting out of server-led selection
+### Choosing the access path yourself
 
-`bin_name` skips the server's explain step and sends the AEL as a plain filter
-expression instead. It is mutually exclusive with `index_name`:
+To bypass server-led selection, attach an explicit index filter. It is sent
+unchanged as the access path, and any `.where()` clause travels beside it as a
+residual filter expression:
 
 ```python
 stream = await (
     session.query(users)
-    .where("$.age > 25")
-    .with_hint(QueryHint(bin_name="age"))
+    .filter(Filter.range("age", 25, 40))
+    .where("$.city == 'NYC'")
     .execute()
 )
 ```
-
-!!! warning "Deprecated in alpha"
-    `bin_name` is a legacy opt-out during alpha, and the bin name itself is not
-    sent to the server — it only selects the route. The Query Optimizer PRD
-    specifies the index *name* as the sole hint shape, so this is expected to
-    be removed. To bypass the planner deliberately, prefer an explicit
-    `.filter(...)`, which the server honors when the index is available.
 
 See the [AEL guide](expression-ael.md) for string filter syntax and capability
 checks (`cluster.supports_ael()`, `cluster.supports_query_selection()`).

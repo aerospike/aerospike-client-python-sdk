@@ -1,7 +1,0 @@
-# Sync TlsBuilder
-
-```{eval-rst}
-.. autoclass:: aerospike_sdk.sync.tls_builder.TlsBuilder
-   :members:
-   :show-inheritance:
-```

@@ -26,7 +26,7 @@ Covers:
 import pytest
 from aerospike_async import Operation
 
-from aerospike_sdk import Key, ListReturnType, MapReturnType
+from aerospike_sdk import Behavior, Exp, Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk.aio.operations.cdt_read import (
@@ -57,6 +57,7 @@ class _OpCollector:
 
 def _make_builder(**overrides) -> QueryBuilder:
     """Create a QueryBuilder with a fake client for unit testing."""
+    overrides.setdefault("behavior", Behavior.DEFAULT)
     return QueryBuilder(client=object(), namespace="test", set_name="unit", **overrides)
 
 
@@ -98,6 +99,11 @@ class TestCdtReadBuilder:
         b, parent, cap = self._build(is_map=True)
         b.get_keys_and_values()
         assert cap == [MapReturnType.KEY_VALUE]
+
+    def test_get_as_ordered_map(self):
+        b, parent, cap = self._build(is_map=True)
+        b.get_as_ordered_map()
+        assert cap == [MapReturnType.ORDERED_MAP]
 
     def test_count(self):
         b, parent, cap = self._build()
@@ -143,6 +149,11 @@ class TestCdtReadBuilder:
         b, _, _ = self._build(is_map=False)
         with pytest.raises(TypeError, match="only supported for map"):
             b.get_keys_and_values()
+
+    def test_get_as_ordered_map_raises_for_list(self):
+        b, _, _ = self._build(is_map=False)
+        with pytest.raises(TypeError, match="only supported for map"):
+            b.get_as_ordered_map()
 
 
 # ===================================================================
@@ -416,8 +427,12 @@ class TestShouldIncludeResult:
     def test_filtered_out_included_with_fail_on_filtered(self):
         assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, False, True) is True
 
-    def test_filtered_out_included_with_respond_all_keys(self):
-        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, True, False) is True
+    def test_filtered_out_read_excluded_with_respond_all_keys_alone(self):
+        assert QueryBuilder._should_include_result(ResultCode.FILTERED_OUT, True, False) is False
+
+    def test_filtered_out_write_always_included(self):
+        assert QueryBuilder._should_include_result(
+            ResultCode.FILTERED_OUT, False, False, has_write=True) is True
 
     def test_other_errors_always_included(self):
         assert QueryBuilder._should_include_result(ResultCode.TIMEOUT, False, False) is True
@@ -566,6 +581,7 @@ class TestSyncQueryBuilderDelegation:
             client=object(),
             namespace="test",
             set_name="unit",
+            behavior=Behavior.DEFAULT,
         )
 
     def test_bin_returns_query_bin_builder(self):
@@ -617,3 +633,37 @@ class TestSyncQueryBuilderDelegation:
         sb = self._sync_builder()
         with pytest.raises(ValueError, match="Dataset.*cannot be stacked"):
             sb.query(_make_key())
+
+
+# ===================================================================
+# Dataset query followed by a keyed write
+# ===================================================================
+
+_EXP = Exp.eq(Exp.int_bin("age"), Exp.int_val(30))
+
+# A dataset query has no spec to carry its state, so a keyed write chained
+# onto it would inherit the query's filter, projection, and read ops while the
+# query itself never ran.
+_DATASET_INTO_WRITE = [
+    pytest.param(lambda qb: qb.where(_EXP), id="where"),
+    pytest.param(lambda qb: qb.bins(["name"]), id="bins"),
+    pytest.param(lambda qb: qb.bin("age").get(), id="bin-read"),
+    pytest.param(lambda qb: qb, id="bare"),
+]
+
+
+@pytest.mark.parametrize("qb_cls", [QueryBuilder, SyncQueryBuilder], ids=["async", "sync"])
+class TestDatasetQueryIntoWrite:
+
+    @pytest.mark.parametrize("configure", _DATASET_INTO_WRITE)
+    def test_write_verb_on_dataset_query_raises(self, qb_cls, configure):
+        qb = configure(qb_cls(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT))
+        with pytest.raises(ValueError, match="Dataset.*cannot be stacked"):
+            qb.upsert(_make_key(2))
+
+    def test_key_query_filter_stays_with_its_segment(self, qb_cls):
+        qb = qb_cls(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
+        qb._single_key = _make_key(1)
+        qb.where(_EXP).upsert(_make_key(2)).bin("x").set_to(1)
+        qb._finalize_chain()
+        assert [spec.filter_expression for spec in qb._specs] == [_EXP, None]

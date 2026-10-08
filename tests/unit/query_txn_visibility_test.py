@@ -23,9 +23,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aerospike_sdk import Txn
+from aerospike_sdk import Behavior, Txn
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.loggers import SdkLoggers
+from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 _EXPECTED_WARNING = (
@@ -41,27 +42,35 @@ _EXPECTED_WARNING = (
 def _async_builder(txn=None) -> QueryBuilder:
     client = MagicMock()
     client.query = AsyncMock(return_value=MagicMock())
-    return QueryBuilder(
+    qb = QueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         txn=txn,
         supports_query_selection=False,
         supports_server_compiled_ael=False,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 def _sync_builder(txn=None) -> SyncQueryBuilder:
     client = MagicMock()
     client.query_blocking.return_value = MagicMock()
-    return SyncQueryBuilder(
+    qb = SyncQueryBuilder(
         client=client,
         namespace="test",
         set_name="s",
+        behavior=Behavior.DEFAULT,
         txn=txn,
         supports_query_selection=False,
         supports_server_compiled_ael=False,
     )
+    # Tests call policy builders directly, skipping execute()'s namespace-mode resolution.
+    qb._namespace_mode = Mode.AP
+    return qb
 
 
 def _query_warnings(caplog) -> list[str]:

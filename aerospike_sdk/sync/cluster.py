@@ -75,10 +75,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def __init__(self, sdk_client: SyncClient) -> None:
         """
         Initialize a Cluster instance.
-        
+
         Args:
             sdk_client: The underlying SyncClient instance
-        
+
         Note:
             This should not be called directly. Use ClusterDefinition.connect() instead.
         """
@@ -91,7 +91,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         self._installed_exporter: Any = None
         self._export_timer: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
-    
+
     @classmethod
     def _create(
         cls,
@@ -147,11 +147,11 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         if sdk_config_source is not None:
             sdk_client._start_sdk_config_monitor(sdk_config_source)
         return cluster
-    
+
     def __enter__(self) -> Cluster:
         """Context manager entry."""
         return self
-    
+
     def __exit__(
         self,
         exc_type: Optional[type[BaseException]],
@@ -160,7 +160,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     ) -> None:
         """Context manager exit."""
         self.close()
-    
+
     @property
     def _client(self) -> SyncClient:
         """Get the underlying SyncClient."""
@@ -344,7 +344,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         made after enabling still takes effect.
         """
         self._stop_export_timer()
-        self._uninstall_built_in()
         settings = getattr(self._sdk_client, "_sdk_settings", None)
         metrics = getattr(settings, "metrics", None)
         interval = DEFAULT_EXPORT_INTERVAL_SECONDS
@@ -374,11 +373,16 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         except OSError:
             pass
 
-    def _stop_export_timer(self) -> None:
-        """Stop the export timer if one is running."""
+    def _stop_export_timer(self, *, final: bool = False) -> None:
+        """Stop the export timer and retire the config-installed exporter.
+
+        With ``final``, exporters -- the config-installed one included --
+        receive one closing snapshot first.
+        """
         if self._export_timer is not None:
-            self._export_timer.stop()
-            self._export_timer = None
+            timer, self._export_timer = self._export_timer, None
+            timer.stop(final=final)
+        self._uninstall_built_in()
 
     def enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
         """Enable metrics collection for this cluster.
@@ -415,17 +419,24 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def disable_metrics(self) -> None:
         """Disable metrics collection. Accumulated data is retained.
 
-        Stops the export push; exporters the application registered stay
-        registered and are not closed -- their lifecycle belongs to the
-        application.
+        Stops the export push after one last snapshot, so the window since the
+        previous export still reaches the exporters before this returns.
+        Exporters the application registered stay registered and are not
+        closed -- their lifecycle belongs to the application.
+
+        Example::
+
+            cluster.disable_metrics()  # exporters have the closing snapshot
+
+        See Also:
+            :meth:`enable_metrics`, :meth:`add_exporter`
         """
+        self._stop_export_timer(final=True)
         client = self._sdk_client
         client.underlying_client.disable_metrics()
         client._usage_on = False
         client._cmd_count_on = False
         client._record_on = False
-        self._stop_export_timer()
-        self._uninstall_built_in()
 
     def metrics_enabled(self) -> bool:
         """Whether metrics collection is currently enabled."""
@@ -434,20 +445,20 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def close(self) -> None:
         """
         Closes the cluster connection and releases all associated resources.
-        
+
         This method closes the underlying client connection. It should be called
         when the cluster is no longer needed to ensure proper resource cleanup.
-        
+
         This method is automatically called when using context manager::
 
                 with ClusterDefinition("localhost", 3100).connect() as cluster:
                     # Use the cluster...
                 # cluster.close() is automatically called here
+
+        With metrics enabled, exporters receive one closing snapshot first.
         """
-        # Stop exporting before the client goes away: the timer polls the
-        # client every interval and would otherwise keep firing against a
-        # closed one.
-        self._stop_export_timer()
-        self._uninstall_built_in()
+        # Finish exporting before the client goes away: the closing snapshot
+        # reads it, and a running timer would keep firing against a closed one.
+        self._stop_export_timer(final=True)
         self._sdk_client.close()
 

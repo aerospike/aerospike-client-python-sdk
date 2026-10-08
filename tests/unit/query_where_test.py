@@ -21,7 +21,7 @@ Tests the two forms: where(str) and where(Exp).
 from unittest.mock import patch
 
 
-from aerospike_sdk import Exp
+from aerospike_sdk import Behavior, Exp
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
@@ -29,6 +29,7 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
     client = kwargs.pop("client", None)
+    kwargs.setdefault("behavior", Behavior.DEFAULT)
     supports_server_compiled_ael = kwargs.pop("supports_server_compiled_ael", False)
     if client is None:
         client = object()
@@ -107,6 +108,10 @@ class TestQueryBuilderWhere:
             Exp.from_server_compiled_ael("$.age > 20")
         )
 
+    def test_filter_expression_is_not_a_builder_method(self):
+        """where() is the one entry point for expressions and AEL alike."""
+        assert not hasattr(_query_builder(), "filter_expression")
+
 
 class TestSyncQueryBuilderWhere:
     """Test SyncQueryBuilder.where() overloads (same behavior as QueryBuilder)."""
@@ -117,6 +122,7 @@ class TestSyncQueryBuilderWhere:
             client=object(),
             namespace="test",
             set_name="unit_test",
+            behavior=Behavior.DEFAULT,
             supports_server_compiled_ael=True,
         )
 
@@ -145,3 +151,6 @@ class TestSyncQueryBuilderWhere:
         result = builder.where(exp)
         assert result is builder
         assert builder._filter_expression is exp
+
+    def test_filter_expression_is_not_a_builder_method(self):
+        assert not hasattr(self._sync_builder(), "filter_expression")

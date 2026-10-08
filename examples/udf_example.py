@@ -26,7 +26,7 @@ SERVER_PATH = f"{PACKAGE}.lua"
 
 # Registered from a string so the example is self-contained; production code
 # more often ships a .lua file and calls register_udf_from_file().
-LUA_SOURCE = b"""
+LUA_SOURCE = b"""\
 local function balance_of(rec)
     return rec['balance'] or 0
 end
@@ -136,8 +136,6 @@ async def run_examples(session) -> None:
         raise AssertionError("expected UdfError was not raised")
     except UdfError as exc:
         print(f"caught {type(exc).__name__} (code {exc.result_code}): {exc.base_message}")
-
-    print("Overall: SUCCESS")
 
 
 async def main() -> None:

@@ -82,7 +82,7 @@ def _uvloop_has_721_fix() -> bool:
     try:
         # uvloop is an optional/platform-specific dependency (absent on Windows);
         # import lazily so pool import never hard-fails on its absence.
-        import uvloop
+        import uvloop  # noqa: PLC0415
 
         parts = tuple(int(p) for p in uvloop.__version__.split(".")[:3])
         return parts > (0, 22, 1)

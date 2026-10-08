@@ -176,14 +176,20 @@ class _UdfBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
         Returns:
             This builder for chaining.
 
+        Raises:
+            ValueError: If ``where`` has already been called on this operation.
+
         See Also:
             :meth:`QueryBuilder.where`: Same AEL for reads.
         """
+        qb = self._qb
+        if qb._filter_expression is not None or qb._where_ael is not None:
+            raise ValueError("where() can only be called once per operation")
         expression = bind_ael_params(expression, params)
         if isinstance(expression, str):
-            self._qb._filter_expression = self._qb._filter_expression_from_ael(expression)
+            qb._filter_expression = qb._filter_expression_from_ael(expression)
         else:
-            self._qb._filter_expression = expression
+            qb._filter_expression = expression
         return self
 
     def default_with_durable_delete(self) -> Self:

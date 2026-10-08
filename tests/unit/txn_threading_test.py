@@ -24,10 +24,11 @@ network I/O.
 """
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aerospike_sdk import Key, ResultCode, Txn
+from aerospike_sdk import ErrorStrategy, Key, ResultCode, Txn
 from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
 
 from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
@@ -46,6 +47,8 @@ from aerospike_sdk.aio.operations.query import (
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.behavior_settings import Mode
+from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 class _FakePac:
@@ -64,20 +67,20 @@ class _FakeSdkClient:
 def test_query_builder_captures_txn_at_construction() -> None:
     txn = Txn()
     qb = QueryBuilder(
-        client=_FakePac(), namespace="test", set_name="s", txn=txn,
+        client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT, txn=txn,
     )
     assert qb._txn is txn
 
 
 def test_query_builder_default_txn_is_none() -> None:
-    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s")
+    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT)
     assert qb._txn is None
 
 
 def test_query_builder_apply_txn_stamps_each_policy_type() -> None:
     txn = Txn()
     qb = QueryBuilder(
-        client=_FakePac(), namespace="test", set_name="s", txn=txn,
+        client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT, txn=txn,
     )
     for policy in (WritePolicy(), ReadPolicy(), QueryPolicy(), BatchPolicy()):
         stamped = qb._apply_txn(policy)
@@ -87,7 +90,7 @@ def test_query_builder_apply_txn_stamps_each_policy_type() -> None:
 
 
 def test_query_builder_apply_txn_noop_outside_mrt() -> None:
-    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s")
+    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT)
     wp = WritePolicy()
     assert qb._apply_txn(wp) is wp
     assert wp.txn is None
@@ -96,7 +99,7 @@ def test_query_builder_apply_txn_noop_outside_mrt() -> None:
 def test_query_builder_apply_txn_tolerates_none() -> None:
     txn = Txn()
     qb = QueryBuilder(
-        client=_FakePac(), namespace="test", set_name="s", txn=txn,
+        client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT, txn=txn,
     )
     assert qb._apply_txn(None) is None
 
@@ -105,7 +108,7 @@ def test_query_builder_with_txn_overrides_captured() -> None:
     t1 = Txn()
     t2 = Txn()
     qb = QueryBuilder(
-        client=_FakePac(), namespace="test", set_name="s", txn=t1,
+        client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT, txn=t1,
     )
     assert qb._txn is t1
     result = qb.with_txn(t2)
@@ -117,27 +120,52 @@ def test_query_builder_with_txn_overrides_captured() -> None:
 def test_query_builder_with_txn_none_clears_ambient() -> None:
     txn = Txn()
     qb = QueryBuilder(
-        client=_FakePac(), namespace="test", set_name="s", txn=txn,
+        client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT, txn=txn,
     )
     qb.with_txn(None)
     assert qb._txn is None
     assert qb._apply_txn(WritePolicy()).txn is None
 
 
-def test_query_builder_with_txn_drops_cached_base_policies() -> None:
-    """After .with_txn() the cached base policies must be re-derived so
-    they reflect the (new) txn."""
-    rp = ReadPolicy()
-    wp = WritePolicy()
-    qb = QueryBuilder(
+@pytest.mark.parametrize("qb_cls", [QueryBuilder, SyncQueryBuilder], ids=["async", "sync"])
+def test_query_builder_with_txn_drops_cached_base_policies(qb_cls) -> None:
+    """After .with_txn() every cached base policy, AP and SC, must be
+    re-derived so it reflects the (new) txn. An SC copy left in place would
+    be swapped back in when the namespace resolves as SC."""
+    qb = qb_cls(
         client=_FakePac(), namespace="test", set_name="s",
-        cached_read_policy=rp, cached_write_policy=wp,
+        behavior=Behavior.DEFAULT,
+        cached_read_policy=ReadPolicy(), cached_write_policy=WritePolicy(),
+        cached_read_policy_sc=ReadPolicy(), cached_write_policy_sc=WritePolicy(),
+        cached_read_operate_policy=WritePolicy(),
+        cached_read_operate_policy_sc=WritePolicy(),
     )
-    assert qb._base_read_policy is rp
-    assert qb._base_write_policy is wp
     qb.with_txn(Txn())
     assert qb._base_read_policy is None
     assert qb._base_write_policy is None
+    assert qb._base_read_policy_sc is None
+    assert qb._base_write_policy_sc is None
+    assert qb._base_read_operate_policy is None
+    assert qb._base_read_operate_policy_sc is None
+
+
+async def test_with_txn_single_key_read_on_sc_reaches_pac_in_the_txn() -> None:
+    """A read opted into a transaction on an SC namespace carries it to PAC
+    on the slow path that an ``on_error`` strategy takes."""
+    pac = MagicMock()
+    pac.get = AsyncMock(return_value=MagicMock())
+    qb = QueryBuilder(
+        client=pac, namespace="test", set_name="s",
+        behavior=Behavior.DEFAULT,
+        cached_read_policy=ReadPolicy(), cached_write_policy=WritePolicy(),
+        cached_read_policy_sc=ReadPolicy(), cached_write_policy_sc=WritePolicy(),
+        namespace_mode_resolver=AsyncMock(return_value=Mode.SC),
+    )
+    qb._single_key = Key("test", "s", 1)
+    txn = Txn()
+    await (await qb.with_txn(txn).execute(on_error=ErrorStrategy.IN_STREAM)).collect()
+    kwargs = pac.get.call_args.kwargs
+    assert kwargs.get("txn") is txn or kwargs["policy"].txn is not None
 
 
 def test_query_builder_under_txn_skips_cached_policies() -> None:
@@ -147,6 +175,7 @@ def test_query_builder_under_txn_skips_cached_policies() -> None:
     wp = WritePolicy()
     qb = QueryBuilder(
         client=_FakePac(), namespace="test", set_name="s",
+        behavior=Behavior.DEFAULT,
         cached_read_policy=rp, cached_write_policy=wp, txn=Txn(),
     )
     assert qb._base_read_policy is None
@@ -156,7 +185,7 @@ def test_query_builder_under_txn_skips_cached_policies() -> None:
 # -- WriteSegmentBuilder delegation ------------------------------------------
 
 def test_write_segment_with_txn_delegates_to_query_builder() -> None:
-    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s")
+    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT)
     seg = WriteSegmentBuilder(qb)
     txn = Txn()
     result = seg.with_txn(txn)
@@ -171,7 +200,7 @@ def test_single_key_segment_captures_txn() -> None:
     txn = Txn()
     seg = _SingleKeyWriteSegment(
         client=_FakePac(), key=key, op_type="upsert",
-        behavior=None, write_policy=None, read_policy=None, txn=txn,
+        behavior=Behavior.DEFAULT, write_policy=None, read_policy=None, txn=txn,
     )
     assert seg._txn is txn
 
@@ -181,7 +210,7 @@ def test_single_key_segment_apply_txn_stamps() -> None:
     txn = Txn()
     seg = _SingleKeyWriteSegment(
         client=_FakePac(), key=key, op_type="upsert",
-        behavior=None, write_policy=None, read_policy=None, txn=txn,
+        behavior=Behavior.DEFAULT, write_policy=None, read_policy=None, txn=txn,
     )
     wp = WritePolicy()
     stamped = seg._apply_txn(wp)
@@ -195,7 +224,7 @@ def test_single_key_segment_under_txn_drops_cached_policies() -> None:
     key = Key("test", "s", 1)
     seg = _SingleKeyWriteSegment(
         client=_FakePac(), key=key, op_type="upsert",
-        behavior=None, write_policy=WritePolicy(),
+        behavior=Behavior.DEFAULT, write_policy=WritePolicy(),
         read_policy=ReadPolicy(), txn=Txn(),
     )
     assert seg._write_policy is None
@@ -206,7 +235,7 @@ def test_single_key_segment_with_txn_threads_through_promotion() -> None:
     key = Key("test", "s", 1)
     seg = _SingleKeyWriteSegment(
         client=_FakePac(), key=key, op_type="upsert",
-        behavior=None, write_policy=None, read_policy=None,
+        behavior=Behavior.DEFAULT, write_policy=None, read_policy=None,
     )
     txn = Txn()
     seg.with_txn(txn)
@@ -222,7 +251,7 @@ def test_session_bind_txn_helper_applies_to_builder() -> None:
     session = Session.__new__(Session)
     session._txn = Txn()
 
-    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s")
+    qb = QueryBuilder(client=_FakePac(), namespace="test", set_name="s", behavior=Behavior.DEFAULT)
     returned = session._bind_txn(qb)
     assert returned is qb
     assert qb._txn is session._txn
@@ -235,6 +264,7 @@ def test_session_bind_txn_noop_when_no_active_txn() -> None:
 
     qb = QueryBuilder(
         client=_FakePac(), namespace="test", set_name="s",
+        behavior=Behavior.DEFAULT,
         txn=None,  # builder starts with no txn
     )
     session._bind_txn(qb)

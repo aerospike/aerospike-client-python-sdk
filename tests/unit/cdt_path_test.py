@@ -22,7 +22,10 @@ tests pin the entries each step emits and the client-side rules for
 
 import pytest
 
-from aerospike_sdk import CTX, Exp, LoopVarPart, MapOrder
+from aerospike_async import ExpOperation
+
+from aerospike_sdk import Behavior, CTX, Exp, ExpType, LoopVarPart, MapOrder, SelectFlags
+from aerospike_sdk.aio.operations import cdt_read
 from aerospike_sdk.aio.operations.cdt_read import CdtPathBuilder
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -47,7 +50,7 @@ def _over(threshold: int):
 
 
 def _write_bin(bin_name: str = "m") -> tuple[WriteBinBuilder, WriteSegmentBuilder]:
-    qb = QueryBuilder(client=object(), namespace="test", set_name="unit")
+    qb = QueryBuilder(client=object(), namespace="test", set_name="unit", behavior=Behavior.DEFAULT)
     segment = WriteSegmentBuilder(qb)
     return WriteBinBuilder(segment, bin_name), segment
 
@@ -78,6 +81,11 @@ class TestMapKeysInStep:
         path = QueryBinBuilder(_OpCollector(), "m").on_map_keys_in(("a", 1))
         assert path._ctx == (CTX.map_keys_in(["a", 1]),)
 
+    def test_bytes_element_is_one_blob_key_among_mixed_keys(self):
+        path = QueryBinBuilder(_OpCollector(), "m").on_map_keys_in([b"\x01\x02", "s", 3])
+        assert path._ctx == (CTX.map_keys_in([b"\x01\x02", "s", 3]),)
+        assert path._ctx != (CTX.map_keys_in([1, 2, "s", 3]),)
+
     def test_terminal_emits_one_operation(self):
         parent = _OpCollector()
         result = QueryBinBuilder(parent, "m").on_map_keys_in(["a"]).collect_values()
@@ -89,6 +97,49 @@ class TestMapKeysInStep:
         add_1 = Exp.num_add([Exp.int_loop_var(LoopVarPart.VALUE), Exp.val(1)])
         assert wbb.on_map_keys_in(["a"]).modify_by(add_1) is segment
         assert len(segment._qb._operations) == 1
+
+
+_COLLECTION_STEPS = {
+    "on_map_keys_in": lambda b, v: b.on_map_keys_in(v),
+    "on_map_key_list": lambda b, v: b.on_map_key_list(v),
+    "on_map_value_list": lambda b, v: b.on_map_value_list(v),
+    "on_list_value_list": lambda b, v: b.on_list_value_list(v),
+}
+
+_STEP_OWNERS = {
+    "query_bin": lambda: QueryBinBuilder(_OpCollector(), "m"),
+    "write_bin": lambda: _write_bin()[0],
+    "cdt_read": lambda: QueryBinBuilder(_OpCollector(), "m").on_map_key("x"),
+    "cdt_write": lambda: _write_bin()[0].on_map_key("x"),
+}
+
+
+class TestCollectionArguments:
+    """Steps taking a collection of keys or values refuse a bare ``str`` or ``bytes``.
+
+    Both are iterable, so they would otherwise select one entry per character
+    or one integer key per byte.
+    """
+
+    @pytest.mark.parametrize("step", _COLLECTION_STEPS.values(), ids=_COLLECTION_STEPS.keys())
+    @pytest.mark.parametrize("owner", _STEP_OWNERS.values(), ids=_STEP_OWNERS.keys())
+    def test_every_step_rejects_bare_bytes(self, owner, step):
+        with pytest.raises(TypeError, match="must be a collection"):
+            step(owner(), b"ab")
+
+    def test_path_step_rejects_bare_bytes(self):
+        with pytest.raises(TypeError, match="must be a collection"):
+            QueryBinBuilder(_OpCollector(), "m").on_each_child().on_map_keys_in(b"ab")
+
+    @pytest.mark.parametrize("value", ["ab", b"ab", bytearray(b"ab")], ids=["str", "bytes", "bytearray"])
+    def test_message_names_the_type_and_the_fix(self, value):
+        with pytest.raises(TypeError, match=rf"not a single {type(value).__name__}; wrap"):
+            QueryBinBuilder(_OpCollector(), "m").on_map_key_list(value)
+
+    def test_list_step_accepts_a_generator(self):
+        parent = _OpCollector()
+        QueryBinBuilder(parent, "m").on_map_key_list(k for k in ("a", "b")).get_values()
+        assert len(parent.operations) == 1
 
 
 class TestAndFilter:
@@ -172,3 +223,51 @@ class TestAndFilter:
     def test_rejected_after_a_range_selection(self):
         with pytest.raises(TypeError, match="and_filter"):
             QueryBinBuilder(_OpCollector(), "m").on_map_key_range("a", "d").and_filter(_over(10))
+
+
+class _RecordingCdtOperation:
+    """Stands in for ``CdtOperation``, whose operations do not compare equal."""
+
+    def __getattr__(self, factory):
+        def record(bin_name, *args):
+            return (factory, *args[:-1])
+        return record
+
+
+class TestCollectTerminals:
+    """Each ``collect_*`` terminal emits its select, adding ``NO_FAIL`` on request."""
+
+    @pytest.mark.parametrize(("terminal", "plain", "flags"), [
+        ("collect_values", "select_values", SelectFlags.VALUE),
+        ("collect_map_keys", "select_map_keys", SelectFlags.MAP_KEY),
+        ("collect_map_entries", "select_map_entries", SelectFlags.MAP_KEY_VALUE),
+        ("collect_matching_tree", "select_matching_tree", SelectFlags.MATCHING_TREE),
+    ], ids=["values", "map_keys", "map_entries", "matching_tree"])
+    @pytest.mark.parametrize("no_fail", [False, True])
+    def test_emits_the_select_and_flags(self, monkeypatch, terminal, plain, flags, no_fail):
+        monkeypatch.setattr(cdt_read, "CdtOperation", _RecordingCdtOperation())
+        parent = _OpCollector()
+        getattr(QueryBinBuilder(parent, "m").on_each_child(), terminal)(no_fail=no_fail)
+        expected = ("select_by_path", flags | SelectFlags.NO_FAIL) if no_fail else (plain,)
+        assert parent.operations == [expected]
+
+
+class TestExpressionReadTerminal:
+    """``collect_values_as_expression_read`` emits one expression read op."""
+
+    @pytest.mark.parametrize("bin_type", [ExpType.MAP, ExpType.LIST])
+    def test_emits_one_expression_read(self, bin_type):
+        parent = _OpCollector()
+        result = QueryBinBuilder(parent, "m").on_each_child().collect_values_as_expression_read(
+            bin_type, no_fail=True, ignore_eval_failure=True,
+        )
+        assert result is parent
+        assert len(parent.operations) == 1
+        assert isinstance(parent.operations[0], ExpOperation)
+
+    @pytest.mark.parametrize("bin_type", [ExpType.INT, ExpType.STRING])
+    def test_rejects_a_non_collection_bin_type(self, bin_type):
+        parent = _OpCollector()
+        with pytest.raises(ValueError, match="ExpType.MAP or ExpType.LIST"):
+            QueryBinBuilder(parent, "m").on_each_child().collect_values_as_expression_read(bin_type)
+        assert parent.operations == []

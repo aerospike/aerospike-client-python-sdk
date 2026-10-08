@@ -25,11 +25,13 @@ value type is defined once and cannot drift.
 from __future__ import annotations
 
 import os
-from typing import Any, Generic, List, Optional, Protocol, TypeVar, Union
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any, Generic, List, Optional, TypeVar, Union
 
 from typing import Self
 
-from aerospike_async import AuthMode, ClientPolicy, Version
+from aerospike_async import AuthMode, ClientPolicy, TlsConfig, Version
 
 from aerospike_sdk import capabilities
 from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
@@ -50,18 +52,63 @@ except Exception:
     _SDK_CLIENT_ID = "python-sdk-0.0.0"
 
 
-class _TlsBuilderLike(Protocol):
-    """The slice of a tree's ``TlsBuilder`` the shared definition base consumes."""
+@dataclass(frozen=True, kw_only=True)
+class _TlsSettings:
+    """TLS options held until connect, when they become a ``TlsConfig``.
 
-    def is_tls_enabled(self) -> bool: ...
-    def build_tls_config(self) -> Optional[Any]: ...
-    def get_tls_name(self) -> Optional[str]: ...
+    Building the ``TlsConfig`` opens the CA and client files, so it waits for
+    ``connect()`` rather than failing at definition time.
+    """
+
+    tls_name: Optional[str] = None
+    ca_file: Optional[str] = None
+    client_cert_file: Optional[str] = None
+    client_key_file: Optional[str] = None
+    protocols: Optional[list[str]] = None
+    ciphers: Optional[list[str]] = None
+    for_login_only: bool = False
+
+    def build_tls_config(self) -> TlsConfig:
+        """Build the PAC ``TlsConfig``.
+
+        A config with no CA file still builds: the server is then verified
+        against the system trust store, which is what a ``tls_name``-only setup
+        needs.
+
+        Raises:
+            ValueError: An unrecognized protocol or cipher-suite name, or a
+                protocol and cipher combination that leaves no usable suite.
+            aerospike_async.exceptions.IoError: A CA or client file that
+                cannot be read.
+        """
+        if self.client_cert_file:
+            return TlsConfig.with_client_auth(
+                self.ca_file,
+                self.client_cert_file,
+                self.client_key_file,
+                protocols=self.protocols,
+                ciphers=self.ciphers,
+                for_login_only=self.for_login_only,
+            )
+        return TlsConfig(
+            self.ca_file,
+            protocols=self.protocols,
+            ciphers=self.ciphers,
+            for_login_only=self.for_login_only,
+        )
 
 
-# The tree's ``TlsBuilder`` type. Each leaf binds this to its own class so the
-# builder chain (``with_tls_config_of`` and friends) stays precisely typed
-# without the shared base importing either tree.
-_TB = TypeVar("_TB", bound=_TlsBuilderLike)
+def _name_list(field: str, names: Optional[Sequence[str]]) -> Optional[list[str]]:
+    # A str is itself a Sequence, so a bare "TLSv1.3" would split into characters.
+    if isinstance(names, str):
+        raise TypeError(f"{field} takes a list of names, not a single string: [{names!r}]")
+    if names is None:
+        return None
+    if not names:
+        # Empty would read as "no restriction" and allow every default.
+        raise ValueError(f"{field} must name at least one entry; omit it to allow the defaults")
+    return list(names)
+
 
 # The cluster's tree-appropriate session / transactional-session types. Each
 # leaf binds these (via forward-reference strings, so the runtime never has to
@@ -161,15 +208,13 @@ class Host:
         return hosts
 
 
-class ClusterDefinitionBase(Generic[_TB]):
+class ClusterDefinitionBase:
     """Runtime-agnostic cluster-definition builder shared by both trees.
 
     Holds everything that is pure configuration state: seed/host handling, auth,
-    rack awareness, IP mapping, system settings, TLS wiring, and the
-    ``ClientPolicy`` / seeds-string assembly used at connect time. The only
-    runtime-bound pieces stay on the leaves: ``connect()`` (async ``await`` vs
-    blocking) and constructing the tree's ``TlsBuilder`` (behind
-    :meth:`_new_tls_builder`).
+    rack awareness, IP mapping, system settings, TLS, and the ``ClientPolicy`` /
+    seeds-string assembly used at connect time. The only runtime-bound piece
+    stays on the leaves: ``connect()`` (async ``await`` vs blocking).
 
     Defining these builder methods once means the two trees cannot drift on the
     accepted configuration surface or on how a ``ClientPolicy`` is assembled.
@@ -215,19 +260,9 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._seed_only_cluster = False
         self._strict_config = False
         self._ip_map: Optional[dict[str, str]] = None
-        self._tls_builder: Optional[_TB] = None
+        self._tls: Optional[_TlsSettings] = None
         self._system_settings: Optional[SystemSettings] = None
         self._app_id: Optional[str] = None
-
-    # -- Per-leaf hook --------------------------------------------------------
-
-    def _new_tls_builder(self) -> _TB:
-        """Return a new tree-appropriate ``TlsBuilder`` bound to this definition.
-
-        Overridden per leaf so the shared base never imports either tree's
-        ``TlsBuilder``. Not called on the base.
-        """
-        raise NotImplementedError
 
     # -- Builder chain (pure state mutation) ----------------------------------
 
@@ -343,24 +378,36 @@ class ClusterDefinitionBase(Generic[_TB]):
     def with_certificate_credentials(self) -> Self:
         """Configure certificate-based (PKI) authentication.
 
-        Uses client certificates instead of username/password credentials.
-        Automatically enables TLS if not already configured.
+        The server identifies the client by its TLS client certificate instead
+        of a user name and password, so the certificate and key must be set
+        with :meth:`with_tls_config`.
 
         Returns:
             This ClusterDefinition for method chaining.
 
         Raises:
-            ValueError: At connect time if any host is missing a TLS name.
+            ValueError: At connect time if no client certificate is configured
+                or any host is missing a TLS name.
 
         Example::
 
-            cd = ClusterDefinition("localhost", 4333).with_certificate_credentials()
+            cd = (
+                ClusterDefinition("db.example.com", 4333)
+                .with_tls_config(
+                    tls_name="db.example.com",
+                    ca_file="/certs/ca.pem",
+                    client_cert_file="/certs/app.pem",
+                    client_key_file="/certs/app.key",
+                )
+                .with_certificate_credentials()
+            )
+
+        See Also:
+            :meth:`with_tls_config`: Supplies the client certificate.
         """
         self._auth_mode = AuthMode.PKI
         self._user_name = None
         self._password = None
-        if not self._tls_builder:
-            self._tls_builder = self._new_tls_builder()
         return self
 
     @property
@@ -368,22 +415,26 @@ class ClusterDefinitionBase(Generic[_TB]):
         """The current authentication mode."""
         return self._auth_mode
 
-    def validate_cluster_name_is(self, cluster_name: str) -> Self:
-        """Validate that the cluster name matches the expected value.
+    def cluster_name(self, cluster_name: str) -> Self:
+        """Declare the name of the cluster this definition connects to.
 
-        Enables cluster-name validation so the client only connects to the
-        expected cluster. If the actual cluster name does not match, the
-        connection fails.
+        The client validates it against each node: nodes reporting a different
+        cluster name are rejected, so the connection fails if none match. The
+        name also selects the matching ``system.<name>`` profile in a dynamic
+        SDK config file before the connection is built.
 
         Args:
-            cluster_name: The expected cluster name to validate against.
+            cluster_name: The expected cluster name.
 
         Returns:
             This ClusterDefinition for method chaining.
 
         Example::
 
-            cd = ClusterDefinition("localhost", 3000).validate_cluster_name_is("my-cluster")
+            cd = ClusterDefinition("localhost", 3000).cluster_name("prod-east")
+
+        See Also:
+            :attr:`ClusterBase.cluster_name`: The name the connected servers report.
         """
         self._cluster_name = cluster_name
         return self
@@ -435,7 +486,7 @@ class ClusterDefinitionBase(Generic[_TB]):
             cd = ClusterDefinition("bench-asd", 3000).using_services_alternate(False)
 
         See Also:
-            :meth:`with_ip_map`: Client-side address translation, for when the
+            :meth:`ip_map`: Client-side address translation, for when the
                 cluster publishes no alternate addresses.
         """
         self._use_services_alternate = enabled
@@ -486,7 +537,7 @@ class ClusterDefinitionBase(Generic[_TB]):
             :meth:`using_services_alternate`: The production remedy when
                 advertised addresses are not routable — discovers peers, but
                 addresses them by their alternate address.
-            :meth:`with_ip_map`: Client-side translation of discovered
+            :meth:`ip_map`: Client-side translation of discovered
                 addresses.
         """
         self._seed_only_cluster = enabled
@@ -551,7 +602,7 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._fail_if_not_connected = fail
         return self
 
-    def with_ip_map(self, ip_map: dict[str, str]) -> Self:
+    def ip_map(self, ip_map: dict[str, str]) -> Self:
         """Set an IP address translation table for cluster node discovery.
 
         Used when clients from different networks need different IP addresses to
@@ -570,7 +621,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
         Example::
 
-            cd = ClusterDefinition("localhost", 3000).with_ip_map({"10.0.0.1": "192.168.1.1"})
+            cd = ClusterDefinition("localhost", 3000).ip_map({"10.0.0.1": "192.168.1.1"})
         """
         self._ip_map = ip_map if ip_map else None
         return self
@@ -595,22 +646,83 @@ class ClusterDefinitionBase(Generic[_TB]):
         self._system_settings = settings
         return self
 
-    def with_tls_config_of(self) -> _TB:
-        """Begin TLS configuration using a chainable builder.
+    def with_tls_config(
+        self,
+        *,
+        tls_name: Optional[str] = None,
+        ca_file: Optional[str] = None,
+        client_cert_file: Optional[str] = None,
+        client_key_file: Optional[str] = None,
+        protocols: Optional[Sequence[str]] = None,
+        ciphers: Optional[Sequence[str]] = None,
+        for_login_only: bool = False,
+    ) -> Self:
+        """Connect over TLS with these settings.
 
-        Returns a ``TlsBuilder`` for configuring TLS name, CA file, protocols,
-        ciphers, and other TLS options. Call ``done()`` on it to return to this
-        ClusterDefinition for further configuration.
+        Each call replaces any earlier TLS settings on this definition. The
+        settings are built into a TLS configuration at ``connect()``, so that
+        is where a missing file, an unknown protocol or cipher name, or a
+        protocol and cipher restriction that leaves no usable suite is
+        reported.
+
+        Args:
+            tls_name: Name the server certificate must carry, also sent as SNI.
+                It is applied to every :class:`Host` that has no ``tls_name`` of
+                its own.
+            ca_file: PEM file of the certificate authorities that sign the
+                server certificates. Without one, the system trust store is
+                used.
+            client_cert_file: PEM client certificate for mutual TLS. Requires
+                ``client_key_file``.
+            client_key_file: PEM private key for ``client_cert_file``.
+            protocols: TLS versions to allow, for example ``["TLSv1.3"]``.
+                Defaults to the client's supported set.
+            ciphers: Cipher-suite names to allow. Defaults to the client's
+                supported set. They must suit an allowed protocol: TLS 1.3
+                suites are separate from TLS 1.2 ones.
+            for_login_only: Encrypt only the login exchange. The credential
+                exchange runs over TLS, that connection closes once the session
+                token is held, and every later connection to the node opens in
+                cleartext at its cleartext service address; no socket is
+                downgraded. Trades data-plane encryption for throughput on
+                trusted networks, and requires credentials on this definition.
 
         Returns:
-            A ``TlsBuilder`` for configuring TLS settings.
+            This ClusterDefinition for method chaining.
+
+        Raises:
+            ValueError: If only one of ``client_cert_file`` and
+                ``client_key_file`` is given.
+            ValueError: If ``protocols`` or ``ciphers`` is an empty list.
+            TypeError: If ``protocols`` or ``ciphers`` is a single string
+                rather than a list of names.
 
         Example::
 
-            cd = ClusterDefinition("localhost", 4333).with_tls_config_of().ca_file("/certs/ca.pem").done()
+            cd = (
+                ClusterDefinition("db.example.com", 4333)
+                .with_tls_config(tls_name="db.example.com", ca_file="/certs/ca.pem")
+                .with_native_credentials("app", "secret")
+            )
+
+        See Also:
+            :meth:`with_certificate_credentials`: Authenticate with the client
+            certificate instead of a password.
         """
-        self._tls_builder = self._new_tls_builder()
-        return self._tls_builder
+        if bool(client_cert_file) != bool(client_key_file):
+            raise ValueError(
+                "mutual TLS needs both client_cert_file and client_key_file",
+            )
+        self._tls = _TlsSettings(
+            tls_name=tls_name,
+            ca_file=ca_file,
+            client_cert_file=client_cert_file,
+            client_key_file=client_key_file,
+            protocols=_name_list("protocols", protocols),
+            ciphers=_name_list("ciphers", ciphers),
+            for_login_only=for_login_only,
+        )
+        return self
 
     # -- Connect-time assembly (shared) ---------------------------------------
 
@@ -650,11 +762,11 @@ class ClusterDefinitionBase(Generic[_TB]):
         if self._ip_map:
             policy.ip_map = self._ip_map
 
-        # TLS configuration
-        if self._tls_builder and self._tls_builder.is_tls_enabled():
-            tls_config = self._tls_builder.build_tls_config()
-            if tls_config is not None:
-                policy.tls_config = tls_config
+        if self._tls is not None:
+            try:
+                policy.tls_config = self._tls.build_tls_config()
+            except PacAerospikeError as e:
+                raise _convert_pac_exception(e) from e
 
         # System settings (connection pool, tend interval, etc.)
         if system_settings is not None:
@@ -664,10 +776,7 @@ class ClusterDefinitionBase(Generic[_TB]):
 
     def _get_effective_hosts(self) -> List[Host]:
         """Return hosts, adding TLS names when TLS is enabled and they are unset."""
-        if not self._tls_builder or not self._tls_builder.is_tls_enabled():
-            return self._hosts
-
-        tls_name = self._tls_builder.get_tls_name()
+        tls_name = self._tls.tls_name if self._tls is not None else None
         if not tls_name:
             return self._hosts
 
@@ -696,6 +805,11 @@ class ClusterDefinitionBase(Generic[_TB]):
     def _validate(self) -> None:
         """Validate the configuration before connecting."""
         if self._auth_mode == AuthMode.PKI:
+            if self._tls is None or not self._tls.client_cert_file:
+                raise ValueError(
+                    "PKI authentication requires a client certificate: pass "
+                    "client_cert_file and client_key_file to with_tls_config()"
+                )
             effective = self._get_effective_hosts()
             missing = [h.name for h in effective if not h.tls_name]
             if missing:
@@ -785,7 +899,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
     def cluster_name(self) -> Optional[str]:
         """The cluster name the servers report.
 
-        When the connection was built with ``validate_cluster_name_is``, nodes
+        When the connection was built with ``ClusterDefinition.cluster_name()``, nodes
         reporting any other name were rejected, so this equals the validated
         name.
 

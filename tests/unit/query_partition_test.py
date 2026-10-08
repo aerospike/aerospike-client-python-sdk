@@ -23,12 +23,14 @@ built, so a bound-vs-count mixup cannot come back silently.
 
 import pytest
 
+from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
 def _query_builder(**kwargs):
     """Return a QueryBuilder with a fake client (no real connection)."""
     client = kwargs.pop("client", None)
+    kwargs.setdefault("behavior", Behavior.DEFAULT)
     if client is None:
         client = object()
     return QueryBuilder(

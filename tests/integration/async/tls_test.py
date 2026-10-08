@@ -86,17 +86,14 @@ class TestTlsClusterDefinition:
         return _parse_host_port(_tls_host_env())
 
     async def test_basic_tls_connection(self, host_port):
-        """ClusterDefinition + with_tls_config_of() connects over TLS."""
+        """ClusterDefinition + with_tls_config() connects over TLS."""
         if not TLS_CA:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
 
         hostname, port = host_port
         cd = (
             ClusterDefinition(hostname, port)
-            .with_tls_config_of()
-            .tls_name(TLS_NAME or "")
-            .ca_file(TLS_CA)
-            .done()
+            .with_tls_config(tls_name=TLS_NAME, ca_file=TLS_CA)
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
@@ -116,9 +113,7 @@ class TestTlsClusterDefinition:
         hostname, port = host_port
         cd = (
             ClusterDefinition(hosts=[Host(hostname, port, tls_name=TLS_NAME)])
-            .with_tls_config_of()
-            .ca_file(TLS_CA)
-            .done()
+            .with_tls_config(ca_file=TLS_CA)
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
@@ -136,10 +131,7 @@ class TestTlsClusterDefinition:
         hostname, port = host_port
         cd = (
             ClusterDefinition(hostname, port)
-            .with_tls_config_of()
-            .tls_name(TLS_NAME or "")
-            .ca_file(TLS_CA)
-            .done()
+            .with_tls_config(tls_name=TLS_NAME, ca_file=TLS_CA)
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
@@ -170,19 +162,19 @@ class TestPkiClusterDefinition:
         return _parse_host_port(_tls_host_env())
 
     async def test_pki_connection(self, host_port):
-        """Connect with client cert + key via the chainable builder."""
+        """Connect with a client cert + key."""
         if not all([TLS_CA, TLS_CERT, TLS_KEY]):
             pytest.skip("TLS certificate files not configured")
 
         hostname, port = host_port
         cd = (
             ClusterDefinition(hostname, port)
-            .with_tls_config_of()
-            .tls_name(TLS_NAME or "")
-            .ca_file(TLS_CA)
-            .client_cert_file(TLS_CERT)
-            .client_key_file(TLS_KEY)
-            .done()
+            .with_tls_config(
+                tls_name=TLS_NAME,
+                ca_file=TLS_CA,
+                client_cert_file=TLS_CERT,
+                client_key_file=TLS_KEY,
+            )
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
@@ -200,7 +192,7 @@ class TestPkiClusterDefinition:
 
 @skip_no_tls
 class TestTlsEnvDrivenDefinition:
-    """TLS via the builder with the full env-driven knob set.
+    """TLS with the full env-driven knob set.
 
     Unlike the fixed-shape classes above, client cert/key are applied only
     when both are set — mirroring how a deployment-driven config would
@@ -209,11 +201,12 @@ class TestTlsEnvDrivenDefinition:
 
     def _definition(self, cd):
         """Apply CA (always) and client cert/key (when both set) to ``cd``."""
-        tls = cd.with_tls_config_of().tls_name(TLS_NAME or "").ca_file(TLS_CA)
-        if TLS_CERT and TLS_KEY:
-            tls = tls.client_cert_file(TLS_CERT).client_key_file(TLS_KEY)
+        client_auth = (
+            {"client_cert_file": TLS_CERT, "client_key_file": TLS_KEY}
+            if TLS_CERT and TLS_KEY else {}
+        )
         return (
-            tls.done()
+            cd.with_tls_config(tls_name=TLS_NAME, ca_file=TLS_CA, **client_auth)
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
@@ -269,23 +262,17 @@ class TestTlsTransportOptions:
     def host_port(self):
         return _parse_host_port(_tls_host_env())
 
-    def _definition(self, host_port, tune):
+    def _definition(self, host_port, restrictions):
         hostname, port = host_port
-        builder = (
-            ClusterDefinition(hostname, port)
-            .with_tls_config_of()
-            .tls_name(TLS_NAME or "")
-            .ca_file(TLS_CA)
-        )
-        tune(builder)
         return (
-            builder.done()
+            ClusterDefinition(hostname, port)
+            .with_tls_config(tls_name=TLS_NAME, ca_file=TLS_CA, **restrictions)
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )
 
-    async def _round_trip(self, host_port, tune, key_name):
-        cluster = await self._definition(host_port, tune).connect()
+    async def _round_trip(self, host_port, restrictions, key_name):
+        cluster = await self._definition(host_port, restrictions).connect()
         try:
             session = cluster.create_session(Behavior.DEFAULT)
             key = USERS.id(key_name)
@@ -303,7 +290,7 @@ class TestTlsTransportOptions:
         if not TLS_CA:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
         await self._round_trip(
-            host_port, lambda b: b.protocols("TLSv1.2"), "tls_proto",
+            host_port, {"protocols": ["TLSv1.2"]}, "tls_proto",
         )
 
     async def test_supported_cipher_still_connects(self, host_port):
@@ -312,7 +299,7 @@ class TestTlsTransportOptions:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
         await self._round_trip(
             host_port,
-            lambda b: b.ciphers("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"),
+            {"ciphers": ["TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"]},
             "tls_cipher",
         )
 
@@ -323,9 +310,10 @@ class TestTlsTransportOptions:
             pytest.skip("AEROSPIKE_TLS_CA_FILE not set")
         await self._round_trip(
             host_port,
-            lambda b: b.protocols("TLSv1.2").ciphers(
-                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-            ),
+            {
+                "protocols": ["TLSv1.2"],
+                "ciphers": ["TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"],
+            },
             "tls_both",
         )
 
@@ -351,11 +339,9 @@ class TestTlsForLoginOnly:
     def _definition(self, cls, hostname, port, for_login_only):
         return (
             cls(hostname, port)
-            .with_tls_config_of()
-            .tls_name(TLS_NAME or "")
-            .ca_file(TLS_CA)
-            .for_login_only(for_login_only)
-            .done()
+            .with_tls_config(
+                tls_name=TLS_NAME, ca_file=TLS_CA, for_login_only=for_login_only,
+            )
             .with_native_credentials(TLS_USER, TLS_PASS)
             .using_services_alternate()
         )

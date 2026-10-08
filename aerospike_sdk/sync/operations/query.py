@@ -20,17 +20,17 @@ runtime-agnostic bases in :mod:`aerospike_sdk.query_shared` /
 :mod:`aerospike_sdk.operations_shared`, and the blocking-IO dispatchers
 from :mod:`aerospike_sdk.sync.operations.query_dispatch`. Concrete sync
 subclasses add sync ``execute()`` (Tier 1 / 1b / 2 dispatch) and override
-factory hooks (``_start_write_verb``, ``_promote``) so chained types stay
-in the sync namespace.
+factory hooks (``_start_write_segment``, ``_start_write_verb``, ``_promote``)
+so chained types stay in the sync namespace.
 """
 
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any, List, Optional, Sequence, Union
+from typing import List, Optional, Union
 
 
-from aerospike_async import ExecuteTask, Key
+from aerospike_async import Key
 
 from aerospike_async import ResultCode
 
@@ -109,7 +109,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
 
     # -- Write transitions ----------------------------------------------------
 
-    def _start_write_verb(  # type: ignore[override]
+    def _start_write_segment(  # type: ignore[override]
         self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
         """Open a sync write segment after a write verb on this query."""
@@ -135,21 +135,6 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         return WriteSegmentBuilder(self)
 
     # -- Execute --------------------------------------------------------------
-
-    def execute_background_task(self) -> ExecuteTask:
-        """Run a background write for this dataset query (synchronous)."""
-        return self._execute_background_task_blocking()
-
-    def execute_udf_background_task(
-        self,
-        package_name: str,
-        function_name: str,
-        args: Optional[Sequence[Any]] = None,
-    ) -> ExecuteTask:
-        """Run a background UDF for this dataset query (synchronous)."""
-        return self._execute_udf_background_task_blocking(
-            package_name, function_name, args,
-        )
 
     def execute(
         self, on_error: Optional[OnError] = None,
@@ -178,8 +163,8 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             and self._default_where_ael is None
             and self._filter is None
             and self._op_type is None
+            and self._partition_filter is None
             and self._base_read_policy is not None
-            and self._read_policy is None
         ):
             if self._record_on:
                 self._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
@@ -223,10 +208,13 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                 key=self._single_key, record=record, result_code=ResultCode.OK,
             )])
 
+        # The dispatchers finalize internally; doing it here first lets an
+        # empty key selection return before any dispatcher reads it as a
+        # dataset query, and leaves their own call a no-op.
+        self._finalize_chain()
+        if self._keys_selected and not self._specs:
+            return RecordStream._from_list([])
         if self._record_on:
-            # The dispatchers finalize internally; doing it here first makes
-            # the shape readable and leaves their own call a no-op.
-            self._finalize_chain()
             self._record_call(usage.API_BLOCKING, self._usage_shape())
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
         fast = self._execute_blocking_fast_path(on_error)

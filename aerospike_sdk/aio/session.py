@@ -671,66 +671,18 @@ class Session(
 
     # -- Internal helpers -----------------------------------------------------
 
-    @staticmethod
-    def _resolve_keys(
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *more_keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
-    ) -> List[Key]:
-        """Resolve mixed positional/keyword arguments into a flat list of Keys."""
-        all_keys: List[Key] = []
-
-        if arg1 is not None:
-            if isinstance(arg1, Key):
-                all_keys.append(arg1)
-                if isinstance(arg2, Key):
-                    all_keys.append(arg2)
-                all_keys.extend(more_keys)
-            elif isinstance(arg1, list):
-                if not arg1:
-                    raise ValueError("keys list cannot be empty")
-                all_keys.extend(arg1)
-            else:
-                raise TypeError(f"Expected Key or List[Key], got {type(arg1)}")
-        elif key is not None:
-            all_keys.append(key)
-        elif key_value is not None:
-            if dataset is not None:
-                all_keys.append(dataset.id(key_value))
-            elif namespace is not None and set_name is not None:
-                all_keys.append(Key(namespace, set_name, key_value))
-            else:
-                raise ValueError(
-                    "Either dataset or (namespace and set_name) must be provided with key_value"
-                )
-
-        if not all_keys:
-            raise ValueError("At least one key must be provided")
-        return all_keys
-
     def _build_write_segment(
-        self,
-        op_type: str,
-        arg1: Optional[Union[Key, List[Key]]] = None,
-        arg2: Optional[Key] = None,
-        *more_keys: Key,
-        key: Optional[Key] = None,
-        dataset: Optional[DataSet] = None,
-        namespace: Optional[str] = None,
-        set_name: Optional[str] = None,
-        key_value: Optional[Union[str, int, bytes]] = None,
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
     ) -> WriteSegmentBuilder:
         """Resolve keys and create a :class:`WriteSegmentBuilder`."""
-        all_keys = self._resolve_keys(
-            arg1, arg2, *more_keys,
-            key=key, dataset=dataset,
-            namespace=namespace, set_name=set_name, key_value=key_value,
-        )
+        if isinstance(arg1, Key):
+            all_keys = [arg1, *more_keys]
+        elif isinstance(arg1, list) and not more_keys:
+            if not arg1:
+                raise ValueError("keys list cannot be empty")
+            all_keys = list(arg1)
+        else:
+            raise TypeError(f"Expected Key or List[Key], got {type(arg1)}")
         first = all_keys[0]
         qb = QueryBuilder(
             client=self._client._client,
@@ -747,7 +699,7 @@ class Session(
             sdk_client=self._client,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
-        return qb._start_write_verb(op_type, target)
+        return qb._start_write_segment(op_type, target)
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:
         """Dataset-scoped tabular write; rows arrive through ``bins(...)``."""
@@ -795,7 +747,7 @@ class Session(
     # only the tree-specific builder construction lives here, behind the hooks
     # the base routes to.
 
-    def _fast_query_builder(self, key: Key, behavior: Behavior) -> QueryBuilder:
+    def _fast_query_builder(self, key: Key) -> QueryBuilder:
         """Single-key query builder: skip ``Client.query()`` and per-op policy rebuilds.
 
         Bench-hot: the common ``session.query(key)`` shape lands here directly
@@ -808,11 +760,13 @@ class Session(
             self._client._async_client,
             key.namespace,
             key.set_name,
-            behavior,
+            self._behavior,
             self._cached_read_policy,
             self._cached_write_policy,
             self._cached_read_policy_sc,
             self._cached_write_policy_sc,
+            self._cached_read_operate_policy,
+            self._cached_read_operate_policy_sc,
             self._txn,
             self._resolve_namespace_mode,
             self._resolve_namespace_mode_blocking,
@@ -822,89 +776,31 @@ class Session(
         return builder
 
     def _build_query_builder(
-        self,
-        *,
-        dataset: Optional[DataSet],
-        key: Optional[Key],
-        keys: Optional[List[Key]],
-        namespace: Optional[str],
-        set_name: Optional[str],
-        behavior: Behavior,
+        self, *, dataset: Optional[DataSet], keys: Optional[List[Key]],
     ) -> QueryBuilder:
-        """Dataset / multi-key / namespace query builder (non-single-key shapes)."""
-        return self._client._query(  # type: ignore[call-overload]
-            namespace=namespace,
-            set_name=set_name,
+        """Dataset / multi-key query builder (non-single-key shapes)."""
+        return self._client._query(
             dataset=dataset,
-            key=key,
             keys=keys,
-            behavior=behavior,
+            behavior=self._behavior,
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
         )
 
-    @typing.overload
-    def index(
-        self,
-        dataset: DataSet,
-        /,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder from a DataSet."""
-        ...
-
-    @typing.overload
-    def index(
-        self,
-        *,
-        dataset: DataSet,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder from a DataSet."""
-        ...
-
-    @typing.overload
-    def index(
-        self,
-        namespace: str,
-        set_name: str,
-        *,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """Create an index builder with explicit namespace/set."""
-        ...
-
-    def index(
-        self,
-        namespace: Optional[Union[str, DataSet]] = None,
-        set_name: Optional[str] = None,
-        *,
-        dataset: Optional[DataSet] = None,
-        behavior: Optional[Behavior] = None,
-    ) -> IndexBuilder:
-        """
-        Create a secondary index builder for a namespace and set.
-
-        Takes a :class:`~aerospike_sdk.dataset.DataSet` positionally or by
-        keyword, matching :meth:`query` and the write verbs.
+    def index(self, dataset: DataSet, /) -> IndexBuilder:
+        """Create a secondary index builder for a dataset.
 
         Args:
-            namespace: A dataset, or the namespace name when passing
-                ``set_name`` too.
-            set_name: Set name when ``namespace`` is a namespace string.
-            dataset: Keyword :class:`~aerospike_sdk.dataset.DataSet` that
-                supplies namespace and set.
-            behavior: Reserved for symmetry with :meth:`query`; forwarded to
-                :meth:`Client.index` but not used by index operations yet.
+            dataset: Namespace and set to index; a set-less
+                :class:`~aerospike_sdk.dataset.DataSet` covers the whole
+                namespace.
 
         Returns:
             :class:`~aerospike_sdk.aio.operations.index.IndexBuilder` for
                 chaining index definition and creation.
 
         Raises:
-            ValueError: If no dataset is given and ``namespace`` or
-                ``set_name`` is missing.
+            TypeError: If ``dataset`` is not a :class:`~aerospike_sdk.dataset.DataSet`.
 
         Example::
 
@@ -912,27 +808,14 @@ class Session(
             await session.index(users).on_bin("age").named("age_idx").integer().create()
 
         See Also:
-            :meth:`Client.index`
+            :meth:`create_index`: The same in one call.
+            :meth:`drop_index`
         """
-        if isinstance(namespace, DataSet):
-            dataset = namespace
-            namespace = None
-        if dataset is not None:
-            return self._client.index(dataset=dataset, behavior=behavior)
-        elif namespace is not None and set_name is not None:
-            return self._client.index(
-                namespace, set_name, behavior=behavior,
-            )
-        else:
-            raise ValueError(
-                "Invalid arguments. Use either:\n"
-                "  - index(dataset=DataSet(...))\n"
-                "  - index(namespace=..., set_name=...)"
-            )
+        return self._client.index(dataset)
 
     def _txn_session_cls(self) -> "type[TransactionalSession]":
         """Return the async transactional-session class (late import breaks the cycle)."""
-        from aerospike_sdk.aio.transactional_session import TransactionalSession
+        from aerospike_sdk.aio.transactional_session import TransactionalSession  # noqa: PLC0415
         return TransactionalSession
 
     async def create_index(
