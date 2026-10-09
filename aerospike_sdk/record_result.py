@@ -321,8 +321,11 @@ class RecordResult:
 
         Wraps the two-element ``[index_bit_count, min_hash_bit_count]`` list
         that ``hll_describe()`` writes back into the bin and returns it as an
-        :class:`HllConfig`. Returns ``None`` if the bin is absent from the
-        record (or the record itself is ``None``).
+        :class:`HllConfig`. When the bin carried several ops in the same
+        ``execute()``, such as ``hll_init()`` followed by ``hll_describe()``,
+        the bin holds one slot per op and the describe result is the last
+        one that is not ``None``; that slot is used. Returns ``None`` if the
+        bin is absent from the record (or the record itself is ``None``).
 
         Args:
             bin_name: Name of the bin holding a ``hll_describe()`` result.
@@ -346,6 +349,12 @@ class RecordResult:
         value = self.record.bins.get(bin_name)
         if value is None:
             return None
+        # Several ops on the bin group their answers; the describe result is
+        # the last one that answered.
+        if isinstance(value, list) and all(v is None or isinstance(v, list) for v in value):
+            value = next((v for v in reversed(value) if v is not None), None)
+            if value is None:
+                return None
         if not isinstance(value, list) or len(value) != 2:
             raise TypeError(
                 f"Bin {bin_name!r} is not a 2-element list (got {type(value).__name__})",

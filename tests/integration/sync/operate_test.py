@@ -110,9 +110,8 @@ def test_touch_record_resets_ttl(session, ds):
 
 
 def test_scalar_multi_op_results_are_op_aligned(session, ds):
-    """get/add/get on one bin through the sync path: one slot per op
-    positionally, while the bins view merges the reads and skips the
-    write's empty slot."""
+    """get/add/get on one bin through the sync path: one slot per op in
+    both views, the write's answer being ``None``."""
     key = ds.id("scalar_positional")
     session.delete(key).execute()
     session.upsert(key).bin("n").set_to(1).execute()
@@ -127,7 +126,7 @@ def test_scalar_multi_op_results_are_op_aligned(session, ds):
     rec = result.record_or_raise()
 
     assert rec.results == [1, None, 11]
-    assert rec.bins["n"] == [1, 11]
+    assert rec.bins["n"] == [1, None, 11]
 
     assert result.operation_result(0) == 1
     assert result.operation_result(1) is None

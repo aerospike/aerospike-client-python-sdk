@@ -152,6 +152,10 @@ class TestToReadOperatePolicy:
         assert p.read_mode_sc == ReadModeSC.LINEARIZE
         assert p.read_touch_ttl == 80
 
+    def test_replica_is_carried(self):
+        p = to_read_operate_policy(Settings(replica=Replica.PREFER_RACK))
+        assert p.replica == Replica.PREFER_RACK
+
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
         with pytest.raises(ValueError) as exc_info:
             to_read_operate_policy(Settings(read_touch_ttl_percent=101))

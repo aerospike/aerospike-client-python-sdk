@@ -758,7 +758,7 @@ class TestWriteBinGet:
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
-        assert rr.record.bins["v"] == 42
+        assert rr.operation_result(1) == 42
 
         await _cleanup(session, k)
 
@@ -777,8 +777,8 @@ class TestWriteBinGet:
         )
         rr = await rs.first_or_raise()
         assert rr.is_ok
-        assert rr.record.bins["a"] == 1
-        assert rr.record.bins["b"] == "hello"
+        assert rr.operation_result(2) == 1
+        assert rr.operation_result(3) == "hello"
 
         await _cleanup(session, k)
 

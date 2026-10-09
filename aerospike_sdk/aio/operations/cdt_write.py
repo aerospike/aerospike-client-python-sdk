@@ -1219,6 +1219,10 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         Set :attr:`~aerospike_sdk.StringRegexFlags.GLOBAL` in ``flags`` to
         replace every match.
 
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_REGEX_LIMIT_EXCEEDED``) if matching exceeds
+        the server's regex resource budget.
+
         Args:
             pattern: ICU regex pattern.
             replacement: Replacement text.

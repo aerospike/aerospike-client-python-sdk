@@ -132,13 +132,16 @@ def to_read_operate_policy(settings: Settings) -> WritePolicy:
     """Build the WritePolicy for an operate call that only reads.
 
     PAC's ``operate`` takes only a ``WritePolicy``, so read settings ride on
-    one. ``replica`` has no ``WritePolicy`` field and is not carried.
+    one, ``replica`` included: an operate whose ops all read is routed like
+    a read.
 
     Raises:
         ValueError: If ``read_touch_ttl_percent`` is out of range (must be -1,
             0, or 1-100).
     """
     policy = to_write_policy(settings)
+    if settings.replica is not None:
+        policy.replica = settings.replica
     try:
         if settings.read_mode_ap is not None:
             policy.read_mode_ap = settings.read_mode_ap

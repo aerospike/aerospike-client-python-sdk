@@ -65,8 +65,8 @@ assert rec.bins["s"] == [5, "ell", 2]
 
 ## Modifying String Bins
 
-Modify operations mutate the bin in place. Chain freely; the bin's
-post-modify state is reflected in subsequent reads on the same key.
+Modify operations mutate the bin in place. Chain freely; a read later in
+the same ``execute()`` sees the modified value.
 
 ```python
 await session.upsert(key).put({"name": "alice"}).execute()
@@ -313,11 +313,14 @@ and ``Exp.to_string``.
 
 ## Positional Results
 
-When a single ``execute()`` issues multiple ops, the response carries
-results in op-arrival order, available on the record's ``results``
-attribute (one slot per op). Modify ops produce ``Value::Nil`` on the
-wire and surface as ``None`` in the positional list — the by-name
-``bins`` dictionary reflects only the post-modify state.
+Every op in an ``execute()`` owns one result slot, in request order. A
+modify op answers nil on the wire and surfaces as ``None``; a read
+answers its value. The record exposes the slots two ways:
+
+- ``results`` — the positional list, one slot per op across all bins.
+- ``bins`` — the same slots grouped by bin name. A bin touched by one op
+  holds that op's answer; a bin touched by several ops holds a list of
+  their answers in op order, ``None`` included.
 
 ```python
 await session.upsert(key).put({"s": "ab"}).execute()
@@ -328,18 +331,18 @@ stream = await (session.upsert(key)
                 .execute())
 rec = (await stream.first_or_raise()).record_or_raise()
 
-assert rec.bins["s"] == "AB"
 assert rec.results == [None, "AB"]
+assert rec.bins["s"] == [None, "AB"]
 ```
 
-Use ``results[i]`` (or ``record.operation_result(i)``) when you need to
-distinguish *which* op produced *which* value — especially in pipelines
-that interleave modifies and reads on the same or different bins.
+So a modify-then-read on one bin does not come back as the bare value:
+read the value from the read op's slot, with ``results[i]`` or
+``record.operation_result(i)``. That is also the only reliable way to
+tell *which* op produced *which* value in pipelines that interleave
+modifies and reads on the same or different bins.
 
-The slot-per-op contract holds for scalar ops too, and the two views
-diverge on purpose when one bin is read more than once: the positional
-list keeps every slot, while ``bins`` merges the reads and skips the
-write's empty slot.
+The slot-per-op contract holds for scalar ops too. The two views carry
+the same slots; ``bins`` only groups them:
 
 ```python
 stream = await (session.upsert(key)
@@ -350,8 +353,9 @@ stream = await (session.upsert(key)
 row = await stream.first_or_raise()
 rec = row.record_or_raise()
 
-assert rec.results == [1, None, 11]   # one slot per op
-assert rec.bins["n"] == [1, 11]       # reads merged, write slot skipped
+assert rec.results == [1, None, 11]     # one slot per op
+assert rec.bins["n"] == [1, None, 11]   # the same slots, grouped by bin
+assert row.operation_result(2) == 11    # the read after the add
 ```
 
 For per-op type enforcement, `RecordResult.typed_operation_result(i)`

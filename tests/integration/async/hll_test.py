@@ -142,6 +142,23 @@ class TestHllDescribeRoundTrip:
         config = result.get_hll_config("h")
         assert config == HllConfig.of(14, 20)
 
+    async def test_describe_in_the_same_execute_as_init(self, hll_cluster):
+        """The init's empty slot sits ahead of the describe pair under the
+        bin; the accessor still finds the pair."""
+        session = hll_cluster.create_session()
+        key = DataSet.of(NAMESPACE, SET).id("init_describe")
+        await session.delete(key).execute()
+
+        rs = await (
+            session.upsert(key)
+            .bin("h").hll_init(HllConfig.of(12))
+            .bin("h").hll_describe()
+            .execute()
+        )
+        result = await rs.first_or_raise()
+        assert result.record_or_raise().bins["h"] == [None, [12, 0]]
+        assert result.get_hll_config("h").index_bit_count == 12
+
 
 class TestHllReadsAndUnion:
 

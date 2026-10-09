@@ -196,8 +196,9 @@ class TestOperatePositionalResults:
     """Positional per-op results for scalar multi-op operates."""
 
     async def test_scalar_multi_op_results_are_op_aligned(self, cluster, test_set: DataSet):
-        """get/add/get on one bin: one slot per op positionally, while the
-        bins view merges the two reads and skips the write's empty slot."""
+        """get/add/get on one bin: one slot per op in both views. The
+        positional list and the by-name list carry the same three slots, the
+        write's answer being ``None``."""
         session = cluster.create_session()
         key = test_set.id("scalar_positional")
         await session.delete(key).execute()
@@ -214,7 +215,7 @@ class TestOperatePositionalResults:
         rec = result.record_or_raise()
 
         assert rec.results == [1, None, 11]
-        assert rec.bins["n"] == [1, 11]
+        assert rec.bins["n"] == [1, None, 11]
 
         assert result.operation_result(0) == 1
         assert result.operation_result(1) is None
@@ -227,3 +228,31 @@ class TestOperatePositionalResults:
         assert result.typed_operation_result(99) is None
 
         await session.delete(key).execute()
+
+    async def test_one_key_and_batch_rows_return_the_same_bins(self, cluster, test_set: DataSet):
+        """The same write chain answers the same ``bins`` whether it runs on
+        one key or as a row of a batch, write nils included."""
+        session = cluster.create_session()
+        one, k1, k2 = (test_set.id(f"same_bins_{i}") for i in range(3))
+        for k in (one, k1, k2):
+            await session.delete(k).execute()
+            await session.upsert(k).bin("c").set_to(10).execute()
+
+        single = await (await (
+            session.upsert(one).bin("c").add(1).bin("c").get().execute()
+        )).first_or_raise()
+        rows = await (await (
+            session.upsert(k1, k2).bin("c").add(1).bin("c").get().execute()
+        )).collect()
+
+        assert single.record_or_raise().bins == {"c": [None, 11]}
+        assert [r.record_or_raise().bins for r in rows] == [{"c": [None, 11]}] * 2
+
+        single = await (await session.upsert(one).bin("c").set_to(5).execute()).first_or_raise()
+        rows = await (await session.upsert(k1, k2).bin("c").set_to(5).execute()).collect()
+
+        assert single.record_or_raise().bins == {"c": None}
+        assert [r.record_or_raise().bins for r in rows] == [{"c": None}] * 2
+
+        for k in (one, k1, k2):
+            await session.delete(k).execute()

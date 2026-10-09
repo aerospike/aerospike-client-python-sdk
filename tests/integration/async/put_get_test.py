@@ -376,9 +376,8 @@ async def test_operate_map_clear(cluster):
     )
 
     assert record is not None
-    assert record.bins is not None
-    size = record.bins.get("mapbin")
-    assert size == 0
+    # clear answers None, size answers 0 for the emptied map.
+    assert record.bins.get("mapbin") == [None, 0]
 
 
 async def test_bin_chaining_set_to(cluster):

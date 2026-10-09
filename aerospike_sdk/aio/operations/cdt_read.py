@@ -1031,6 +1031,10 @@ class CdtReadBuilder(Generic[T]):
     def str_regex_compare(self, pattern: str, flags: int | StringRegexFlags = 0) -> T:
         """Return ``True`` iff the ICU regex ``pattern`` matches the string at this CDT path.
 
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_REGEX_LIMIT_EXCEEDED``) if matching exceeds
+        the server's regex resource budget.
+
         Args:
             pattern: ICU regex pattern.
             flags: OR-combined :class:`~aerospike_sdk.StringRegexFlags` bitmask.

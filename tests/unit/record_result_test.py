@@ -381,6 +381,20 @@ class TestGetHllConfig:
         )
         assert rr.get_hll_config("h") == HllConfig.of(12, 20)
 
+    def test_reads_the_describe_slot_when_the_bin_groups_several_ops(self):
+        # hll_init + hll_describe in one execute: the init answers None and
+        # the describe answers the pair, grouped under the bin in op order.
+        rr = RecordResult(
+            key=_key(), record=_record(h=[None, [14, 20]]), result_code=ResultCode.OK,
+        )
+        assert rr.get_hll_config("h") == HllConfig.of(14, 20)
+
+    def test_returns_none_when_every_grouped_slot_is_empty(self):
+        rr = RecordResult(
+            key=_key(), record=_record(h=[None, None]), result_code=ResultCode.OK,
+        )
+        assert rr.get_hll_config("h") is None
+
     def test_returns_none_when_record_is_none(self):
         rr = RecordResult(key=_key(), record=None, result_code=ResultCode.OK)
         assert rr.get_hll_config("h") is None

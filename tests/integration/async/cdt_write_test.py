@@ -1064,9 +1064,9 @@ class TestRelativeRangeNavigation:
 class TestRelativeRangeBatchOrdering:
     """Batched CDT reads: per-op return lists in operate order.
 
-    Multi-op **remove** batches do not surface the same per-op list in the
-    PAC record (map bin may be absent; list may expose only the first op).
-    Remove coverage uses a trailing ``.get()`` and asserts final bin state.
+    Multi-op **remove** batches answer ``None`` per remove, so the by-name
+    bin value is a list of empty slots. Remove coverage adds a trailing
+    ``.get()`` and reads the final bin state from that op's slot.
     """
 
     async def test_operate_map_get_relative_batch(self, cluster, sc_aware_delete):
@@ -1139,8 +1139,7 @@ class TestRelativeRangeBatchOrdering:
             .bin("mapbin").get()
             .execute()
         )
-        m = (await rs.first_or_raise()).record.bins["mapbin"]
-        assert m == {0: 17}
+        assert (await rs.first_or_raise()).operation_result(3) == {0: 17}
 
         await sc_aware_delete(session, k)
         await session.upsert(k).put({"p": 1}).execute()
@@ -1156,8 +1155,7 @@ class TestRelativeRangeBatchOrdering:
             .bin("mapbin").get()
             .execute()
         )
-        m2 = (await rs2.first_or_raise()).record.bins["mapbin"]
-        assert m2 == {4: 2, 5: 15}
+        assert (await rs2.first_or_raise()).operation_result(2) == {4: 2, 5: 15}
 
     async def test_operate_list_remove_relative_final_state(self, cluster, sc_aware_delete):
         session = cluster.create_session()
@@ -1178,8 +1176,7 @@ class TestRelativeRangeBatchOrdering:
             .bin("lst").get()
             .execute()
         )
-        lst = (await rs.first_or_raise()).record.bins["lst"]
-        assert lst == []
+        assert (await rs.first_or_raise()).operation_result(6) == []
 
 
 # ===================================================================

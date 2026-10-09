@@ -506,7 +506,9 @@ class TestPathExpressionRead:
             .collect_values_as_expression_read(ExpType.MAP, ignore_eval_failure=True)
             .execute()
         ).first_or_raise()
-        assert "nums" not in result.record.bins
+        # The op still owns its result slot; dropping the read leaves it empty.
+        assert result.record.bins["nums"] is None
+        assert result.operation_result(0) is None
 
     async def test_a_filter_hitting_a_wrong_typed_element_fails_the_read(
         self, cluster,

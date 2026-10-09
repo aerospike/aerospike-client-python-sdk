@@ -4394,6 +4394,10 @@ class _BinWriteSteps(Generic[_W]):
         Uses ICU regex syntax. Combine ``StringRegexFlags`` constants with
         bitwise OR for the ``flags`` argument.
 
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_REGEX_LIMIT_EXCEEDED``) if matching exceeds
+        the server's regex resource budget.
+
         Example::
 
             stream = await (
@@ -4561,6 +4565,10 @@ class _BinWriteSteps(Generic[_W]):
             :class:`StringWriteFlags` bitmask travels in ``write_flags``.
             ``CREATE_ONLY`` is a ``PARAMETER_ERROR`` here because a regex
             replace cannot create a bin.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_REGEX_LIMIT_EXCEEDED``) if matching exceeds
+        the server's regex resource budget.
 
         Example::
 
@@ -5843,6 +5851,10 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         """Read a bool: ``True`` iff the ICU regex ``pattern`` matches this bin.
 
         ``flags`` is an OR-combined :class:`StringRegexFlags` bitmask.
+
+        Server returns ``OP_NOT_APPLICABLE`` (subcode
+        ``SubCode.OPNOT_STRING_REGEX_LIMIT_EXCEEDED``) if matching exceeds
+        the server's regex resource budget.
         """
         self._parent.add_operation(  # type: ignore[union-attr]
             StringOperation.regex_compare(self._bin, pattern, int(flags)),

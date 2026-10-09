@@ -90,13 +90,10 @@ async def test_str_reads_via_builder(cluster):
 
 
 async def test_str_modify_and_read(cluster):
-    """``str_upper`` chained with ``get`` in a single execute. Asserts both:
-
-    * ``bins["s"] == "AB"`` (by-name access shows the trailing read result)
-    * ``results == [None, "AB"]`` (positional access shows the modify op
-      contributing ``None`` at op-index 0 and the read returning ``"AB"`` at
-      op-index 1 — the server returns nil for STRING_MODIFY ops on the wire,
-      which the positional accessor surfaces faithfully)
+    """``str_upper`` chained with ``get`` in a single execute. Both views
+    carry one slot per op: the modify answers ``None`` at op-index 0 (the
+    server returns nil for STRING_MODIFY ops on the wire) and the read
+    returns ``"AB"`` at op-index 1.
     """
     sess = cluster.create_session()
     k = _TEST_DS.id("strop_modify")
@@ -107,7 +104,7 @@ async def test_str_modify_and_read(cluster):
         .bin("s").get()
         .execute()).first_or_raise()
     rec = result.record_or_raise()
-    assert rec.bins["s"] == "AB"
+    assert rec.bins["s"] == [None, "AB"]
     assert rec.results == [None, "AB"]
     assert result.operation_result(0) is None
     assert result.operation_result(1) == "AB"
@@ -125,13 +122,13 @@ async def test_str_append_and_prepend(cluster):
         .bin("s").str_append(" world")
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "hello world"
+    assert result.operation_result(1) == "hello world"
 
     result = await (await sess.upsert(k)
         .bin("s").str_prepend("oh ")
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "oh hello world"
+    assert result.operation_result(1) == "oh hello world"
 
 
 async def test_str_snip_range_and_truncate_to_end(cluster):
@@ -151,7 +148,7 @@ async def test_str_snip_range_and_truncate_to_end(cluster):
         .bin("s").str_snip(2, 4)
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "abef"
+    assert result.operation_result(1) == "abef"
 
     # 1-arg form: truncate from start through the end.
     await sess.upsert(k).bin("s").set_to("hello world").execute()
@@ -159,7 +156,7 @@ async def test_str_snip_range_and_truncate_to_end(cluster):
         .bin("s").str_snip(5)
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "hello"
+    assert result.operation_result(1) == "hello"
 
     # Negative start counts from the end of the string.
     await sess.upsert(k).bin("s").set_to("hello world").execute()
@@ -167,7 +164,7 @@ async def test_str_snip_range_and_truncate_to_end(cluster):
         .bin("s").str_snip(-6)
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "hello"
+    assert result.operation_result(1) == "hello"
 
     # Same two forms through the low-level StringOperation factory.
     await sess.upsert(k).bin("s").set_to("Hello").execute()
@@ -175,14 +172,14 @@ async def test_str_snip_range_and_truncate_to_end(cluster):
         .add_operation(StringOperation.snip("s", 1, 4))
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "Ho"
+    assert result.operation_result(1) == "Ho"
 
     await sess.upsert(k).bin("s").set_to("hello world").execute()
     result = await (await sess.upsert(k)
         .add_operation(StringOperation.snip("s", 5))
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "hello"
+    assert result.operation_result(1) == "hello"
 
 
 async def test_str_reads_via_add_operation(cluster):
@@ -587,7 +584,8 @@ async def test_string_reads_on_navigated_write_builder(cluster):
         .bin("m").on_map_key("k").str_split("l")
         .bin("m").on_map_key("k").str_regex_compare("^H", StringRegexFlags.CASE_INSENSITIVE)
         .execute())
-    assert (await rs.first_or_raise()).record_or_raise().bins["m"] == [["he", "", "o"], True]
+    rec = (await rs.first_or_raise()).record_or_raise()
+    assert rec.bins["m"] == [None, None, ["he", "", "o"], True]
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +774,7 @@ async def test_str_replace_matches_across_normalization_forms(cluster):
         .bin("s").str_replace(_NFD, "tea")
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "tea au lait"
+    assert result.operation_result(1) == "tea au lait"
 
     # Decomposed haystack, composed needle.
     await sess.upsert(k).bin("s").set_to(_NFD + " au lait").execute()
@@ -784,7 +782,7 @@ async def test_str_replace_matches_across_normalization_forms(cluster):
         .bin("s").str_replace(_NFC, "tea")
         .bin("s").get()
         .execute()).first_or_raise()
-    assert result.record_or_raise().bins["s"] == "tea au lait"
+    assert result.operation_result(1) == "tea au lait"
 
 
 async def test_str_starts_with_and_ends_with_match_across_normalization_forms(cluster):
