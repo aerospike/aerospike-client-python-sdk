@@ -26,9 +26,9 @@ from datetime import timedelta
 import pytest
 
 from aerospike_sdk import TxnState
-from aerospike_async import CommitErrorType, ReadModeSC, WritePolicy
+from aerospike_async import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC, WritePolicy
 
-from aerospike_sdk import AbortStatus, CommitStatus, Txn, TransactionalSession
+from aerospike_sdk import Txn, TransactionalSession, TxnStatus
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import CommitError
 from aerospike_sdk.policy.behavior import Behavior
@@ -147,7 +147,7 @@ async def test_explicit_commit_returns_status(
 ) -> None:
     async with tx_session as tx:
         status = await tx.commit()
-        assert status == CommitStatus.OK
+        assert status is TxnStatus.COMMITTED
         assert tx.active is False
         # Subsequent __aexit__ should not double-commit:
     assert len(sdk_client._async_client.commit_calls) == 1
@@ -193,7 +193,7 @@ async def test_close_abandoned_is_still_success(
     sdk_client._async_client.commit_return = CommitStatus.CLOSE_ABANDONED
     async with tx_session as tx:
         status = await tx.commit()
-    assert status is CommitStatus.CLOSE_ABANDONED
+    assert status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED
 
 
 async def test_ops_after_explicit_commit_run_txn_free(
@@ -227,7 +227,7 @@ async def test_explicit_abort_returns_status(
 ) -> None:
     async with tx_session as tx:
         status = await tx.abort()
-        assert status == AbortStatus.OK
+        assert status is TxnStatus.ABORTED
         assert tx.active is False
     assert len(sdk_client._async_client.abort_calls) == 1
     assert len(sdk_client._async_client.commit_calls) == 0

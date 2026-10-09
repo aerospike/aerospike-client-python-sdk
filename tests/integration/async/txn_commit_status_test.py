@@ -34,8 +34,8 @@ import time
 
 import pytest
 
-from aerospike_async import CommitErrorType, CommitStatus, TxnState
-from aerospike_sdk import ClusterDefinition, DataSet, Host
+from aerospike_async import CommitErrorType, TxnState
+from aerospike_sdk import ClusterDefinition, DataSet, Host, TxnStatus
 from aerospike_sdk.exceptions import CommitError, ResultCode, TransactionError
 
 from integration.tcp_gate import TcpGate
@@ -135,8 +135,8 @@ class TestAbandonedMonitorClose:
                     status = await tx.commit()
 
                 assert status in (
-                    CommitStatus.OK,
-                    CommitStatus.CLOSE_ABANDONED,
+                    TxnStatus.COMMITTED,
+                    TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED,
                 )
             finally:
                 await cluster.close()

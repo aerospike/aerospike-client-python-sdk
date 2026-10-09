@@ -34,6 +34,29 @@ async with ClusterDefinition("localhost", 3100).connect() as cluster:
 If anything inside the `with` raises, the transaction is aborted and the
 exception propagates.
 
+### Commit and Abort Status
+
+To finalize inside the block, call `commit()` or `abort()` explicitly. Both
+return a [`TxnStatus`](../api/txn-status.md): `COMMITTED` or `ABORTED` when
+everything finished, or an `*_ABANDONED` status when the outcome stands but the
+client left cleanup to the server:
+
+```python
+from aerospike_sdk import TxnStatus
+
+async with session.transaction() as tx:
+    await tx.upsert(accounts.id("A")).bin("bal").add(-10).execute()
+    await tx.upsert(accounts.id("B")).bin("bal").add(10).execute()
+    status = await tx.commit()
+
+if status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED:
+    log.info("committed; the server will finish closing the transaction")
+```
+
+`ROLL_FORWARD_CLOSE_ABANDONED` is still a successful commit: the writes are
+durable. A commit that leaves the writes provisional raises `CommitError`
+instead of returning a status (see [Errors](#txn-errors)).
+
 ### Retrying on Transient Conflicts
 
 Strong-consistency transactions can fail with transient conflicts when
@@ -306,11 +329,12 @@ configured pause +/- 50% (5 ms becomes anywhere from 3 ms to 7 ms), so
 transactions that collided do not retry in lockstep. A pause of `0` never
 waits.
 
+(txn-errors)=
 ## Errors
 
 | Error | Meaning |
 |-------|---------|
-| `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries verify and mark-roll-forward failures automatically. An abandoned roll-forward (`commit_error_type` `ROLL_FORWARD_ABANDONED`) is **not** retried: those writes are still provisional and the server will eventually commit them. Retrying would open a second transaction on the same keys. `CLOSE_ABANDONED` is still a successful `CommitStatus` — the writes are durable and only monitor cleanup was left to the server. |
+| `CommitError` | The commit's verify or roll phase failed. `commit_error_type` names the stage, and `verify_records` / `roll_records` carry the per-key outcomes when available, so you can tell whether anything landed. The `in_doubt` flag — carried by every `AerospikeError`, see [Error Handling](error-handling.md) — indicates whether writes may have reached the server. `do_in_transaction` retries verify and mark-roll-forward failures automatically. An abandoned roll-forward (`commit_error_type` `ROLL_FORWARD_ABANDONED`) is **not** retried: those writes are still provisional and the server will eventually commit them. Retrying would open a second transaction on the same keys. `TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED` is still a successful commit — the writes are durable and only monitor cleanup was left to the server. |
 | `MRT_BLOCKED` | Another transaction has one of the records locked. Retry after a pause. |
 | `MRT_VERSION_MISMATCH` | A non-transactional write raced with the transaction. Retry immediately. |
 | `MRT_EXPIRED` | Transaction monitor TTL elapsed before commit. |
@@ -319,4 +343,5 @@ waits.
 See Also:
 - [`TransactionalSession`](../api/transactional-session.md) — async API reference
 - [`TransactionalSession`](../api/sync/transactional-session.md) — sync API reference
+- [`TxnStatus`](../api/txn-status.md) — commit and abort outcomes
 - [`Session.transaction`](../api/session.md) / [`Session.do_in_transaction`](../api/session.md)

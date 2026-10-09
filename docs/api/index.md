@@ -24,6 +24,7 @@ The primary API. All operations are `async`/`await`.
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
 | [`InfoCommands`](info.md) | Aerospike info protocol commands |
 | [`TransactionalSession`](transactional-session.md) | Multi-record transactions |
+| [`TxnStatus`](txn-status.md) | Outcome of a transaction commit or abort |
 
 ## Sync API
 
@@ -95,6 +96,7 @@ background
 udf
 info
 transactional-session
+txn-status
 sync/cluster
 sync/node
 sync/session

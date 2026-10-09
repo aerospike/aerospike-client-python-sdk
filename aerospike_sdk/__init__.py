@@ -16,7 +16,6 @@
 """Aerospike Python SDK — high-level API built on the ``aerospike_async`` package."""
 
 from aerospike_async import (
-    AbortStatus,
     AuthMode,
     BitPolicy,
     BitwiseOverflowActions,
@@ -24,7 +23,6 @@ from aerospike_async import (
     BitWriteFlags,
     CdtOperation,
     CollectionIndexType,
-    CommitStatus,
     CTX,
     ErrorDetailVerbosity,
     ExpressionTrace,
@@ -106,6 +104,7 @@ from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
+from aerospike_sdk.txn_status import TxnStatus
 
 try:
     from importlib.metadata import version as _meta_version
@@ -114,7 +113,6 @@ except Exception:
     __version__ = "0.0.0"
 
 __all__ = [
-    "AbortStatus",
     "AerospikeError",
     "AsyncPool",
     "AuthenticationError",
@@ -138,7 +136,6 @@ __all__ = [
     "ClusterDefinition",
     "CollectionIndexType",
     "CommitError",
-    "CommitStatus",
     "ConnectionError",
     "CTX",
     "DataSet",
@@ -206,6 +203,7 @@ __all__ = [
     "TransactionalSession",
     "Txn",
     "TxnState",
+    "TxnStatus",
     "UDFLang",
     "Version",
     "map_keys",

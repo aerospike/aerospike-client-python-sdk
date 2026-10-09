@@ -31,7 +31,8 @@ import pytest
 from aerospike_sdk import ErrorStrategy, Key, ResultCode, Txn
 from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
 
-from aerospike_sdk import AbortStatus, CommitStatus, TransactionalSession
+from aerospike_async import AbortStatus, CommitStatus
+from aerospike_sdk import TransactionalSession
 from aerospike_async.exceptions import CommitFailedError as PacCommitFailedError
 from dataclasses import replace
 from datetime import timedelta

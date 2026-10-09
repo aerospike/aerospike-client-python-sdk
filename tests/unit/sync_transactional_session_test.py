@@ -26,16 +26,12 @@ import pytest
 
 from aerospike_sdk import ResultCode
 
-from aerospike_sdk import (
-    AbortStatus,
-    CommitStatus,
-    Txn,
-)
+from aerospike_sdk import Txn, TxnStatus
 from aerospike_sdk.sync.transactional_session import (
     TransactionalSession as SyncTransactionalSession,
 )
 from aerospike_async.exceptions import CommitFailedError
-from aerospike_async import CommitErrorType, ReadModeSC
+from aerospike_async import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
@@ -161,7 +157,7 @@ def test_explicit_commit_returns_status(
 ) -> None:
     with sync_tx as tx:
         status = tx.commit()
-        assert status == CommitStatus.OK
+        assert status is TxnStatus.COMMITTED
         assert tx.active is False
     # __exit__ must not double-commit after an explicit commit:
     assert len(sync_client._pac.commit_calls) == 1
@@ -207,7 +203,7 @@ def test_close_abandoned_is_still_success(
     sync_client._pac.commit_return = CommitStatus.CLOSE_ABANDONED
     with sync_tx as tx:
         status = tx.commit()
-    assert status is CommitStatus.CLOSE_ABANDONED
+    assert status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED
 
 
 def test_ops_after_explicit_commit_run_txn_free(
@@ -227,7 +223,7 @@ def test_explicit_abort_returns_status(
 ) -> None:
     with sync_tx as tx:
         status = tx.abort()
-        assert status == AbortStatus.OK
+        assert status is TxnStatus.ABORTED
         assert tx.active is False
     assert len(sync_client._pac.abort_calls) == 1
     assert len(sync_client._pac.commit_calls) == 0

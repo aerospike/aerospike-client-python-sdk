@@ -5,7 +5,8 @@
 the returned session auto-participates, no policy juggling. The block commits
 atomically on clean exit and aborts if an exception propagates out — so a
 partial transfer can never be left behind. ``abort()`` rolls back deliberately
-when a precondition fails.
+when a precondition fails; it and ``commit()`` return a ``TxnStatus`` naming the
+outcome.
 
 ``session.do_in_transaction()`` is the alternative entry point: it owns the
 lifecycle, retries the block on a transient conflict, and returns the
@@ -59,7 +60,8 @@ async def run_transfers(session, accounts) -> None:
 
         if await balance(tx, accounts, "alice") < 0:
             # Nothing written in this block survives; abort() unwinds it all.
-            await tx.abort()
+            status = await tx.abort()
+            print(f"overdraft rolled back: {status.name}")
     await report(session, accounts, "after aborted overdraft (unchanged)")
 
     # --- 4) An exception escaping the block also rolls back ---

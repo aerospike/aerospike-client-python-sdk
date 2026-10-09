@@ -22,13 +22,14 @@ import typing
 from typing import Any, Optional, TYPE_CHECKING
 
 
-from aerospike_async import AbortStatus, CommitStatus, Txn, TxnState
+from aerospike_async import Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pac_exception
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
+from aerospike_sdk.txn_status import TxnStatus, _from_abort, _from_commit
 
 if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
@@ -134,12 +135,13 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise RuntimeError("No active transaction to join.")
         return await operation(self)
 
-    async def commit(self) -> CommitStatus:
+    async def commit(self) -> TxnStatus:
         """Commit the transaction and return the server-reported status.
 
-        ``CLOSE_ABANDONED`` is still success: the writes are durable and only
-        monitor cleanup was left to the server. An abandoned roll-forward
-        raises instead — those writes are not yet visible.
+        :attr:`~aerospike_sdk.TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED` is still
+        success: the writes are durable and only monitor cleanup was left to the
+        server. An abandoned roll-forward raises instead — those writes are not
+        yet visible.
 
         A commit that fails **in doubt** — the roll-forward mark may or may not
         have reached the server — leaves the transaction open and retryable,
@@ -154,7 +156,8 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 stage failed.
 
         Returns:
-            :class:`~aerospike_async.CommitStatus` reported by the server.
+            :attr:`~aerospike_sdk.TxnStatus.COMMITTED`, or another
+            :class:`~aerospike_sdk.TxnStatus` the server reported.
 
         See Also:
             :meth:`abort`: Undo the transaction instead of committing.
@@ -180,7 +183,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
         # commit run transaction-free instead of stamping the finalized
         # txn on their policies (mirrors the sync session and __aexit__).
         self._txn = None
-        return status
+        return _from_commit(status)
 
     def _commit_is_retryable(self) -> bool:
         """Whether a failed commit left the transaction resolvable by retrying.
@@ -191,7 +194,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
         """
         return self._txn is not None and self._txn.state == TxnState.COMMIT_FAILED
 
-    async def abort(self) -> AbortStatus:
+    async def abort(self) -> TxnStatus:
         """Abort the transaction and return the server-reported status.
 
         Refused after a commit failed in doubt: the server may be rolling the
@@ -205,7 +208,8 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 failed in doubt, or the roll-back itself failed.
 
         Returns:
-            :class:`~aerospike_async.AbortStatus` reported by the server.
+            :attr:`~aerospike_sdk.TxnStatus.ABORTED`, or another
+            :class:`~aerospike_sdk.TxnStatus` the server reported.
 
         See Also:
             :meth:`commit`: Persist the transaction instead of aborting.
@@ -224,7 +228,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise _convert_pac_exception(e) from e
         self._finalized = True
         self._txn = None
-        return status
+        return _from_abort(status)
 
     async def __aenter__(self) -> "TransactionalSession":
         if self._txn is not None:
