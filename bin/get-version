@@ -6,7 +6,7 @@
 #
 # Output: bare version string. The VERSION file may have trailing whitespace;
 # this script trims it.
-# Example: 0.1.0-alpha.1
+# Example: 1.0.0
 
 set -euo pipefail
 

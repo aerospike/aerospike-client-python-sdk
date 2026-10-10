@@ -41,23 +41,17 @@ jobs:
           fi
           echo "Tag v${{ inputs.version }} is available"
 
+      # Release candidates, stable included, build from stage. main only
+      # moves after the bundle has been published, and tag-release.yaml
+      # tags it then.
       - name: Enforce branch gate
         run: |
           BRANCH="${{ github.ref_name }}"
-          VERSION="${{ inputs.version }}"
-          case "$VERSION" in
-            *-alpha.*|*-beta.*|*-rc.*)
-              if [ "$BRANCH" != "stage" ]; then
-                echo "::error::prereleases must be dispatched from 'stage' (current: $BRANCH)"
-                exit 1
-              fi ;;
-            *)
-              if [ "$BRANCH" != "main" ]; then
-                echo "::error::Stable releases must be dispatched from 'main' (current: $BRANCH)"
-                exit 1
-              fi ;;
-          esac
-          echo "Version $VERSION from branch $BRANCH — OK"
+          if [ "$BRANCH" != "stage" ]; then
+            echo "::error::Releases must be dispatched from 'stage' (current: $BRANCH)"
+            exit 1
+          fi
+          echo "Version ${{ inputs.version }} from branch $BRANCH — OK"
 
       - name: Validate PNC dependency is on PyPI
         run: |
