@@ -19,7 +19,11 @@
 .. autoclass:: aerospike_sdk.metrics.AsyncMetricsExporter
    :members:
 
-.. autoclass:: aerospike_sdk.metrics.LearnMetricsFileExporter
+.. autoclass:: aerospike_sdk.metrics.MetricsExporterType
+   :members:
+   :undoc-members:
+
+.. autoclass:: aerospike_sdk.metrics.MetricsWriter
    :members:
 
 .. autoclass:: aerospike_sdk.policy.system_settings.MetricsSettings

@@ -36,16 +36,24 @@ async def part1_collect_and_read(cluster) -> None:
     # --- 1) Collect latency and read a snapshot ---
     print("\n=== 1. Collecting latency ===")
 
-    # Microseconds here because a local cluster answers in well under a
-    # millisecond, where the default millisecond buckets would put every
-    # sample in the first column.
+    # Latency is the operational tier, off unless asked for. Microseconds
+    # because a local cluster answers in well under a millisecond, where the
+    # default millisecond buckets would put every sample in the first column.
     cluster.enable_metrics(
-        MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS, latency_columns=24)
+        MetricsPolicy(
+            operational_enabled=True,
+            latency_unit=LatencyUnit.MICROSECONDS,
+            latency_columns=24,
+        )
     )
     await _traffic(cluster, 25)
 
-    snapshot = cluster.metrics()
-    print(f"  nodes={snapshot.total_nodes} open_connections={snapshot.open_connections}")
+    snapshot = cluster.metrics_snapshot()
+    connections = snapshot.to_canonical_dict()["cluster"]["connections"]
+    print(
+        f"  nodes={snapshot.total_nodes} "
+        f"connections in_use={connections['in_use']} in_pool={connections['in_pool']}"
+    )
 
     for kind in (LatencyType.READ, LatencyType.WRITE):
         histogram = snapshot.latency(kind)
@@ -65,6 +73,7 @@ async def part1_collect_and_read(cluster) -> None:
     # discards the samples collected so far.
     cluster.enable_metrics(
         MetricsPolicy(
+            operational_enabled=True,
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=24,
             sampler=Sampler.probability(0.1),
@@ -81,7 +90,7 @@ async def part2_feature_usage(cluster) -> None:
     cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
     await _traffic(cluster, 10)
 
-    snapshot = cluster.metrics()
+    snapshot = cluster.metrics_snapshot()
     for name, count in sorted(snapshot.usage.items()):
         print(f"  {name:32s} {count}")
     if not snapshot.usage:
@@ -117,9 +126,11 @@ async def part3_export(cluster) -> None:
     # The export interval comes from configuration; without a config file it
     # is 30s, which is too long to demonstrate, so this reads the snapshot the
     # exporter would have been handed.
-    cluster.enable_metrics(MetricsPolicy(latency_unit=LatencyUnit.MICROSECONDS))
+    cluster.enable_metrics(
+        MetricsPolicy(operational_enabled=True, latency_unit=LatencyUnit.MICROSECONDS)
+    )
     await _traffic(cluster, 5)
-    await exporter.export(cluster.metrics())
+    await exporter.export(cluster.metrics_snapshot())
 
     cluster.disable_metrics()
     cluster.remove_exporter(exporter)

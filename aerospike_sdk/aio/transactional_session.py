@@ -26,6 +26,7 @@ from aerospike_native import Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.aio.session import Session
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
@@ -60,6 +61,11 @@ class TransactionalSession(TransactionalSessionBase, Session):
     See Also:
         :meth:`aerospike_sdk.aio.session.Session.transaction`
     """
+
+    # Whether entering records the transaction for the usage counters. A
+    # retrying ``do_in_transaction`` counts once per call and clears this on
+    # the sessions it opens per attempt.
+    _count_on_enter: bool = True
 
     def __init__(
         self,
@@ -235,6 +241,8 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise RuntimeError("TransactionalSession is already active.")
         self._txn = Txn()
         self._finalized = False
+        if self._count_on_enter:
+            usage.record_transaction(self._client)
         return self
 
     async def __aexit__(

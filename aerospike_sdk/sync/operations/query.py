@@ -538,7 +538,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             # segment counts its per-op attribute stores.
             sdk_fast = self._sdk_client_fast
             if sdk_fast is not None and sdk_fast._record_on:
-                usage.record_call_point(sdk_fast, usage.API_BLOCKING, self._txn, self._ops)
+                usage.record_call_point(sdk_fast, usage.API_BLOCKING, self._ops)
             cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
             try:
                 record = self._client_fast.operate_blocking(

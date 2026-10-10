@@ -154,15 +154,16 @@ class MetricsSnapshot:
 
         cluster.enable_metrics()
         ...
-        snapshot = cluster.metrics()
+        snapshot = cluster.metrics_snapshot()
         reads = snapshot.latency(LatencyType.READ)
         print(f"{reads.count} reads, avg {reads.average:.1f} {reads.latency_unit}")
         for host, node in snapshot.nodes.items():
-            print(host, node.connections_attempts, node.open_connections)
+            print(host, node.connections_attempts)
     """
 
     __slots__ = (
         "_pnc", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
+        "_metrics_enabled", "_usage_enabled",
     )
 
     def __init__(
@@ -175,6 +176,8 @@ class MetricsSnapshot:
         command_count: Optional[int] = None,
         app_id: Optional[str] = None,
         process: Optional[Tuple[float, int]] = None,
+        metrics_enabled: bool = False,
+        usage_enabled: bool = False,
     ) -> None:
         """Wrap a raw PNC snapshot.
 
@@ -190,6 +193,9 @@ class MetricsSnapshot:
             app_id: Application identity to report when the underlying client
                 carries none, normally the authenticated user. ``None`` falls
                 back to ``"not-set"``.
+            metrics_enabled: Whether collection was on when the snapshot was
+                taken.
+            usage_enabled: Whether the usage counters were being recorded.
         """
         self._pnc = pnc_metrics
         self._policy = policy
@@ -199,6 +205,8 @@ class MetricsSnapshot:
         self._departed: tuple = ()
         self._app_id = app_id
         self._process = process
+        self._metrics_enabled = metrics_enabled
+        self._usage_enabled = usage_enabled
 
     def _mark_departed(self, tracker: Any) -> None:
         """Record which hosts left the cluster, for ``nodes_departed``.
@@ -237,19 +245,27 @@ class MetricsSnapshot:
         return self._pnc.total_nodes
 
     @property
-    def open_connections(self) -> int:
-        """Open connections across the cluster (point-in-time gauge)."""
-        return self._pnc.open_connections
+    def metrics_enabled(self) -> bool:
+        """Whether collection was on when the snapshot was taken.
+
+        A snapshot can be pulled while collection is off; its counters are
+        then frozen at the values they had when collection was last on.
+        """
+        return self._metrics_enabled
 
     @property
-    def exceeded_max_retries(self) -> int:
-        """Commands that failed after exhausting max retries (cumulative)."""
-        return self._pnc.exceeded_max_retries
+    def operational_metrics_enabled(self) -> bool:
+        """Whether the operational tier (latency, errors, bytes) was being recorded."""
+        return (
+            self._metrics_enabled
+            and self._policy is not None
+            and self._policy.operational_enabled
+        )
 
     @property
-    def exceeded_total_timeout(self) -> int:
-        """Commands that failed on total timeout (cumulative)."""
-        return self._pnc.exceeded_total_timeout
+    def usage_metrics_enabled(self) -> bool:
+        """Whether the feature-usage counters were being recorded."""
+        return self._metrics_enabled and self._usage_enabled
 
     @property
     def command_retries(self) -> int:
@@ -263,7 +279,7 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             retries_per_call = snapshot.command_retries / max(snapshot.command_count, 1)
         """
         aggregated = self._pnc.cluster_aggregated
@@ -323,37 +339,27 @@ class MetricsSnapshot:
 
         Example::
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             print(snapshot.usage.get("feature.filter.ael", 0))
         """
         return dict(self._usage)
 
     @property
     def command_count(self) -> int:
-        """User API calls counted while metrics were enabled, cumulative.
+        """User API calls counted while operational metrics were on, cumulative.
 
         Counted by this SDK — one increment per data-path call (point, batch,
-        query, UDF) made through this API, whatever the sampler decides —
-        so it is an exact total, and traffic issued through the underlying
-        client directly is not represented. ``0`` when metrics were never
-        enabled.
+        query, UDF, background job) made through this API, whatever the
+        sampler decides — so it is an exact total, and traffic issued through
+        the underlying client directly is not represented. ``0`` when the
+        operational tier was never enabled.
 
         Example::
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             errors_per_call = errors / max(snapshot.command_count, 1)
         """
         return self._command_count or 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """The raw snapshot as the underlying client serializes it.
-
-        Node snapshots appear under their host address; the aggregate under
-        ``"cluster_aggregated_metrics"``. Field names are the underlying
-        client's own (hyphenated), which is why this is not the shape
-        exporters consume — see :meth:`to_canonical_dict`.
-        """
-        return self._pnc.to_dict()
 
     def to_canonical_dict(self) -> Dict[str, Any]:
         """The snapshot in the cross-SDK structured form exporters consume.
@@ -365,10 +371,19 @@ class MetricsSnapshot:
         The cluster section carries the pool occupancy split, recover-queue
         depth and invalid-node count the underlying client reports, this
         process's CPU share and resident memory when the cluster sampled them,
-        and each node its circuit-breaker ``error_rate``. The cluster
+        and each node its circuit-breaker ``error_rate`` and the
+        ``pool_exhausted`` count among its connection counters. The cluster
         ``command_retries`` is the per-node retry counters summed;
         ``command_count`` is present when this SDK counted calls — see
         :attr:`command_count` for its scope.
+
+        Each namespace's ``errors`` is the remainder: failures not already
+        counted under ``timeouts``, ``key_busy``, ``record_too_big`` or
+        ``device_overload``, so summing the five never counts a failure twice.
+        ``timeouts`` counts server-reported timeouts; a command that expired on
+        the client side has no result code and is counted once, cluster-wide,
+        under ``command_timeout_client``, while ``command_timeout_server`` is
+        the namespace ``timeouts`` summed.
 
         ``app_id`` is always populated, so a consumer can group by application
         without a missing-field case: the identity the application set on the
@@ -378,22 +393,19 @@ class MetricsSnapshot:
         the previous export appears once under ``nodes_departed`` -- same
         shape, final counters -- so an exporter can flush its series without a
         callback. Departure is tracked by the export timer; a snapshot pulled
-        directly through ``metrics()`` always carries an empty
+        directly through ``metrics_snapshot()`` always carries an empty
         ``nodes_departed``.
 
         Returns:
             The structured snapshot: ``timestamp``, ``client_type``,
-            ``client_version``, ``cluster_name``, ``app_id``, ``labels``,
-            the histogram shape, ``cluster``, ``nodes`` as a list, and
-            ``nodes_departed``.
+            ``client_version``, ``cluster_name``, ``app_id``, ``labels``, the
+            three tier flags, the histogram shape, ``cluster``, ``nodes`` as a
+            list, and ``nodes_departed``.
 
         Example::
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             payload = json.dumps(snapshot.to_canonical_dict())
-
-        See Also:
-            :meth:`to_dict`: The underlying client's own serialization.
         """
         raw = self._pnc.to_dict()
         aggregated = raw.get("cluster_aggregated_metrics") or {}
@@ -432,11 +444,14 @@ class MetricsSnapshot:
         shift = policy.latency_shift if policy is not None else _DEFAULT_LATENCY_SHIFT
         document: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "client_type": "python",
+            "client_type": CLIENT_TYPE,
             "client_version": _client_version(),
             "cluster_name": labels.reserved.get("cluster", ""),
             "app_id": labels.reserved.get("app_id") or self._app_id or _APP_ID_UNSET,
             "labels": labels.user,
+            "metrics_enabled": self.metrics_enabled,
+            "operational_metrics_enabled": self.operational_metrics_enabled,
+            "usage_metrics_enabled": self.usage_metrics_enabled,
             "latency_unit": _canonical_unit(aggregated.get("latency_unit")),
             "cluster": {
                 # Cluster rollups summed across nodes by the aggregate, which
@@ -445,7 +460,6 @@ class MetricsSnapshot:
                 "connections": {
                     "opened": aggregated.get("connections_successful", 0),
                     "closed": aggregated.get("closed_connections", 0),
-                    "open": self.open_connections,
                     "in_use": int(raw.get("connections_in_use", 0) or 0),
                     "in_pool": int(raw.get("connections_in_pool", 0) or 0),
                 },
@@ -454,15 +468,15 @@ class MetricsSnapshot:
                     "invalid": int(raw.get("nodes_invalid", 0) or 0),
                 },
                 "recover_queue": {"size": int(raw.get("recover_queue_size", 0) or 0)},
-                "exceeded_max_retries": self.exceeded_max_retries,
-                "exceeded_total_timeout": self.exceeded_total_timeout,
                 # Both cluster counters are client-side timeouts (the retry
                 # budget and the deadline are the two ways a client gives up),
                 # so their sum is the client-reported total; the server-
                 # reported total is the TIMEOUT answers across namespaces.
                 # Derived from the same counts the nodes carry, never counted
                 # a second time here.
-                "command_timeout_client": self.exceeded_max_retries + self.exceeded_total_timeout,
+                "command_timeout_client": (
+                    self._pnc.exceeded_max_retries + self._pnc.exceeded_total_timeout
+                ),
                 "command_timeout_server": sum(
                     ns["timeouts"] for node in nodes for ns in node["namespaces"]
                 ),
@@ -472,8 +486,8 @@ class MetricsSnapshot:
                 # name for the cluster retry total).
                 "command_retries": aggregated.get("transaction_retry_count", 0),
                 # Counted by this SDK, not the underlying client: one per user
-                # API call made through this API, whenever metrics are on, and
-                # never reduced by the sampler.
+                # API call made through this API while the operational tier is
+                # on, never reduced by the sampler.
                 **({"command_count": self._command_count}
                    if self._command_count is not None else {}),
             },
@@ -512,10 +526,8 @@ class MetricsSnapshot:
             "connections": {
                 "opened": node_raw.get("connections_successful", 0),
                 "closed": node_raw.get("closed_connections", 0),
-                "open": node_raw.get("open_connections", 0),
                 "in_use": node_raw.get("connections_in_use", 0),
                 "in_pool": node_raw.get("connections_in_pool", 0),
-                "recovering": node_raw.get("connections_recovering", 0),
                 "open_failure": node_raw.get("connections_failed", 0),
                 "tls_handshake_failure": node_raw.get("connections_error_tls", 0),
                 "auth_failure": node_raw.get("connections_error_auth", 0),
@@ -538,9 +550,9 @@ class MetricsSnapshot:
     def __repr__(self) -> str:
         return (
             f"MetricsSnapshot(total_nodes={self.total_nodes}, "
-            f"open_connections={self.open_connections}, "
-            f"exceeded_max_retries={self.exceeded_max_retries}, "
-            f"exceeded_total_timeout={self.exceeded_total_timeout})"
+            f"metrics_enabled={self.metrics_enabled}, "
+            f"command_count={self.command_count}, "
+            f"command_retries={self.command_retries})"
         )
 
 
@@ -553,6 +565,10 @@ _RESERVED_LABELS = frozenset({"node", "host", "cluster", "app_id"})
 # unauthenticated. A placeholder rather than an empty string, so a consumer
 # grouping by application never has to tell "" apart from a missing field.
 _APP_ID_UNSET = "not-set"
+
+# `client_type` on every snapshot and log line. Distinct from the standalone
+# Python client's identifier, so the two are never merged downstream.
+CLIENT_TYPE = "python-sdk"
 
 
 class _SplitLabels(NamedTuple):
@@ -633,11 +649,10 @@ def _namespace_view(
     ``detailed_metrics`` the byte and latency histograms; both are keyed
     namespace -> command -> value.
     """
-    # `errors` is every non-OK outcome, the named causes included; those are
-    # also reported separately, so they are counted twice by design. The
-    # counts are server answers only: a client-side deadline never reaches a
-    # result code here and is counted as the cluster's
-    # `exceeded_total_timeout` instead.
+    # `errors` is the remainder after the named causes, so no failure is
+    # counted in two places. The counts are server answers only: a
+    # client-side deadline never reaches a result code here and is counted
+    # under the cluster's `command_timeout_client` instead.
     errors = timeouts = key_busy = record_too_big = device_overload = 0
     for counts in (result_codes.get(namespace) or {}).values():
         if not isinstance(counts, Mapping):
@@ -646,7 +661,6 @@ def _namespace_view(
             if code == _RESULT_OK:
                 continue
             value = int(count or 0)
-            errors += value
             if code == _RESULT_TIMEOUT:
                 timeouts += value
             elif code == _RESULT_KEY_BUSY:
@@ -655,6 +669,8 @@ def _namespace_view(
                 record_too_big += value
             elif code == _RESULT_DEVICE_OVERLOAD:
                 device_overload += value
+            else:
+                errors += value
 
     bytes_in = bytes_out = 0
     latency: Dict[str, List[int]] = {}

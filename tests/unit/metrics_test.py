@@ -19,7 +19,11 @@ from typing import List
 import time
 
 import pytest
+from types import SimpleNamespace
 
+from aerospike_sdk.cluster_shared import ClusterBase
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 from aerospike_sdk.metrics import (
     CommandType,
     LatencyType,
@@ -40,7 +44,7 @@ class TestMetricsPolicy:
         assert mp.latency_columns == 7
         assert mp.latency_shift == 1
         assert mp.sampler == Sampler.all()
-        assert mp.labels == []
+        assert mp.labels == {}
 
     def test_no_histogram_type_knob(self):
         # Logarithmic range layout is the only supported bucket scheme;
@@ -59,7 +63,7 @@ class TestMetricsPolicy:
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=18,
             sampler=Sampler.probability(0.25),
-            labels=[{"team": "billing"}],
+            labels={"team": "billing"},
         )
         pnc = mp._to_pnc()
         assert pnc.latency_unit == LatencyUnit.MICROSECONDS
@@ -67,6 +71,9 @@ class TestMetricsPolicy:
         assert pnc.sampler.range == 1_000_000
         assert pnc.sampler.threshold == 250_000
         assert pnc.labels == [{"team": "billing"}]
+
+    def test_no_labels_pass_down_as_no_label_maps(self):
+        assert MetricsPolicy()._to_pnc().labels == []
 
     def test_shift_below_one_rejected(self):
         with pytest.raises(ValueError):
@@ -155,7 +162,6 @@ class _FakePncSnapshot:
     def __init__(self, doc):
         self._doc = doc
         self.total_nodes = 1
-        self.open_connections = 3
         self.exceeded_max_retries = 1
         self.exceeded_total_timeout = 2
         self.nodes = {}
@@ -253,13 +259,36 @@ class TestCanonicalSnapshot:
 
     def test_top_level_fields(self):
         doc = self._snapshot(policy=MetricsPolicy(latency_columns=9, latency_shift=3)).to_canonical_dict()
-        assert doc["client_type"] == "python"
+        assert doc["client_type"] == "python-sdk"
         assert doc["latency_unit"] == "microseconds"
         assert doc["latency_columns"] == 9
         assert doc["latency_shift"] == 3
         assert doc["cluster_name"] == "c1"
         assert doc["app_id"] == "billing"
         assert doc["timestamp"].endswith("+00:00")
+
+    def test_tier_flags_follow_what_was_collecting(self):
+        on = MetricsSnapshot(
+            _FakePncSnapshot(_RAW),
+            policy=MetricsPolicy(operational_enabled=True),
+            metrics_enabled=True,
+            usage_enabled=False,
+        ).to_canonical_dict()
+        assert on["metrics_enabled"] is True
+        assert on["operational_metrics_enabled"] is True
+        assert on["usage_metrics_enabled"] is False
+
+    def test_tier_flags_are_off_while_collection_is_off(self):
+        """A pull taken after disable reports frozen counters, not live tiers."""
+        snapshot = MetricsSnapshot(
+            _FakePncSnapshot(_RAW),
+            policy=MetricsPolicy(operational_enabled=True, usage_enabled=True),
+            metrics_enabled=False,
+            usage_enabled=True,
+        )
+        assert snapshot.metrics_enabled is False
+        assert snapshot.operational_metrics_enabled is False
+        assert snapshot.usage_metrics_enabled is False
 
     def _no_app_id_snapshot(self, app_id=None):
         """A snapshot whose underlying client reports no application identity."""
@@ -308,8 +337,7 @@ class TestCanonicalSnapshot:
     def test_connections_report_the_full_set(self):
         conns = self._snapshot().to_canonical_dict()["nodes"][0]["connections"]
         assert conns == {
-            "opened": 7, "closed": 2, "open": 3,
-            "in_use": 0, "in_pool": 0, "recovering": 0,
+            "opened": 7, "closed": 2, "in_use": 0, "in_pool": 0,
             "open_failure": 0, "tls_handshake_failure": 0, "auth_failure": 0,
             "closed_idle": 0, "closed_error": 0, "closed_node_removed": 0,
             "pool_exhausted": 0,
@@ -332,13 +360,12 @@ class TestCanonicalSnapshot:
     def test_pool_occupancy_split_is_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(
             _RAW["127.0.0.1:3010"],
-            **{"connections_in_use": 2, "connections_in_pool": 6,
-               "connections_recovering": 1},
+            **{"connections_in_use": 2, "connections_in_pool": 6},
         )}
         conns = MetricsSnapshot(
             _FakePncSnapshot(raw)
         ).to_canonical_dict()["nodes"][0]["connections"]
-        assert (conns["in_use"], conns["in_pool"], conns["recovering"]) == (2, 6, 1)
+        assert (conns["in_use"], conns["in_pool"]) == (2, 6)
 
     def test_connection_open_failures_are_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections_failed": 4})}
@@ -363,12 +390,17 @@ class TestCanonicalSnapshot:
         assert conns["pool_exhausted"] == 3
 
     def test_command_timeouts_are_split_by_who_reported_them(self):
-        """Client-side expiries are the two cluster counters; server timeouts are the TIMEOUT answers."""
+        """Client-side expiries are the two core counters summed; server timeouts are the TIMEOUT answers."""
         # The fake reports exceeded_max_retries=1 and exceeded_total_timeout=2;
         # the namespace fixture carries one server TIMEOUT answer.
         cluster = self._snapshot().to_canonical_dict()["cluster"]
         assert cluster["command_timeout_client"] == 3
         assert cluster["command_timeout_server"] == 1
+
+    def test_node_error_rate_is_mapped(self):
+        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
+        node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
+        assert node["error_rate"] == 4
 
     def test_process_samples_reach_the_cluster_section(self):
         cluster = MetricsSnapshot(
@@ -381,11 +413,6 @@ class TestCanonicalSnapshot:
         cluster = self._snapshot().to_canonical_dict()["cluster"]
         assert "cpu_percent" not in cluster and "memory_bytes" not in cluster
 
-    def test_node_error_rate_is_mapped(self):
-        raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
-        node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
-        assert node["error_rate"] == 4
-
     def test_namespace_splits_the_named_error_causes(self):
         """Record-too-big and device-overload are broken out beside key_busy."""
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], detailed_resultcode_counts={
@@ -396,8 +423,8 @@ class TestCanonicalSnapshot:
         assert ns["record_too_big"] == 5
         assert ns["device_overload"] == 3
         assert ns["key_busy"] == 2 and ns["timeouts"] == 1
-        # Every non-OK outcome, the named causes included.
-        assert ns["errors"] == 11
+        # Every failure here has a named cause, so none is left for `errors`.
+        assert ns["errors"] == 0
 
     def test_command_count_reaches_the_cluster_section(self):
         snapshot = MetricsSnapshot(_FakePncSnapshot(_RAW), command_count=42)
@@ -460,7 +487,7 @@ class TestCanonicalSnapshot:
     def test_namespace_counters(self):
         ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]
         assert ns["name"] == "test"
-        assert ns["errors"] == 6        # every non-ok code
+        assert ns["errors"] == 3        # the unnamed causes only
         assert ns["timeouts"] == 1
         assert ns["key_busy"] == 2
         assert ns["bytes_in"] == 120
@@ -491,3 +518,34 @@ class TestProcessSampler:
         cpu, _ = sampler.sample()
         assert cpu > 0.0
 
+
+
+class TestConfigFileOwnsTheSwitch:
+    """`enable_metrics()` / `disable_metrics()` defer to a file that sets `metrics.enabled`."""
+
+    @staticmethod
+    def _cluster(monitor, enabled):
+        metrics = None if enabled is None else MetricsSettings(enabled=enabled)
+        return SimpleNamespace(
+            _sdk_client=SimpleNamespace(
+                _sdk_config_monitor=monitor,
+                _sdk_settings=SystemSettings(metrics=metrics),
+            ),
+        )
+
+    def test_a_file_that_sets_enabled_refuses_the_api(self):
+        for enabled in (True, False):
+            with pytest.raises(AerospikeError) as info:
+                ClusterBase._check_metrics_switch_is_free(
+                    self._cluster(object(), enabled), "enable_metrics"
+                )
+            assert info.value.result_code == ResultCode.PARAMETER_ERROR
+            assert "enable_metrics()" in str(info.value)
+            assert "metrics.enabled" in str(info.value)
+
+    def test_a_file_silent_on_enabled_leaves_the_switch_to_code(self):
+        ClusterBase._check_metrics_switch_is_free(self._cluster(object(), None), "enable_metrics")
+
+    def test_no_file_means_no_owner(self):
+        """Settings given in code are not re-applied, so they cannot undo the API."""
+        ClusterBase._check_metrics_switch_is_free(self._cluster(None, False), "disable_metrics")

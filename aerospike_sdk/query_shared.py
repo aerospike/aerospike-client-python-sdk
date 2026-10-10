@@ -1460,8 +1460,6 @@ class _QueryBuilderBase:
             features.append(usage.FILTER_SECONDARY_INDEX)
         if self._partition_filter is not None:
             features.append(usage.QUERY_PARTITION_FILTER)
-        if self._txn is not None:
-            features.append(usage.TRANSACTION)
         usage.record(self._sdk_client, features)
 
     def _finalize_current_spec(self) -> None:

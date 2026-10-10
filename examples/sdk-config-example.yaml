@@ -48,12 +48,13 @@ system:
       # Static labels attached to every snapshot.
       labels:
         owner: platform-team
-      # Push cadence to registered exporters, and the built-in file exporter,
-      # installed only when the application registered no exporter itself.
-      # With report_dir empty (the default) no file is written; exporter: none
-      # never installs the built-in.
+      # Push cadence, and who receives each snapshot: file (the default: the
+      # built-in log writer, into report_dir), custom (the exporters the
+      # application registered), or none. With report_dir empty no file is
+      # written.
+      # report_size_limit is 0 (no rotation) or at least 1000000 bytes.
       export_interval: 30s
-      exporter: learn_metrics_file
+      exporter: file
       report_dir: ""
       report_size_limit: 10mb
       # Two independent opt-in groups. enabled: true above turns on neither;

@@ -31,11 +31,12 @@ from typing import Any, Generic, List, Optional, TypeVar, Union
 
 from typing import Self
 
-from aerospike_native import AuthMode, ClientPolicy, TlsConfig, Version
+from aerospike_native import AuthMode, ClientPolicy, ResultCode, TlsConfig, Version
 
 from aerospike_sdk import capabilities
-from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
+from aerospike_sdk.exceptions import AerospikeError, PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
+from aerospike_sdk.metrics.export import MetricsExporterType, export_mode
 from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.node_shared import NodeBase
@@ -838,9 +839,12 @@ class ClusterBase(Generic[_S, _TS, _N]):
     # it, so ``Any`` costs no precision on the surfaces users touch.
     _sdk_client: Any
     _node_cls: type[_N]
-    # Set by each leaf's ``__init__`` / ``enable_metrics``; read by :meth:`metrics`.
+    # Set by each leaf's ``__init__`` / ``enable_metrics``; read by
+    # :meth:`metrics_snapshot` and the export timer.
     _metrics_policy: Optional[MetricsPolicy]
     _process_sampler: ProcessSampler
+    _exporters: list
+    _installed_exporter: Any
 
     def create_session(self, behavior: Optional[Behavior] = None) -> _S:
         """Open a session on this cluster with optional behavior.
@@ -1041,22 +1045,26 @@ class ClusterBase(Generic[_S, _TS, _N]):
     # is touched, so this is a plain call on both surfaces. PNC releases the
     # GIL for the copy.
 
-    def metrics(self) -> MetricsSnapshot:
+    def metrics_snapshot(self) -> MetricsSnapshot:
         """Snapshot the accumulated cluster metrics.
 
-        Values are cumulative since metrics were enabled (connection gauges
-        are point-in-time). Snapshotting drains and aggregates per-node
+        Available whether or not collection is on. Values are cumulative since
+        metrics were enabled and frozen while collection is off; connection
+        gauges are point-in-time. Snapshotting drains and aggregates per-node
         state, so poll at an export interval rather than per operation.
 
         Returns:
-            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; empty (zeroed) if
-            metrics were never enabled.
+            A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; zeroed counters
+            if metrics were never enabled.
 
         Example::
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             reads = snapshot.latency(LatencyType.READ)
             print(f"{reads.count} reads, avg {reads.average:.1f}")
+
+        See Also:
+            :meth:`enable_metrics`: Start collection.
         """
         client = self._sdk_client
         pnc = client.underlying_client
@@ -1072,7 +1080,48 @@ class ClusterBase(Generic[_S, _TS, _N]):
             # connection by, and so the one that joins the two views.
             app_id=client_policy.application_id or client_policy.user,
             process=self._process_sampler.sample(),
+            metrics_enabled=pnc.metrics_enabled(),
+            usage_enabled=client._usage_on,
         )
+
+    def _check_metrics_switch_is_free(self, method: str) -> None:
+        """Refuse an API flip of the master switch while a loaded file owns it.
+
+        A configuration file that sets ``metrics.enabled`` re-applies it on
+        every reload, so a change made through the API would be silently
+        undone by the next one and the file would no longer explain the
+        cluster's state. A file silent on ``enabled`` leaves the switch to
+        the API.
+
+        Args:
+            method: The public method being refused, for the message.
+
+        Raises:
+            AerospikeError: With ``PARAMETER_ERROR`` when the switch is owned
+                by the configuration file.
+        """
+        client = self._sdk_client
+        if getattr(client, "_sdk_config_monitor", None) is None:
+            return
+        metrics = getattr(getattr(client, "_sdk_settings", None), "metrics", None)
+        if metrics is None or metrics.enabled is None:
+            return
+        raise AerospikeError(
+            f"Metrics cannot be switched with {method}() while the configuration file "
+            f"sets metrics.enabled ({'true' if metrics.enabled else 'false'}); "
+            "change the file instead.",
+            result_code=ResultCode.PARAMETER_ERROR,
+        )
+
+    def _export_targets(self) -> list:
+        """This interval's recipients, per the ``metrics.exporter`` mode."""
+        settings = getattr(self._sdk_client, "_sdk_settings", None)
+        mode = export_mode(getattr(settings, "metrics", None))
+        if mode is MetricsExporterType.CUSTOM:
+            return list(self._exporters)
+        if mode is MetricsExporterType.FILE and self._installed_exporter is not None:
+            return [self._installed_exporter]
+        return []
 
     @property
     def is_connected(self) -> bool:

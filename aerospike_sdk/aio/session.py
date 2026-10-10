@@ -1244,10 +1244,15 @@ class Session(
             sleep_between_retries,
         )
 
+        # One transaction for the usage counters however many attempts it
+        # takes; the per-attempt sessions do not count themselves.
+        usage.record_transaction(self._client)
         last_exc: Optional[BaseException] = None
         for attempt in range(attempts):
             try:
-                async with self.transaction() as tx_session:
+                tx = self.transaction()
+                tx._count_on_enter = False
+                async with tx as tx_session:
                     return await operation(tx_session)
             except AerospikeError as exc:
                 last_exc = exc
