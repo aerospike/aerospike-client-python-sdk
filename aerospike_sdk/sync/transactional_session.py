@@ -20,10 +20,10 @@ from __future__ import annotations
 import typing
 
 import types
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 
-from aerospike_native import Txn, TxnState
+from aerospike_native import Key, Record, ResultCode, Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.metrics import usage
@@ -46,7 +46,11 @@ class TransactionalSession(TransactionalSessionBase, Session):
 
     On clean exit the transaction commits; if an exception propagates out
     the transaction aborts. Explicit :meth:`commit` and :meth:`abort` are
-    available for manual control.
+    available for manual control. Either finalizes the session: a later
+    operation on it raises :class:`~aerospike_sdk.exceptions.TransactionError`
+    with ``ResultCode.TXN_ALREADY_COMMITTED`` or
+    ``ResultCode.TXN_ALREADY_ABORTED`` instead of running outside the
+    transaction.
 
     Example::
 
@@ -69,6 +73,17 @@ class TransactionalSession(TransactionalSessionBase, Session):
         super().__init__(client, behavior)
         # txn / active come from TransactionalSessionBase.
         self._finalized = False
+
+    # Direct verbs bypass the builder factories, so they carry the guard
+    # themselves; the wrapped calls are the plain session's.
+
+    def get(self, key: Key, bins: Optional[List[str]] = None) -> Record:
+        self._require_open()
+        return super().get(key, bins)
+
+    def put(self, key: Key, bins: Dict[str, Any]) -> None:
+        self._require_open()
+        super().put(key, bins)
 
     def do_in_transaction(
         self,
@@ -161,6 +176,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 self._txn = None
             raise _convert_pnc_exception(e) from e
         self._finalized = True
+        self._final_code = ResultCode.TXN_ALREADY_COMMITTED
         self._txn = None
         return _from_commit(status)
 

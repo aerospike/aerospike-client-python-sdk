@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 from aerospike_native import Key, ResultCode
 from aerospike_sdk.exceptions import (
     AerospikeError,
+    RecordNotFoundError,
     _convert_pnc_exception,
     _result_code_to_exception,
 )
@@ -278,10 +279,14 @@ class RecordStream:
         """Advance one row and require success, keeping the stream open.
 
         Non-closing counterpart of :meth:`first_or_raise`.
+
+        Raises:
+            RecordNotFoundError: If the stream is exhausted (empty).
+            AerospikeError: If the row is not OK (from :meth:`RecordResult.or_raise`).
         """
         result = self.pop()
         if result is None:
-            raise StopIteration("RecordStream is empty")
+            raise _empty_stream_error()
         return result.or_raise()
 
     def first(self) -> Optional[RecordResult]:
@@ -308,7 +313,7 @@ class RecordStream:
         """
         result = self.first()
         if result is None:
-            raise StopIteration("RecordStream is empty")
+            raise _empty_stream_error()
         return result.or_raise()
 
     def first_udf_result(self) -> Any | None:
@@ -443,3 +448,15 @@ def _chunked_iter(
             )
     except Exception as e:
         raise _convert_pnc_exception(e) from e
+
+
+def _empty_stream_error() -> RecordNotFoundError:
+    """Build the error an ``*_or_raise`` terminal raises for an empty stream.
+
+    An empty stream on a keyed read means the record is not there, so the
+    failure wears the same type and code a missing key reports elsewhere
+    instead of leaking the iterator protocol's stop signal.
+    """
+    return RecordNotFoundError(
+        "RecordStream is empty", result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+    )

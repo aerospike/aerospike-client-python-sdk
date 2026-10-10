@@ -17,9 +17,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, List, Optional, Union
 
-from aerospike_native import Txn
+from aerospike_native import Key, ResultCode, Txn
+
+from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.exceptions import TransactionError
 
 
 class TransactionalSessionBase:
@@ -39,6 +42,10 @@ class TransactionalSessionBase:
     # attribute.
     _txn: Optional[Txn]
     _finalized: bool
+    # Set alongside ``_finalized`` by the leaf terminals: the code a later
+    # operation is refused with, so the refusal says how the transaction
+    # ended.
+    _final_code: ResultCode = ResultCode.TXN_ALREADY_ABORTED
 
     @property
     def txn(self) -> Txn:
@@ -75,3 +82,52 @@ class TransactionalSessionBase:
                 assert tx.active
         """
         return self._txn is not None and not self._finalized
+
+    # -- Finalized-session guard ---------------------------------------------
+    # Once committed or aborted the session holds no transaction, and the
+    # plain-session paths would run a later operation transaction-free. Every
+    # operation entry point checks here first so the write cannot escape.
+
+    def _require_open(self) -> None:
+        """Refuse an operation on a finalized session.
+
+        Raises:
+            TransactionError: With ``ResultCode.TXN_ALREADY_COMMITTED`` or
+                ``ResultCode.TXN_ALREADY_ABORTED`` after :meth:`commit` or
+                :meth:`abort` (explicit or on block exit).
+        """
+        if self._finalized:
+            committed = self._final_code is ResultCode.TXN_ALREADY_COMMITTED
+            raise TransactionError(
+                f"Transaction already {'committed' if committed else 'aborted'}; "
+                "start a new transaction for further operations",
+                result_code=self._final_code,
+            )
+
+    def _fast_write_segment(self, op_type: str, key: Key) -> Any:
+        self._require_open()
+        return super()._fast_write_segment(op_type, key)  # type: ignore[misc]
+
+    def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> Any:
+        self._require_open()
+        return super()._dataset_write_builder(op_type, dataset)  # type: ignore[misc]
+
+    def _build_write_segment(
+        self, op_type: str, arg1: Union[Key, List[Key]], *more_keys: Key,
+    ) -> Any:
+        self._require_open()
+        return super()._build_write_segment(op_type, arg1, *more_keys)  # type: ignore[misc]
+
+    def _fast_query_builder(self, key: Key) -> Any:
+        self._require_open()
+        return super()._fast_query_builder(key)  # type: ignore[misc]
+
+    def _build_query_builder(
+        self, *, dataset: Optional[DataSet], keys: Optional[List[Key]],
+    ) -> Any:
+        self._require_open()
+        return super()._build_query_builder(dataset=dataset, keys=keys)  # type: ignore[misc]
+
+    def execute_udf(self, *keys: Key) -> Any:
+        self._require_open()
+        return super().execute_udf(*keys)  # type: ignore[misc]

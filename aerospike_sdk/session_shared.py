@@ -630,7 +630,9 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     ) -> _WSB:
         """Start an existence check for one or more keys.
 
-        Key resolution matches :meth:`upsert`.
+        Key resolution matches :meth:`upsert`. A single key always yields one
+        row, reading ``False`` when the record is absent; a batch omits absent
+        keys unless ``include_missing_keys()`` is set on the builder.
 
         Returns:
             A write-segment builder whose result reports presence per key.

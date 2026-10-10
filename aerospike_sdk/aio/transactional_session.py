@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import typing
 
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 
 
-from aerospike_native import Txn, TxnState
+from aerospike_native import Key, Record, ResultCode, Txn, TxnState
 
-from aerospike_sdk.exceptions import _convert_pnc_exception
+from aerospike_sdk.exceptions import AerospikeError, _convert_pnc_exception
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
@@ -49,7 +49,11 @@ class TransactionalSession(TransactionalSessionBase, Session):
 
     On clean exit the transaction is committed; if an exception propagates
     out of the block the transaction is aborted. Explicit :meth:`commit` and
-    :meth:`abort` are also available for manual control.
+    :meth:`abort` are also available for manual control. Either finalizes
+    the session: a later operation on it raises
+    :class:`~aerospike_sdk.exceptions.TransactionError` with
+    ``ResultCode.TXN_ALREADY_COMMITTED`` or ``ResultCode.TXN_ALREADY_ABORTED``
+    instead of running outside the transaction.
 
     Example::
 
@@ -93,6 +97,29 @@ class TransactionalSession(TransactionalSessionBase, Session):
         # _txn is inherited from Session (initially None); __aenter__ sets it.
         # txn / active come from TransactionalSessionBase.
         self._finalized = False
+
+    # Direct verbs bypass the builder factories, so they carry the guard
+    # themselves; the wrapped calls are the plain session's.
+
+    async def get(self, key: Key, bins: Optional[List[str]] = None) -> Record:
+        self._require_open()
+        return await super().get(key, bins)
+
+    async def put(self, key: Key, bins: Dict[str, Any]) -> None:
+        self._require_open()
+        await super().put(key, bins)
+
+    async def get_many(
+        self, keys: List[Key], bins: Optional[List[str]] = None,
+    ) -> List[Union[Record, AerospikeError]]:
+        self._require_open()
+        return await super().get_many(keys, bins)
+
+    async def put_many(
+        self, keys: List[Key], bins: Dict[str, Any],
+    ) -> List[Optional[AerospikeError]]:
+        self._require_open()
+        return await super().put_many(keys, bins)
 
     async def do_in_transaction(
         self,
@@ -185,9 +212,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
                 self._txn = None
             raise _convert_pnc_exception(e) from e
         self._finalized = True
-        # Drop the txn reference so operations issued after an explicit
-        # commit run transaction-free instead of stamping the finalized
-        # txn on their policies (mirrors the sync session and __aexit__).
+        self._final_code = ResultCode.TXN_ALREADY_COMMITTED
         self._txn = None
         return _from_commit(status)
 

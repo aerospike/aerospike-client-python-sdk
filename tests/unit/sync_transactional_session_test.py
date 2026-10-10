@@ -24,7 +24,7 @@ from datetime import timedelta
 
 import pytest
 
-from aerospike_sdk import ResultCode
+from aerospike_sdk import DataSet, ResultCode
 
 from aerospike_sdk import Txn, TxnStatus
 from aerospike_sdk.sync.transactional_session import (
@@ -33,7 +33,7 @@ from aerospike_sdk.sync.transactional_session import (
 from aerospike_native.exceptions import CommitFailedError
 from aerospike_native import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
-from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk.exceptions import AerospikeError, CommitError, TransactionError
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.system_settings import TransactionSettings
 from aerospike_sdk.policy.behavior_settings import Mode, Settings
@@ -207,15 +207,49 @@ def test_close_abandoned_is_still_success(
     assert status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED
 
 
-def test_ops_after_explicit_commit_run_txn_free(
+_KEY = DataSet.of("test", "accounts").id("A")
+
+
+def test_ops_after_explicit_commit_are_refused(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,
 ) -> None:
-    # Twin of the aio drift guard: explicit commit drops the txn reference,
-    # so later builders run transaction-free.
     with sync_tx as tx:
         tx.commit()
         assert tx.current_transaction is None
+        with pytest.raises(TransactionError) as excinfo:
+            tx.upsert(_KEY)
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
+        with pytest.raises(TransactionError):
+            tx.query(_KEY)
+        with pytest.raises(TransactionError):
+            tx.get(_KEY)
+        with pytest.raises(TransactionError):
+            tx.put(_KEY, {"balance": 1})
+
+
+def test_ops_after_explicit_abort_are_refused(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    with sync_tx as tx:
+        tx.abort()
+        with pytest.raises(TransactionError) as excinfo:
+            tx.exists(_KEY)
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_ABORTED
+        with pytest.raises(TransactionError):
+            tx.execute_udf(_KEY)
+
+
+def test_ops_after_block_exit_are_refused(
+    sync_tx: SyncTransactionalSession,
+    sync_client: _FakeSyncClient,
+) -> None:
+    with sync_tx as tx:
+        pass
+    with pytest.raises(TransactionError) as excinfo:
+        tx.upsert(_KEY)
+    assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
 
 
 def test_explicit_abort_returns_status(

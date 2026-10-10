@@ -682,6 +682,8 @@ class CommitError(TransactionError):
 _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     # Client-assigned codes
     ResultCode.TXN_FAILED: TransactionError,
+    ResultCode.TXN_ALREADY_ABORTED: TransactionError,
+    ResultCode.TXN_ALREADY_COMMITTED: TransactionError,
     ResultCode.SCAN_TERMINATED: QueryTerminatedError,
     ResultCode.QUERY_TERMINATED: QueryTerminatedError,
     ResultCode.SERIALIZE_ERROR: SerializationError,

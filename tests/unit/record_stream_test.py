@@ -24,6 +24,7 @@ from aerospike_sdk.exceptions import (
     AerospikeError,
     ConnectionError,
     PncConnectionError,
+    RecordNotFoundError,
     ResultCode,
 )
 
@@ -305,8 +306,9 @@ class TestFirst:
 
     async def test_first_or_raise_empty(self):
         stream = RecordStream._from_list([])
-        with pytest.raises(StopAsyncIteration):
+        with pytest.raises(RecordNotFoundError) as excinfo:
             await stream.first_or_raise()
+        assert excinfo.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_first_or_raise_error(self):
         stream = RecordStream._from_list([_fail_result()])
@@ -346,7 +348,7 @@ class TestPopKeepsOpen:
 
     async def test_pop_or_raise_empty(self):
         stream = RecordStream._from_list([])
-        with pytest.raises(StopAsyncIteration):
+        with pytest.raises(RecordNotFoundError):
             await stream.pop_or_raise()
 
     async def test_pop_or_raise_error(self):

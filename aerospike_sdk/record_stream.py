@@ -25,6 +25,7 @@ from aerospike_native.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import (
     AerospikeError,
+    RecordNotFoundError,
     _convert_pnc_exception,
     _result_code_to_exception,
 )
@@ -449,7 +450,7 @@ class RecordStream:
             The next OK :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Raises:
-            StopAsyncIteration: If the stream is exhausted (empty).
+            RecordNotFoundError: If the stream is exhausted (empty).
             AerospikeError: If the row is not OK (from :meth:`RecordResult.or_raise`).
 
         See Also:
@@ -457,7 +458,7 @@ class RecordStream:
         """
         result = await self.pop()
         if result is None:
-            raise StopAsyncIteration("RecordStream is empty")
+            raise _empty_stream_error()
         return result.or_raise()
 
     async def first(self) -> RecordResult | None:
@@ -499,7 +500,7 @@ class RecordStream:
             The first OK :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Raises:
-            StopAsyncIteration: If the stream yields no rows (empty).
+            RecordNotFoundError: If the stream yields no rows (empty).
             AerospikeError: If the first row is not OK (from :meth:`RecordResult.or_raise`).
 
         Example::
@@ -512,7 +513,7 @@ class RecordStream:
         """
         result = await self.first()
         if result is None:
-            raise StopAsyncIteration("RecordStream is empty")
+            raise _empty_stream_error()
         return result.or_raise()
 
     async def first_udf_result(self) -> Any | None:
@@ -605,3 +606,15 @@ class RecordStream:
                 closeable.close()
             except Exception:
                 log.debug("underlying stream close() raised", exc_info=True)
+
+
+def _empty_stream_error() -> RecordNotFoundError:
+    """Build the error an ``*_or_raise`` terminal raises for an empty stream.
+
+    An empty stream on a keyed read means the record is not there, so the
+    failure wears the same type and code a missing key reports elsewhere
+    instead of leaking the iterator protocol's stop signal.
+    """
+    return RecordNotFoundError(
+        "RecordStream is empty", result_code=ResultCode.KEY_NOT_FOUND_ERROR,
+    )

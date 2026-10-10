@@ -23,6 +23,7 @@ import pytest_asyncio
 from aerospike_sdk import Behavior, Filter, Key
 from aerospike_native import PartitionFilter
 from aerospike_sdk import DataSet, Exp, val
+from aerospike_sdk.exceptions import RecordNotFoundError
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -752,7 +753,7 @@ class TestSingleRecordTerminals:
     async def test_first_or_raise_raises_when_nothing_matches(self, cluster):
         session = cluster.create_session()
         ds = QUERY_DS
-        with pytest.raises(StopAsyncIteration):
+        with pytest.raises(RecordNotFoundError):
             await session.query(ds.id("no_such_key_xyz")).first_or_raise()
 
     async def test_result_envelope_is_preserved(self, cluster):

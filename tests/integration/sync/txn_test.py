@@ -34,8 +34,8 @@ from datetime import timedelta
 
 import pytest
 
-from aerospike_sdk import Behavior, DataSet, ResultCode
-from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk import Behavior, DataSet, ResultCode, TxnStatus
+from aerospike_sdk.exceptions import AerospikeError, CommitError, TransactionError
 from aerospike_sdk.policy import Settings
 from aerospike_sdk.sync import TransactionalSession
 
@@ -164,6 +164,39 @@ def test_txn_abort_rolls_back(session, mrt_set):
         tx.abort()
 
     assert _fetch_bin(session, key) == "val1"
+
+
+# ---------------------------------------------------------------------------
+# A finalized session refuses further operations instead of running them
+# outside the transaction.
+# ---------------------------------------------------------------------------
+def test_write_after_abort_is_refused(session, mrt_set):
+    key = mrt_set.id("sync_txn_write_after_abort")
+    _reset(session, key)
+    session.upsert(key).put({BIN_NAME: "before"}).execute()
+
+    with session.transaction() as tx:
+        tx.upsert(key).put({BIN_NAME: "inside"}).execute()
+        assert tx.abort() is TxnStatus.ABORTED
+        with pytest.raises(TransactionError) as excinfo:
+            tx.upsert(key).put({BIN_NAME: "escaped"}).execute()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_ABORTED
+
+    assert _fetch_bin(session, key) == "before"
+
+
+def test_write_after_commit_is_refused(session, mrt_set):
+    key = mrt_set.id("sync_txn_write_after_commit")
+    _reset(session, key)
+
+    with session.transaction() as tx:
+        tx.upsert(key).put({BIN_NAME: "inside"}).execute()
+        assert tx.commit() is TxnStatus.COMMITTED
+        with pytest.raises(TransactionError) as excinfo:
+            tx.upsert(key).put({BIN_NAME: "escaped"}).execute()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
+
+    assert _fetch_bin(session, key) == "inside"
 
 
 # ---------------------------------------------------------------------------

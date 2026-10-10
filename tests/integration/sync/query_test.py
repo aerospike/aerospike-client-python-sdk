@@ -19,6 +19,7 @@ import time
 
 import pytest
 from aerospike_sdk import DataSet, Exp
+from aerospike_sdk.exceptions import RecordNotFoundError
 from tests.integration.namespace import general_namespace
 from aerospike_sdk.record_result import RecordResult
 
@@ -363,9 +364,8 @@ class TestSingleRecordTerminals:
         assert session.query(ds.id("no_such_key_xyz")).first() is None
 
     def test_first_or_raise_raises_when_nothing_matches(self, session):
-        """The sync stream signals exhaustion with StopIteration, not its async twin."""
         ds = QUERY_DS
-        with pytest.raises(StopIteration):
+        with pytest.raises(RecordNotFoundError):
             session.query(ds.id("no_such_key_xyz")).first_or_raise()
 
     def test_result_envelope_is_preserved(self, session):

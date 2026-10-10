@@ -57,6 +57,12 @@ if status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED:
 durable. A commit that leaves the writes provisional raises `CommitError`
 instead of returning a status (see [Errors](#txn-errors)).
 
+Either call finalizes the session. An operation started on it afterwards
+raises `TransactionError` with `ResultCode.TXN_ALREADY_COMMITTED` or
+`ResultCode.TXN_ALREADY_ABORTED` rather than running outside the transaction,
+so a write that was meant to be transactional cannot slip through after an
+abort. Start a new `session.transaction()` for further work.
+
 ### Retrying on Transient Conflicts
 
 Strong-consistency transactions can fail with transient conflicts when

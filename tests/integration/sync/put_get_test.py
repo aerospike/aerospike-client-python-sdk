@@ -89,10 +89,10 @@ def test_exists(cluster):
     ds = DataSet.of(general_namespace(), "test")
     key = ds.id(1)
 
-    exists_stream = session.exists(key).execute()
-    first = exists_stream.first()
-    exists = first.as_bool() if first else False
-    assert not exists
+    first = session.exists(key).execute().first()
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+    assert first.index == 0
 
 
 def test_delete(cluster):

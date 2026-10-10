@@ -29,6 +29,7 @@ from aerospike_sdk.exceptions import (
     AerospikeError,
     ConnectionError,
     PncConnectionError,
+    RecordNotFoundError,
     ResultCode,
 )
 
@@ -225,8 +226,13 @@ class TestSyncPopKeepsOpen:
         assert [r.index for r in stream.collect()] == [1]
 
     def test_pop_or_raise_empty(self):
-        with pytest.raises(StopIteration):
+        with pytest.raises(RecordNotFoundError) as excinfo:
             SyncRecordStream._from_list([]).pop_or_raise()
+        assert excinfo.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+    def test_first_or_raise_empty(self):
+        with pytest.raises(RecordNotFoundError):
+            SyncRecordStream._from_list([]).first_or_raise()
 
     def test_pop_or_raise_error(self):
         with pytest.raises(AerospikeError):

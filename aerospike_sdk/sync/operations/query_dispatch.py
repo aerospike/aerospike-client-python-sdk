@@ -288,14 +288,12 @@ class _BlockingQueryDispatch:
                 found = self._client.exists_blocking(key, policy=rp)
             except Exception as e:
                 return self._handle_error_blocking_singlekey(key, e, "exists", disp, handler)
-            rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-            if self._should_include_result(
-                rc, self._respond_all_keys, self._fail_on_filtered_out,
-            ):
-                return [RecordResult(
-                    key=key, record=None, result_code=rc, index=0,
-                )]
-            return []
+            # A single-key existence check always answers; only batch rows
+            # are subject to include_missing_keys.
+            return [RecordResult(
+                key=key, record=None, index=0,
+                result_code=ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR,
+            )]
 
         if op_type == "udf":
             pkg = spec.udf_package

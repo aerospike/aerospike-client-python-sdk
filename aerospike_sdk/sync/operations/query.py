@@ -293,7 +293,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Raises:
-            StopIteration: The query matched no records.
+            RecordNotFoundError: The query matched no records.
             AerospikeError: The first row reported a failure.
 
         Example::

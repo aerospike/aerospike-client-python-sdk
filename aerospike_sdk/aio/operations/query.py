@@ -395,7 +395,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Raises:
-            StopAsyncIteration: The query matched no records.
+            RecordNotFoundError: The query matched no records.
             AerospikeError: The first row reported a failure.
 
         Example::
@@ -929,10 +929,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             found = await self._client.exists(key, policy=rp)
         except Exception as e:
             return self._handle_error(key, e, disp, handler, op_type="exists")
-        rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream._from_error(key, rc)
-        return RecordStream._from_list([])
+        # A single-key existence check always answers; only batch rows are
+        # subject to include_missing_keys.
+        return RecordStream._from_error(
+            key, ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR)
 
     async def _execute_batch_exists(
         self, spec: _OperationSpec,
@@ -1238,9 +1238,8 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                 return self._handle_fast_error(exc, "exists")
             if cmd_t0:
                 _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
-            if found:
-                return RecordStream._from_error(key, ResultCode.OK)
-            return RecordStream._from_list([])
+            return RecordStream._from_error(
+                key, ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR)
 
         # -- operate-based fallback when only one cached policy is set
         # (e.g. txn-bound segment nulled both policies). cached_wp here

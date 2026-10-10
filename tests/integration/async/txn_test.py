@@ -34,8 +34,8 @@ from datetime import timedelta
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Behavior, DataSet, ResultCode, Txn, TxnState
-from aerospike_sdk.exceptions import AerospikeError, CommitError
+from aerospike_sdk import Behavior, DataSet, ResultCode, Txn, TxnState, TxnStatus
+from aerospike_sdk.exceptions import AerospikeError, CommitError, TransactionError
 from aerospike_sdk.policy import Settings
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
@@ -135,6 +135,39 @@ async def test_txn_write(session, mrt_set):
 
     await session.do_in_transaction(op)
     assert await _fetch_bin(session, key) == "val2"
+
+
+# ---------------------------------------------------------------------------
+# A finalized session refuses further operations instead of running them
+# outside the transaction.
+# ---------------------------------------------------------------------------
+async def test_write_after_abort_is_refused(session, mrt_set):
+    key = mrt_set.id("txn_write_after_abort")
+    await _reset(session, key)
+    await session.upsert(key).put({BIN_NAME: "before"}).execute()
+
+    async with session.transaction() as tx:
+        await tx.upsert(key).put({BIN_NAME: "inside"}).execute()
+        assert await tx.abort() is TxnStatus.ABORTED
+        with pytest.raises(TransactionError) as excinfo:
+            await tx.upsert(key).put({BIN_NAME: "escaped"}).execute()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_ABORTED
+
+    assert await _fetch_bin(session, key) == "before"
+
+
+async def test_write_after_commit_is_refused(session, mrt_set):
+    key = mrt_set.id("txn_write_after_commit")
+    await _reset(session, key)
+
+    async with session.transaction() as tx:
+        await tx.upsert(key).put({BIN_NAME: "inside"}).execute()
+        assert await tx.commit() is TxnStatus.COMMITTED
+        with pytest.raises(TransactionError) as excinfo:
+            await tx.upsert(key).put({BIN_NAME: "escaped"}).execute()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
+
+    assert await _fetch_bin(session, key) == "inside"
 
 
 # ---------------------------------------------------------------------------

@@ -138,7 +138,9 @@ async def test_delete(cluster):
 
     exists_result = await session.exists(k).execute()
     first = await exists_result.first()
-    assert first is None or not first.as_bool()
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+    assert first.index == 0
 
 
 async def test_delete_nonexistent(cluster):
