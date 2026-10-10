@@ -794,10 +794,8 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             existed = await self._client.delete(key, policy=wp)
         except Exception as e:
             return self._handle_error(key, e, disp, handler, op_type="delete")
-        rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
-        if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-            return RecordStream._from_error(key, rc)
-        return RecordStream._from_list([])
+        return RecordStream._from_error(
+            key, ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR)
 
     async def _execute_spec_mixed_mode_batch(
         self, spec: _OperationSpec,
@@ -886,11 +884,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             await self._client.touch(key, policy=wp)
         except Exception as e:
             return self._handle_error(key, e, disp, handler, op_type="touch")
-        if self._should_include_result(
-            ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out
-        ):
-            return RecordStream._from_error(key, ResultCode.OK)
-        return RecordStream._from_list([])
+        return RecordStream._from_error(key, ResultCode.OK)
 
     async def _execute_batch_touch(
         self, spec: _OperationSpec,
@@ -946,10 +940,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         except Exception as e:
             return self._handle_batch_error(spec.keys, e, disp, handler)
         results = []
-        for key, found in zip(spec.keys, found_list):
+        for i, (key, found) in enumerate(zip(spec.keys, found_list)):
             rc = ResultCode.OK if found else ResultCode.KEY_NOT_FOUND_ERROR
             if self._should_include_result(rc, self._respond_all_keys, self._fail_on_filtered_out):
-                results.append(RecordResult(key, None, rc))
+                results.append(RecordResult(key, None, rc, index=i))
         return RecordStream._from_list(results)
 
     # -- Mixed-batch execution (multi-spec chains) ----------------------------
@@ -1180,7 +1174,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     txn=self._txn,
                 )
             except Exception as exc:
-                return self._handle_fast_error(exc, op_type or "upsert")
+                return self._handle_fast_error(exc, op_type or "upsert", key)
             if cmd_t0:
                 _cmd_done(
                     op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
@@ -1206,12 +1200,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             try:
                 existed = await self._client_fast.delete(key, policy=wp)
             except Exception as exc:
-                return self._handle_fast_error(exc, "delete")
+                return self._handle_fast_error(exc, "delete", key)
             if cmd_t0:
                 _cmd_done("delete", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
-            if existed:
-                return RecordStream._from_error(key, ResultCode.OK)
-            return RecordStream._from_list([])
+            return RecordStream._from_error(
+                key, ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR)
 
         # -- touch (no record returned) --
         if op_type == "touch":
@@ -1220,7 +1213,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             try:
                 await self._client_fast.touch(key, policy=wp)
             except Exception as exc:
-                return self._handle_fast_error(exc, "touch")
+                return self._handle_fast_error(exc, "touch", key)
             if cmd_t0:
                 _cmd_done("touch", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             return RecordStream._from_error(key, ResultCode.OK)
@@ -1235,7 +1228,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             try:
                 found = await self._client_fast.exists(key, policy=rp)
             except Exception as exc:
-                return self._handle_fast_error(exc, "exists")
+                return self._handle_fast_error(exc, "exists", key)
             if cmd_t0:
                 _cmd_done("exists", key.namespace, key.set_name, 1, cmd_t0, self._client_fast)
             return RecordStream._from_error(
@@ -1256,7 +1249,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     txn=self._txn,
                 )
             except Exception as exc:
-                return self._handle_fast_error(exc, op_type or "upsert")
+                return self._handle_fast_error(exc, op_type or "upsert", key)
             if cmd_t0:
                 _cmd_done(
                     op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
@@ -1277,7 +1270,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         try:
             record = await self._client_fast.operate(key, self._ops, policy=wp)
         except Exception as exc:
-            return self._handle_fast_error(exc, op_type or "upsert")
+            return self._handle_fast_error(exc, op_type or "upsert", key)
         if cmd_t0:
             _cmd_done(op_type or "upsert", key.namespace, key.set_name, 1, cmd_t0,
                       self._client_fast)

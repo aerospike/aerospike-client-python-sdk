@@ -23,6 +23,7 @@ from aerospike_native import Key, ResultCode, Txn
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import TransactionError
+from aerospike_sdk.txn_status import TxnStatus
 
 
 class TransactionalSessionBase:
@@ -97,12 +98,29 @@ class TransactionalSessionBase:
                 :meth:`abort` (explicit or on block exit).
         """
         if self._finalized:
-            committed = self._final_code is ResultCode.TXN_ALREADY_COMMITTED
-            raise TransactionError(
-                f"Transaction already {'committed' if committed else 'aborted'}; "
-                "start a new transaction for further operations",
-                result_code=self._final_code,
-            )
+            raise self._finalized_error()
+
+    def _finalized_error(self) -> TransactionError:
+        committed = self._final_code is ResultCode.TXN_ALREADY_COMMITTED
+        return TransactionError(
+            f"Transaction already {'committed' if committed else 'aborted'}; "
+            "start a new transaction for further operations",
+            result_code=self._final_code,
+        )
+
+    def _commit_after_finalize(self) -> TxnStatus:
+        """Answer a second ``commit()``: a repeat is a no-op status, a commit
+        after an abort is an error."""
+        if self._final_code is ResultCode.TXN_ALREADY_COMMITTED:
+            return TxnStatus.ALREADY_COMMITTED
+        raise self._finalized_error()
+
+    def _abort_after_finalize(self) -> TxnStatus:
+        """Answer a second ``abort()``: a repeat is a no-op status, an abort
+        after a commit is an error."""
+        if self._final_code is ResultCode.TXN_ALREADY_COMMITTED:
+            raise self._finalized_error()
+        return TxnStatus.ALREADY_ABORTED
 
     def _fast_write_segment(self, op_type: str, key: Key) -> Any:
         self._require_open()

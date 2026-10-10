@@ -153,7 +153,8 @@ async def test_delete_nonexistent(cluster):
 
     result = await session.delete(k).execute()
     first = await result.first()
-    assert first is None or not first.is_ok
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
 
 async def test_exists(cluster):
@@ -640,9 +641,10 @@ async def test_touch_nonexistent_record(cluster):
     except Exception:
         pass
 
-    stream = await session.touch(k).include_missing_keys().execute()
+    stream = await session.touch(k).execute()
     first = await stream.first()
-    assert first is not None
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
     assert not first.is_ok
 
 

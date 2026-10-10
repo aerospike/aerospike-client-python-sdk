@@ -495,6 +495,7 @@ class TestRecordResultIntegration:
         results = await stream.collect()
 
         assert len(results) == 2
+        assert [r.index for r in results] == [0, 1]
         assert results[0].is_ok
         assert results[0].result_code == ResultCode.OK
         assert not results[1].is_ok

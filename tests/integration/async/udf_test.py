@@ -153,6 +153,29 @@ async def test_batch_udf(cluster_with_udf):
         assert rr.record is not None
         assert rr.record.bins.get("B5") == "value5"
 
+async def test_batch_udf_result_is_surfaced_per_row(cluster_with_udf):
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("batch_udf_ret_1")
+    k2 = DS.id("batch_udf_ret_2")
+    await session.upsert(k1).put({"name": "Alice"}).execute()
+    await session.upsert(k2).put({"name": "Bob"}).execute()
+    stream = await (
+        session.execute_udf(k1, k2)
+        .function(MODULE, "readBin")
+        .passing("name")
+        .execute()
+    )
+    results = await stream.collect()
+    assert [r.udf_result for r in results] == ["Alice", "Bob"]
+    stream = await (
+        session.execute_udf(k1, k2)
+        .function(MODULE, "readBin")
+        .passing("name")
+        .execute()
+    )
+    assert await stream.first_udf_result() == "Alice"
+
+
 async def test_batch_udf_validation_error_in_stream(cluster_with_udf):
     session = cluster_with_udf.create_session()
     k1 = DS.id("batch_udf_err_1")
@@ -227,7 +250,10 @@ async def test_fail_on_filtered_out_raises_for_a_single_key_udf(cluster_with_udf
             .where("$.v < 10")
         )
 
-    assert await (await filtered_udf().execute()).collect() == []
+    # A UDF apply is a write, so the filtered-out outcome is reported as a
+    # row by default and only raises once the caller opts in.
+    rows = await (await filtered_udf().execute()).collect()
+    assert [r.result_code for r in rows] == [ResultCode.FILTERED_OUT]
     with pytest.raises(FilteredOutError):
         await filtered_udf().fail_on_filtered_out().execute()
 
@@ -457,6 +483,16 @@ async def test_single_key_validation_raises(cluster_with_udf):
             .passing("bx", 99)
             .execute()
         )
+
+async def test_register_udf_accepts_text(cluster_with_udf):
+    session = cluster_with_udf.create_session()
+    path = "psdk_register_text_probe.lua"
+    task = await session.register_udf("function one(r) return 1 end", path, UDFLang.LUA)
+    assert await task.wait_till_complete(sleep_time=0.2, timeout=10.0)
+    assert any(m["name"] == path for m in await session.list_udf())
+    rm = await session.remove_udf(path)
+    await rm.wait_till_complete(sleep_time=0.1, timeout=2.0)
+
 
 async def test_list_udf(aerospike_host, make_cluster_definition):
     """``list_udf`` reports name/hash/type and reflects register + remove."""

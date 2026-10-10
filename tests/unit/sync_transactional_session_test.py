@@ -241,6 +241,28 @@ def test_ops_after_explicit_abort_are_refused(
             tx.execute_udf(_KEY)
 
 
+def test_commit_twice_reports_already_committed(
+    sync_tx: SyncTransactionalSession,
+) -> None:
+    with sync_tx as tx:
+        assert tx.commit() is TxnStatus.COMMITTED
+        assert tx.commit() is TxnStatus.ALREADY_COMMITTED
+        with pytest.raises(TransactionError) as excinfo:
+            tx.abort()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
+
+
+def test_abort_twice_reports_already_aborted(
+    sync_tx: SyncTransactionalSession,
+) -> None:
+    with sync_tx as tx:
+        assert tx.abort() is TxnStatus.ABORTED
+        assert tx.abort() is TxnStatus.ALREADY_ABORTED
+        with pytest.raises(TransactionError) as excinfo:
+            tx.commit()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_ABORTED
+
+
 def test_ops_after_block_exit_are_refused(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,

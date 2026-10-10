@@ -158,6 +158,7 @@ from aerospike_sdk.record_result import (
     RecordResult,
     batch_failure_records_to_results,
     batch_records_to_results,
+    _set_udf_result,
 )
 from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.metrics import usage
@@ -1802,6 +1803,11 @@ class _QueryBuilderBase:
             ):
                 continue
 
+            # The native client delivers a batch UDF's return value as the
+            # record's ``SUCCESS`` bin; the single-key path already yields it
+            # directly, so surface it the same way here.
+            if row_op == "udf" and r.record is not None:
+                _set_udf_result(r, r.record.bins.get("SUCCESS"))
             filtered.append(r)
         return filtered
 
@@ -1869,6 +1875,7 @@ class _QueryBuilderBase:
                 return RecordStream._from_list([])
         elif not self._should_include_result(
             rc, self._respond_all_keys, self._fail_on_filtered_out,
+            has_write=op_type is not None,
         ):
             return RecordStream._from_list([])
 

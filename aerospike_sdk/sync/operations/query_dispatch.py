@@ -259,14 +259,10 @@ class _BlockingQueryDispatch:
                 existed = self._client.delete_blocking(key, policy=wp)
             except Exception as e:
                 return self._handle_error_blocking_singlekey(key, e, "delete", disp, handler)
-            rc = ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR
-            if self._should_include_result(
-                rc, self._respond_all_keys, self._fail_on_filtered_out,
-            ):
-                return [RecordResult(
-                    key=key, record=None, result_code=rc, index=0,
-                )]
-            return []
+            return [RecordResult(
+                key=key, record=None, index=0,
+                result_code=ResultCode.OK if existed else ResultCode.KEY_NOT_FOUND_ERROR,
+            )]
 
         if op_type == "touch":
             wp = self._make_write_policy(spec)
@@ -274,13 +270,9 @@ class _BlockingQueryDispatch:
                 self._client.touch_blocking(key, policy=wp)
             except Exception as e:
                 return self._handle_error_blocking_singlekey(key, e, "touch", disp, handler)
-            if self._should_include_result(
-                ResultCode.OK, self._respond_all_keys, self._fail_on_filtered_out,
-            ):
-                return [RecordResult(
-                    key=key, record=None, result_code=ResultCode.OK, index=0,
-                )]
-            return []
+            return [RecordResult(
+                key=key, record=None, result_code=ResultCode.OK, index=0,
+            )]
 
         if op_type == "exists":
             rp = self._make_read_policy(spec)
@@ -804,6 +796,7 @@ class _BlockingQueryDispatch:
                 return []
         elif not self._should_include_result(
             rc, self._respond_all_keys, self._fail_on_filtered_out,
+            has_write=op_type is not None,
         ):
             return []
         return [RecordResult(

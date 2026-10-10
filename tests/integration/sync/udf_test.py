@@ -82,6 +82,15 @@ def test_sync_write_using_udf(cluster_with_udf):
     assert rr.record.bins.get("sb1") == "sync val"
 
 
+def test_sync_register_udf_accepts_text(cluster_with_udf):
+    session = cluster_with_udf.create_session()
+    path = "psdk_register_text_probe_sync.lua"
+    task = session.register_udf("function one(r) return 1 end", path, UDFLang.LUA)
+    assert _wait_task(cluster_with_udf, task)
+    assert any(m["name"] == path for m in session.list_udf())
+    _wait_task(cluster_with_udf, session.remove_udf(path))
+
+
 def test_sync_list_udf(cluster_with_udf):
     """Sync ``list_udf`` reports name/hash/type and reflects register + remove."""
     session = cluster_with_udf.create_session()
@@ -140,6 +149,22 @@ def test_sync_udf_admin_reachable_via_cluster_and_session(aerospike_host):
         assert not any(m["name"] == path for m in cluster.list_udf())
     finally:
         cluster.close()
+
+
+def test_sync_batch_udf_result_is_surfaced_per_row(cluster_with_udf):
+    session = cluster_with_udf.create_session()
+    k1 = DS.id("sync_batch_udf_ret_1")
+    k2 = DS.id("sync_batch_udf_ret_2")
+    session.upsert(k1).put({"name": "Alice"}).execute()
+    session.upsert(k2).put({"name": "Bob"}).execute()
+    results = (
+        session.execute_udf(k1, k2)
+        .function(MODULE, "readBin")
+        .passing("name")
+        .execute()
+        .collect()
+    )
+    assert [r.udf_result for r in results] == ["Alice", "Bob"]
 
 
 def test_sync_batch_udf_validation_errors_in_stream(cluster_with_udf):

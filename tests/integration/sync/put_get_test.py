@@ -110,6 +110,26 @@ def test_delete(cluster):
     assert not exists
 
 
+def test_delete_nonexistent(cluster):
+    session = cluster.create_session()
+    key = DataSet.of(general_namespace(), "test").id("pg_sync_delete_missing")
+    session.delete(key).execute()
+
+    first = session.delete(key).execute().first()
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
+def test_touch_nonexistent_record(cluster):
+    session = cluster.create_session()
+    key = DataSet.of(general_namespace(), "test").id("pg_sync_touch_missing")
+    session.delete(key).execute()
+
+    first = session.touch(key).execute().first()
+    assert first is not None and not first.as_bool()
+    assert first.result_code == ResultCode.KEY_NOT_FOUND_ERROR
+
+
 def test_get_with_bins(cluster):
     """Test get with specific bin selection."""
     session = cluster.create_session()

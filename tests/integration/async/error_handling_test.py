@@ -991,14 +991,15 @@ class TestTtlExpiry:
 
         await _cleanup(session, k)
 
-    async def test_touch_nonexistent_returns_empty(self, session, ds):
-        """Touch on a non-existent key produces no result."""
+    async def test_touch_nonexistent_reports_not_found(self, session, ds):
+        """Touch on a non-existent key reports the miss as a row, like every write."""
         k = ds.id("ttl_touch_miss")
         await _cleanup(session, k)
 
         rs = await session.touch(k).execute()
         rr = await rs.first()
-        assert rr is None
+        assert rr is not None and not rr.as_bool()
+        assert rr.result_code == ResultCode.KEY_NOT_FOUND_ERROR
 
     async def test_touch_existing_succeeds(self, session, ds):
         """Touch on an existing key succeeds (record still there)."""

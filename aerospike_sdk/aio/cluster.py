@@ -205,13 +205,13 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
     async def register_udf(
         self,
-        body: bytes,
+        body: bytes | str,
         server_path: str,
         language: UDFLang = UDFLang.LUA,
         *,
         policy: Optional["AdminPolicy"] = None,
     ) -> "RegisterTask":
-        """Register a UDF package from in-memory bytes on the cluster.
+        """Register a UDF package from in-memory bytes or text on the cluster.
 
         Raises:
             RuntimeError: If not connected.

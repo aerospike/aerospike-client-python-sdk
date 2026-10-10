@@ -184,18 +184,24 @@ class TransactionalSession(TransactionalSessionBase, Session):
         as before.
 
         Raises:
-            RuntimeError: If the session has no active transaction.
+            RuntimeError: If the transaction was never started.
+            TransactionError: With ``ResultCode.TXN_ALREADY_ABORTED`` if the
+                transaction was aborted.
             CommitError: The roll-forward was abandoned, or another commit
                 stage failed.
 
         Returns:
-            :attr:`~aerospike_sdk.TxnStatus.COMMITTED`, or another
-            :class:`~aerospike_sdk.TxnStatus` the server reported.
+            :attr:`~aerospike_sdk.TxnStatus.COMMITTED`,
+            :attr:`~aerospike_sdk.TxnStatus.ALREADY_COMMITTED` on a repeat
+            call, or another :class:`~aerospike_sdk.TxnStatus` the server
+            reported.
 
         See Also:
             :meth:`abort`: Undo the transaction instead of committing.
         """
-        if self._txn is None or self._finalized:
+        if self._finalized:
+            return self._commit_after_finalize()
+        if self._txn is None:
             raise RuntimeError("No active transaction to commit.")
         try:
             # Built per commit rather than cached so a behavior or config-file
@@ -234,18 +240,23 @@ class TransactionalSession(TransactionalSessionBase, Session):
         retried.
 
         Raises:
-            RuntimeError: If the session has no active transaction.
+            RuntimeError: If the transaction was never started.
+            TransactionError: With ``ResultCode.TXN_ALREADY_COMMITTED`` if the
+                transaction was committed.
             AerospikeError: If the abort was refused because a commit already
                 failed in doubt, or the roll-back itself failed.
 
         Returns:
-            :attr:`~aerospike_sdk.TxnStatus.ABORTED`, or another
-            :class:`~aerospike_sdk.TxnStatus` the server reported.
+            :attr:`~aerospike_sdk.TxnStatus.ABORTED`,
+            :attr:`~aerospike_sdk.TxnStatus.ALREADY_ABORTED` on a repeat call,
+            or another :class:`~aerospike_sdk.TxnStatus` the server reported.
 
         See Also:
             :meth:`commit`: Persist the transaction instead of aborting.
         """
-        if self._txn is None or self._finalized:
+        if self._finalized:
+            return self._abort_after_finalize()
+        if self._txn is None:
             raise RuntimeError("No active transaction to abort.")
         try:
             status = await self._client._async_client.abort(

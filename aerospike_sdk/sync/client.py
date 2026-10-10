@@ -316,13 +316,15 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     def _register_udf(
         self,
-        body: bytes,
+        body: bytes | str,
         server_path: str,
         language: UDFLang = UDFLang.LUA,
         *,
         policy: Optional[AdminPolicy] = None,
     ) -> RegisterTask:
-        """Register a UDF module from bytes (synchronous)."""
+        """Register a UDF module from bytes or text (synchronous)."""
+        if isinstance(body, str):
+            body = body.encode()
         return self.underlying_client.register_udf_blocking(
             body, server_path, language, policy=policy,
         )

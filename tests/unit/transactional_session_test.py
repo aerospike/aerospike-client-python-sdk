@@ -253,6 +253,28 @@ async def test_ops_after_explicit_abort_are_refused(
             await tx.get_many([_KEY])
 
 
+async def test_commit_twice_reports_already_committed(
+    tx_session: TransactionalSession,
+) -> None:
+    async with tx_session as tx:
+        assert await tx.commit() is TxnStatus.COMMITTED
+        assert await tx.commit() is TxnStatus.ALREADY_COMMITTED
+        with pytest.raises(TransactionError) as excinfo:
+            await tx.abort()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_COMMITTED
+
+
+async def test_abort_twice_reports_already_aborted(
+    tx_session: TransactionalSession,
+) -> None:
+    async with tx_session as tx:
+        assert await tx.abort() is TxnStatus.ABORTED
+        assert await tx.abort() is TxnStatus.ALREADY_ABORTED
+        with pytest.raises(TransactionError) as excinfo:
+            await tx.commit()
+        assert excinfo.value.result_code == ResultCode.TXN_ALREADY_ABORTED
+
+
 async def test_ops_after_block_exit_are_refused(
     tx_session: TransactionalSession,
     sdk_client: _FakeSdkClient,

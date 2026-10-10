@@ -1027,8 +1027,12 @@ def _convert_pnc_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
                 code, str(exc), getattr(exc, "in_doubt", False),
                 **_retry_context_kwargs(exc),
             )
+        # A client-side failure that names no condition (a CA file that
+        # cannot be read, for example) still reports as the client's own
+        # error, so code-branching callers always have a code to branch on.
         return AerospikeError(
-            str(exc), in_doubt=getattr(exc, "in_doubt", False),
+            str(exc), result_code=ResultCode.CLIENT_ERROR,
+            in_doubt=getattr(exc, "in_doubt", False),
             **_retry_context_kwargs(exc),
         )
 

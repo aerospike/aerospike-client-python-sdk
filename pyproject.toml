@@ -9,11 +9,7 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Dev-channel version published to the internal package index on every
-    # PNC merge; promoted versions land on public PyPI at release. CI
-    # resolves this from the internal index; see README "Local PNC checkout"
-    # for working against a local PNC tree instead.
-    "aerospike-native==0.6.0a7.dev115",
+    "aerospike-native==1.0.0",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]

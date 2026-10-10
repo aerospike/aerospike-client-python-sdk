@@ -1402,7 +1402,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         )
 
     def _handle_fast_error(
-        self, exc: Exception, op_type: str,
+        self, exc: Exception, op_type: str, key: Key,
     ) -> RecordStream:
         hint = (
             self._bin_name_hint()
@@ -1417,7 +1417,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
                 raise pfc_exc from exc
         elif rc != ResultCode.FILTERED_OUT:
             raise pfc_exc from exc
-        return RecordStream._from_list([])
+        # The fast path only carries writes, and a write row always reports
+        # its outcome (a touch on a missing key, a filtered-out upsert).
+        return RecordStream._from_error(key, rc)
 
     def _get_write_policy(self, mode: Mode = Mode.AP) -> WritePolicy:
         """Resolve the point-write policy for *mode*, caching per mode.

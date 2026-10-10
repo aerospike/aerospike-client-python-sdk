@@ -625,10 +625,9 @@ class TestSyncBatchFilterExpression:
         assert by_key[keys["hi"].value].is_ok
         assert by_key[keys["lo"].value].result_code == ResultCode.FILTERED_OUT
 
-        present = {
-            r.key.value: r.as_bool()
-            for r in session.exists(list(keys.values())).include_missing_keys().execute().collect()
-        }
+        rows = session.exists(list(keys.values())).include_missing_keys().execute().collect()
+        assert [r.index for r in rows] == [0, 1]
+        present = {r.key.value: r.as_bool() for r in rows}
         assert present[keys["hi"].value] is False
         assert present[keys["lo"].value] is True
 

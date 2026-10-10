@@ -671,10 +671,41 @@ class CdtReadBuilder(Generic[T]):
             The parent builder for chaining.
 
         See Also:
+            :meth:`get_as_map`: The same entries as an unordered ``dict``.
             :meth:`get_as_ordered_map`: The same entries as a key-ordered ``SortedMap``.
         """
         self._require_map("get_keys_and_values")
         return self._emit(self._rt.KEY_VALUE)
+
+    def get_as_map(self) -> T:
+        """Return the selected map entries as an unordered ``dict``.
+
+        The server returns the entries as an unordered map rather than as
+        key-value pairs, so the result makes no promise about order; use
+        :meth:`get_keys_and_values` to keep the server's selection order or
+        :meth:`get_as_ordered_map` for key order.
+
+        Example::
+
+            stream = await (
+                session.query(players.id("p-1001"))
+                .bin("scores").on_map_key_range("a", "m").get_as_map()
+                .execute()
+            )
+            early = (await stream.first_or_raise()).record.bins["scores"]
+
+        Returns:
+            The parent builder for chaining.
+
+        Raises:
+            TypeError: If the selection is on a list rather than a map.
+
+        See Also:
+            :meth:`get_keys_and_values`: Entries in selection order, as a ``dict``.
+            :meth:`get_as_ordered_map`: Entries in key order, as a ``SortedMap``.
+        """
+        self._require_map("get_as_map")
+        return self._emit(self._rt.UNORDERED_MAP)
 
     def get_as_ordered_map(self) -> T:
         """Return the selected map entries as a key-ordered :class:`~aerospike_sdk.SortedMap`.

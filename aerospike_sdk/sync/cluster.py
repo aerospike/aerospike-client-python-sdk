@@ -166,7 +166,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
     def register_udf(
         self,
-        body: bytes,
+        body: bytes | str,
         server_path: str,
         language: UDFLang = UDFLang.LUA,
         *,

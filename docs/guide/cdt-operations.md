@@ -254,7 +254,8 @@ isinstance(scores, dict)          # True
 ```
 
 A selection read with `get_keys_and_values()` is a plain `dict` in the order
-the server selected the entries, such as rank order for a rank range. End it
+the server selected the entries, such as rank order for a rank range.
+`get_as_map()` is the same `dict` with no order promise. End the selection
 with `get_as_ordered_map()` instead to get a `SortedMap` in key order, whatever
 the bin's own order:
 

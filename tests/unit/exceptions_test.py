@@ -332,6 +332,8 @@ class TestConvertPncException:
         pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is AerospikeError
         assert pfc.in_doubt is False
+        # A codeless client failure still gives callers a code to branch on.
+        assert pfc.result_code == ResultCode.CLIENT_ERROR
 
     def test_pnc_generic_in_doubt_propagated(self):
         pnc = PncAerospikeError("batch failed over an in-doubt write")

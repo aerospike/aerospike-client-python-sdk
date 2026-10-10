@@ -435,7 +435,7 @@ class Client(RoutingCapabilitiesMixin):
         """Register a UDF package from in-memory bytes on the cluster.
 
         Args:
-            body: Raw module source (for example UTF-8 encoded Lua).
+            body: Module source, as bytes or as text (encoded as UTF-8).
             server_path: Path name stored on the server (often ends with ``.lua``).
             language: :class:`~aerospike_native.UDFLang`; default is Lua.
             policy: Optional :class:`~aerospike_native.AdminPolicy` (PNC leading
@@ -457,6 +457,8 @@ class Client(RoutingCapabilitiesMixin):
             task = await session.register_udf("my_module", udf_source_code)
             await task.wait_till_complete()
         """
+        if isinstance(body, str):
+            body = body.encode()
         return await self._async_client.register_udf(body, server_path, language, policy=policy)
 
     async def _register_udf_from_file(

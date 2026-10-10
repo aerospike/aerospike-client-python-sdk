@@ -105,6 +105,11 @@ class TestCdtReadBuilder:
         b.get_as_ordered_map()
         assert cap == [MapReturnType.ORDERED_MAP]
 
+    def test_get_as_map(self):
+        b, parent, cap = self._build(is_map=True)
+        b.get_as_map()
+        assert cap == [MapReturnType.UNORDERED_MAP]
+
     def test_count(self):
         b, parent, cap = self._build()
         b.count()
@@ -154,6 +159,11 @@ class TestCdtReadBuilder:
         b, _, _ = self._build(is_map=False)
         with pytest.raises(TypeError, match="only supported for map"):
             b.get_as_ordered_map()
+
+    def test_get_as_map_raises_for_list(self):
+        b, _, _ = self._build(is_map=False)
+        with pytest.raises(TypeError, match="only supported for map"):
+            b.get_as_map()
 
 
 # ===================================================================
