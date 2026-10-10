@@ -149,7 +149,7 @@ class _FakeNode:
         self.name, self.address, self.host = name, address, host
 
 
-class _FakePacSnapshot:
+class _FakePncSnapshot:
     """Stands in for the underlying client's snapshot object."""
 
     def __init__(self, doc):
@@ -249,7 +249,7 @@ class TestCanonicalSnapshot:
     """The structured export shape, independent of the raw serialization."""
 
     def _snapshot(self, policy=None, nodes=None):
-        return MetricsSnapshot(_FakePacSnapshot(_RAW), policy=policy, nodes=nodes)
+        return MetricsSnapshot(_FakePncSnapshot(_RAW), policy=policy, nodes=nodes)
 
     def test_top_level_fields(self):
         doc = self._snapshot(policy=MetricsPolicy(latency_columns=9, latency_shift=3)).to_canonical_dict()
@@ -266,7 +266,7 @@ class TestCanonicalSnapshot:
         raw = copy.deepcopy(_RAW)
         labels = raw["cluster_aggregated_metrics"]["labels"][0]
         del labels["app_id"]
-        return MetricsSnapshot(_FakePacSnapshot(raw), app_id=app_id)
+        return MetricsSnapshot(_FakePncSnapshot(raw), app_id=app_id)
 
     def test_app_id_falls_back_to_the_authenticated_user(self):
         """Unnamed applications still group by the identity the server knows."""
@@ -323,7 +323,7 @@ class TestCanonicalSnapshot:
                "connections_error_auth": 1},
         )}
         conns = MetricsSnapshot(
-            _FakePacSnapshot(raw)
+            _FakePncSnapshot(raw)
         ).to_canonical_dict()["nodes"][0]["connections"]
         assert conns["open_failure"] == 5
         assert conns["tls_handshake_failure"] == 3
@@ -336,13 +336,13 @@ class TestCanonicalSnapshot:
                "connections_recovering": 1},
         )}
         conns = MetricsSnapshot(
-            _FakePacSnapshot(raw)
+            _FakePncSnapshot(raw)
         ).to_canonical_dict()["nodes"][0]["connections"]
         assert (conns["in_use"], conns["in_pool"], conns["recovering"]) == (2, 6, 1)
 
     def test_connection_open_failures_are_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections_failed": 4})}
-        snapshot = MetricsSnapshot(_FakePacSnapshot(raw))
+        snapshot = MetricsSnapshot(_FakePncSnapshot(raw))
         conns = snapshot.to_canonical_dict()["nodes"][0]["connections"]
         assert conns["open_failure"] == 4
 
@@ -350,7 +350,7 @@ class TestCanonicalSnapshot:
         """Pool occupancy, recover depth and invalid-node count reach the cluster section."""
         raw = dict(_RAW, connections_in_use=2, connections_in_pool=6,
                    recover_queue_size=1, nodes_invalid=3)
-        cluster = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["cluster"]
+        cluster = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["cluster"]
         assert cluster["connections"]["in_use"] == 2
         assert cluster["connections"]["in_pool"] == 6
         assert cluster["recover_queue"] == {"size": 1}
@@ -359,7 +359,7 @@ class TestCanonicalSnapshot:
     def test_pool_exhaustion_is_mapped(self):
         """A poll against a full pool with no idle socket counts as pool_exhausted."""
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], connections_pool_empty=3)}
-        conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
+        conns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
         assert conns["pool_exhausted"] == 3
 
     def test_command_timeouts_are_split_by_who_reported_them(self):
@@ -372,7 +372,7 @@ class TestCanonicalSnapshot:
 
     def test_process_samples_reach_the_cluster_section(self):
         cluster = MetricsSnapshot(
-            _FakePacSnapshot(_RAW), process=(12.5, 1048576)
+            _FakePncSnapshot(_RAW), process=(12.5, 1048576)
         ).to_canonical_dict()["cluster"]
         assert cluster["cpu_percent"] == 12.5
         assert cluster["memory_bytes"] == 1048576
@@ -383,7 +383,7 @@ class TestCanonicalSnapshot:
 
     def test_node_error_rate_is_mapped(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
-        node = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]
+        node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
         assert node["error_rate"] == 4
 
     def test_namespace_splits_the_named_error_causes(self):
@@ -392,7 +392,7 @@ class TestCanonicalSnapshot:
             "test": {"Put": {"ok": 4, "Timeout": 1, "Hot key": 2,
                              "Record too big": 5, "Device overload": 3}},
         })}
-        ns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["namespaces"][0]
+        ns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["namespaces"][0]
         assert ns["record_too_big"] == 5
         assert ns["device_overload"] == 3
         assert ns["key_busy"] == 2 and ns["timeouts"] == 1
@@ -400,7 +400,7 @@ class TestCanonicalSnapshot:
         assert ns["errors"] == 11
 
     def test_command_count_reaches_the_cluster_section(self):
-        snapshot = MetricsSnapshot(_FakePacSnapshot(_RAW), command_count=42)
+        snapshot = MetricsSnapshot(_FakePncSnapshot(_RAW), command_count=42)
         doc = snapshot.to_canonical_dict()
         assert doc["cluster"]["command_count"] == 42
         assert snapshot.command_count == 42
@@ -414,7 +414,7 @@ class TestCanonicalSnapshot:
         raw["cluster_aggregated_metrics"] = dict(
             _RAW["cluster_aggregated_metrics"], **{"transaction_retry_count": 9}
         )
-        doc = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()
+        doc = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()
         assert doc["cluster"]["command_retries"] == 9
 
     def test_retry_count_defaults_to_zero(self):
@@ -428,7 +428,7 @@ class TestCanonicalSnapshot:
             **{"connections_idle_dropped": 5, "connections_closed_error": 2,
                "connections_closed_node_removed": 1},
         )}
-        conns = MetricsSnapshot(_FakePacSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
+        conns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
         assert conns["closed_idle"] == 5
         assert conns["closed_error"] == 2
         assert conns["closed_node_removed"] == 1

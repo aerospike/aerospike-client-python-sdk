@@ -35,7 +35,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
 
 
-class _FakePacClient:
+class _FakePncClient:
     """Minimal async stand-in for the PNC Client with commit/abort plus
     put/get/operate/etc. stubs used by higher-level SDK paths."""
 
@@ -72,7 +72,7 @@ class _FakeSdkClient:
     """
 
     def __init__(self) -> None:
-        self._async_client = _FakePacClient()
+        self._async_client = _FakePncClient()
         self._client = self._async_client
         self._indexes_monitor = None
 

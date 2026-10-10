@@ -39,7 +39,7 @@ Dedicated VMs on isolated CPU cores with direct, low-latency networking between 
 | Python | 3.14.6 free-threaded build (e.g. 3.14t) |
 | Rust | 1.96.0 |
 | PyO3 | 0.29.0 |
-| PNC | `aerospike-async` 0.6.0-alpha (built from source with `mimalloc` global allocator; uvloop installed by default) |
+| PNC | `aerospike-native` 0.6.0-alpha, then named `aerospike-async` (built from source with `mimalloc` global allocator; uvloop installed by default) |
 | PSDK | `aerospike-sdk` 0.9.0-alpha (built from source) |
 | Aerospike server | Enterprise 8.x, 3-node cluster, in-memory, 4 GB per node, RF=1 |
 

@@ -42,7 +42,7 @@ class _FakeNode:
         self.version = version
 
 
-class _FakePacClient:
+class _FakePncClient:
     """Stands in for PNC ``Client``: exposes ``nodes`` on the class."""
 
     def __init__(self, *versions: _FakeVersion) -> None:
@@ -105,7 +105,7 @@ def clock(monkeypatch):
 
 
 def test_capable_nodes_open_both_gates():
-    client = _Client(_FakePacClient(_FakeVersion(), _FakeVersion()))
+    client = _Client(_FakePncClient(_FakeVersion(), _FakeVersion()))
     client._warm_routing_capabilities()
     assert client.supports_server_compiled_ael is True
     assert client.supports_query_selection is True
@@ -113,7 +113,7 @@ def test_capable_nodes_open_both_gates():
 
 def test_one_lagging_node_closes_both_gates():
     client = _Client(
-        _FakePacClient(
+        _FakePncClient(
             _FakeVersion(),
             _FakeVersion(ael=False, query_selection=False),
         ),
@@ -150,7 +150,7 @@ def test_probe_never_touches_the_proxy_instance():
 
 
 def test_disconnected_client_reports_no_capabilities():
-    client = _Client(_FakePacClient(_FakeVersion()))
+    client = _Client(_FakePncClient(_FakeVersion()))
     client._warm_routing_capabilities()
     client._connected = False
     assert client.supports_server_compiled_ael is False
@@ -161,7 +161,7 @@ class TestTendIntervalRefresh:
     """Gates track the node list PNC tends, within one tend interval."""
 
     def test_lagging_node_joining_after_connect_closes_the_gates(self, clock):
-        pnc = _FakePacClient(_FakeVersion())
+        pnc = _FakePncClient(_FakeVersion())
         client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
         assert client.supports_server_compiled_ael is True
@@ -174,7 +174,7 @@ class TestTendIntervalRefresh:
 
     def test_gates_reopen_when_the_lagging_node_leaves(self, clock):
         """Gates reopen when a lagging node leaves, without reconnecting."""
-        pnc = _FakePacClient(
+        pnc = _FakePncClient(
             _FakeVersion(),
             _FakeVersion(ael=False, query_selection=False),
         )
@@ -190,7 +190,7 @@ class TestTendIntervalRefresh:
 
     def test_within_the_interval_the_node_list_is_not_rewalked(self, clock):
         """Hot-path reads must stay a cached-boolean lookup between tends."""
-        pnc = _FakePacClient(_FakeVersion())
+        pnc = _FakePncClient(_FakeVersion())
         client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
         calls_after_warm = pnc.list_calls
@@ -203,7 +203,7 @@ class TestTendIntervalRefresh:
         assert pnc.list_calls == calls_after_warm
 
     def test_a_configured_interval_sets_the_refresh_window(self, clock):
-        pnc = _FakePacClient(_FakeVersion())
+        pnc = _FakePncClient(_FakeVersion())
         client = _Client(pnc, tend_interval=timedelta(seconds=30))
         client._warm_routing_capabilities()
         pnc.join(_FakeVersion(ael=False, query_selection=False))
@@ -215,7 +215,7 @@ class TestTendIntervalRefresh:
         assert client.supports_server_compiled_ael is False
 
     def test_unset_interval_falls_back_to_the_pnc_default(self):
-        client = _Client(_FakePacClient(_FakeVersion()))
+        client = _Client(_FakePncClient(_FakeVersion()))
         assert client._routing_capability_ttl_seconds() == pytest.approx(
             _pnc_default_tend_interval_seconds(),
         )
@@ -233,7 +233,7 @@ class TestTendIntervalRefresh:
 
     def test_a_reader_refreshes_when_connect_never_warmed(self):
         """A never-stamped cache resolves on first read rather than reading ``None``."""
-        client = _Client(_FakePacClient(_FakeVersion()))
+        client = _Client(_FakePncClient(_FakeVersion()))
         assert client.supports_server_compiled_ael is True
         assert client.supports_query_selection is True
 
@@ -256,7 +256,7 @@ class TestTendIntervalRefresh:
                 time.sleep(0.005)
                 return timedelta(seconds=7)
 
-        client = _Client(_FakePacClient(_FakeVersion()))
+        client = _Client(_FakePncClient(_FakeVersion()))
         client._sdk_settings = _SlowSettings()
         n = 32
         barrier = threading.Barrier(n)
@@ -279,7 +279,7 @@ class TestRefreshUnderARunningLoop:
 
     @pytest.mark.asyncio
     async def test_a_stale_read_refreshes_before_answering(self, clock):
-        pnc = _FakePacClient(_FakeVersion())
+        pnc = _FakePncClient(_FakeVersion())
         client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
 
@@ -290,7 +290,7 @@ class TestRefreshUnderARunningLoop:
         assert client.supports_query_selection is False
 
     def test_a_failed_refresh_keeps_the_previous_gates(self, clock):
-        pnc = _FakePacClient(_FakeVersion())
+        pnc = _FakePncClient(_FakeVersion())
         client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
 

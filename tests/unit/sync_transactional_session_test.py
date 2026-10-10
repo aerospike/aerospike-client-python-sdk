@@ -40,7 +40,7 @@ from aerospike_sdk.policy.behavior_settings import Mode, Settings
 from aerospike_sdk.sync.session import Session as SyncSession
 
 
-class _FakePacClient:
+class _FakePncClient:
     """Minimal stand-in for the PNC Client with commit/abort_blocking stubs."""
 
     def __init__(self) -> None:
@@ -71,7 +71,7 @@ class _FakeSyncClient:
     """Stand-in for :class:`aerospike_sdk.sync.client.SyncClient`."""
 
     def __init__(self) -> None:
-        self._pnc = _FakePacClient()
+        self._pnc = _FakePncClient()
         self._indexes_monitor = None
         self._namespace_mode_cache: dict = {}
         # Mirrors the real client: the retry plan is resolved from here.

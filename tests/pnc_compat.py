@@ -33,7 +33,7 @@ from aerospike_native.exceptions import InvalidRequest
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 
-class SupportsPacCapabilities(Protocol):
+class SupportsPncCapabilities(Protocol):
     """Anything reporting the cluster capability flags: a connected client or a probe result."""
 
     @property
@@ -57,10 +57,10 @@ def _capability_bool(client: object, attr: str) -> bool:
     return value
 
 
-def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
+def skip_if_lacks_server_compiled_ael(client: SupportsPncCapabilities) -> None:
     """Skip when server-compiled AEL is not available on the probed cluster.
 
-    Reads :attr:`SupportsPacCapabilities.supports_server_compiled_ael`, which the
+    Reads :attr:`SupportsPncCapabilities.supports_server_compiled_ael`, which the
     session probe fills from ``Cluster.supports_ael()``.
     """
     if _capability_bool(client, "supports_server_compiled_ael") is True:
@@ -71,10 +71,10 @@ def skip_if_lacks_server_compiled_ael(client: SupportsPacCapabilities) -> None:
     )
 
 
-def skip_if_lacks_query_selection(client: SupportsPacCapabilities) -> None:
+def skip_if_lacks_query_selection(client: SupportsPncCapabilities) -> None:
     """Skip when field ``44`` query selection is not available on the probed cluster.
 
-    Reads :attr:`SupportsPacCapabilities.supports_query_selection`, which the
+    Reads :attr:`SupportsPncCapabilities.supports_query_selection`, which the
     session probe fills from ``Cluster.supports_query_selection()``.
     """
     if _capability_bool(client, "supports_query_selection") is True:

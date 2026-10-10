@@ -66,7 +66,7 @@ class _MrtError(Exception):
         self.result_code = result_code
 
 
-class _FakePacClient:
+class _FakePncClient:
     """Records commit/abort calls for both runtimes."""
 
     def __init__(self, commit_error_codes=()):
@@ -132,14 +132,14 @@ class TestStampTxn:
 class TestBlockingRunner:
 
     def test_commit_on_success(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
         result = run_in_implicit_txn_blocking(pnc, _settings(), lambda txn: "ok")
         assert result == "ok"
         assert len(pnc.commits) == 1
         assert pnc.aborts == []
 
     def test_abort_and_raise_on_non_retryable(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
 
         def attempt(txn):
             raise _MrtError(ResultCode.PARAMETER_ERROR)
@@ -150,7 +150,7 @@ class TestBlockingRunner:
         assert pnc.commits == []
 
     def test_retryable_then_success(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
         calls: list = []
 
         def attempt(txn):
@@ -167,7 +167,7 @@ class TestBlockingRunner:
         assert len(pnc.commits) == 1
 
     def test_attempts_exhausted(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
 
         def attempt(txn):
             raise _MrtError(ResultCode.MRT_VERSION_MISMATCH)
@@ -178,14 +178,14 @@ class TestBlockingRunner:
         assert pnc.commits == []
 
     def test_commit_failure_is_retried(self):
-        pnc = _FakePacClient(commit_error_codes=[ResultCode.MRT_VERSION_MISMATCH])
+        pnc = _FakePncClient(commit_error_codes=[ResultCode.MRT_VERSION_MISMATCH])
         result = run_in_implicit_txn_blocking(pnc, _settings(), lambda txn: "ok")
         assert result == "ok"
         assert len(pnc.aborts) == 1
         assert len(pnc.commits) == 1
 
     def test_abort_failure_does_not_mask_original_error(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
 
         def failing_abort(txn):
             raise RuntimeError("abort exploded")
@@ -199,7 +199,7 @@ class TestBlockingRunner:
             run_in_implicit_txn_blocking(pnc, _settings(), attempt)
 
     def test_defaults_when_settings_fields_unset(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
         raw = TransactionSettings(
             implicit_batch_write_transactions=True,
             sleep_between_attempts=timedelta(0),
@@ -226,7 +226,7 @@ class TestBlockingRunner:
             return "ok"
 
         settings = _settings(sleep=timedelta(milliseconds=10))
-        assert run_in_implicit_txn_blocking(_FakePacClient(), settings, attempt) == "ok"
+        assert run_in_implicit_txn_blocking(_FakePncClient(), settings, attempt) == "ok"
         assert len(sleeps) == 1
         assert 0.005 <= sleeps[0] <= 0.015
 
@@ -235,7 +235,7 @@ class TestAsyncRunner:
 
     @pytest.mark.asyncio
     async def test_commit_on_success(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
 
         async def attempt(txn):
             return "ok"
@@ -247,7 +247,7 @@ class TestAsyncRunner:
 
     @pytest.mark.asyncio
     async def test_retryable_then_success(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
         calls: list = []
 
         async def attempt(txn):
@@ -263,7 +263,7 @@ class TestAsyncRunner:
 
     @pytest.mark.asyncio
     async def test_abort_and_raise_on_non_retryable(self):
-        pnc = _FakePacClient()
+        pnc = _FakePncClient()
 
         async def attempt(txn):
             raise _MrtError(ResultCode.PARAMETER_ERROR)
