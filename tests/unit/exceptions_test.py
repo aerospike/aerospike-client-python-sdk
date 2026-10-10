@@ -275,7 +275,7 @@ class TestResultCodeToException:
         assert exc.in_doubt is True
 
 
-class TestConvertPacException:
+class TestConvertPncException:
     """Verify PNC-to-PSDK exception conversion."""
 
     def test_server_error_mapped(self):

@@ -138,7 +138,7 @@ class _FakeBatchStream:
         self.close_calls += 1
 
 
-class TestFromPacBatchStreamOnError:
+class TestFromPncBatchStreamOnError:
     """``_from_pnc_batch_stream(on_error=...)`` routes non-OK BatchRecords to
     the callback and excludes them from the yielded stream."""
 
