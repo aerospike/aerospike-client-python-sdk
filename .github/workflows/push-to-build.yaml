@@ -59,26 +59,26 @@ jobs:
           esac
           echo "Version $VERSION from branch $BRANCH — OK"
 
-      - name: Validate PAC dependency is on PyPI
+      - name: Validate PNC dependency is on PyPI
         run: |
-          PAC_PIN=$(python3 -c "
+          PNC_PIN=$(python3 -c "
           import re, pathlib
           text = pathlib.Path('pyproject.toml').read_text()
-          m = re.search(r'aerospike-async==([^\s\"]+)', text)
+          m = re.search(r'aerospike-native==([^\s\"]+)', text)
           print(m.group(1) if m else '')
           ")
-          if [ -z "$PAC_PIN" ]; then
-            echo "::error::Could not extract aerospike-async version pin from pyproject.toml"
+          if [ -z "$PNC_PIN" ]; then
+            echo "::error::Could not extract aerospike-native version pin from pyproject.toml"
             exit 1
           fi
-          echo "Checking PyPI for aerospike-async==$PAC_PIN"
+          echo "Checking PyPI for aerospike-native==$PNC_PIN"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://pypi.org/pypi/aerospike-async/${PAC_PIN}/json")
+            "https://pypi.org/pypi/aerospike-native/${PNC_PIN}/json")
           if [ "$STATUS" != "200" ]; then
-            echo "::error::aerospike-async==$PAC_PIN is not available on PyPI (HTTP $STATUS)"
+            echo "::error::aerospike-native==$PNC_PIN is not available on PyPI (HTTP $STATUS)"
             exit 1
           fi
-          echo "aerospike-async==$PAC_PIN is available on PyPI — OK"
+          echo "aerospike-native==$PNC_PIN is available on PyPI — OK"
 
   build-release:
     name: Build release

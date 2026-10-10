@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest_asyncio
 
-from tests.pac_compat import skip_if_lacks_query_selection
+from tests.pnc_compat import skip_if_lacks_query_selection
 from tests.integration.query_selection_seed import (
     QuerySelectionClusterState,
     seed_query_selection_async,

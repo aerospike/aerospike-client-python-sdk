@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from tests.pac_compat import (
+from tests.pnc_compat import (
     skip_if_lacks_query_selection,
     skip_if_lacks_server_compiled_ael,
 )

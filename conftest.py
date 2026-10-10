@@ -17,10 +17,10 @@ import pytest
 import pytest_asyncio
 from pathlib import Path
 
-from aerospike_async import AuthMode, ClientPolicy, new_client, new_client_blocking
+from aerospike_native import AuthMode, ClientPolicy, new_client, new_client_blocking
 from aerospike_sdk import ClusterDefinition, DataSet, Host
 from aerospike_sdk.info_types import NamespaceDetail
-from aerospike_async.exceptions import ConnectionError as PacConnectionError
+from aerospike_native.exceptions import ConnectionError as PncConnectionError
 from aerospike_sdk.sync import ClusterDefinition as SyncClusterDefinition, Host as SyncHost
 from aerospike_sdk.sync.info import InfoCommands as SyncInfoCommands
 from tests.integration.general_auth import (
@@ -170,7 +170,7 @@ def pytest_configure(config):
             handler.setFormatter(logging.Formatter(
                 "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
             ))
-            for prefix in ("aerospike_core", "aerospike_async", "aerospike_sdk"):
+            for prefix in ("aerospike_core", "aerospike_native", "aerospike_sdk"):
                 logger = logging.getLogger(prefix)
                 logger.setLevel(numeric)
                 logger.addHandler(handler)
@@ -563,7 +563,7 @@ def aerospike_host_sc_single(pytestconfig):
     probe_policy.timeout = 2000
     try:
         client = new_client_blocking(probe_policy, seed)
-    except PacConnectionError:
+    except PncConnectionError:
         emit = _terminal_emit(pytestconfig)
         emit("")
         emit(
@@ -587,7 +587,7 @@ def aerospike_host_sc(pytestconfig):
     dependent test when the SC cluster is unreachable, rather than
     surfacing a connect error per test. Uses :func:`new_client_blocking`
     so we don't need an asyncio loop just to probe — and therefore catches
-    PAC's ``ConnectionError``, not the SDK-level one it converts to.
+    PNC's ``ConnectionError``, not the SDK-level one it converts to.
     """
     sc = os.environ.get("AEROSPIKE_HOST_SC", "").strip()
     seed = sc if sc else os.environ.get("AEROSPIKE_HOST", "localhost:3000")
@@ -603,7 +603,7 @@ def aerospike_host_sc(pytestconfig):
 
     try:
         client = new_client_blocking(probe_policy, seed)
-    except PacConnectionError as exc:
+    except PncConnectionError as exc:
         # Announce it as well as skipping: a bare skip is a single 's' unless the
         # run asked for -rs, which makes "no SC cluster" look like a green SC run.
         emit = _terminal_emit(pytestconfig)

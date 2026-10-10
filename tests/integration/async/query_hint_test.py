@@ -17,7 +17,7 @@
 
 import pytest_asyncio
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from aerospike_sdk import Filter, QueryDuration
 
 from aerospike_sdk import (

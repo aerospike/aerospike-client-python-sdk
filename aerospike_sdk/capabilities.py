@@ -16,16 +16,16 @@
 """Cluster server-capability resolution (minimum version across all nodes).
 
 A cluster supports a feature only when *every* connected node does, so each
-predicate folds the per-node :class:`~aerospike_async.Version` with ``all``;
+predicate folds the per-node :class:`~aerospike_native.Version` with ``all``;
 :func:`min_version` returns the minimum version across the nodes — the
 least-capable node a caller must guard against. These are pure functions over
-a list of PAC ``Version`` objects — the async and sync clients supply the list
+a list of PNC ``Version`` objects — the async and sync clients supply the list
 from their respective node accessors, keeping one implementation for both.
 
-All predicates delegate to PAC's own ``Version.supports_*`` methods (PAC owns
-the authoritative version→capability mapping). The pinned ``aerospike-async``
+All predicates delegate to PNC's own ``Version.supports_*`` methods (PNC owns
+the authoritative version→capability mapping). The pinned ``aerospike-native``
 dependency is assumed to expose those predicates and
-``FilterExpression.from_server_compiled_ael``; older PAC builds are unsupported.
+``FilterExpression.from_server_compiled_ael``; older PNC builds are unsupported.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from typing import Any, List, Optional, Tuple
 
 
 def version_key(version: Any) -> Tuple[int, int, int, int]:
-    """Sortable ``(major, minor, patch, build)`` tuple for a PAC ``Version``."""
+    """Sortable ``(major, minor, patch, build)`` tuple for a PNC ``Version``."""
     return (version.major, version.minor, version.patch, version.build)
 
 

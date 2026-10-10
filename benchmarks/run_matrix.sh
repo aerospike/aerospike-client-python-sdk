@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-client TPS+latency matrix runner.
 #
-# Runs the canonical matrix (PSDK / PAC / Rust core
+# Runs the canonical matrix (PSDK / PNC / Rust core
 # across {sync, async, AsyncPool} × 32t × {FT, non-FT}) plus a
 # batch-size sweep for the async builder paths.
 #
@@ -142,7 +142,7 @@ for gil in 0 1; do
 done
 
 # --- PSDK sync EXPERIMENTAL current_thread_runtime -------------------------
-# Per-thread Tokio current_thread runtime + per-thread PAC _LocalClient.
+# Per-thread Tokio current_thread runtime + per-thread PNC _LocalClient.
 # Dormant by default — only fires when the bench passes the explicit flag.
 # Kept in-matrix so each lever lands with both default + ct_runtime numbers.
 for gil in 0 1; do
@@ -208,45 +208,45 @@ for gil in 0 1; do
   done
 done
 
-# --- PAC sync direct (pac-blocking) ----------------------------------------
+# --- PNC sync direct (pnc-blocking) ----------------------------------------
 for gil in 0 1; do
   for threads in 32; do
-    tag="pac_sync_t${threads}_gil${gil}"
+    tag="pnc_sync_t${threads}_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
-        --mode pac-blocking --threads $threads
+        --mode pnc-blocking --threads $threads
   done
 done
 
-# --- PAC sync EXPERIMENTAL current_thread_runtime --------------------------
-# Per-thread Tokio current_thread runtime + per-thread PAC _LocalClient.
+# --- PNC sync EXPERIMENTAL current_thread_runtime --------------------------
+# Per-thread Tokio current_thread runtime + per-thread PNC _LocalClient.
 # Dormant by default — only fires when the bench passes the explicit flag.
-# Apples-to-apples PAC-direct ct_runtime measurement (no PSDK layer);
+# Apples-to-apples PNC-direct ct_runtime measurement (no PSDK layer);
 # compare against psdk_sync_*_ctrt_gil* cells to isolate PSDK overhead
 # under ct_runtime.
 for gil in 0 1; do
   for threads in 32; do
-    tag="pac_sync_t${threads}_ctrt_gil${gil}"
+    tag="pnc_sync_t${threads}_ctrt_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
-        --mode pac-blocking --threads $threads --current-thread-runtime
+        --mode pnc-blocking --threads $threads --current-thread-runtime
   done
 done
 
-# --- PAC async direct (pac-async) ------------------------------------------
+# --- PNC async direct (pnc-async) ------------------------------------------
 for gil in 0 1; do
   for tasks in 32; do
-    tag="pac_async_z${tasks}_gil${gil}"
+    tag="pnc_async_z${tasks}_gil${gil}"
     PYTHON_GIL=$gil ALLOW_GIL_ON=1 \
       run "$tag" python -m benchmarks.benchmark "${ARGS[@]}" \
-        --mode pac-async -z $tasks
+        --mode pnc-async -z $tasks
   done
 done
 
 # --- Legacy aerospike C client -------------------------------------------
 # Not run in the networked matrix: legacy is single-thread-only, so its only
 # number is a 1t number, which is RTT-bound here (~11K, same as every client).
-# Compare legacy vs PSDK/PAC in the loopback co-located procedure instead.
+# Compare legacy vs PSDK/PNC in the loopback co-located procedure instead.
 
 # --- Rust core binary (no Python, no GIL) ----------------------------------
 if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then
@@ -279,8 +279,8 @@ for z in $ZSWEEP; do
     run "psdk_async_fast_path_z${z}_gil0" \
       python -m benchmarks.benchmark "${ARGS[@]}" --mode async -z "$z" --fast-path
   PYTHON_GIL=0 \
-    run "pac_async_z${z}_gil0" \
-      python -m benchmarks.benchmark "${ARGS[@]}" --mode pac-async -z "$z"
+    run "pnc_async_z${z}_gil0" \
+      python -m benchmarks.benchmark "${ARGS[@]}" --mode pnc-async -z "$z"
 done
 
 if [[ -x benchmarks/rust-core/target/release/rust-core ]]; then

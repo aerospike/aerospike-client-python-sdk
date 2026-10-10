@@ -15,8 +15,8 @@
 
 """Shared response parsing for the info-command helpers.
 
-The two info surfaces differ only in *dispatch* — one awaits the async PAC
-client, the other calls the ``*_blocking`` PAC entries — but the info-protocol
+The two info surfaces differ only in *dispatch* — one awaits the async PNC
+client, the other calls the ``*_blocking`` PNC entries — but the info-protocol
 responses they get back are parsed identically. That parsing lives here, once,
 as stateless static helpers so the two trees cannot drift on how a response is
 interpreted.

@@ -513,7 +513,7 @@ class TestMetricsExport:
 
             def metrics(self):
                 real = self._real.metrics()
-                return MetricsSnapshot(real._pac, policy=real._policy, nodes=[])
+                return MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 

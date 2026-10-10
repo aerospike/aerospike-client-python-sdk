@@ -20,8 +20,8 @@ passthrough. Behavior against a live cluster is covered in
 ``tests/integration/async/error_detail_test.py``.
 """
 
-from aerospike_async import ReadPolicy, WritePolicy
-from aerospike_sdk.exceptions import AerospikeError, _convert_pac_exception, ResultCode, ServerError as PacServerError
+from aerospike_native import ReadPolicy, WritePolicy
+from aerospike_sdk.exceptions import AerospikeError, _convert_pnc_exception, ResultCode, ServerError as PncServerError
 
 import aerospike_sdk
 from aerospike_sdk import ErrorDetailVerbosity, ExpressionTrace, SubCode
@@ -80,7 +80,7 @@ class TestSettingsResolution:
 
 
 class TestPolicyMapping:
-    """The verbosity crosses into every PAC policy the mapper builds."""
+    """The verbosity crosses into every PNC policy the mapper builds."""
 
     def test_to_read_policy(self):
         p = to_read_policy(Settings(error_detail_verbosity=2))
@@ -123,10 +123,10 @@ class TestConfigKey:
 
 
 class TestExceptionPassthrough:
-    """A PAC ServerError's detail surfaces on the converted PSDK exception."""
+    """A PNC ServerError's detail surfaces on the converted PSDK exception."""
 
     def test_detail_passes_through(self):
-        pac = PacServerError(
+        pnc = PncServerError(
             "list index 99 out of bounds",
             ResultCode.OP_NOT_APPLICABLE,
             False,
@@ -134,17 +134,17 @@ class TestExceptionPassthrough:
             "index 99 out of bounds (subcode=1)",
             None,
         )
-        psdk = _convert_pac_exception(pac)
+        psdk = _convert_pnc_exception(pnc)
         assert isinstance(psdk, AerospikeError)
         assert psdk.result_code == ResultCode.OP_NOT_APPLICABLE
         assert psdk.sub_code == 1
         assert psdk.server_message == "index 99 out of bounds (subcode=1)"
 
     def test_absent_detail_is_none(self):
-        pac = PacServerError(
+        pnc = PncServerError(
             "key not found", ResultCode.KEY_NOT_FOUND_ERROR, False, None, None, None
         )
-        psdk = _convert_pac_exception(pac)
+        psdk = _convert_pnc_exception(pnc)
         assert psdk.sub_code is None
         assert psdk.server_message is None
         assert psdk.exp_trace is None

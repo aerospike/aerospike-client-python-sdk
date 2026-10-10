@@ -40,7 +40,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Generic, Optional, Sequence, TypeVar, Union
 
-from aerospike_async import (
+from aerospike_native import (
     CTX,
     CdtOperation,
     ExpOperation,
@@ -375,7 +375,7 @@ class CdtReadBuilder(Generic[T]):
             index: List index (0-based, negative counts from end).
             order: If set (or if *pad* is ``True``), use create-on-missing
                 list context with this order; when only *pad* is ``True``,
-                defaults to :data:`~aerospike_async.ListOrderType.UNORDERED`.
+                defaults to :data:`~aerospike_native.ListOrderType.UNORDERED`.
             pad: When using create-on-missing context, allow sparse indexes.
 
         Returns:

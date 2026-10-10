@@ -33,7 +33,7 @@ import math
 
 import pytest
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import HllConfig

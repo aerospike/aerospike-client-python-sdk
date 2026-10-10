@@ -31,10 +31,10 @@ from typing import Any, Generic, List, Optional, TypeVar, Union
 
 from typing import Self
 
-from aerospike_async import AuthMode, ClientPolicy, TlsConfig, Version
+from aerospike_native import AuthMode, ClientPolicy, TlsConfig, Version
 
 from aerospike_sdk import capabilities
-from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
 from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
@@ -69,7 +69,7 @@ class _TlsSettings:
     for_login_only: bool = False
 
     def build_tls_config(self) -> TlsConfig:
-        """Build the PAC ``TlsConfig``.
+        """Build the PNC ``TlsConfig``.
 
         A config with no CA file still builds: the server is then verified
         against the system trust store, which is what a ``tls_name``-only setup
@@ -78,7 +78,7 @@ class _TlsSettings:
         Raises:
             ValueError: An unrecognized protocol or cipher-suite name, or a
                 protocol and cipher combination that leaves no usable suite.
-            aerospike_async.exceptions.IoError: A CA or client file that
+            aerospike_native.exceptions.IoError: A CA or client file that
                 cannot be read.
         """
         if self.client_cert_file:
@@ -765,8 +765,8 @@ class ClusterDefinitionBase:
         if self._tls is not None:
             try:
                 policy.tls_config = self._tls.build_tls_config()
-            except PacAerospikeError as e:
-                raise _convert_pac_exception(e) from e
+            except PncAerospikeError as e:
+                raise _convert_pnc_exception(e) from e
 
         # System settings (connection pool, tend interval, etc.)
         if system_settings is not None:
@@ -869,7 +869,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
 
         Operations run inside the returned context manager use *behavior* (or
         :attr:`~aerospike_sdk.policy.behavior.Behavior.DEFAULT` when omitted) and
-        auto-participate in a fresh :class:`~aerospike_async.Txn`, committed on
+        auto-participate in a fresh :class:`~aerospike_native.Txn`, committed on
         clean exit and aborted if an exception propagates. Requires a
         strong-consistency (SC) namespace.
 
@@ -936,7 +936,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
             :meth:`node_names`: Just the names.
         """
         node_cls = self._node_cls
-        return [node_cls(pac) for pac in self._sdk_client.underlying_client.nodes()]
+        return [node_cls(pnc) for pnc in self._sdk_client.underlying_client.nodes()]
 
     def get_node(self, name: str) -> _N:
         """Look up one node by its name.
@@ -962,8 +962,8 @@ class ClusterBase(Generic[_S, _TS, _N]):
         """
         try:
             return self._node_cls(self._sdk_client.underlying_client.get_node(name))
-        except PacAerospikeError as e:
-            raise _convert_pac_exception(e) from e
+        except PncAerospikeError as e:
+            raise _convert_pnc_exception(e) from e
 
     def node_names(self) -> list[str]:
         """The names of the nodes currently in the cluster.
@@ -995,7 +995,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
         """The minimum server version across connected nodes.
 
         Returns:
-            The least-capable node's :class:`~aerospike_async.Version`, or
+            The least-capable node's :class:`~aerospike_native.Version`, or
             ``None`` when the cluster reports no nodes. Guarding against the
             *minimum* is what makes a feature check safe on a mixed-version
             or mid-upgrade cluster.
@@ -1038,7 +1038,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
 
     # -- Metrics snapshot -------------------------------------------------------
     # The core assembles the snapshot from in-memory per-node state: no socket
-    # is touched, so this is a plain call on both surfaces. PAC releases the
+    # is touched, so this is a plain call on both surfaces. PNC releases the
     # GIL for the copy.
 
     def metrics(self) -> MetricsSnapshot:
@@ -1059,12 +1059,12 @@ class ClusterBase(Generic[_S, _TS, _N]):
             print(f"{reads.count} reads, avg {reads.average:.1f}")
         """
         client = self._sdk_client
-        pac = client.underlying_client
+        pnc = client.underlying_client
         client_policy = client._policy
         return MetricsSnapshot(
-            pac.metrics(),
+            pnc.metrics(),
             policy=self._metrics_policy,
-            nodes=pac.nodes(),
+            nodes=pnc.nodes(),
             usage=client._usage_counters.totals(),
             command_count=client._command_counts.totals().get(COMMAND_COUNT, 0),
             # With no application identity of its own, the snapshot reports the

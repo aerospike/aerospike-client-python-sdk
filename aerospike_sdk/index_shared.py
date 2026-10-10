@@ -28,7 +28,7 @@ from typing import List, Optional, Union
 
 from typing import Self
 
-from aerospike_async import (
+from aerospike_native import (
     CTX,
     CollectionIndexType,
     FilterExpression,
@@ -392,7 +392,7 @@ class _IndexBuilderBase:
 
         Args:
             collection_index_type: ``CollectionIndexType`` constant from the
-                ``aerospike_async`` package (map- vs list-style collection indexing).
+                ``aerospike_native`` package (map- vs list-style collection indexing).
 
         Returns:
             ``self`` for method chaining.
@@ -423,7 +423,7 @@ class _IndexBuilderBase:
             )
 
         See Also:
-            :meth:`~aerospike_async.Filter.context`: Attach the same path when querying.
+            :meth:`~aerospike_native.Filter.context`: Attach the same path when querying.
         """
         self._ctx = ctx
         return self

@@ -22,8 +22,8 @@ from types import SimpleNamespace
 import pytest
 
 from aerospike_sdk import Behavior, Key, Txn
-from aerospike_async import BatchPolicy
-from aerospike_async.exceptions import AerospikeError as PacAerospikeError
+from aerospike_native import BatchPolicy
+from aerospike_native.exceptions import AerospikeError as PncAerospikeError
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk.implicit_txn import (
@@ -132,25 +132,25 @@ class TestStampTxn:
 class TestBlockingRunner:
 
     def test_commit_on_success(self):
-        pac = _FakePacClient()
-        result = run_in_implicit_txn_blocking(pac, _settings(), lambda txn: "ok")
+        pnc = _FakePacClient()
+        result = run_in_implicit_txn_blocking(pnc, _settings(), lambda txn: "ok")
         assert result == "ok"
-        assert len(pac.commits) == 1
-        assert pac.aborts == []
+        assert len(pnc.commits) == 1
+        assert pnc.aborts == []
 
     def test_abort_and_raise_on_non_retryable(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
 
         def attempt(txn):
             raise _MrtError(ResultCode.PARAMETER_ERROR)
 
         with pytest.raises(_MrtError):
-            run_in_implicit_txn_blocking(pac, _settings(), attempt)
-        assert len(pac.aborts) == 1
-        assert pac.commits == []
+            run_in_implicit_txn_blocking(pnc, _settings(), attempt)
+        assert len(pnc.aborts) == 1
+        assert pnc.commits == []
 
     def test_retryable_then_success(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
         calls: list = []
 
         def attempt(txn):
@@ -159,47 +159,47 @@ class TestBlockingRunner:
                 raise _MrtError(ResultCode.MRT_BLOCKED)
             return "ok"
 
-        assert run_in_implicit_txn_blocking(pac, _settings(), attempt) == "ok"
+        assert run_in_implicit_txn_blocking(pnc, _settings(), attempt) == "ok"
         assert len(calls) == 2
         # Each attempt gets a fresh transaction.
         assert calls[0] is not calls[1]
-        assert len(pac.aborts) == 1
-        assert len(pac.commits) == 1
+        assert len(pnc.aborts) == 1
+        assert len(pnc.commits) == 1
 
     def test_attempts_exhausted(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
 
         def attempt(txn):
             raise _MrtError(ResultCode.MRT_VERSION_MISMATCH)
 
         with pytest.raises(_MrtError):
-            run_in_implicit_txn_blocking(pac, _settings(attempts=3), attempt)
-        assert len(pac.aborts) == 3
-        assert pac.commits == []
+            run_in_implicit_txn_blocking(pnc, _settings(attempts=3), attempt)
+        assert len(pnc.aborts) == 3
+        assert pnc.commits == []
 
     def test_commit_failure_is_retried(self):
-        pac = _FakePacClient(commit_error_codes=[ResultCode.MRT_VERSION_MISMATCH])
-        result = run_in_implicit_txn_blocking(pac, _settings(), lambda txn: "ok")
+        pnc = _FakePacClient(commit_error_codes=[ResultCode.MRT_VERSION_MISMATCH])
+        result = run_in_implicit_txn_blocking(pnc, _settings(), lambda txn: "ok")
         assert result == "ok"
-        assert len(pac.aborts) == 1
-        assert len(pac.commits) == 1
+        assert len(pnc.aborts) == 1
+        assert len(pnc.commits) == 1
 
     def test_abort_failure_does_not_mask_original_error(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
 
         def failing_abort(txn):
             raise RuntimeError("abort exploded")
 
-        pac.abort_blocking = failing_abort
+        pnc.abort_blocking = failing_abort
 
         def attempt(txn):
             raise _MrtError(ResultCode.PARAMETER_ERROR)
 
         with pytest.raises(_MrtError):
-            run_in_implicit_txn_blocking(pac, _settings(), attempt)
+            run_in_implicit_txn_blocking(pnc, _settings(), attempt)
 
     def test_defaults_when_settings_fields_unset(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
         raw = TransactionSettings(
             implicit_batch_write_transactions=True,
             sleep_between_attempts=timedelta(0),
@@ -211,7 +211,7 @@ class TestBlockingRunner:
             raise _MrtError(ResultCode.MRT_BLOCKED)
 
         with pytest.raises(_MrtError):
-            run_in_implicit_txn_blocking(pac, raw, attempt)
+            run_in_implicit_txn_blocking(pnc, raw, attempt)
         assert len(attempts) == 10
 
     def test_only_a_blocked_record_waits_before_retrying(self, monkeypatch):
@@ -235,19 +235,19 @@ class TestAsyncRunner:
 
     @pytest.mark.asyncio
     async def test_commit_on_success(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
 
         async def attempt(txn):
             return "ok"
 
-        result = await run_in_implicit_txn(pac, _settings(), attempt)
+        result = await run_in_implicit_txn(pnc, _settings(), attempt)
         assert result == "ok"
-        assert len(pac.commits) == 1
-        assert pac.aborts == []
+        assert len(pnc.commits) == 1
+        assert pnc.aborts == []
 
     @pytest.mark.asyncio
     async def test_retryable_then_success(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
         calls: list = []
 
         async def attempt(txn):
@@ -256,22 +256,22 @@ class TestAsyncRunner:
                 raise _MrtError(ResultCode.MRT_BLOCKED)
             return "ok"
 
-        assert await run_in_implicit_txn(pac, _settings(), attempt) == "ok"
+        assert await run_in_implicit_txn(pnc, _settings(), attempt) == "ok"
         assert len(calls) == 2
-        assert len(pac.aborts) == 1
-        assert len(pac.commits) == 1
+        assert len(pnc.aborts) == 1
+        assert len(pnc.commits) == 1
 
     @pytest.mark.asyncio
     async def test_abort_and_raise_on_non_retryable(self):
-        pac = _FakePacClient()
+        pnc = _FakePacClient()
 
         async def attempt(txn):
             raise _MrtError(ResultCode.PARAMETER_ERROR)
 
         with pytest.raises(_MrtError):
-            await run_in_implicit_txn(pac, _settings(), attempt)
-        assert len(pac.aborts) == 1
-        assert pac.commits == []
+            await run_in_implicit_txn(pnc, _settings(), attempt)
+        assert len(pnc.aborts) == 1
+        assert pnc.commits == []
 
 
 def _ok_rows(count):
@@ -282,7 +282,7 @@ def _ok_rows(count):
 
 
 class _RecordingBatchClient:
-    """Fake PAC surface for driving the sync chain's blocking batch dispatch."""
+    """Fake PNC surface for driving the sync chain's blocking batch dispatch."""
 
     def __init__(self):
         self.batch_policies: list = []
@@ -308,9 +308,9 @@ class _RecordingBatchClient:
         self.aborts.append(txn)
 
 
-def _write_chain_builder(pac, sdk_client, mode=Mode.SC, txn=None):
+def _write_chain_builder(pnc, sdk_client, mode=Mode.SC, txn=None):
     return SyncQueryBuilder(
-        client=pac,
+        client=pnc,
         namespace="test",
         set_name="s",
         behavior=Behavior.DEFAULT,
@@ -332,97 +332,97 @@ class TestMultiKeyWriteChainWrap:
         return [Key("test", "s", 1), Key("test", "s", 2)]
 
     def test_sc_write_batch_is_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client())
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
-        assert len(pac.commits) == 1
-        assert pac.batch_policies[0] is not None
-        assert pac.batch_policies[0].txn is not None
+        assert len(pnc.commits) == 1
+        assert pnc.batch_policies[0] is not None
+        assert pnc.batch_policies[0].txn is not None
 
     def test_ap_batch_is_not_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client(), mode=Mode.AP)
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client(), mode=Mode.AP)
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
-        assert pac.commits == []
-        assert pac.batch_policies[0].txn is None
+        assert pnc.commits == []
+        assert pnc.batch_policies[0].txn is None
 
     def test_explicit_txn_is_not_double_wrapped(self):
-        pac = _RecordingBatchClient()
+        pnc = _RecordingBatchClient()
         explicit = Txn()
-        builder = _write_chain_builder(pac, self._sdk_client(), txn=explicit)
+        builder = _write_chain_builder(pnc, self._sdk_client(), txn=explicit)
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
         # The explicit txn is stamped; no implicit commit happens.
-        assert pac.commits == []
-        assert pac.batch_policies[0].txn is not None
+        assert pnc.commits == []
+        assert pnc.batch_policies[0].txn is not None
 
     def test_with_txn_none_opts_out(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client())
         (
             builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1)
             .with_txn(None).execute()
         )
-        assert pac.commits == []
-        assert pac.batch_policies[0].txn is None
+        assert pnc.commits == []
+        assert pnc.batch_policies[0].txn is None
 
     def test_setting_disabled_is_not_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client(implicit=False))
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client(implicit=False))
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
-        assert pac.commits == []
+        assert pnc.commits == []
 
     def test_cluster_without_mrt_is_not_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client(supports_mrt=False))
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client(supports_mrt=False))
         builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1).execute()
-        assert pac.commits == []
+        assert pnc.commits == []
 
     def test_read_only_batch_is_not_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client())
         builder._keys = self._keys()
         builder.execute()
-        assert pac.commits == []
-        assert len(pac.batch_policies) == 1
+        assert pnc.commits == []
+        assert len(pnc.batch_policies) == 1
 
     def test_multi_namespace_batch_is_not_wrapped(self):
         # A transaction cannot span namespaces. Wrapping is SDK-initiated, so
         # the batch goes through unwrapped and the server answers per key,
         # rather than the whole batch failing client-side.
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client())
         keys = [Key("test", "s", 1), Key("other", "s", 2)]
         builder._start_write_segment("upsert", keys).bin("a").set_to(1).execute()
-        assert pac.commits == []
-        assert pac.batch_policies[0].txn is None
+        assert pnc.commits == []
+        assert pnc.batch_policies[0].txn is None
 
     def test_multi_namespace_write_chain_is_not_wrapped(self):
-        pac = _RecordingBatchClient()
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc = _RecordingBatchClient()
+        builder = _write_chain_builder(pnc, self._sdk_client())
         (
             builder._start_write_segment("upsert", Key("test", "s", 1)).bin("a").set_to(1)
             .upsert(Key("other", "s", 2)).bin("a").set_to(2)
             .execute()
         )
-        assert pac.commits == []
-        assert pac.batch_policies[0].txn is None
+        assert pnc.commits == []
+        assert pnc.batch_policies[0].txn is None
 
     def test_failed_wrapped_batch_reports_every_row_as_failed(self):
         # The transaction aborted, so nothing was written and no row may
         # claim success. A client-side rejection carries no server result
         # code, so the rows read OK — the attached exception is the signal.
-        pac = _RecordingBatchClient()
+        pnc = _RecordingBatchClient()
 
         def failing_batch(keys, ops_per_key, batch_policy=None, write_policy=None):
-            raise PacAerospikeError("client rejected the command")
+            raise PncAerospikeError("client rejected the command")
 
-        pac.batch_operate_blocking = failing_batch
-        builder = _write_chain_builder(pac, self._sdk_client())
+        pnc.batch_operate_blocking = failing_batch
+        builder = _write_chain_builder(pnc, self._sdk_client())
         chain = builder._start_write_segment("upsert", self._keys()).bin("a").set_to(1)
         rows = list(chain.execute())
 
-        assert len(pac.aborts) == 1
-        assert pac.commits == []
+        assert len(pnc.aborts) == 1
+        assert pnc.commits == []
         assert len(rows) == 2
         assert not any(row.is_ok for row in rows)
         for row in rows:

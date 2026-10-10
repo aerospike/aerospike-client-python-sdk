@@ -16,7 +16,7 @@ import gc
 import threading
 from types import SimpleNamespace
 
-from aerospike_async import (
+from aerospike_native import (
     HllOperation,
     ListOperation,
     ListPolicy,

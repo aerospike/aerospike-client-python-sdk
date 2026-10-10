@@ -44,7 +44,7 @@ def parse_index_list(
     ``bin`` is preserved as ``""`` rather than dropping the index.
 
     Args:
-        raw_responses: ``{node: {info_key: value}}`` from PAC info-on-all-nodes.
+        raw_responses: ``{node: {info_key: value}}`` from PNC info-on-all-nodes.
         namespace: When set, keep only indexes in this namespace.
     """
     index_map: Dict[str, Dict[str, str]] = {}

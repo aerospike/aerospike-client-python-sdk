@@ -78,7 +78,7 @@ def test_sync_list_indexes_via_cluster_and_session(aerospike_host):
 
 
 def test_sync_expression_index_create_and_drop(aerospike_host):
-    """Sync smoke for expression-based index creation (blocking PAC entry)."""
+    """Sync smoke for expression-based index creation (blocking PNC entry)."""
     if ":" in aerospike_host:
         hostname, port_str = aerospike_host.split(":", 1)
         port = int(port_str)

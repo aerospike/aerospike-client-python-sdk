@@ -67,7 +67,7 @@ from tests.integration.query_selection_helpers import (
     index_range_bound,
     index_range_ktype,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 SCOPE_DS = DataSet.of(NS, SCOPE_SET_NAME)
 _GEO_MATCH = f"geoCompare($.{SCOPE_LOC_BIN}, geoJson('{SCOPE_MATCH_POINT}'))"
@@ -88,9 +88,9 @@ class TestQuerySelectionExplainScope:
         self, query_selection_cluster,
     ):
         client = query_selection_cluster.client
-        pac = client.underlying_client
+        pnc = client.underlying_client
         plan = await explain_plan_async(
-            pac, "$.age == 25", set_name=SCOPE_SET_NAME,
+            pnc, "$.age == 25", set_name=SCOPE_SET_NAME,
         )
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -102,9 +102,9 @@ class TestQuerySelectionExplainScope:
         self, query_selection_cluster,
     ):
         client = query_selection_cluster.client
-        pac = client.underlying_client
+        pnc = client.underlying_client
         plan = await explain_plan_async(
-            pac, "$.country == 'US'", set_name=SCOPE_SET_NAME,
+            pnc, "$.country == 'US'", set_name=SCOPE_SET_NAME,
         )
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
@@ -116,9 +116,9 @@ class TestQuerySelectionExplainScope:
         self, query_selection_cluster,
     ):
         client = query_selection_cluster.client
-        pac = client.underlying_client
+        pnc = client.underlying_client
         where = f"$.{SCOPE_BLOB_BIN} == x'{blob_hex_literal(SCOPE_BLOB_BYTES)}'"
-        plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
+        plan = await explain_plan_async(pnc, where, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_BLOB_INDEX
@@ -129,9 +129,9 @@ class TestQuerySelectionExplainScope:
         self, query_selection_cluster,
     ):
         client = query_selection_cluster.client
-        pac = client.underlying_client
+        pnc = client.underlying_client
         where = f"$.{SCOPE_MAP_BIN}.{SCOPE_MAP_KEY}.exists() == true"
-        plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
+        plan = await explain_plan_async(pnc, where, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_MAP_INDEX
@@ -152,8 +152,8 @@ class TestQuerySelectionExplainScope:
     async def test_explain_selects_default_secondary_index(
         self, query_selection_cluster, where, index_name,
     ):
-        pac = query_selection_cluster.client.underlying_client
-        plan = await explain_plan_async(pac, where, set_name=SCOPE_SET_NAME)
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pnc, where, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == index_name
@@ -170,8 +170,8 @@ class TestQuerySelectionExplainScope:
         STRING/BLOB one, so a large region must not fall back to a scan.
         """
         assert len(SCOPE_LARGE_REGION) > STRING_BOUND_MAX
-        pac = query_selection_cluster.client.underlying_client
-        plan = await explain_plan_async(pac, _LARGE_REGION_MATCH, set_name=SCOPE_SET_NAME)
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pnc, _LARGE_REGION_MATCH, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_PT_INDEX
@@ -188,8 +188,8 @@ class TestQuerySelectionExplainScope:
         truncated or stale bound would still look like a well-formed range;
         only the bytes themselves catch it.
         """
-        pac = query_selection_cluster.client.underlying_client
-        plan = await explain_plan_async(pac, _LARGE_REGION_MATCH, set_name=SCOPE_SET_NAME)
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pnc, _LARGE_REGION_MATCH, set_name=SCOPE_SET_NAME)
         range_bytes = plan.index_range_bytes
 
         assert index_range_bin_name(range_bytes) == SCOPE_PT_BIN
@@ -204,8 +204,8 @@ class TestQuerySelectionExplainScope:
 
         An expression index has no bin, so its range carries an empty bin name.
         """
-        pac = query_selection_cluster.client.underlying_client
-        plan = await explain_plan_async(pac, _EXP_ARITH_MATCH, set_name=SCOPE_SET_NAME)
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pnc, _EXP_ARITH_MATCH, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == SCOPE_AGE_PLUS_INDEX
@@ -222,8 +222,8 @@ class TestQuerySelectionExplainScope:
         a client expression, so the two never compare equal; the predicate still
         evaluates as a residual filter.
         """
-        pac = query_selection_cluster.client.underlying_client
-        plan = await explain_plan_async(pac, _UPPER_MATCH, set_name=SCOPE_SET_NAME)
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await explain_plan_async(pnc, _UPPER_MATCH, set_name=SCOPE_SET_NAME)
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None

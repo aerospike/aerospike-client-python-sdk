@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from aerospike_async import CTX, FilterExpression, GeoJSON, IndexType
+from aerospike_native import CTX, FilterExpression, GeoJSON, IndexType
 
 from aerospike_sdk import CollectionIndexType, DataSet, Exp, StringWriteFlags
 
@@ -343,14 +343,14 @@ async def seed_query_selection_async(
     for set_name in _QUERY_SELECTION_SETS:
         await session.truncate(DataSet.of(NS, set_name))
 
-    pac = client.underlying_client
+    pnc = client.underlying_client
     for seed in _ALL_SEEDS:
         ds = DataSet.of(NS, seed.set_name)
 
         async def make_indexes(seed=seed):
             for ix in seed.indexes:
                 await create_index_quiet_async(
-                    pac,
+                    pnc,
                     set_name=seed.set_name,
                     bin_name=ix.bin_name,
                     index_name=ix.index_name,
@@ -379,14 +379,14 @@ def seed_query_selection_sync(
     for set_name in _QUERY_SELECTION_SETS:
         session.truncate(DataSet.of(NS, set_name))
 
-    pac = client.underlying_client
+    pnc = client.underlying_client
     for seed in _ALL_SEEDS:
         ds = DataSet.of(NS, seed.set_name)
 
         def make_indexes(seed=seed):
             for ix in seed.indexes:
                 create_index_quiet_blocking(
-                    pac,
+                    pnc,
                     set_name=seed.set_name,
                     bin_name=ix.bin_name,
                     index_name=ix.index_name,

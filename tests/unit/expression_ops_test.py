@@ -26,7 +26,7 @@ import pytest
 from unittest.mock import MagicMock, call, patch
 
 from aerospike_sdk import Behavior, Exp, Key
-from aerospike_async import ExpReadFlags, ExpWriteFlags, FilterExpression
+from aerospike_native import ExpReadFlags, ExpWriteFlags, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
     QueryBinBuilder,
@@ -206,7 +206,7 @@ class TestDatasetQueryProjection:
         )
         qb.bin("ev").select_from(Exp.num_add([Exp.int_bin("A"), Exp.int_val(4)]))
         # A dataset query carries bin-level reads as its ops projection
-        # instead of rejecting them; PAC's set_operations would reject a
+        # instead of rejecting them; PNC's set_operations would reject a
         # non-operation, so building the statement is the check.
         qb._build_dataset_read_statement()
         assert len(qb._operations) == 1

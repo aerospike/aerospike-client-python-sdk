@@ -26,7 +26,7 @@ from collections import Counter
 from aerospike_sdk import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 PART_SET = "query_partition"
 HOT_SET = "query_partition_hot"

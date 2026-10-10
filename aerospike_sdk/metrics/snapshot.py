@@ -30,8 +30,8 @@ import sys
 import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
-from aerospike_async import (
-    ClusterMetrics as _PacClusterMetrics,
+from aerospike_native import (
+    ClusterMetrics as _PncClusterMetrics,
     LatencyUnit,
     NodeMetricsSnapshot,
 )
@@ -162,12 +162,12 @@ class MetricsSnapshot:
     """
 
     __slots__ = (
-        "_pac", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
+        "_pnc", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
     )
 
     def __init__(
         self,
-        pac_metrics: _PacClusterMetrics,
+        pnc_metrics: _PncClusterMetrics,
         *,
         policy: Optional[MetricsPolicy] = None,
         nodes: Optional[List[Any]] = None,
@@ -176,10 +176,10 @@ class MetricsSnapshot:
         app_id: Optional[str] = None,
         process: Optional[Tuple[float, int]] = None,
     ) -> None:
-        """Wrap a raw PAC snapshot.
+        """Wrap a raw PNC snapshot.
 
         Args:
-            pac_metrics: The snapshot from the underlying client.
+            pnc_metrics: The snapshot from the underlying client.
             policy: Policy in effect, supplying the histogram shape that the
                 snapshot itself does not carry.
             nodes: Live cluster nodes, joined by host to name the nodes in
@@ -191,7 +191,7 @@ class MetricsSnapshot:
                 carries none, normally the authenticated user. ``None`` falls
                 back to ``"not-set"``.
         """
-        self._pac = pac_metrics
+        self._pnc = pnc_metrics
         self._policy = policy
         self._nodes = nodes
         self._usage = usage or {}
@@ -209,7 +209,7 @@ class MetricsSnapshot:
         the tracker remembers what was already reported. A snapshot pulled
         outside the export cycle carries an empty ``nodes_departed``.
         """
-        raw = self._pac.to_dict()
+        raw = self._pnc.to_dict()
         snapshot_hosts = [
             host for host, value in raw.items()
             if isinstance(value, Mapping) and ":" in host
@@ -224,32 +224,32 @@ class MetricsSnapshot:
     @property
     def nodes(self) -> Dict[str, NodeMetricsSnapshot]:
         """Per-node snapshots keyed by host address."""
-        return self._pac.nodes
+        return self._pnc.nodes
 
     @property
     def cluster_aggregated(self) -> NodeMetricsSnapshot:
         """All node snapshots aggregated into one view."""
-        return self._pac.cluster_aggregated
+        return self._pnc.cluster_aggregated
 
     @property
     def total_nodes(self) -> int:
         """Number of nodes in the snapshot."""
-        return self._pac.total_nodes
+        return self._pnc.total_nodes
 
     @property
     def open_connections(self) -> int:
         """Open connections across the cluster (point-in-time gauge)."""
-        return self._pac.open_connections
+        return self._pnc.open_connections
 
     @property
     def exceeded_max_retries(self) -> int:
         """Commands that failed after exhausting max retries (cumulative)."""
-        return self._pac.exceeded_max_retries
+        return self._pnc.exceeded_max_retries
 
     @property
     def exceeded_total_timeout(self) -> int:
         """Commands that failed on total timeout (cumulative)."""
-        return self._pac.exceeded_total_timeout
+        return self._pnc.exceeded_total_timeout
 
     @property
     def command_retries(self) -> int:
@@ -266,7 +266,7 @@ class MetricsSnapshot:
             snapshot = cluster.metrics()
             retries_per_call = snapshot.command_retries / max(snapshot.command_count, 1)
         """
-        aggregated = self._pac.cluster_aggregated
+        aggregated = self._pnc.cluster_aggregated
         if aggregated is None:
             return 0
         return aggregated.transaction_retry_count
@@ -353,7 +353,7 @@ class MetricsSnapshot:
         client's own (hyphenated), which is why this is not the shape
         exporters consume — see :meth:`to_canonical_dict`.
         """
-        return self._pac.to_dict()
+        return self._pnc.to_dict()
 
     def to_canonical_dict(self) -> Dict[str, Any]:
         """The snapshot in the cross-SDK structured form exporters consume.
@@ -395,7 +395,7 @@ class MetricsSnapshot:
         See Also:
             :meth:`to_dict`: The underlying client's own serialization.
         """
-        raw = self._pac.to_dict()
+        raw = self._pnc.to_dict()
         aggregated = raw.get("cluster_aggregated_metrics") or {}
         labels = _split_labels(aggregated.get("labels") or [])
 

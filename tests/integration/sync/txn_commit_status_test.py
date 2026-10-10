@@ -28,7 +28,7 @@ import time
 
 import pytest
 
-from aerospike_async import TxnState
+from aerospike_native import TxnState
 from aerospike_sdk import DataSet
 from aerospike_sdk.sync import ClusterDefinition
 from aerospike_sdk.exceptions import CommitError, ResultCode, TransactionError

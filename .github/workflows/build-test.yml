@@ -19,7 +19,7 @@ on:
 
 permissions:
   contents: read
-  # OIDC token exchange with Artifactory (PAC wheel download).
+  # OIDC token exchange with Artifactory (PNC wheel download).
   id-token: write
 
 env:
@@ -34,11 +34,11 @@ env:
   AEROSPIKE_SERVER_REPO: database-docker-test-local/aerospike-server-enterprise
 
 jobs:
-  # Advisory only (never fails the build): confirm the pinned PAC dev version
+  # Advisory only (never fails the build): confirm the pinned PNC dev version
   # actually exists in the internal dev repo, so a bad pin surfaces as a clear
   # warning instead of a cryptic install failure in every matrix job.
-  pac-pin-check:
-    name: PAC pin availability (advisory)
+  pnc-pin-check:
+    name: PNC pin availability (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,19 +52,19 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      - name: Check the pinned PAC version exists in the dev repo
+      - name: Check the pinned PNC version exists in the dev repo
         run: |
           set -euo pipefail
-          version=$(grep -oE 'aerospike-async==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-async==//')
-          echo "Pinned PAC version: $version"
-          count=$(jf rt search "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-async/${version}/*.whl" --count || echo 0)
+          version=$(grep -oE 'aerospike-native==[0-9A-Za-z.]+' pyproject.toml | head -1 | sed 's/aerospike-native==//')
+          echo "Pinned PNC version: $version"
+          count=$(jf rt search "${{ vars.JFROG_PROJECT }}-pypi-dev-local/aerospike-native/${version}/*.whl" --count || echo 0)
           echo "Wheels found for $version: $count"
           if [ "$count" = "0" ]; then
-            echo "::warning title=PAC pin not found in dev repo::aerospike-async==${version} has no wheels in ${{ vars.JFROG_PROJECT }}-pypi-dev-local. Fix the pin in pyproject.toml or publish the version from PAC."
+            echo "::warning title=PNC pin not found in dev repo::aerospike-native==${version} has no wheels in ${{ vars.JFROG_PROJECT }}-pypi-dev-local. Fix the pin in pyproject.toml or publish the version from PNC."
           fi
 
   # Lint gate: fails the build on any ruff error, so the tree-wide cleanup can't
-  # regress. Pure static check — no server or PAC dev-index needed. Ruff is
+  # regress. Pure static check — no server or PNC dev-index needed. Ruff is
   # pinned so a new release adding rules can't spuriously break CI.
   lint:
     name: Ruff lint
@@ -83,9 +83,9 @@ jobs:
       - name: Ruff check
         run: ruff check .
 
-  # PAC dev builds exist only for the newest Python, so day-to-day PRs do not
+  # PNC dev builds exist only for the newest Python, so day-to-day PRs do not
   # run the SDK on older versions. This catches the likeliest break there --
-  # syntax newer than the floor -- without needing PAC.
+  # syntax newer than the floor -- without needing PNC.
   syntax-floor:
     name: Python 3.11 syntax
     runs-on: ubuntu-latest
@@ -104,9 +104,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Day-to-day PRs test the Pythons the PAC dev channel publishes;
+        # Day-to-day PRs test the Pythons the PNC dev channel publishes;
         # release PRs (into main) test every supported version against the
-        # public PAC release. The 3.11 syntax gate below covers the gap on
+        # public PNC release. The 3.11 syntax gate below covers the gap on
         # every PR.
         python: ${{ fromJSON((github.base_ref == 'main' || inputs.all-pythons) && '["3.11","3.12","3.13","3.14","3.15"]' || '["3.14","3.15"]') }}
       fail-fast: false
@@ -128,7 +128,7 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
+      # The pinned aerospike-native dev version resolves from the internal
       # PyPI index (OIDC-minted credentials); everything else comes from
       # public PyPI. --only-binary keeps a missing wheel from degrading
       # into a confusing source build of the Rust extension.
@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install ".[dev]" --only-binary aerospike-native \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       # The fail-under floor sits below the current unit-only figure so churn
@@ -194,7 +194,7 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
+      # The pinned aerospike-native dev version resolves from the internal
       # PyPI index (OIDC-minted credentials); everything else comes from
       # public PyPI. --only-binary keeps a missing wheel from degrading
       # into a confusing source build of the Rust extension.
@@ -205,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install ".[dev]" --only-binary aerospike-native \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Run canonical code examples
@@ -259,7 +259,7 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
+      # The pinned aerospike-native dev version resolves from the internal
       # PyPI index (OIDC-minted credentials); everything else comes from
       # public PyPI. --only-binary keeps a missing wheel from degrading
       # into a confusing source build of the Rust extension.
@@ -270,7 +270,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install ".[dev]" --only-binary aerospike-native \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Verify GIL stays disabled after import
@@ -320,7 +320,7 @@ jobs:
           oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
           oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
 
-      # The pinned aerospike-async dev version resolves from the internal
+      # The pinned aerospike-native dev version resolves from the internal
       # PyPI index (OIDC-minted credentials); everything else comes from
       # public PyPI. --only-binary keeps a missing wheel from degrading
       # into a confusing source build of the Rust extension.
@@ -331,7 +331,7 @@ jobs:
         run: |
           set -euo pipefail
           user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
-          pip install ".[dev]" --only-binary aerospike-async \
+          pip install ".[dev]" --only-binary aerospike-native \
             --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
 
       - name: Verify GIL stays disabled after import

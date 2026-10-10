@@ -16,15 +16,15 @@
 """RecordStream — pure-sync iterator of :class:`RecordResult` rows.
 
 Does not wrap an async :class:`aerospike_sdk.record_stream.RecordStream`. Sources are sync iterables —
-typically a PAC :class:`Recordset`, a list of ``BatchRecord``, or a
+typically a PNC :class:`Recordset`, a list of ``BatchRecord``, or a
 materialized list of :class:`RecordResult`.
 
 Factory classmethods mirror :class:`aerospike_sdk.record_stream.RecordStream`
 so callers that already use ``_from_list`` / ``_from_single`` /
 ``_from_error`` / ``chain`` keep the same shape. The
-producer adapters that wrap a live PAC recordset / batch stream are private
-plumbing (``_from_pac_recordset`` / ``_from_chunked_pac_recordset`` /
-``_from_pac_batch_stream``), driven by the query/batch dispatch code.
+producer adapters that wrap a live PNC recordset / batch stream are private
+plumbing (``_from_pnc_recordset`` / ``_from_chunked_pnc_recordset`` /
+``_from_pnc_batch_stream``), driven by the query/batch dispatch code.
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 
-from aerospike_async import Key, ResultCode
+from aerospike_native import Key, ResultCode
 from aerospike_sdk.exceptions import (
     AerospikeError,
-    _convert_pac_exception,
+    _convert_pnc_exception,
     _result_code_to_exception,
 )
 from aerospike_sdk.record_result import RecordResult
@@ -45,7 +45,7 @@ from aerospike_sdk.loggers import SdkLoggers
 log = logging.getLogger(SdkLoggers.RECORD_STREAM)
 
 if TYPE_CHECKING:
-    from aerospike_async import Record
+    from aerospike_native import Record
     from aerospike_sdk.error_strategy import ErrorHandler
 
 
@@ -69,12 +69,12 @@ class RecordStream:
 
     __slots__ = (
         "_source", "_closed", "_single_result",
-        # Underlying closeable PAC producer (BatchRecordStream / Recordset)
+        # Underlying closeable PNC producer (BatchRecordStream / Recordset)
         # when lazily fed from one; None for materialized sources. close()
         # forwards to it for deterministic release. See the async
         # RecordStream for the full rationale.
         "_closeable",
-        # Chunked-recordset state (set by _from_chunked_pac_recordset; left
+        # Chunked-recordset state (set by _from_chunked_pnc_recordset; left
         # unset for non-chunked streams). Slotted to allow assignment.
         "_chunked", "_chunk_recordset", "_chunk_reexecute",
         "_chunk_limit", "_chunk_count", "_chunk_first", "_counter_ref",
@@ -94,19 +94,19 @@ class RecordStream:
         return cls(iter(results))
 
     @classmethod
-    def _from_pac_batch_stream(
-        cls, pac_stream: Any, on_error: "ErrorHandler | None" = None,
+    def _from_pnc_batch_stream(
+        cls, pnc_stream: Any, on_error: "ErrorHandler | None" = None,
     ) -> "RecordStream":
-        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (sync iter) — internal plumbing.
+        """Lazy-feed adapter over a PNC ``BatchRecordStream`` (sync iter) — internal plumbing.
 
-        See :meth:`aerospike_sdk.record_stream.RecordStream._from_pac_batch_stream`
+        See :meth:`aerospike_sdk.record_stream.RecordStream._from_pnc_batch_stream`
         for the contract. This sync variant pulls ``(idx, BatchRecord)``
-        tuples via PAC's blocking ``__iter__``/``__next__`` and maps each
+        tuples via PNC's blocking ``__iter__``/``__next__`` and maps each
         to a :class:`RecordResult` with ``index=idx`` (NOT enumeration —
         completion order can differ from input order).
 
         Args:
-            pac_stream: PAC ``BatchRecordStream`` (sync iter) to drain.
+            pnc_stream: PNC ``BatchRecordStream`` (sync iter) to drain.
             on_error: Optional ``(key, index, exception) -> None`` callback.
                 When set, per-key failures are dispatched to the handler
                 and excluded from the returned stream; cluster-level errors
@@ -114,7 +114,7 @@ class RecordStream:
         """
         def _gen() -> Iterator[RecordResult]:
             try:
-                for idx, br in pac_stream:
+                for idx, br in pnc_stream:
                     rc = br.result_code
                     if rc is None:
                         rc = ResultCode.OK
@@ -140,19 +140,19 @@ class RecordStream:
                         exp_trace=exp_trace,
                     )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
             finally:
                 # Release on exhaustion / early GeneratorExit even without an
                 # explicit close() (e.g. the consumer breaks out of the loop).
-                pac_stream.close()
+                pnc_stream.close()
 
         inst = cls(_gen())
-        inst._closeable = pac_stream
+        inst._closeable = pnc_stream
         return inst
 
     @classmethod
-    def _from_pac_recordset(cls, recordset: Any) -> "RecordStream":
-        """Wrap a PAC ``Recordset`` (sync ``__iter__`` / ``__next__``) — internal plumbing.
+    def _from_pnc_recordset(cls, recordset: Any) -> "RecordStream":
+        """Wrap a PNC ``Recordset`` (sync ``__iter__`` / ``__next__``) — internal plumbing.
 
         Each yielded ``Record`` becomes an OK :class:`RecordResult` with
         ``index=-1`` (queries have no positional index).
@@ -169,7 +169,7 @@ class RecordStream:
                         key=key, record=record, result_code=ResultCode.OK,
                     )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
             finally:
                 recordset.close()
         inst = cls(_gen())
@@ -177,13 +177,13 @@ class RecordStream:
         return inst
 
     @classmethod
-    def _from_chunked_pac_recordset(
+    def _from_chunked_pnc_recordset(
         cls,
         recordset: Any,
         reexecute: Callable[[Any], Any],
         limit: int = 0,
     ) -> "RecordStream":
-        """Wrap a PAC ``Recordset`` for chunked iteration — internal plumbing.
+        """Wrap a PNC ``Recordset`` for chunked iteration — internal plumbing.
 
         ``reexecute`` is a *sync* callable that takes the current
         :class:`PartitionFilter` and returns the next ``Recordset`` (or
@@ -392,10 +392,10 @@ class RecordStream:
         if 0 < self._chunk_limit <= self._chunk_count:  # type: ignore[attr-defined]
             return False
 
-        # PAC's async `partition_filter()` can't be awaited on the blocking
+        # PNC's async `partition_filter()` can't be awaited on the blocking
         # path, so the sync cursor is read via `partition_filter_sync()` (it
-        # blocks on PAC's per-thread runtime). The getattr guard keeps this
-        # degrading cleanly — rather than raising — against a PAC too old to
+        # blocks on PNC's per-thread runtime). The getattr guard keeps this
+        # degrading cleanly — rather than raising — against a PNC too old to
         # expose it; the pin requires a build that does.
         pf_getter = getattr(self._chunk_recordset, "partition_filter_sync", None)  # type: ignore[attr-defined]
         if pf_getter is None:
@@ -410,7 +410,7 @@ class RecordStream:
                 return False
             new_recordset = self._chunk_reexecute(pf)  # type: ignore[attr-defined]
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
         if new_recordset is None:
             return False
         # The prior chunk's recordset is consumed and its cursor read;
@@ -442,4 +442,4 @@ def _chunked_iter(
                 key=key, record=record, result_code=ResultCode.OK,
             )
     except Exception as e:
-        raise _convert_pac_exception(e) from e
+        raise _convert_pnc_exception(e) from e

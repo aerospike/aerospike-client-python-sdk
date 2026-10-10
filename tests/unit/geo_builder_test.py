@@ -50,7 +50,7 @@ class TestWriteBinBuilderSetToGeoJson:
         assert len(qb._operations) == 1
         # The queued Operation.put wraps a GeoJSON value, not a raw str.
         # We can't introspect Operation internals directly, but the call
-        # would fail if PAC rejected the type.
+        # would fail if PNC rejected the type.
 
     def test_chaining_to_next_bin(self):
         qb = _make_qb()

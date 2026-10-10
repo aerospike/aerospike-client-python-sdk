@@ -19,11 +19,11 @@ from __future__ import annotations
 
 from typing import List, Optional, Union, overload
 
-from aerospike_async import Key
+from aerospike_native import Key
 
 
 class DataSet:
-    """Pair a namespace and set name for building :class:`~aerospike_async.Key` values.
+    """Pair a namespace and set name for building :class:`~aerospike_native.Key` values.
 
     Use :meth:`of` as the factory, then :meth:`id` for one key or :meth:`ids` for
     many. Pass keys to :meth:`~aerospike_sdk.aio.session.Session.query`,
@@ -112,13 +112,13 @@ class DataSet:
         return self._set_name
 
     def id(self, identifier: Union[str, int, bytes]) -> Key:
-        """Build one :class:`~aerospike_async.Key` for this namespace and set.
+        """Build one :class:`~aerospike_native.Key` for this namespace and set.
 
         Args:
             identifier: User key value (string, integer, or bytes).
 
         Returns:
-            A :class:`~aerospike_async.Key` bound to this dataset's namespace/set.
+            A :class:`~aerospike_native.Key` bound to this dataset's namespace/set.
 
         Example::
 
@@ -230,7 +230,7 @@ class DataSet:
                 identifiers.
 
         Returns:
-            A list of :class:`~aerospike_async.Key` instances in input order.
+            A list of :class:`~aerospike_native.Key` instances in input order.
 
         Raises:
             TypeError: If list elements are not supported key types.

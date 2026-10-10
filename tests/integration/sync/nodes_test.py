@@ -15,7 +15,7 @@
 
 """Sync cluster membership and per-node access.
 
-The sync node dispatches through PAC's ``*_blocking`` node entries rather than
+The sync node dispatches through PNC's ``*_blocking`` node entries rather than
 the awaitables the async suite covers.
 """
 

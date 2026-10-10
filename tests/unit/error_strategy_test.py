@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from aerospike_sdk import Behavior, Key
-from aerospike_async import Expiration, FilterExpression
+from aerospike_native import Expiration, FilterExpression
 from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode, TimeoutError
 
 from aerospike_sdk.aio.operations.query import QueryBuilder, WriteSegmentBuilder
@@ -215,7 +215,7 @@ class TestRecordResultException:
 
 class TestCodeLessFailureRows:
     """A failure the client cannot attribute to a code (here a plain
-    ``ValueError`` escaping PAC) reports ``CLIENT_ERROR``, never ``OK``."""
+    ``ValueError`` escaping PNC) reports ``CLIENT_ERROR``, never ``OK``."""
 
     async def test_single_key_in_stream_row(self):
         qb = QueryBuilder(client=MagicMock(), namespace="test", set_name="test", behavior=Behavior.DEFAULT)

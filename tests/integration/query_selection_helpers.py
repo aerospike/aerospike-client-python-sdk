@@ -23,7 +23,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 import pytest
-from aerospike_async import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
+from aerospike_native import QuerySelection, QueryWhereFlags  # noqa: F401 — re-exported for integration tests
 from aerospike_sdk import AerospikeError, DataSet, QueryHint, ResultCode
 from tests.integration.namespace import general_namespace
 
@@ -187,11 +187,11 @@ def index_range_bound(range_bytes: bytes) -> bytes:
 
 
 def explain_where_flags(hint: Optional[QueryHint]) -> Optional[int]:
-    """Map :class:`QueryHint` to PAC ``explain_where_flags`` (field ``44``)."""
+    """Map :class:`QueryHint` to PNC ``explain_where_flags`` (field ``44``)."""
     if hint is None:
         return None
     flags = QueryWhereFlags.EXPLAIN
-    # PAC-level helper: pass through only an explicit disallow. Resolving an
+    # PNC-level helper: pass through only an explicit disallow. Resolving an
     # unset hint against the Behavior happens in the SDK layer, not here, so
     # unset hints leave the primary-index fallback available.
     if hint.allow_scans_with_where is False:
@@ -203,10 +203,10 @@ def explain_where_flags(hint: Optional[QueryHint]) -> Optional[int]:
     return int(flags)
 
 
-async def explain_plan_async(pac, where: str, *, set_name: str = SET_NAME, hint=None):
-    """Run phase-1 explain via PAC ``query_explain``."""
+async def explain_plan_async(pnc, where: str, *, set_name: str = SET_NAME, hint=None):
+    """Run phase-1 explain via PNC ``query_explain``."""
     index_name_hint = hint.index_name if hint is not None else None
-    return await pac.query_explain(
+    return await pnc.query_explain(
         NS,
         where,
         set_name=set_name,
@@ -215,9 +215,9 @@ async def explain_plan_async(pac, where: str, *, set_name: str = SET_NAME, hint=
     )
 
 
-def explain_plan_blocking(pac, where: str, *, set_name: str = SET_NAME, hint=None):
+def explain_plan_blocking(pnc, where: str, *, set_name: str = SET_NAME, hint=None):
     index_name_hint = hint.index_name if hint is not None else None
-    return pac.query_explain_blocking(
+    return pnc.query_explain_blocking(
         NS,
         where,
         set_name=set_name,
@@ -227,7 +227,7 @@ def explain_plan_blocking(pac, where: str, *, set_name: str = SET_NAME, hint=Non
 
 
 async def create_index_quiet_async(
-    pac,
+    pnc,
     *,
     set_name: str,
     bin_name: Optional[str],
@@ -246,11 +246,11 @@ async def create_index_quiet_async(
     """
     try:
         if expression is not None:
-            task = await pac.create_index_using_expression(
+            task = await pnc.create_index_using_expression(
                 NS, set_name, index_name, index_type, expression, collection_type,
             )
         else:
-            task = await pac.create_index(
+            task = await pnc.create_index(
                 NS, set_name, bin_name, index_name, index_type, collection_type, ctx,
             )
     except Exception as exc:
@@ -261,7 +261,7 @@ async def create_index_quiet_async(
 
 
 def create_index_quiet_blocking(
-    pac,
+    pnc,
     *,
     set_name: str,
     bin_name: Optional[str],
@@ -274,11 +274,11 @@ def create_index_quiet_blocking(
     """Blocking sibling of :func:`create_index_quiet_async`."""
     try:
         if expression is not None:
-            task = pac.create_index_using_expression_blocking(
+            task = pnc.create_index_using_expression_blocking(
                 NS, set_name, index_name, index_type, expression, collection_type,
             )
         else:
-            task = pac.create_index_blocking(
+            task = pnc.create_index_blocking(
                 NS, set_name, bin_name, index_name, index_type, collection_type, ctx,
             )
     except Exception as exc:

@@ -32,7 +32,7 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 
 KEY_PREFIX = "qbops_"

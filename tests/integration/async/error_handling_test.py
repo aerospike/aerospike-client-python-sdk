@@ -45,7 +45,7 @@ from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
 from .durable_delete_support import delete_keys_durable
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 
 @pytest.fixture

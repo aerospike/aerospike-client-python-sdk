@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
 
-from aerospike_async import (
+from aerospike_native import (
     Client,
     ExecuteTask,
     Filter,
@@ -41,7 +41,7 @@ from aerospike_sdk.background_shared import (
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.query_shared import _BACKGROUND_IN_TXN_ERROR, _BinWriteSteps, _W
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.metrics import usage
 from aerospike_sdk.operations_shared import (
     _TTL_DONT_UPDATE,
@@ -74,7 +74,7 @@ class BackgroundTaskSession:
 
     From :meth:`~aerospike_sdk.aio.session.Session.background_task`. Each
     method returns a builder to add filters, bin operations or UDF arguments,
-    then ``await ...execute()`` for a server :class:`~aerospike_async.ExecuteTask`.
+    then ``await ...execute()`` for a server :class:`~aerospike_native.ExecuteTask`.
 
     Example::
 
@@ -287,7 +287,7 @@ class _BackgroundOperationBuilderBase:
         return self
 
     def filter(self, filter_obj: Filter) -> BackgroundOperationBuilder:
-        """Restrict the job with a secondary-index :class:`~aerospike_async.Filter`.
+        """Restrict the job with a secondary-index :class:`~aerospike_native.Filter`.
 
         The filter attaches to the query ``Statement``, so the server reaches the
         records through the index instead of scanning the set. It combines with
@@ -350,7 +350,7 @@ class _BackgroundOperationBuilderBase:
     def add_operation(self, op: Any) -> BackgroundOperationBuilder:
         """Append a prebuilt write operation to apply to each matching record.
 
-        Accepts any write operation from ``aerospike_async``: ``Operation``,
+        Accepts any write operation from ``aerospike_native``: ``Operation``,
         ``ExpOperation``, ``ListOperation``, ``MapOperation``,
         ``BitOperation``, ``HllOperation`` or ``StringOperation``, including
         ones built with a nested CDT context. The server rejects read
@@ -451,7 +451,7 @@ class _BackgroundOperationBuilderBase:
         """Unsupported for background tasks (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def _pac_client(self) -> Client:
+    def _pnc_client(self) -> Client:
         fc = self._session._client
         if fc._client is None:
             raise RuntimeError("Client is not connected")
@@ -491,7 +491,7 @@ class _BackgroundOperationBuilderBase:
         return None
 
     def _execute_blocking(self) -> ExecuteTask:
-        """Blocking counterpart of :meth:`execute` — uses PAC ``query_operate_blocking``.
+        """Blocking counterpart of :meth:`execute` — uses PNC ``query_operate_blocking``.
 
         Internal: the sync tree's background builder is a wrapper over this
         class, and this is the terminal it drives. Async callers use
@@ -518,11 +518,11 @@ class _BackgroundOperationBuilderBase:
         )
         if self._filter is not None:
             statement.filters = [self._filter]
-        client = self._pac_client()
+        client = self._pnc_client()
         try:
             return client.query_operate_blocking(statement, ops, write_policy=wp)
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
 
 
@@ -547,12 +547,12 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
     )
 
     async def execute(self) -> ExecuteTask:
-        """Start the server job and return an :class:`~aerospike_async.ExecuteTask`.
+        """Start the server job and return an :class:`~aerospike_native.ExecuteTask`.
 
         Raises:
             ValueError: For update without bin operations.
             RuntimeError: If the SDK client is not connected.
-            AerospikeError: On PAC errors (converted).
+            AerospikeError: On PNC errors (converted).
 
         Example::
 
@@ -591,11 +591,11 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
         )
         if self._filter is not None:
             statement.filters = [self._filter]
-        client = self._pac_client()
+        client = self._pnc_client()
         try:
             return await client.query_operate(statement, ops, write_policy=wp)
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
 
 
@@ -724,7 +724,7 @@ class _BackgroundUdfBuilderBase:
         return self
 
     def filter(self, filter_obj: Filter) -> BackgroundUdfBuilder:
-        """Restrict the UDF job with a secondary-index :class:`~aerospike_async.Filter`.
+        """Restrict the UDF job with a secondary-index :class:`~aerospike_native.Filter`.
 
         The filter attaches to the query ``Statement``, so the server reaches the
         records through the index instead of scanning the set, and invokes the UDF
@@ -790,7 +790,7 @@ class _BackgroundUdfBuilderBase:
         """Unsupported (raises ``TypeError``)."""
         raise TypeError(_BG_UNSUPPORTED)
 
-    def _pac_client(self) -> Client:
+    def _pnc_client(self) -> Client:
         fc = self._session._client
         if fc._client is None:
             raise RuntimeError("Client is not connected")
@@ -805,7 +805,7 @@ class _BackgroundUdfBuilderBase:
         )
 
     def _execute_blocking(self) -> ExecuteTask:
-        """Blocking counterpart of :meth:`execute` — uses PAC ``query_execute_udf_blocking``.
+        """Blocking counterpart of :meth:`execute` — uses PNC ``query_execute_udf_blocking``.
 
         Internal: the sync tree's background UDF builder is a wrapper over
         this class, and this is the terminal it drives. Async callers use
@@ -829,7 +829,7 @@ class _BackgroundUdfBuilderBase:
         )
         if self._filter is not None:
             statement.filters = [self._filter]
-        client = self._pac_client()
+        client = self._pnc_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return client.query_execute_udf_blocking(
@@ -840,7 +840,7 @@ class _BackgroundUdfBuilderBase:
                 write_policy=wp,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
 
 
@@ -878,7 +878,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
 
         Raises:
             RuntimeError: If the client is not connected.
-            AerospikeError: On PAC errors (converted).
+            AerospikeError: On PNC errors (converted).
 
         Example::
 
@@ -915,7 +915,7 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
         )
         if self._filter is not None:
             statement.filters = [self._filter]
-        client = self._pac_client()
+        client = self._pnc_client()
         py_args: Optional[List[Any]] = list(self._args) if self._args is not None else None
         try:
             return await client.query_execute_udf(
@@ -926,5 +926,5 @@ class BackgroundUdfBuilder(_BackgroundUdfBuilderBase):
                 write_policy=wp,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 

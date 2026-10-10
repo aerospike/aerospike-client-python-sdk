@@ -3,7 +3,7 @@
 #
 # Runs the PSDK cells only: sync (fast-path + builder × 32t × FT/non-FT),
 # async single-loop, AsyncPool, and (optionally) the three batch sweeps.
-# Skips PAC, Rust core, and legacy cells.
+# Skips PNC, Rust core, and legacy cells.
 #
 # Typical wall time:
 #   - core 16 PSDK cells (sync + async + pool): ~5 min

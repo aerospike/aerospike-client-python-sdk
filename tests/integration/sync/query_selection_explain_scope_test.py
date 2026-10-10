@@ -34,7 +34,7 @@ from tests.integration.query_selection_helpers import (
     count_records_sync,
     explain_plan_blocking,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 
 

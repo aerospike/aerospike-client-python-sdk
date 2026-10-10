@@ -3,8 +3,8 @@
 Ultra-High-performance, developer-friendly interface for Aerospike. A dual first-class
 sync/async, Pythonic API — both high-performance — with a chainable session model,
 fluent query builder, and AEL string filters layered over the
-[Aerospike Python Async Client](https://pypi.org/project/aerospike-async/)
-(PAC) — with first-class free-threaded Python (`cp314t`) support for parallel-
+[Aerospike Python Native Client](https://pypi.org/project/aerospike-native/)
+(PNC) — with first-class free-threaded Python (`cp314t`) support for parallel-
 thread throughput well past what GIL-bound clients can sustain.
 
 > **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
@@ -27,10 +27,10 @@ the same surface. Both connect through `ClusterDefinition`.
 | Package | What it is |
 |---|---|
 | `aerospike-sdk` | this SDK - fluent, async-first, AEL string filters |
-| `aerospike-async` | the Python Async Client (PAC) this SDK is built on |
+| `aerospike-native` | the Python Native Client (PNC) this SDK is built on |
 | `aerospike` | the legacy client - a different API entirely |
 
-Write `aerospike_sdk` idioms. Importing `aerospike_async` types is correct only
+Write `aerospike_sdk` idioms. Importing `aerospike_native` types is correct only
 for the surfaces this SDK does not yet wrap - see Known traps.
 
 ### What to read, by task
@@ -94,7 +94,7 @@ This is an alpha and the code moves faster than the prose:
 3. `examples/` for idiomatic usage
 4. `docs/guide/` for concepts and the task map
 5. aerospike.com/docs for server-side semantics and version gates
-6. `aerospike-async` documentation for surfaces this SDK does not wrap
+6. `aerospike-native` documentation for surfaces this SDK does not wrap
 
 A guide that contradicts a docstring is stale, not authoritative. Report it.
 
@@ -110,10 +110,10 @@ A guide that contradicts a docstring is stale, not authoritative. Report it.
   from `aerospike_sdk` directly - see `docs/guide/expression-ael.md`. Removal
   of matching elements is supported (`CdtOperation.remove`); do not conclude
   it does not exist.
-* **Importing `aerospike_async` types is correct in exactly one documented case:**
+* **Importing `aerospike_native` types is correct in exactly one documented case:**
   the low-level exception types described in `docs/guide/error-handling.md`.
   Everywhere else, the `aerospike_sdk` re-exports cover it - `aerospike_sdk.Exp`
-  IS the low-level `FilterExpression`. (The string `"aerospike_async"` as a
+  IS the low-level `FilterExpression`. (The string `"aerospike_native"` as a
   logger name in logging config is fine - that is a name, not an import.)
 * **Fast-path is single-key only.** `session.get(key)` / `session.put(key, bins)`
   take no filters, no error-handler callbacks, and no batch semantics. Use the
@@ -158,8 +158,8 @@ Pin to a specific release if you need reproducible builds:
 pip install aerospike-sdk==0.9.0a5
 ```
 
-This installs the SDK plus its dependency on the Aerospike Python Async Client
-(`aerospike-async`). No Rust toolchain or git checkout required for ordinary
+This installs the SDK plus its dependency on the Aerospike Python Native Client
+(`aerospike-native`). No Rust toolchain or git checkout required for ordinary
 use — pre-built wheels are available for Linux, macOS, and Windows on Python
 3.11–3.15.
 
@@ -309,9 +309,9 @@ index is unconfigured or the token has expired, `--pre` quietly resolves the
 newest *public* pre-release instead and looks like it worked; an exact dev
 version fails loudly with "no matching distribution".
 
-The same index also serves the pinned `aerospike-async` (PAC) pre-release, so
-one credential setup resolves both. Adding `--only-binary aerospike-async` is
-worth it on unusual platforms: it turns a missing PAC wheel into a clear
+The same index also serves the pinned `aerospike-native` (PNC) pre-release, so
+one credential setup resolves both. Adding `--only-binary aerospike-native` is
+worth it on unusual platforms: it turns a missing PNC wheel into a clear
 resolution error instead of a slow source build that needs a Rust toolchain.
 Report bugs against the exact `aerospike_sdk.__version__` you installed.
 
@@ -386,11 +386,11 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
   floor rises in minor releases as versions reach end-of-life.
   Recommended installer: [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.14.5+freethreaded`)
   or [`pyenv`](https://github.com/pyenv/pyenv) with a dedicated environment.
-  Free-threaded PAC wheels (`cp314t`, `cp315t`) ship for Linux (x86_64, aarch64) and
+  Free-threaded PNC wheels (`cp314t`, `cp315t`) ship for Linux (x86_64, aarch64) and
   macOS arm64. (PyO3 0.29 dropped 3.13t support; PSDK's
   free-threaded build starts at 3.14t.)
 - **Aerospike server** — required for integration tests
-- **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Async Client from source (e.g. for an unreleased PAC feature)
+- **Rust toolchain** (`rustc` + `cargo`) — required only when building the Aerospike Python Native Client from source (e.g. for an unreleased PNC feature)
 
 ### Setting up a dev environment
 
@@ -398,14 +398,14 @@ any of this — `pip install aerospike-sdk` is sufficient to use the package.
 pip install -e ".[dev]"    # install with dev extras
 ```
 
-On the `stage` branch, the pinned `aerospike-async` (PAC) version may be a
+On the `stage` branch, the pinned `aerospike-native` (PNC) version may be a
 pre-release build published to Aerospike's internal package index rather
 than public PyPI. When it is, the plain install above needs one extra step that
 depends on who you are:
 
 **External contributors:** the internal index requires Aerospike
-credentials, but PAC's source is public — build it locally per
-[Local PAC checkout](#local-pac-checkout) below (requires a Rust
+credentials, but PNC's source is public — build it locally per
+[Local PNC checkout](#local-pnc-checkout) below (requires a Rust
 toolchain), then install this SDK with `--no-deps`. Released versions of
 `aerospike-sdk` on public PyPI depend only on public PyPI packages and
 need none of this.
@@ -421,16 +421,16 @@ CI does the equivalent with short-lived OIDC credentials; ReadTheDocs builds
 need `PIP_EXTRA_INDEX_URL` set as an environment variable in the RTD project
 dashboard.
 
-### Local PAC checkout
+### Local PNC checkout
 
-To build against a local Aerospike Python Async Client working tree —
-whether because you're changing PAC itself or because you don't have
+To build against a local Aerospike Python Native Client working tree —
+whether because you're changing PNC itself or because you don't have
 access to the internal index — install it editable first and pass
-`--no-deps` to this SDK so pip doesn't try to resolve the exact PAC pin
+`--no-deps` to this SDK so pip doesn't try to resolve the exact PNC pin
 from an index:
 
 ```bash
-pip install -e /path/to/aerospike-client-python-async
+pip install -e /path/to/aerospike-client-python-native
 pip install -e ".[dev]" --no-deps
 ```
 
@@ -506,33 +506,33 @@ bin/get-version    # prints 0.9.0-alpha.2
 # 3. Open a PR against stage with just this change.
 ```
 
-### Bumping the PAC pin
+### Bumping the PNC pin
 
 PSDK pins an exact
-[Aerospike Python Async Client](https://github.com/aerospike/aerospike-client-python-async)
-(`aerospike-async`) version in `pyproject.toml` under `[project] dependencies`.
+[Aerospike Python Native Client](https://github.com/aerospike/aerospike-client-python-native)
+(`aerospike-native`) version in `pyproject.toml` under `[project] dependencies`.
 Releases **must** pin a public PyPI version:
 
 ```toml
 [project]
 dependencies = [
-    "aerospike-async==0.6.0a6",
+    "aerospike-native==0.6.0a6",
     # ...other deps
 ]
 ```
 
 Between releases, `dev` may instead pin a dev-channel build from the internal
-index (e.g. `aerospike-async==0.6.0a7.dev75`) to pick up unreleased PAC work.
+index (e.g. `aerospike-native==0.6.0a7.dev75`) to pick up unreleased PNC work.
 
 To bump: change the version, reinstall, and confirm the environment matches:
 
 ```bash
-pip install "aerospike-async==<new version>"
+pip install "aerospike-native==<new version>"
 make check-pin
 ```
 
 Open the PR against `stage`. PSDK's own `VERSION` does not need to change for a
-PAC pin bump unless the underlying API contract has shifted enough to warrant
+PNC pin bump unless the underlying API contract has shifted enough to warrant
 it.
 
 ### Reading the version programmatically

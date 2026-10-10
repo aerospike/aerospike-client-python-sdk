@@ -116,7 +116,7 @@ class WorkloadConfig:
     knob for measuring whether a higher count earns its keep."""
     current_thread_runtime: bool = False
     """When True (sync mode only), SyncClient installs a thread-local proxy:
-    each bench worker thread gets its own PAC `LocalClient` backed by a
+    each bench worker thread gets its own PNC `LocalClient` backed by a
     per-thread `current_thread` Tokio runtime. Eliminates cross-thread sync
     per op vs the shared multi-thread runtime path. See
     `aerospike_sdk.sync._threadlocal_client` for tend-load caveats."""
@@ -274,13 +274,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=("async", "async-many", "sync", "pac-blocking", "pac-async", "legacy-sync"),
+        choices=("async", "async-many", "sync", "pnc-blocking", "pnc-async", "legacy-sync"),
         default="async",
         help="Client API style. 'async' / 'sync' use PSDK sessions. "
         "'async-many' uses the explicit get_many/put_many window API "
         "(see --many-size). "
-        "'pac-blocking' calls PAC's `_blocking` entries directly. "
-        "'pac-async' uses PAC's async client directly, bypassing PSDK. "
+        "'pnc-blocking' calls PNC's `_blocking` entries directly. "
+        "'pnc-async' uses PNC's async client directly, bypassing PSDK. "
         "'legacy-sync' uses the legacy `aerospike` C client. "
         "(default: %(default)s)",
     )
@@ -386,7 +386,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "for cluster discovery during tending. Only enable when the target "
         "cluster has `alternate-access-address` configured on its nodes — "
         "otherwise partition routing fails with 'Invalid cluster node' and "
-        "ops hang in PAC's retry loop. Pass `--services-alternate` to enable, "
+        "ops hang in PNC's retry loop. Pass `--services-alternate` to enable, "
         "`--no-services-alternate` to force-disable (overrides "
         "AEROSPIKE_USE_SERVICES_ALTERNATE from `aerospike.env` if set). "
         "When neither form is passed, falls back to that env var (default: "
@@ -464,7 +464,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--current-thread-runtime",
         action="store_true",
         default=False,
-        help="(sync mode) Install a thread-local PAC LocalClient per worker "
+        help="(sync mode) Install a thread-local PNC LocalClient per worker "
         "thread; each thread runs its own current_thread Tokio runtime + "
         "connection pool. Eliminates the cross-thread worker hop the shared "
         "multi-thread runtime imposes on every sync op. Recommended pairing: "

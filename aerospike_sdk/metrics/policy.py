@@ -22,10 +22,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from aerospike_async import (
+from aerospike_native import (
     CommandType,
     LatencyUnit,
-    MetricsPolicy as _PacMetricsPolicy,
+    MetricsPolicy as _PncMetricsPolicy,
     Sampler,
 )
 
@@ -46,7 +46,7 @@ class LatencyType(Enum):
     """Legacy five-way latency grouping, derived from the command categories.
 
     The canonical detail is the per-command-type breakdown
-    (:class:`~aerospike_async.CommandType`); these groups exist for
+    (:class:`~aerospike_native.CommandType`); these groups exist for
     compatibility with the classic latency views (``conn``/``write``/``read``/
     ``batch``/``query``) and are computed from the canonical histograms:
 
@@ -101,7 +101,7 @@ class MetricsPolicy:
     in milliseconds across 7 logarithmic buckets whose boundaries double per
     column (``<= 1``, ``> 1``, ``> 2``, ``> 4``, ``> 8``, ``> 16``, ``> 32``
     ms), with every command recorded. Choose
-    :attr:`~aerospike_async.LatencyUnit.MICROSECONDS` with more columns when
+    :attr:`~aerospike_native.LatencyUnit.MICROSECONDS` with more columns when
     sub-millisecond resolution matters.
 
     Re-enabling metrics with a changed latency unit or histogram shape
@@ -189,20 +189,20 @@ class MetricsPolicy:
         self.labels = labels if labels is not None else []
         self.usage_enabled = usage_enabled
 
-    def _to_pac(self) -> _PacMetricsPolicy:
-        """Translate to the PAC policy.
+    def _to_pnc(self) -> _PncMetricsPolicy:
+        """Translate to the PNC policy.
 
         ``usage_enabled`` is deliberately not passed on: usage counters are
         recorded in this SDK, not below it.
         """
-        pac = _PacMetricsPolicy()
-        pac.operational = self.operational_enabled
-        pac.latency_unit = self.latency_unit
-        pac.latency_columns = self.latency_columns
-        pac.latency_shift = self.latency_shift
-        pac.sampler = self.sampler
-        pac.labels = self.labels
-        return pac
+        pnc = _PncMetricsPolicy()
+        pnc.operational = self.operational_enabled
+        pnc.latency_unit = self.latency_unit
+        pnc.latency_columns = self.latency_columns
+        pnc.latency_shift = self.latency_shift
+        pnc.sampler = self.sampler
+        pnc.labels = self.labels
+        return pnc
 
     def __repr__(self) -> str:
         return (
@@ -257,12 +257,12 @@ def apply_metrics_settings(underlying_client: Any, settings: "MetricsSettings") 
     silently switched off by a file that is silent on the subject.
 
     Args:
-        underlying_client: The PAC client to enable or disable collection on.
+        underlying_client: The PNC client to enable or disable collection on.
         settings: The resolved ``metrics`` group.
     """
     if settings.enabled is None:
         return
     if settings.enabled:
-        underlying_client.enable_metrics(policy_from_settings(settings)._to_pac())
+        underlying_client.enable_metrics(policy_from_settings(settings)._to_pnc())
     else:
         underlying_client.disable_metrics()

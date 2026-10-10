@@ -42,7 +42,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aerospike_async import (
+from aerospike_native import (
     CommitLevel,
     Expiration,
     GenerationPolicy,
@@ -98,7 +98,7 @@ class _FakeBatchRecord:
 
 
 class _CapturedDeleteOp:
-    """Stand-in for the PAC ``BatchDeleteOp`` (native ops hide their fields)."""
+    """Stand-in for the PNC ``BatchDeleteOp`` (native ops hide their fields)."""
 
     def __init__(self, key, policy=None):
         self.key = key
@@ -106,7 +106,7 @@ class _CapturedDeleteOp:
 
 
 class _CapturedWriteOp:
-    """Stand-in for the PAC ``BatchWriteOp``."""
+    """Stand-in for the PNC ``BatchWriteOp``."""
 
     def __init__(self, key, operations, policy=None, bins=None):
         self.key = key
@@ -123,7 +123,7 @@ def _capture_batch_ops(monkeypatch):
 
 
 class _RecordingClient:
-    """Fake PAC blocking surface recording batch dispatch shapes."""
+    """Fake PNC blocking surface recording batch dispatch shapes."""
 
     def __init__(self):
         self.batch_delete_calls: list = []
@@ -150,9 +150,9 @@ class _RecordingClient:
         return [_FakeBatchRecord(k) for k in keys]
 
 
-def _builder(pac, namespace=AP_NS, behavior=Behavior.DEFAULT):
+def _builder(pnc, namespace=AP_NS, behavior=Behavior.DEFAULT):
     return SyncQueryBuilder(
-        client=pac,
+        client=pnc,
         namespace=namespace,
         set_name="s",
         behavior=behavior,
@@ -172,35 +172,35 @@ def _k_sc(i: int = 1) -> Key:
 class TestSingleNamespaceUnchanged:
 
     def test_sc_only_delete_stays_on_batch_delete_entry(self):
-        pac = _RecordingClient()
-        _builder(pac, namespace=SC_NS)._start_write_segment("delete", _k_sc(1), _k_sc(2)).execute()
-        assert len(pac.batch_delete_calls) == 1
-        assert pac.batch_mixed_calls == []
-        _, _, bdp = pac.batch_delete_calls[0]
+        pnc = _RecordingClient()
+        _builder(pnc, namespace=SC_NS)._start_write_segment("delete", _k_sc(1), _k_sc(2)).execute()
+        assert len(pnc.batch_delete_calls) == 1
+        assert pnc.batch_mixed_calls == []
+        _, _, bdp = pnc.batch_delete_calls[0]
         assert bdp is not None and bdp.durable_delete is True
 
     def test_ap_only_delete_stays_on_batch_delete_entry(self):
-        pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
-        assert len(pac.batch_delete_calls) == 1
-        assert pac.batch_mixed_calls == []
-        _, _, bdp = pac.batch_delete_calls[0]
+        pnc = _RecordingClient()
+        _builder(pnc, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
+        assert len(pnc.batch_delete_calls) == 1
+        assert pnc.batch_mixed_calls == []
+        _, _, bdp = pnc.batch_delete_calls[0]
         # No durable-delete default on AP and no other row settings.
         assert bdp is None or not bdp.durable_delete
 
 
 class TestMixedModeDelete:
 
-    def _rows(self, pac):
-        assert pac.batch_delete_calls == []
-        assert len(pac.batch_mixed_calls) == 1
-        ops, _ = pac.batch_mixed_calls[0]
+    def _rows(self, pnc):
+        assert pnc.batch_delete_calls == []
+        assert len(pnc.batch_mixed_calls) == 1
+        ops, _ = pnc.batch_mixed_calls[0]
         return ops
 
     def test_ap_first_ordering_resolves_per_row(self):
-        pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(), _k_sc()).execute()
-        ops = self._rows(pac)
+        pnc = _RecordingClient()
+        _builder(pnc, namespace=AP_NS)._start_write_segment("delete", _k_ap(), _k_sc()).execute()
+        ops = self._rows(pnc)
         assert [op.key.namespace for op in ops] == [AP_NS, SC_NS]
         assert all(isinstance(op, _CapturedDeleteOp) for op in ops)
         ap_policy, sc_policy = ops[0].policy, ops[1].policy
@@ -208,9 +208,9 @@ class TestMixedModeDelete:
         assert ap_policy is None or not ap_policy.durable_delete
 
     def test_sc_first_ordering_resolves_per_row(self):
-        pac = _RecordingClient()
-        _builder(pac, namespace=SC_NS)._start_write_segment("delete", _k_sc(), _k_ap()).execute()
-        ops = self._rows(pac)
+        pnc = _RecordingClient()
+        _builder(pnc, namespace=SC_NS)._start_write_segment("delete", _k_sc(), _k_ap()).execute()
+        ops = self._rows(pnc)
         assert [op.key.namespace for op in ops] == [SC_NS, AP_NS]
         sc_policy, ap_policy = ops[0].policy, ops[1].policy
         assert sc_policy is not None and sc_policy.durable_delete is True
@@ -220,16 +220,16 @@ class TestMixedModeDelete:
 class TestMixedModeWriteWithRecordDelete:
 
     def test_record_delete_rows_scope_durable_delete_per_mode(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac, namespace=AP_NS)
+            _builder(pnc, namespace=AP_NS)
             ._start_write_segment("upsert", _k_ap(), _k_sc())
             .delete_record()
             .execute()
         )
-        assert pac.batch_operate_calls == []
-        assert len(pac.batch_mixed_calls) == 1
-        ops, _ = pac.batch_mixed_calls[0]
+        assert pnc.batch_operate_calls == []
+        assert len(pnc.batch_mixed_calls) == 1
+        ops, _ = pnc.batch_mixed_calls[0]
         assert all(isinstance(op, _CapturedWriteOp) for op in ops)
         by_ns = {op.key.namespace: op.policy for op in ops}
         assert by_ns[SC_NS] is not None and by_ns[SC_NS].durable_delete is True
@@ -238,15 +238,15 @@ class TestMixedModeWriteWithRecordDelete:
     def test_plain_mixed_write_keeps_single_policy_entry(self):
         # No record-delete op: nothing row-level is mode-scoped, so the
         # single-policy batch_operate entry remains correct (and fast).
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac, namespace=AP_NS)
+            _builder(pnc, namespace=AP_NS)
             ._start_write_segment("upsert", _k_ap(), _k_sc())
             .bin("a").set_to(1)
             .execute()
         )
-        assert len(pac.batch_operate_calls) == 1
-        assert pac.batch_mixed_calls == []
+        assert len(pnc.batch_operate_calls) == 1
+        assert pnc.batch_mixed_calls == []
 
 
 class TestParentPolicyEscalation:
@@ -260,36 +260,36 @@ class TestParentPolicyEscalation:
         )
 
     def test_mixed_batch_parent_policy_uses_sc_settings(self):
-        pac = _RecordingClient()
-        builder = _builder(pac, namespace=AP_NS, behavior=self._behavior())
+        pnc = _RecordingClient()
+        builder = _builder(pnc, namespace=AP_NS, behavior=self._behavior())
         builder._start_write_segment("delete", _k_ap(), _k_sc()).execute()
-        _, bp = pac.batch_mixed_calls[0]
+        _, bp = pnc.batch_mixed_calls[0]
         assert bp is not None and bp.total_timeout == 5000
 
     def test_ap_only_batch_parent_policy_stays_ap(self):
-        pac = _RecordingClient()
-        builder = _builder(pac, namespace=AP_NS, behavior=self._behavior())
+        pnc = _RecordingClient()
+        builder = _builder(pnc, namespace=AP_NS, behavior=self._behavior())
         builder._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
-        _, _, bdp = pac.batch_delete_calls[0]
+        _, _, bdp = pnc.batch_delete_calls[0]
         # Parent policy comes back through the batch_delete entry.
-        _, bp, _ = pac.batch_delete_calls[0]
+        _, bp, _ = pnc.batch_delete_calls[0]
         assert bp is None or bp.total_timeout != 5000
 
 
 class TestMixedModeUdf:
 
     def test_udf_groups_by_mode_and_merges_in_request_order(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         keys = [_k_ap(1), _k_sc(1), _k_ap(2), _k_sc(2)]
         # Mirror the session's execute_udf entry: multi-key builder with the
         # UDF op type, wrapped in the function builder.
-        builder = _builder(pac, namespace=keys[0].namespace)
+        builder = _builder(pnc, namespace=keys[0].namespace)
         builder._keys = list(keys)
         builder._op_type = "execute_udf"
         results = UdfFunctionBuilder(builder).function("pkg", "fn").execute()
-        assert len(pac.batch_apply_calls) == 2
+        assert len(pnc.batch_apply_calls) == 2
         by_mode = {}
-        for call_keys, _, udf_policy in pac.batch_apply_calls:
+        for call_keys, _, udf_policy in pnc.batch_apply_calls:
             namespaces = {k.namespace for k in call_keys}
             assert len(namespaces) == 1  # one mode per call
             by_mode[namespaces.pop()] = udf_policy
@@ -308,55 +308,55 @@ def _commit_master():
     )
 
 
-def _run_udf_apply(pac, apply_verbs, behavior=Behavior.DEFAULT):
+def _run_udf_apply(pnc, apply_verbs, behavior=Behavior.DEFAULT):
     """Drive a two-key AP UDF apply; return the captured ``udf_policy``.
 
     *apply_verbs* receives the ``UdfBuilder`` to chain TTL/other verbs onto.
     """
-    builder = _builder(pac, namespace=AP_NS, behavior=behavior)
+    builder = _builder(pnc, namespace=AP_NS, behavior=behavior)
     builder._keys = [_k_ap(1), _k_ap(2)]
     builder._op_type = "execute_udf"
     ub = UdfFunctionBuilder(builder).function("m", "f")
     apply_verbs(ub)
     ub.execute()
-    return pac.batch_apply_calls[0][2]  # single AP mode -> one apply call
+    return pnc.batch_apply_calls[0][2]  # single AP mode -> one apply call
 
 
 class TestCommitLevel:
     """Non-default behavior commit level threads onto each batch sub-policy."""
 
     def test_batch_write_carries_non_default_commit_level(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac, behavior=_commit_master())
+            _builder(pnc, behavior=_commit_master())
             ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .insert(_k_ap(2)).put({"b": 2})
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].policy.commit_level == CommitLevel.COMMIT_MASTER
 
     def test_batch_delete_carries_non_default_commit_level(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac, behavior=_commit_master())
+            _builder(pnc, behavior=_commit_master())
             ._start_write_segment("delete", _k_ap(1), _k_ap(2))
             .execute()
         )
-        _, _, bdp = pac.batch_delete_calls[0]
+        _, _, bdp = pnc.batch_delete_calls[0]
         assert bdp is not None and bdp.commit_level == CommitLevel.COMMIT_MASTER
 
     def test_batch_udf_carries_non_default_commit_level(self):
-        pac = _RecordingClient()
-        up = _run_udf_apply(pac, lambda ub: None, behavior=_commit_master())
+        pnc = _RecordingClient()
+        up = _run_udf_apply(pnc, lambda ub: None, behavior=_commit_master())
         assert up is not None and up.commit_level == CommitLevel.COMMIT_MASTER
 
     def test_default_commit_level_keeps_no_policy_fast_path(self):
         # AP default resolves COMMIT_ALL, which equals core's own default, so a
         # plain batch delete needs no policy object at all.
-        pac = _RecordingClient()
-        _builder(pac, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
-        _, _, bdp = pac.batch_delete_calls[0]
+        pnc = _RecordingClient()
+        _builder(pnc, namespace=AP_NS)._start_write_segment("delete", _k_ap(1), _k_ap(2)).execute()
+        _, _, bdp = pnc.batch_delete_calls[0]
         assert bdp is None
 
 
@@ -364,29 +364,29 @@ class TestPlainWritePolicyReuse:
     """Plain write segments with identical settings share one row policy."""
 
     def test_identical_segments_share_one_policy(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac, behavior=_commit_master())
+            _builder(pnc, behavior=_commit_master())
             ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .insert(_k_ap(2)).put({"b": 2})
             .insert(_k_ap(3)).put({"b": 3})
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].policy is ops[1].policy is ops[2].policy
         assert ops[0].policy.record_exists_action == RecordExistsAction.CREATE_ONLY
         assert ops[0].policy.commit_level == CommitLevel.COMMIT_MASTER
 
     def test_segments_differing_in_verb_or_ttl_get_their_own_policy(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("insert", _k_ap(1)).put({"b": 1})
             .update(_k_ap(2)).put({"b": 2})
             .insert(_k_ap(3)).put({"b": 3}).expire_record_after_seconds(600)
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].policy.record_exists_action == RecordExistsAction.CREATE_ONLY
         assert ops[1].policy.record_exists_action == RecordExistsAction.UPDATE_ONLY
         assert ops[2].policy.expiration == Expiration.seconds(600)
@@ -395,42 +395,42 @@ class TestPlainWritePolicyReuse:
 
 
 class TestPutBinsHandoff:
-    """Leading ``put(bins)`` writes reach PAC as one dict, in operation order."""
+    """Leading ``put(bins)`` writes reach PNC as one dict, in operation order."""
 
     def test_leading_puts_merge_into_one_dict(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("upsert", _k_ap(1))
             .put({"name": "Tim", "age": 31}).put({"age": 32})
             .upsert(_k_ap(2)).put({"name": "Bob"})
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].bins == {"name": "Tim", "age": 32}
         assert ops[0].operations == []
         assert ops[1].bins == {"name": "Bob"}
 
     def test_caller_changes_after_put_do_not_leak(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         profile = {"name": "Tim"}
-        chain = _builder(pac)._start_write_segment("upsert", _k_ap(1)).put(profile)
+        chain = _builder(pnc)._start_write_segment("upsert", _k_ap(1)).put(profile)
         profile["name"] = "Bob"
         chain.upsert(_k_ap(2)).put(profile).execute()
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].bins == {"name": "Tim"}
         assert ops[1].bins == {"name": "Bob"}
 
     def test_puts_after_another_op_follow_it(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("upsert", _k_ap(1))
             .put({"name": "Tim"}).bin("visits").add(1).put({"name": "Bob"})
             .upsert(_k_ap(2)).put({"name": "Jane"})
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].bins == {"name": "Tim"}
         assert len(ops[0].operations) == 2
 
@@ -439,38 +439,38 @@ class TestGenerationPolicy:
     """An expected generation sets ``generation_policy`` on write + delete."""
 
     def test_batch_delete_with_expected_generation(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("delete", _k_ap(1), _k_ap(2))
             .ensure_generation_is(7)
             .execute()
         )
-        _, _, bdp = pac.batch_delete_calls[0]
+        _, _, bdp = pnc.batch_delete_calls[0]
         assert bdp.generation_policy == GenerationPolicy.EXPECT_GEN_EQUAL
         assert bdp.generation == 7
 
     def test_batch_write_with_expected_generation(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("update", _k_ap(1)).put({"b": 1}).ensure_generation_is(3)
             .update(_k_ap(2)).put({"b": 2}).ensure_generation_is(3)
             .execute()
         )
-        ops, _ = pac.batch_mixed_calls[0]
+        ops, _ = pnc.batch_mixed_calls[0]
         assert ops[0].policy.generation_policy == GenerationPolicy.EXPECT_GEN_EQUAL
         assert ops[0].policy.generation == 3
 
     def test_batch_delete_without_generation_leaves_policy_gen_none(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("delete", _k_ap(1), _k_ap(2))
             .with_durable_delete()
             .execute()
         )
-        _, _, bdp = pac.batch_delete_calls[0]
+        _, _, bdp = pnc.batch_delete_calls[0]
         assert bdp.generation_policy == GenerationPolicy.NONE
 
 
@@ -478,18 +478,18 @@ class TestBatchUdfExpiration:
     """The chain's TTL verbs reach ``BatchUDFPolicy.expiration``."""
 
     def test_seconds_ttl_reaches_udf_policy(self):
-        pac = _RecordingClient()
-        up = _run_udf_apply(pac, lambda ub: ub.expire_record_after_seconds(600))
+        pnc = _RecordingClient()
+        up = _run_udf_apply(pnc, lambda ub: ub.expire_record_after_seconds(600))
         assert up.expiration == Expiration.seconds(600)
 
     def test_never_expire_reaches_udf_policy(self):
-        pac = _RecordingClient()
-        up = _run_udf_apply(pac, lambda ub: ub.never_expire())
+        pnc = _RecordingClient()
+        up = _run_udf_apply(pnc, lambda ub: ub.never_expire())
         assert up.expiration == Expiration.NEVER_EXPIRE
 
     def test_no_ttl_keeps_no_policy_fast_path(self):
-        pac = _RecordingClient()
-        up = _run_udf_apply(pac, lambda ub: None)
+        pnc = _RecordingClient()
+        up = _run_udf_apply(pnc, lambda ub: None)
         assert up is None
 
 
@@ -503,17 +503,17 @@ class TestSameKeyChainFolding:
     """
 
     def test_overlapping_key_splits_the_chain_into_ordered_batches(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("upsert", _k_ap(1), _k_ap(2)).bin("a").set_to(1)
             .upsert(_k_ap(2), _k_ap(3)).bin("a").set_to(2)
             .execute()
         )
         # k2 spans both segments: one batch per segment, in chain order.
-        assert pac.batch_operate_calls == []
-        assert len(pac.batch_mixed_calls) == 2
-        first, second = (ops for ops, _ in pac.batch_mixed_calls)
+        assert pnc.batch_operate_calls == []
+        assert len(pnc.batch_mixed_calls) == 2
+        first, second = (ops for ops, _ in pnc.batch_mixed_calls)
         assert [op.key.digest for op in first] == [_k_ap(1).digest, _k_ap(2).digest]
         assert [op.key.digest for op in second] == [_k_ap(2).digest, _k_ap(3).digest]
 
@@ -521,27 +521,27 @@ class TestSameKeyChainFolding:
         # Sixty-four single-key segments with one repeated key: every
         # key-disjoint run stays one batch, so the chain costs two round
         # trips rather than one per segment.
-        pac = _RecordingClient()
-        builder = _builder(pac)
+        pnc = _RecordingClient()
+        builder = _builder(pnc)
         cur = builder._start_write_segment("upsert", _k_ap(1)).bin("a").set_to(1)
         for i in range(2, 64):
             cur = cur.upsert(_k_ap(i)).bin("a").set_to(1)
         cur.upsert(_k_ap(40)).bin("a").set_to(1).execute()
-        assert pac.batch_operate_calls == []
-        assert [len(ops) for ops, _ in pac.batch_mixed_calls] == [63, 1]
-        assert pac.batch_mixed_calls[1][0][0].key.digest == _k_ap(40).digest
+        assert pnc.batch_operate_calls == []
+        assert [len(ops) for ops, _ in pnc.batch_mixed_calls] == [63, 1]
+        assert pnc.batch_mixed_calls[1][0][0].key.digest == _k_ap(40).digest
 
     def test_disjoint_keys_keep_the_single_batch_fold(self):
-        pac = _RecordingClient()
+        pnc = _RecordingClient()
         (
-            _builder(pac)
+            _builder(pnc)
             ._start_write_segment("upsert", _k_ap(1), _k_ap(2)).bin("a").set_to(1)
             .upsert(_k_ap(3), _k_ap(4)).bin("a").set_to(2)
             .execute()
         )
         # No shared key: both segments fold into one round trip.
-        assert len(pac.batch_mixed_calls) == 1
-        assert pac.batch_operate_calls == []
+        assert len(pnc.batch_mixed_calls) == 1
+        assert pnc.batch_operate_calls == []
 
     def test_same_user_key_in_two_namespaces_keeps_the_fold(self):
         # The digest omits the namespace, so these keys share one; they are

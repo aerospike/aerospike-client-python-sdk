@@ -6,7 +6,7 @@ Python logger name:
 | Logger name | Layer | Description |
 |-------------|-------|-------------|
 | `aerospike_sdk` | Aerospike Python SDK | Command summaries, queries, lifecycle |
-| `aerospike_async` | Python Async Client (PAC) | Client init, connection lifecycle |
+| `aerospike_native` | Python Native Client (PNC) | Client init, connection lifecycle |
 | `aerospike_core` | Rust core | Cluster tend, connection pooling, wire protocol |
 
 All three layers use Python's standard `logging` module, so any handler or
@@ -79,14 +79,14 @@ logging.getLogger("aerospike_core.cluster").setLevel(logging.DEBUG)
 Membership events (seeding, node refresh failures, node close), partition
 map updates, and rack updates log under `aerospike_core.cluster*` — INFO and
 WARNING for milestones and failures, DEBUG for per-tend detail. The exact
-set of sub-logger names is owned by the PAC/Rust release and may evolve;
-consult PAC release notes.
+set of sub-logger names is owned by the PNC/Rust release and may evolve;
+consult PNC release notes.
 
 ### Runtime level changes and Rust loggers
 
 Levels on `aerospike_sdk.*` loggers are read live by Python's `logging` and
 take effect immediately. Rust-emitted loggers (`aerospike_core.*`,
-`aerospike_async`) cache their effective level on first emission for
+`aerospike_native`) cache their effective level on first emission for
 performance. The SDK re-syncs that cache automatically on every client
 connect, so configuration done between import and connect is always honored.
 To change Rust-side levels **while connected**, call
@@ -112,7 +112,7 @@ handler.setFormatter(logging.Formatter(
     "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 ))
 
-for name in ("aerospike_core", "aerospike_async", "aerospike_sdk"):
+for name in ("aerospike_core", "aerospike_native", "aerospike_sdk"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     logger.addHandler(handler)
@@ -145,7 +145,7 @@ logging.config.dictConfig({
     },
     "loggers": {
         "aerospike_core": {"level": "WARNING"},
-        "aerospike_async": {"level": "INFO"},
+        "aerospike_native": {"level": "INFO"},
         "aerospike_sdk": {"level": "WARNING"},
         # Raise one of these during an incident, e.g.:
         # "aerospike_sdk.command": {"level": "DEBUG"},
@@ -174,7 +174,7 @@ typical log lines look like:
 
 ```
 2026-07-10 14:22:01,234 INFO     aerospike_sdk.lifecycle [prod-1]: Connected seeds='127.0.0.1:3100'
-2026-07-10 14:22:01,289 DEBUG    aerospike_async [-]: connected to 127.0.0.1:3100
+2026-07-10 14:22:01,289 DEBUG    aerospike_native [-]: connected to 127.0.0.1:3100
 2026-07-10 14:22:01,290 DEBUG    aerospike_core.cluster [-]: Tending cluster...
 2026-07-10 14:22:01,301 DEBUG    aerospike_sdk.command [prod-1]: upsert test.users keys=1 latency_ms=0.412
 ```
@@ -182,7 +182,7 @@ typical log lines look like:
 The `%(name)s` field identifies which layer produced the message, making it
 straightforward to filter or route logs. The `[%(aerospike.cluster)s]` field
 shows the configured cluster name on the connect and command/query lines that
-carry it, and the `defaults` fallback `-` on the `aerospike_async` /
+carry it, and the `defaults` fallback `-` on the `aerospike_native` /
 `aerospike_core` lines that don't. If you drop `%(aerospike.cluster)s` from the
 formatter (as the config snippets below do), the field is simply not rendered —
 the records still carry it. See [Structured cluster field](#structured-cluster-field)
@@ -228,7 +228,7 @@ server-reported value; without `ClusterDefinition.cluster_name(...)` the field i
 
 To surface the field in a plain-text formatter, reference it by its dotted key
 **and** supply a `defaults` fallback (Python 3.10+). Most records — everything
-from `aerospike_core`, `aerospike_async`, third-party libraries, and even SDK
+from `aerospike_core`, `aerospike_native`, third-party libraries, and even SDK
 lines emitted before connect — do not carry the field, and a bare
 `%(aerospike.cluster)s` raises `ValueError: Formatting field not found in
 record` on the first such line. The default renders those as `-`:
@@ -247,7 +247,7 @@ That yields, with `ClusterDefinition.cluster_name("prod-1")` configured:
 
 ```
 2026-07-10 14:22:01,234 INFO     aerospike_sdk.lifecycle [prod-1]: Connected seeds='127.0.0.1:3100'
-2026-07-10 14:22:01,289 DEBUG    aerospike_async [-]: connected to 127.0.0.1:3100
+2026-07-10 14:22:01,289 DEBUG    aerospike_native [-]: connected to 127.0.0.1:3100
 2026-07-10 14:22:01,301 DEBUG    aerospike_sdk.command [prod-1]: upsert test.users keys=1 latency_ms=0.412
 ```
 
@@ -261,7 +261,7 @@ handler.setFormatter(logging.Formatter(
     "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 ))
 
-for name in ("aerospike_core", "aerospike_async", "aerospike_sdk"):
+for name in ("aerospike_core", "aerospike_native", "aerospike_sdk"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     logger.addHandler(handler)

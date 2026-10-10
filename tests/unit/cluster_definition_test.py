@@ -486,13 +486,13 @@ class TestConnectValidationCarriesACode:
 
     @pytest.mark.asyncio
     async def test_async_not_connected_reports_server_not_available(self):
-        class _Pac:
+        class _Pnc:
             def is_connected(self):
                 return False
 
         class _Client:
             _seeds = "127.0.0.1:19999"
-            underlying_client = _Pac()
+            underlying_client = _Pnc()
 
             async def connect(self):
                 pass
@@ -505,7 +505,7 @@ class TestConnectValidationCarriesACode:
         assert excinfo.value.result_code == ResultCode.SERVER_NOT_AVAILABLE
 
     def test_sync_not_connected_reports_server_not_available(self, monkeypatch):
-        class _Pac:
+        class _Pnc:
             def is_connected(self):
                 return False
 
@@ -516,8 +516,8 @@ class TestConnectValidationCarriesACode:
             def connect(self):
                 pass
 
-            def _pac_client(self):
-                return _Pac()
+            def _pnc_client(self):
+                return _Pnc()
 
             def close(self):
                 pass

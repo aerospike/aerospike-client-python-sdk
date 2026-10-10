@@ -27,18 +27,18 @@ are host-application choices.
 
 from __future__ import annotations
 
-import aerospike_async
+import aerospike_native
 
-# Absent on PAC releases that predate the log-level cache refresh entry;
+# Absent on PNC releases that predate the log-level cache refresh entry;
 # refresh_log_levels() degrades to a no-op there.
-_pac_refresh_log_levels = getattr(aerospike_async, "refresh_log_levels", None)
+_pnc_refresh_log_levels = getattr(aerospike_native, "refresh_log_levels", None)
 
 
 def refresh_log_levels() -> None:
     """Re-sync Rust-emitted log levels with the Python ``logging`` hierarchy.
 
     The bridge that forwards Rust log records (the ``aerospike_core`` and
-    ``aerospike_async`` loggers) caches each logger's effective level the
+    ``aerospike_native`` loggers) caches each logger's effective level the
     first time that logger emits. A runtime ``setLevel()`` on those loggers
     is invisible to Rust-emitted records until the cache is dropped by
     calling this function. The SDK calls it automatically on every client
@@ -60,8 +60,8 @@ def refresh_log_levels() -> None:
     See Also:
         :class:`SdkLoggers`: Stable logger names for the Python-side areas.
     """
-    if _pac_refresh_log_levels is not None:
-        _pac_refresh_log_levels()
+    if _pnc_refresh_log_levels is not None:
+        _pnc_refresh_log_levels()
 
 
 class SdkLoggers:
@@ -72,7 +72,7 @@ class SdkLoggers:
     specific constant narrows to one operational area.
 
     Two additional roots are emitted below the SDK and are tuned the same
-    way: ``aerospike_async`` (PAC client lifecycle) and ``aerospike_core``
+    way: ``aerospike_native`` (PNC client lifecycle) and ``aerospike_core``
     (Rust core: cluster tend, connection pools, wire protocol).
 
     Example::

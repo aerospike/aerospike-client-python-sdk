@@ -21,7 +21,7 @@ via ``set_operations``.
 """
 
 from aerospike_sdk import Behavior, CTX, CdtOperation
-from aerospike_async import Operation
+from aerospike_native import Operation
 from aerospike_sdk.aio.operations.query import QueryBuilder
 
 
@@ -34,7 +34,7 @@ class TestWithOpProjection:
         qb = _make_qb()
         assert qb._op_projection is None
         # An empty builder produces a Statement with no projection — the
-        # exact field is internal to PAC, but at least we expect no raise.
+        # exact field is internal to PNC, but at least we expect no raise.
         qb._build_statement()
 
     def test_stores_basic_projection(self):
@@ -70,7 +70,7 @@ class TestWithOpProjection:
     def test_build_statement_forwards_to_set_operations(self):
         qb = _make_qb()
         qb.with_op_projection(Operation.get_bin("name"))
-        # _build_statement only crashes if PAC's Statement.set_operations
+        # _build_statement only crashes if PNC's Statement.set_operations
         # rejects the op. It accepts plain Operation, so this exercise
         # confirms we wired through the right method.
         qb._build_statement()
@@ -86,7 +86,7 @@ class TestWithOpProjection:
         qb = _make_qb()
         qb.with_op_projection(Operation.get_bin("name"))
         qb.bin("age").get()
-        # Bin-level ops join the explicit projection; PAC's set_operations
+        # Bin-level ops join the explicit projection; PNC's set_operations
         # would reject anything that isn't an operation.
         qb._build_dataset_read_statement()
         assert len(qb._operations) == 1
@@ -94,7 +94,7 @@ class TestWithOpProjection:
     def test_background_statement_leaves_bin_ops_out(self):
         qb = _make_qb()
         qb.bin("age").get()
-        # Background tasks hand their ops to PAC beside the statement, so the
+        # Background tasks hand their ops to PNC beside the statement, so the
         # plain statement builder must not fold them in.
         qb._build_statement()
         assert qb._op_projection is None

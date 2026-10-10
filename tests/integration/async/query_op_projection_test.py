@@ -20,28 +20,28 @@ exercised through the high-level fluent builder. Covers:
 - Extended reads: ``ExpOperation.read`` / CDT reads accepted in ops projection.
 - Negative cases: write / touch / delete in foreground queries rejected.
 
-Note: The SDK's ``with_op_projection`` is a thin façade over the PAC
+Note: The SDK's ``with_op_projection`` is a thin façade over the PNC
 ``Statement.set_operations`` underneath. Native ``ExpOperation`` /
-``CdtOperation`` are imported from ``aerospike_async`` directly.
+``CdtOperation`` are imported from ``aerospike_native`` directly.
 """
 
 
 import pytest
 import pytest_asyncio
 from aerospike_sdk import CdtOperation, CTX, Exp, Filter
-from aerospike_async import ExpOperation, ExpReadFlags, ExpWriteFlags, Operation
+from aerospike_native import ExpOperation, ExpReadFlags, ExpWriteFlags, Operation
 from aerospike_sdk import DataSet
-# The rejects tests catch both the PSDK error type and the raw PAC error
-# (streams can propagate the PAC type unconverted); PacAerospikeError is
-# the PAC alias the exceptions module binds.
+# The rejects tests catch both the PSDK error type and the raw PNC error
+# (streams can propagate the PNC type unconverted); PncAerospikeError is
+# the PNC alias the exceptions module binds.
 from aerospike_sdk.exceptions import AerospikeError as SdkAerospikeError
-from aerospike_sdk.exceptions import PacAerospikeError
+from aerospike_sdk.exceptions import PncAerospikeError
 from tests.integration.namespace import general_namespace
 
 # Errors raised by the core's wire encoder during stream iteration surface as
-# raw PAC ``AerospikeError`` (not yet wrapped by the SDK command pipeline).
+# raw PNC ``AerospikeError`` (not yet wrapped by the SDK command pipeline).
 # Tests accept either to stay robust as the wrapping moves forward.
-_AnyAerospikeError = (SdkAerospikeError, PacAerospikeError)
+_AnyAerospikeError = (SdkAerospikeError, PncAerospikeError)
 
 
 _NS = general_namespace()

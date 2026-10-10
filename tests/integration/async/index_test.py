@@ -21,7 +21,7 @@ import os
 import pytest
 import pytest_asyncio
 
-from aerospike_async import ClientPolicy as PacClientPolicy, FilterExpression, IndexType, new_client
+from aerospike_native import ClientPolicy as PncClientPolicy, FilterExpression, IndexType, new_client
 from aerospike_sdk import (
     Behavior,
     ClusterDefinition,
@@ -41,7 +41,7 @@ from aerospike_sdk.exceptions import (
     SecurityNotEnabled,
 )
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 TEST_DS = DataSet.of(general_namespace(), "test")
 
@@ -607,7 +607,7 @@ def _services_alternate() -> bool:
     return os.environ.get("AEROSPIKE_USE_SERVICES_ALTERNATE", "true").lower() == "true"
 
 
-async def _wait_user(admin_pac, username, *, present, timeout=5.0):
+async def _wait_user(admin_pnc, username, *, present, timeout=5.0):
     """Poll ``query_users`` until *username* is (or is not) listed.
 
     A user is several system-metadata items committed one by one, so the
@@ -616,7 +616,7 @@ async def _wait_user(admin_pac, username, *, present, timeout=5.0):
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        names = {u.user for u in await admin_pac.query_users(None)}
+        names = {u.user for u in await admin_pnc.query_users(None)}
         if (username in names) == present:
             return
         await asyncio.sleep(0.01)
@@ -624,16 +624,16 @@ async def _wait_user(admin_pac, username, *, present, timeout=5.0):
 
 
 @pytest_asyncio.fixture
-async def sec_admin_pac(aerospike_host_sec):
-    """PAC admin client on the security node, for user management only.
+async def sec_admin_pnc(aerospike_host_sec):
+    """PNC admin client on the security node, for user management only.
 
     PSDK does not expose user or role administration, so the users this
-    test needs come from PAC's admin entries; everything under test goes
+    test needs come from PNC's admin entries; everything under test goes
     through PSDK.
     """
     if not aerospike_host_sec:
         pytest.skip("AEROSPIKE_HOST_SEC unset; privilege tests need a security-enabled cluster")
-    cp = PacClientPolicy()
+    cp = PncClientPolicy()
     cp.use_services_alternate = _services_alternate()
     cp.user = os.environ.get("AEROSPIKE_AUTH_USER", "admin")
     cp.password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin")
@@ -657,7 +657,7 @@ def _sec_definition(seed: str, user: str, password: str) -> ClusterDefinition:
     return definition.with_native_credentials(user, password)
 
 
-async def test_set_index_needs_only_sindex_admin(aerospike_host_sec, sec_admin_pac):
+async def test_set_index_needs_only_sindex_admin(aerospike_host_sec, sec_admin_pnc):
     """A set index is created and dropped by a user holding only ``sindex-admin``.
 
     The negative control is a user holding only ``read-write``: the server
@@ -669,13 +669,13 @@ async def test_set_index_needs_only_sindex_admin(aerospike_host_sec, sec_admin_p
     password = "set_index_pw"
     for name in users:
         try:
-            await sec_admin_pac.drop_user(name)
+            await sec_admin_pnc.drop_user(name)
         except Exception:
             pass
-        await _wait_user(sec_admin_pac, name, present=False)
+        await _wait_user(sec_admin_pnc, name, present=False)
     for name, roles in users.items():
-        await sec_admin_pac.create_user(name, password, roles)
-        await _wait_user(sec_admin_pac, name, present=True)
+        await sec_admin_pnc.create_user(name, password, roles)
+        await _wait_user(sec_admin_pnc, name, present=True)
 
     ds = DataSet.of("test", "sidx_role")
     index_name = "psdk_sidx_role_idx"
@@ -695,7 +695,7 @@ async def test_set_index_needs_only_sindex_admin(aerospike_host_sec, sec_admin_p
     finally:
         for name in users:
             try:
-                await sec_admin_pac.drop_user(name)
+                await sec_admin_pnc.drop_user(name)
             except Exception:
                 pass
-            await _wait_user(sec_admin_pac, name, present=False)
+            await _wait_user(sec_admin_pnc, name, present=False)

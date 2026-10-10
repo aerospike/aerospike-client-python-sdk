@@ -24,7 +24,7 @@ Covers:
 """
 
 import pytest
-from aerospike_async import Operation
+from aerospike_native import Operation
 
 from aerospike_sdk import Behavior, Exp, Key, ListReturnType, MapReturnType
 from aerospike_sdk.exceptions import ResultCode

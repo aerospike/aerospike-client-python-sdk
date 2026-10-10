@@ -16,7 +16,7 @@
 """Invariant: ``aerospike_sdk/sync/`` must not import ``asyncio``.
 
 The whole point of :class:`~aerospike_sdk.sync.client.SyncClient` is that it
-runs without an asyncio event loop. Every IO path routes through PAC's
+runs without an asyncio event loop. Every IO path routes through PNC's
 ``_blocking`` entries. If a regression accidentally pulls ``asyncio`` into
 the sync tree, this test fails — catching the issue at unit-test time
 rather than at runtime in production code that may never have seen a loop.
@@ -48,6 +48,6 @@ def test_no_asyncio_imports_in_sync_tree():
         raise AssertionError(
             "asyncio import(s) found in aerospike_sdk/sync/ tree:\n"
             + report
-            + "\n\nSync code must route IO through PAC's `_blocking` entries; "
+            + "\n\nSync code must route IO through PNC's `_blocking` entries; "
             "no asyncio loop is constructed or required.",
         )

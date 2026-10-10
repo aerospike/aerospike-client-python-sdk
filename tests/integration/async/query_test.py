@@ -21,13 +21,13 @@ import time
 import pytest
 import pytest_asyncio
 from aerospike_sdk import Behavior, Filter, Key
-from aerospike_async import PartitionFilter
+from aerospike_native import PartitionFilter
 from aerospike_sdk import DataSet, Exp, val
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.aio import Cluster
 from aerospike_sdk.aio.operations.query import QueryBuilder
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 QUERY_DS = DataSet.of(general_namespace(), "query_test")
 

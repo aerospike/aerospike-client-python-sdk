@@ -20,29 +20,29 @@ callers can handle failures selectively (for example ``except GenerationError``)
 instead of comparing result codes everywhere.
 
 At public boundaries, errors from the underlying async client are normalized with
-:func:`_convert_pac_exception`. Callers should chain causes explicitly:
-``raise _convert_pac_exception(exc) from exc``.
+:func:`_convert_pnc_exception`. Callers should chain causes explicitly:
+``raise _convert_pnc_exception(exc) from exc``.
 """
 
 from __future__ import annotations
 
-from aerospike_async.exceptions import (
-    AerospikeError as PacAerospikeError,
-    CommitFailedError as PacCommitFailedError,
-    ConnectionError as PacConnectionError,
-    InvalidNodeError as PacInvalidNodeError,
-    MaxErrorRate as PacMaxErrorRate,
-    ServerError as PacServerError,
-    TimeoutError as PacTimeoutError,
-    UDFBadResponse as PacUDFBadResponse,
+from aerospike_native.exceptions import (
+    AerospikeError as PncAerospikeError,
+    CommitFailedError as PncCommitFailedError,
+    ConnectionError as PncConnectionError,
+    InvalidNodeError as PncInvalidNodeError,
+    MaxErrorRate as PncMaxErrorRate,
+    ServerError as PncServerError,
+    TimeoutError as PncTimeoutError,
+    UDFBadResponse as PncUDFBadResponse,
 )
 # Re-exported for callers that need the raw server result code or the
-# PAC-level error types without importing aerospike_async directly.
-from aerospike_async import SubCode
-from aerospike_async.exceptions import ResultCode
-from aerospike_async.exceptions import SecurityNotEnabled as SecurityNotEnabled
-from aerospike_async.exceptions import ServerError as ServerError
-from aerospike_async.exceptions import ValueError as PacValueError  # noqa: F401
+# PNC-level error types without importing aerospike_native directly.
+from aerospike_native import SubCode
+from aerospike_native.exceptions import ResultCode
+from aerospike_native.exceptions import SecurityNotEnabled as SecurityNotEnabled
+from aerospike_native.exceptions import ServerError as ServerError
+from aerospike_native.exceptions import ValueError as PncValueError  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ class AerospikeError(Exception):
     fall back to this type for all other Aerospike-related errors.
 
     Attributes:
-        result_code: The :class:`~aerospike_async.exceptions.ResultCode` of the
+        result_code: The :class:`~aerospike_native.exceptions.ResultCode` of the
             failure. A server failure carries the code the server returned;
             a failure the client raised on its own carries a client code
             (``ResultCode.SERVER_NOT_AVAILABLE``, ``ResultCode.TXN_FAILED``),
@@ -595,7 +595,7 @@ class MaxErrorRateError(BackoffError):
     """Raised when the client's per-node circuit breaker trips.
 
     The breaker is governed by ``Client(...)``'s ``max_error_rate`` and
-    ``error_rate_window`` keywords (or :class:`~aerospike_async.ClientPolicy`
+    ``error_rate_window`` keywords (or :class:`~aerospike_native.ClientPolicy`
     fields of the same name). Once a node's error count crosses
     ``max_error_rate`` within the current window, subsequent commands routed
     to that node fail fast with this exception until the next window resets.
@@ -916,15 +916,15 @@ def _result_code_to_exception(
 
 
 # ---------------------------------------------------------------------------
-# Boundary converter: PAC exception -> PSDK exception
+# Boundary converter: PNC exception -> PSDK exception
 # ---------------------------------------------------------------------------
 
 def _retry_context_kwargs(exc: Exception) -> dict:
-    """Extract the retry/diagnostic context a PAC exception carries.
+    """Extract the retry/diagnostic context a PNC exception carries.
 
-    ``getattr`` defaults keep this tolerant of PAC versions predating a
+    ``getattr`` defaults keep this tolerant of PNC versions predating a
     field. Prior-attempt exceptions are themselves converted, so
-    ``sub_exceptions`` is homogeneous in this hierarchy (PAC sub-errors
+    ``sub_exceptions`` is homogeneous in this hierarchy (PNC sub-errors
     never nest further, so the recursion is single-level).
     """
     subs = getattr(exc, "sub_exceptions", None)
@@ -933,13 +933,13 @@ def _retry_context_kwargs(exc: Exception) -> dict:
         "iteration": getattr(exc, "iteration", None),
         "base_message": getattr(exc, "base_message", None),
         "sub_exceptions": (
-            tuple(_convert_pac_exception(s) for s in subs) if subs else ()
+            tuple(_convert_pnc_exception(s) for s in subs) if subs else ()
         ),
     }
 
 
 def _client_error_kwargs(exc: Exception) -> dict:
-    """The fields a client-side PAC failure carries, ready for a constructor.
+    """The fields a client-side PNC failure carries, ready for a constructor.
 
     The result code rides along with the retry context: a client failure
     carries its client code the way a server failure carries the server's.
@@ -951,14 +951,14 @@ def _client_error_kwargs(exc: Exception) -> dict:
     }
 
 
-def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> AerospikeError:
-    """Convert a PAC exception to the appropriate PSDK typed exception.
+def _convert_pnc_exception(exc: Exception, *, hint: str | None = None) -> AerospikeError:
+    """Convert a PNC exception to the appropriate PSDK typed exception.
 
     The original exception is **not** set as ``__cause__`` here; callers
-    should use ``raise _convert_pac_exception(e) from e``.
+    should use ``raise _convert_pnc_exception(e) from e``.
 
     Args:
-        exc: The PAC exception to convert.
+        exc: The PNC exception to convert.
         hint: Guidance narrower than the result code alone supports, from a
             caller that still has the operation in scope. Replaces the generic
             text for that code. Ignored for failures that carry no result code.
@@ -966,7 +966,7 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
     if isinstance(exc, AerospikeError):
         return exc
 
-    if isinstance(exc, PacServerError):
+    if isinstance(exc, PncServerError):
         return _result_code_to_exception(
             exc.result_code,
             str(exc),
@@ -978,22 +978,22 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
             **_retry_context_kwargs(exc),
         )
 
-    if isinstance(exc, PacMaxErrorRate):
+    if isinstance(exc, PncMaxErrorRate):
         return MaxErrorRateError(str(exc), **_client_error_kwargs(exc))
 
-    if isinstance(exc, PacTimeoutError):
-        # PAC's TimeoutError is core's client-side deadline; a server-reported
+    if isinstance(exc, PncTimeoutError):
+        # PNC's TimeoutError is core's client-side deadline; a server-reported
         # timeout arrives as a ServerError with the TIMEOUT result code and
         # keeps the default client=False.
         return TimeoutError(str(exc), client=True, **_client_error_kwargs(exc))
 
-    if isinstance(exc, PacConnectionError):
+    if isinstance(exc, PncConnectionError):
         return ConnectionError(str(exc), **_client_error_kwargs(exc))
 
-    if isinstance(exc, PacInvalidNodeError):
+    if isinstance(exc, PncInvalidNodeError):
         return InvalidNodeError(str(exc), **_client_error_kwargs(exc))
 
-    if isinstance(exc, PacUDFBadResponse):
+    if isinstance(exc, PncUDFBadResponse):
         return _result_code_to_exception(
             ResultCode.UDF_BAD_RESPONSE,
             str(exc),
@@ -1001,7 +1001,7 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
             **_retry_context_kwargs(exc),
         )
 
-    if isinstance(exc, PacCommitFailedError):
+    if isinstance(exc, PncCommitFailedError):
         # The stage, the per-key records, and the code that tripped verify or
         # roll all come straight through. The code is absent when the failure
         # was client-side, which is why this is classified by type as well.
@@ -1015,7 +1015,7 @@ def _convert_pac_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
             **_retry_context_kwargs(exc),
         )
 
-    if isinstance(exc, PacAerospikeError):
+    if isinstance(exc, PncAerospikeError):
         # A generic client failure still names its condition by code, and
         # some of those conditions have a type here (an abort refused after a
         # failed commit is a TransactionError).

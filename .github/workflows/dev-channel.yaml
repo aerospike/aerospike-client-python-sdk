@@ -11,8 +11,8 @@ name: Dev channel publish
 # version-override input. The release path (push-to-build.yaml) is
 # unchanged and continues to build the committed version.
 #
-# Unlike that release path, this workflow does not require the pinned PAC
-# version to be on public PyPI — dev builds resolve PAC from the same
+# Unlike that release path, this workflow does not require the pinned PNC
+# version to be on public PyPI — dev builds resolve PNC from the same
 # internal dev repo they publish to.
 
 on:
@@ -71,7 +71,7 @@ jobs:
 
   # Installs the freshly published version the way a consumer will: by name
   # and version from the dev index, on a runner with no source checkout. That
-  # proves PAC resolves from the same index.
+  # proves PNC resolves from the same index.
   smoke-install:
     needs: [compute-version, build-publish]
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run == false }}
@@ -105,7 +105,7 @@ jobs:
           # rather than fail a publish that actually succeeded.
           for attempt in 1 2 3 4 5; do
             if pip install "aerospike-sdk==${VERSION}" \
-                 --only-binary aerospike-async --extra-index-url "$index"; then
+                 --only-binary aerospike-native --extra-index-url "$index"; then
               exit 0
             fi
             echo "Install attempt ${attempt} failed; waiting for the index to catch up"

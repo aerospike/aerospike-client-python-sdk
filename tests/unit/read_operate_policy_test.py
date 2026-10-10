@@ -15,17 +15,17 @@
 
 """A single-key query with read operations sends the Behavior's read settings.
 
-PAC's ``operate`` takes only a ``WritePolicy``, so the read settings ride on
+PNC's ``operate`` takes only a ``WritePolicy``, so the read settings ride on
 one. Every route a single-key read-operate takes (the default fast path, an
 ``on_error`` strategy, a ``where()`` filter, an SC namespace) must resolve
-them from the read point scope, never from the write scope or PAC defaults.
+them from the read point scope, never from the write scope or PNC defaults.
 """
 
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aerospike_async import ReadModeAP, ReadModeSC
+from aerospike_native import ReadModeAP, ReadModeSC
 
 from aerospike_sdk import ErrorStrategy, Key
 from aerospike_sdk.aio.session import Session
@@ -35,7 +35,7 @@ from aerospike_sdk.sync.session import Session as SyncSession
 _KEY = Key("test", "read_operate", 1)
 
 # Reads and writes differ in every asserted field, so a policy built from the
-# write scope or from PAC defaults cannot pass.
+# write scope or from PNC defaults cannot pass.
 _BEHAVIOR = Behavior.DEFAULT.derive_with_changes(
     "read-operate-policy",
     reads=Settings(
@@ -49,10 +49,10 @@ _BEHAVIOR = Behavior.DEFAULT.derive_with_changes(
 _ROUTES = pytest.mark.parametrize("route", ["default", "on_error", "where"])
 
 
-def _sdk_client(pac: MagicMock) -> MagicMock:
+def _sdk_client(pnc: MagicMock) -> MagicMock:
     client = MagicMock()
-    client._async_client = pac
-    client.underlying_client = pac
+    client._async_client = pnc
+    client.underlying_client = pnc
     client._usage_on = False
     client._record_on = False
     client.supports_server_compiled_ael = True
@@ -61,18 +61,18 @@ def _sdk_client(pac: MagicMock) -> MagicMock:
 
 
 def _async_session(mode: Mode) -> tuple[Session, MagicMock]:
-    pac = MagicMock()
-    pac.operate = AsyncMock(return_value=MagicMock())
-    session = Session(client=_sdk_client(pac), behavior=_BEHAVIOR)
+    pnc = MagicMock()
+    pnc.operate = AsyncMock(return_value=MagicMock())
+    session = Session(client=_sdk_client(pnc), behavior=_BEHAVIOR)
     session._resolve_namespace_mode = AsyncMock(return_value=mode)
-    return session, pac.operate
+    return session, pnc.operate
 
 
 def _sync_session(mode: Mode) -> tuple[SyncSession, MagicMock]:
-    pac = MagicMock()
-    session = SyncSession(client=_sdk_client(pac), behavior=_BEHAVIOR)
+    pnc = MagicMock()
+    session = SyncSession(client=_sdk_client(pnc), behavior=_BEHAVIOR)
     session._resolve_namespace_mode_blocking = lambda namespace: mode
-    return session, pac.operate_blocking
+    return session, pnc.operate_blocking
 
 
 def _read_op(session, route: str):

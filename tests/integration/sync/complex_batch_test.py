@@ -16,7 +16,7 @@
 """Sync integration tests for complex batch (mixed read + write chains).
 
 Mirror of ``tests/integration/async/complex_batch_test.py``. The sync
-builders are an independent implementation against PAC's ``*_blocking``
+builders are an independent implementation against PNC's ``*_blocking``
 surface (not an async façade), so mixed-chain finalization, per-spec
 settings, and exists/touch verbs traverse their own code path and need
 their own coverage — a gap that previously let the ``query(reads).write()``
@@ -28,7 +28,7 @@ from aerospike_sdk.exceptions import ResultCode
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 
 @pytest.fixture(scope="module")

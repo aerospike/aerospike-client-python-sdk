@@ -26,7 +26,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 _KEY = DataSet.of(general_namespace(), "ael_path_string").id("r1")
 _LIST = [100, 200, 300, 400, 500]

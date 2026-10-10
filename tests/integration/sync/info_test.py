@@ -37,8 +37,8 @@ def test_info_creation(session):
     """Test creating a SyncInfoCommands instance."""
     info = session.info()
     assert info is not None
-    # SyncInfoCommands holds a PAC client directly.
-    assert info._pac is not None
+    # SyncInfoCommands holds a PNC client directly.
+    assert info._pnc is not None
 
 
 def test_namespace_sc_status_and_is_namespace_sc(session):

@@ -60,4 +60,4 @@ bench-quick:
 	python -m benchmarks.benchmark -k 1000 -z 4 -w RU,50 -d 5 --warmup 0 --cooldown 0
 
 bench-compare:
-	python -m benchmarks.compare -k 100000 -z 32 --threads 32 -w RU,50 -d 15 --warmup 3 --cooldown 3 --modes pac-blocking,pac-async,async,sync
+	python -m benchmarks.compare -k 100000 -z 32 --threads 32 -w RU,50 -d 15 --warmup 3 --cooldown 3 --modes pnc-blocking,pnc-async,async,sync

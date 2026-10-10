@@ -27,7 +27,7 @@ import time
 from unittest.mock import MagicMock
 
 from aerospike_sdk import Key
-from aerospike_async import ClientPolicy
+from aerospike_native import ClientPolicy
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.policy.behavior import Behavior
@@ -37,7 +37,7 @@ from aerospike_sdk.sync.session import Session as SyncSession
 
 
 def _make_offline_sync_client() -> SyncClient:
-    """SyncClient with a mock PAC connection — never opens a socket."""
+    """SyncClient with a mock PNC connection — never opens a socket."""
     client = SyncClient("127.0.0.1:3000", policy=ClientPolicy())
     client._client = MagicMock()
     client._connected = True

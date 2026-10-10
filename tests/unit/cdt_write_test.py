@@ -40,7 +40,7 @@ from aerospike_sdk import (
     StringRegexFlags,
     StringWriteFlags,
 )
-from aerospike_async import ListOperation, MapOperation, MapPolicy
+from aerospike_native import ListOperation, MapOperation, MapPolicy
 
 import aerospike_sdk.aio.operations.cdt_read as cdt_read_module
 import aerospike_sdk.aio.operations.cdt_write as cdt_write_module
@@ -409,7 +409,7 @@ class TestWriteBinBuilderCdtNavigation:
 # ===================================================================
 
 class TestRelativeRangeOperationGeneration:
-    """PAC operations emitted for relative range get/remove terminals."""
+    """PNC operations emitted for relative range get/remove terminals."""
 
     def _build(self, bin_name: str = "mb"):
         qb = _make_qb()
@@ -1019,7 +1019,7 @@ class TestNestedWriteNavigationRanges:
 class TestNestedWriteVerbs:
     """Map and list verbs applied at a nested CDT path.
 
-    Each verb builds a concrete PAC operation against the current context
+    Each verb builds a concrete PNC operation against the current context
     and hands the chain back to the parent segment.
     """
 

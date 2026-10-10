@@ -195,7 +195,7 @@ class TestUvloopGate:
     """``use_uvloop`` auto-decide: on under the GIL, and under free-threading
     only when uvloop's libuv race (MagicStack/uvloop #720/#721) is mitigated.
 
-    The mitigation is reported by ``_uvloop_safe_under_ft`` — PAC's pipe-wake
+    The mitigation is reported by ``_uvloop_safe_under_ft`` — PNC's pipe-wake
     transport active (the default) or a fixed uvloop release; its env→safe
     mapping is covered in ``async_pool_uvloop_gate_test``. Here we pin only the
     ``__init__`` resolution: ``_gil_is_enabled() or _uvloop_safe_under_ft()``.

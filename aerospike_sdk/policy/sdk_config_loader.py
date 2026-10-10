@@ -46,7 +46,7 @@ from datetime import timedelta
 from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 import yaml
-from aerospike_async import ReadModeAP, ReadModeSC, Replica
+from aerospike_native import ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior import Behavior
@@ -237,7 +237,7 @@ _BEHAVIOR_FIELD_KEYS: _KeyMap = {
     "error_detail_verbosity": ("error_detail_verbosity", int),
 }
 
-# The transaction-phase blocks accept only the keys their PAC policies can
+# The transaction-phase blocks accept only the keys their PNC policies can
 # carry; anything else warns as unrecognized instead of parsing into a Settings
 # field that would silently never reach the wire. Verify additionally takes the
 # read-consistency keys (it is a batch of reads); roll does not.
@@ -769,7 +769,7 @@ def fill_hard_defaults(settings: Optional[SystemSettings]) -> SystemSettings:
     """Apply the bottom precedence layer (hard defaults) to resolved settings.
 
     Policy-mapped fields keep ``None`` (their defaults live in
-    :class:`~aerospike_async.ClientPolicy`); only SDK-runtime fields with an
+    :class:`~aerospike_native.ClientPolicy`); only SDK-runtime fields with an
     SDK-defined default are filled here.
     """
     if settings is None:

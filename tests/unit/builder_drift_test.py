@@ -106,8 +106,8 @@ from aerospike_sdk.sync.transactional_session import (
 # (async_leaf, sync_leaf, label, allowed_diff). Every pair must have an
 # identical public surface apart from ``allowed_diff``; the stream pair's
 # runtime dunders are private and excluded automatically. The stream pair's
-# producer *source adapters* (``_from_pac_recordset`` /
-# ``_from_chunked_pac_recordset`` / ``_from_pac_batch_stream``) are private
+# producer *source adapters* (``_from_pnc_recordset`` /
+# ``_from_chunked_pnc_recordset`` / ``_from_pnc_batch_stream``) are private
 # plumbing on both trees, so they drop out of the public-surface comparison —
 # no allowlist needed.
 _PAIRS = [

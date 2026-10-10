@@ -32,7 +32,7 @@ import pytest_asyncio
 
 from aerospike_sdk import DataSet, QueryHint
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 BIN = "nsw_score"

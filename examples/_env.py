@@ -57,7 +57,7 @@ def _configure_logging() -> None:
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     ))
-    for prefix in ("aerospike_core", "aerospike_async", "aerospike_sdk"):
+    for prefix in ("aerospike_core", "aerospike_native", "aerospike_sdk"):
         logger = logging.getLogger(prefix)
         logger.setLevel(numeric)
         logger.addHandler(handler)

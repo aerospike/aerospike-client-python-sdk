@@ -22,7 +22,7 @@ tests pin the entries each step emits and the client-side rules for
 
 import pytest
 
-from aerospike_async import ExpOperation
+from aerospike_native import ExpOperation
 
 from aerospike_sdk import Behavior, CTX, Exp, ExpType, LoopVarPart, MapOrder, SelectFlags
 from aerospike_sdk.aio.operations import cdt_read

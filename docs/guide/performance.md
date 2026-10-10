@@ -35,14 +35,14 @@ uv python install 3.14.5+freethreaded
 PYTHON_GIL=0 python my_app.py
 ```
 
-**Critical gotcha:** if any imported C extension hasn't opted into free-threading, the interpreter silently re-enables the GIL. Verify with `sys._is_gil_enabled()` returning `False` after all imports. PSDK's dependency PAC (`aerospike-async`) is FT-safe; many other libraries aren't yet.
+**Critical gotcha:** if any imported C extension hasn't opted into free-threading, the interpreter silently re-enables the GIL. Verify with `sys._is_gil_enabled()` returning `False` after all imports. PSDK's dependency PNC (`aerospike-native`) is FT-safe; many other libraries aren't yet.
 
 On the free-threaded build the GIL is **off by default** — `PYTHON_GIL=0` is not what turns it off. Rather, it *forces* the GIL to stay off even when an FT-incompatible extension would otherwise silently re-enable it (the gotcha above), so launching with it is a safeguard, not a switch. `PYTHON_GIL=1` forces the GIL back on.
 
 (fast-path-sessionget--sessionput)=
 ## Fast-path: `session.get` / `session.put`
 
-For single-key operations where you don't need filters, error handlers, projections, batch semantics, secondary indexes, etc., the fast-path methods bypass the builder + stream wrapping and call PAC's native blocking/async APIs directly with the session-cached policy.
+For single-key operations where you don't need filters, error handlers, projections, batch semantics, secondary indexes, etc., the fast-path methods bypass the builder + stream wrapping and call PNC's native blocking/async APIs directly with the session-cached policy.
 
 ### Sync example
 
@@ -77,7 +77,7 @@ asyncio.run(main())
 
 The fast-path APIs accept an optional `bins=` projection for reads and an arbitrary `bins` dict for writes. Errors raise directly (no `RecordResult` wrapping).
 
-**Async operation coalescing (automatic).** On the async fast path, concurrent `session.get()` calls issued within one event-loop iteration are fused into a single client-side crossing to PAC — one submission drives them all, and each `await` still resolves to its own record (or raises its own exception) the instant that key returns. `session.put()` coalesces the same way, each buffered write carrying its own payload. Reads and writes buffer separately (they are distinct submissions) but share one armed flush, so a mixed tick still costs a single scheduling callback. It is fully transparent: no API change, identical results, and a lone or low-rate op dispatches directly, so it pays nothing.
+**Async operation coalescing (automatic).** On the async fast path, concurrent `session.get()` calls issued within one event-loop iteration are fused into a single client-side crossing to PNC — one submission drives them all, and each `await` still resolves to its own record (or raises its own exception) the instant that key returns. `session.put()` coalesces the same way, each buffered write carrying its own payload. Reads and writes buffer separately (they are distinct submissions) but share one armed flush, so a mixed tick still costs a single scheduling callback. It is fully transparent: no API change, identical results, and a lone or low-rate op dispatches directly, so it pays nothing.
 
 What does *not* coalesce: a projection read (`session.get(key, ["name"])`), anything inside a `TransactionalSession`, and builder calls (`session.query(...)`, `session.upsert(...)`) — the coalescer lives on the `get`/`put` fast path only. Buffers are also per-`Session`, so ops fuse only with same-tick ops on the *same session object*; a session-per-task pattern gets no fusion. On a single loop the lift scales with per-tick fan-in: at high in-flight (512 tasks) it raises throughput ~**+45–56%** across read-only, mixed, and write workloads alike (measured median-of-3, both free-threaded and GIL-on), with p50 latency roughly halved; at low concurrency the win shrinks toward zero because there is less to fuse per tick. On the multi-loop `AsyncPool` the picture is different: the benefit grows with **loop count**, not per-session fan-in — ~+3% at 4 loops versus ~+10% at 8 loops for a 50/50 mix, measured at equal total in-flight (so equal server load and matched p50), which makes it a client-side contention-relief effect rather than a fusion-volume one. Doubling per-session fan-in at a fixed loop count barely moves it. Reads and writes each contribute a material share of the 8-loop gain and the split between them is not stable run to run, so neither direction is the one carrying it; the write share is also independent of payload width, which places the win in the submission crossing rather than in payload conversion. Latency moves with the same grain: p50 improves slightly at 8 loops, and rises slightly at 4, where a buffered op waits a tick without much contention to relieve. These stay independent wire ops — this is client-side submission fusion, **not** a server batch (that's the builder's batch path, `session.query(...)` over a key list). Disable with `PSDK_COALESCE=0` to A/B the whole thing, or `PSDK_COALESCE_WRITES=0` to keep reads fusing while writes dispatch directly.
 
@@ -90,7 +90,7 @@ What does *not* coalesce: a projection read (`session.get(key, ["name"])`), anyt
 (async-window-api)=
 ## Async window API: `session.get_many` / `session.put_many`
 
-When you already have a *window* of independent keys to read or write together — not a server batch, just many single-record ops you'd otherwise `await` one at a time — the async window API submits the whole window in one client→PAC crossing and delivers each key's result positionally. It amortizes the per-op submission cost that caps the single-op fast path, reaching a throughput tier the transparent coalescer can't.
+When you already have a *window* of independent keys to read or write together — not a server batch, just many single-record ops you'd otherwise `await` one at a time — the async window API submits the whole window in one client→PNC crossing and delivers each key's result positionally. It amortizes the per-op submission cost that caps the single-op fast path, reaching a throughput tier the transparent coalescer can't.
 
 ```python
 import asyncio
@@ -167,7 +167,7 @@ Use the builder when you need filter expressions, batch operations, secondary-in
 
 ## AsyncPool — multi-loop async on free-threaded Python only
 
-`AsyncPool` runs N event loops on N OS threads with one cluster member (one PAC client) each, so async work can use multiple CPU cores in parallel. **It only helps under free-threaded Python.**
+`AsyncPool` runs N event loops on N OS threads with one cluster member (one PNC client) each, so async work can use multiple CPU cores in parallel. **It only helps under free-threaded Python.**
 
 ```python
 from aerospike_sdk import AsyncPool, Behavior, ClusterDefinition
@@ -181,10 +181,10 @@ async with AsyncPool(ClusterDefinition("localhost", 3000), loop_count=4) as pool
 ```
 
 **Scaling**: at `loop_count >= 4`, AsyncPool automatically gives each member
-its own PAC Tokio runtime (per-Client runtime isolation). This eliminates the
+its own PNC Tokio runtime (per-Client runtime isolation). This eliminates the
 cross-loop scheduler contention that previously capped throughput at 4 loops,
 so TPS scales monotonically. Measured on 8-core hardware, FT Python (with
-uvloop enabled by default and PAC's drainer thread serializing
+uvloop enabled by default and PNC's drainer thread serializing
 `call_soon_threadsafe` wakeups across all pooled Clients):
 
 | Pool size | TPS | p99 latency |
@@ -208,7 +208,7 @@ defaults to `os.cpu_count()` (or 4 if indeterminate).
 free-threading — its per-op savings compound with the multi-loop scaling, worth
 ~**+8%** FT pool throughput over the stdlib selector fallback (measured, 4×64
 fast-path, latency-neutral). This
-is safe because PAC routes its cross-thread completion wakeups through a
+is safe because PNC routes its cross-thread completion wakeups through a
 self-pipe watched by an `add_reader` callback instead of `call_soon_threadsafe`,
 sidestepping a libuv free-threading race (MagicStack/uvloop #720) that otherwise
 stalls a multi-loop pool on uvloop releases lacking the upstream fix. The
@@ -226,7 +226,7 @@ On regular Python it's a wash — pick AsyncPool if it fits your code shape (you
 - **Sync ([`aerospike_sdk.sync`](../api/sync/cluster-definition.md))** is best when:
   - You're integrating into an existing sync codebase (Django views, scripts, etc.)
   - Per-op latency matters more than concurrency depth
-  - You want the absolute lowest per-op overhead — PSDK sync fast-path is roughly at parity with PAC's direct blocking API
+  - You want the absolute lowest per-op overhead — PSDK sync fast-path is roughly at parity with PNC's direct blocking API
 
 - **Async (top-level [`aerospike_sdk`](../api/cluster-definition.md))** is best when:
   - You already have an asyncio event loop (FastAPI, aiohttp, etc.)
@@ -305,9 +305,9 @@ The **async window API** is client-side fusion of N independent point ops (not a
 
 ## Why sync and async perform similarly now
 
-The cost stacks for sync and async used to diverge sharply — async historically lost ~50% to the asyncio ↔ Tokio bridge per op. With PAC's drainer thread (a single persistent waker thread handling all Tokio→asyncio wakeups) plus uvloop installed by default under FT, the async ceiling has closed substantially:
+The cost stacks for sync and async used to diverge sharply — async historically lost ~50% to the asyncio ↔ Tokio bridge per op. With PNC's drainer thread (a single persistent waker thread handling all Tokio→asyncio wakeups) plus uvloop installed by default under FT, the async ceiling has closed substantially:
 
-- **Sync clients pay only the PyO3 boundary cost** plus a per-op thread-handoff between caller and Tokio (~71 µs per op). PSDK fast-path adds ~3-5% on top of PAC direct — the SDK layer is essentially free.
+- **Sync clients pay only the PyO3 boundary cost** plus a per-op thread-handoff between caller and Tokio (~71 µs per op). PSDK fast-path adds ~3-5% on top of PNC direct — the SDK layer is essentially free.
 - **Async clients pay PyO3 + asyncio event-loop scheduling**. The drainer thread eliminates per-batch `Python::attach` churn on Tokio workers; uvloop reduces per-op loop-thread cost. With both, single-loop async tops out around 130K TPS (the asyncio loop thread is now the single-threaded bottleneck, doing per-op `set_result` and task wakeup).
 - **AsyncPool with N loops** breaks past the single-loop ceiling by parallelizing the loop work across N Python threads. 4-8 loops scale to 280-317K TPS — above the production sync ceiling on the same hardware.
 - **The chained-builder API pays an additional Python-interpreter cost** on single-key calls — per-op object allocation, validation, and stream-wrap cost. On batch calls, that cost amortizes across keys; at batch=128 the sync builder reaches ~506K TPS — much higher than any single-key cell. Use the fast-path (`session.get`/`session.put`) for single-key dispatch without filters; use the builder with batching for high-throughput bulk workloads.

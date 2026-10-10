@@ -37,7 +37,7 @@ from tests.integration.query_selection_helpers import (
     HINT_SCORE_INDEX_NAME,
     count_records_async,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 # Indexed on `age`, so this predicate can be served by HINT_INDEX_NAME.
 INDEXED_PREDICATE = "$.age >= 25"

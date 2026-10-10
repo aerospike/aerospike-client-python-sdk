@@ -17,11 +17,11 @@
 
 import pytest
 from aerospike_sdk import IndexNotFoundError, ResultCode, UDFLang
-from aerospike_async import Filter
+from aerospike_native import Filter
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "pfc_bg_task"
@@ -55,7 +55,7 @@ end
 
 
 def _wait_task(cluster, task) -> bool:
-    """Wait for ``task`` synchronously via PAC's blocking sibling."""
+    """Wait for ``task`` synchronously via PNC's blocking sibling."""
     return task.wait_till_complete_blocking()
 
 

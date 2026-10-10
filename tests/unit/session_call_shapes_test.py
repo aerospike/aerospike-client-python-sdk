@@ -19,7 +19,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from aerospike_async import ClientPolicy
+from aerospike_native import ClientPolicy
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.aio.client import Client

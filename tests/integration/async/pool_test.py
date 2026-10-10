@@ -18,7 +18,7 @@
 The pool spins up N event loops on N OS threads, each with its own
 :class:`~aerospike_sdk.aio.cluster.Cluster` member built from one shared
 :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`.  Each
-member's PAC ``CompletionBridge`` is bound to its own loop, so completions
+member's PNC ``CompletionBridge`` is bound to its own loop, so completions
 never cross loops and the cross-loop guard in the bridge never fires during
 normal use.
 """
@@ -78,7 +78,7 @@ class TestAsyncPoolDispatch:
     async def test_run_roundtrips_on_pool_loop(self, aerospike_host, make_cluster_definition):
         """Each `run` call dispatches a put+get; completions land on the right loop.
 
-        The cross-loop guard in PAC's CompletionBridge is what makes this a
+        The cross-loop guard in PNC's CompletionBridge is what makes this a
         real test: if the pool wired up loops incorrectly, the operation
         would fail with the owning-loop RuntimeError.
         """
@@ -139,7 +139,7 @@ class TestAsyncPoolLoopType:
     (MagicStack/uvloop issues #720, #721) that stalls a multi-loop pool when
     the GIL is disabled — the per-loop race fires across all loops at once and
     wedges (a hard hang on the fast-path pool path). ``AsyncPool`` therefore
-    uses uvloop under free-threading only when the race is mitigated (PAC's
+    uses uvloop under free-threading only when the race is mitigated (PNC's
     pipe-wake transport active — the default — or a fixed uvloop release);
     otherwise it falls back to the stdlib selector loop. Under GIL-on the race
     can't fire, so uvloop is always the default. ``use_uvloop`` forces either.

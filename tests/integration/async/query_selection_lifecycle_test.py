@@ -28,7 +28,7 @@ query-selection seed, whose indexes every other module in the area depends on.
 from __future__ import annotations
 
 import pytest
-from aerospike_async import IndexType
+from aerospike_native import IndexType
 
 from aerospike_sdk import DataSet, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
@@ -38,7 +38,7 @@ from tests.integration.query_selection_helpers import (
     create_index_quiet_async,
     drop_index_quiet_async,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 LIFECYCLE_SET = "qsel_lifecycle"
 AGE_BIN = "age"
@@ -56,7 +56,7 @@ async def lifecycle_set(query_selection_cluster):
     """A private set with an age index, restored however the test leaves it."""
     session = query_selection_cluster.session
     client = query_selection_cluster.client
-    pac = client.underlying_client
+    pnc = client.underlying_client
     ds = DataSet.of(NS, LIFECYCLE_SET)
 
     for i in range(SIZE):
@@ -66,13 +66,13 @@ async def lifecycle_set(query_selection_cluster):
             .execute()
         )
     await create_index_quiet_async(
-        pac,
+        pnc,
         set_name=LIFECYCLE_SET,
         bin_name=AGE_BIN,
         index_name=AGE_INDEX,
         index_type=IndexType.NUMERIC,
     )
-    yield session, pac, client, ds
+    yield session, pnc, client, ds
     for name in (AGE_INDEX, SCORE_INDEX):
         await drop_index_quiet_async(client, NS, LIFECYCLE_SET, name)
     for i in range(SIZE):
@@ -125,10 +125,10 @@ class TestIndexLifecycle:
     @requires_query_selection
     async def test_rows_are_unchanged_after_an_index_is_created(self, lifecycle_set):
         """Adding an index the predicate cannot use does not change the answer."""
-        session, pac, _, _ = lifecycle_set
+        session, pnc, _, _ = lifecycle_set
         before = await _ages(session)
         await create_index_quiet_async(
-            pac,
+            pnc,
             set_name=LIFECYCLE_SET,
             bin_name=SCORE_BIN,
             index_name=SCORE_INDEX,
@@ -141,7 +141,7 @@ class TestIndexLifecycle:
         self, lifecycle_set,
     ):
         """A second index appearing mid-iteration does not disturb the set."""
-        session, pac, _, _ = lifecycle_set
+        session, pnc, _, _ = lifecycle_set
         created: set[str] = set()
         stream = await (
             session.query(DataSet.of(NS, LIFECYCLE_SET))
@@ -161,7 +161,7 @@ class TestIndexLifecycle:
                 if len(ages) >= 3 and SCORE_INDEX not in created:
                     created.add(SCORE_INDEX)
                     await create_index_quiet_async(
-                        pac,
+                        pnc,
                         set_name=LIFECYCLE_SET,
                         bin_name=SCORE_BIN,
                         index_name=SCORE_INDEX,

@@ -17,10 +17,10 @@
 
 import pytest_asyncio
 from aerospike_sdk import Exp, MapOrder, MapReturnType, SortedMap
-from aerospike_async import MapOperation, MapPolicy, WritePolicy
+from aerospike_native import MapOperation, MapPolicy, WritePolicy
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 
 NS = general_namespace()
@@ -46,10 +46,10 @@ class TestKOrderedMapOrdering:
         key = 1
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "cherry", 3, policy),
@@ -70,10 +70,10 @@ class TestKOrderedMapOrdering:
         key = 2
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, 50, "fifty", policy),
@@ -96,12 +96,12 @@ class TestKOrderedMapOrdering:
         key = 3
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         keys_reversed = list(range(100, 0, -1))
         ops = [MapOperation.put(BIN, kk, kk * 10, policy) for kk in keys_reversed]
-        await pac.operate(k, ops, policy=WritePolicy())
+        await pnc.operate(k, ops, policy=WritePolicy())
 
         result = await (await session.query(k).execute()).first_or_raise()
         record = result.record
@@ -113,10 +113,10 @@ class TestKOrderedMapOrdering:
         key = 4
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "b", 2, policy),
@@ -125,7 +125,7 @@ class TestKOrderedMapOrdering:
             policy=WritePolicy(),
         )
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "a", 1, policy),
@@ -144,10 +144,10 @@ class TestKOrderedMapOrdering:
         key = 5
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "a", 1, policy),
@@ -158,7 +158,7 @@ class TestKOrderedMapOrdering:
             policy=WritePolicy(),
         )
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.remove_by_key(BIN, "b", MapReturnType.NONE),
@@ -176,10 +176,10 @@ class TestKOrderedMapOrdering:
         key = 9
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "a", 100, policy),
@@ -191,7 +191,7 @@ class TestKOrderedMapOrdering:
             policy=WritePolicy(),
         )
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.remove_by_value(BIN, 200, MapReturnType.NONE),
@@ -210,10 +210,10 @@ class TestKOrderedMapOrdering:
         key = 6
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "z", 26, policy),
@@ -230,7 +230,7 @@ class TestKOrderedMapOrdering:
 
         # Clear and re-insert using MapOperation to preserve K-ordered policy
         items = list(original.items())
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.clear(BIN),
@@ -251,10 +251,10 @@ class TestKVOrderedMapOrdering:
         key = 7
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "cherry", 30, policy),
@@ -275,10 +275,10 @@ class TestKVOrderedMapOrdering:
         key = 8
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_VALUE_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, 50, "fifty", policy),
@@ -321,11 +321,11 @@ class TestNestedOrderedMaps:
         outer_key = 11
         k = DS.id(outer_key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         inner = {"c": 3, "a": 1, "b": 2}
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "z_outer", inner, policy),
@@ -356,10 +356,10 @@ class TestEdgeCases:
         key = 12
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "banana", "s2", policy),
@@ -387,10 +387,10 @@ class TestEdgeCases:
         key = 13
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, b"\x03", "third", policy),
@@ -410,17 +410,17 @@ class TestEdgeCases:
         key = 15
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "a", 1, policy),
         ],
             policy=WritePolicy(),
         )
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.remove_by_key(BIN, "a", MapReturnType.NONE),
@@ -438,10 +438,10 @@ class TestEdgeCases:
         """get_by_rank_range on K-ordered map returns values in rank order."""
         key = 16
         k = DS.id(key)
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "c", 300, policy),
@@ -453,7 +453,7 @@ class TestEdgeCases:
         )
 
         # Rank 0 = smallest value (100), get 3 entries by rank
-        record = await pac.operate(
+        record = await pnc.operate(
             k,
             [
             MapOperation.get_by_rank_range(BIN, 0, 3, MapReturnType.VALUE),
@@ -472,11 +472,11 @@ class TestCdtOrdering:
         key = 17
         k = DS.id(key)
         session = cluster.create_session()
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
         # First create the bin as K-ordered
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "z", 1, policy),
@@ -500,10 +500,10 @@ class TestCdtOrdering:
         """get_by_key_range on K-ordered map returns keys in sorted order."""
         key = 18
         k = DS.id(key)
-        pac = cluster._client.underlying_client
+        pnc = cluster._client.underlying_client
         policy = MapPolicy(MapOrder.KEY_ORDERED, None)
 
-        await pac.operate(
+        await pnc.operate(
             k,
             [
             MapOperation.put(BIN, "e", 5, policy),
@@ -515,7 +515,7 @@ class TestCdtOrdering:
             policy=WritePolicy(),
         )
 
-        record = await pac.operate(
+        record = await pnc.operate(
             k,
             [
             MapOperation.get_by_key_range(BIN, "b", "e", MapReturnType.KEY),

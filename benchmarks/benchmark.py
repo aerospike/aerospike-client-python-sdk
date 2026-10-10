@@ -37,8 +37,8 @@ from benchmarks.workers import (  # noqa: E402
     run_async_many,
     run_async_pool,
     run_legacy_sync,
-    run_pac_async,
-    run_pac_blocking,
+    run_pnc_async,
+    run_pnc_blocking,
     run_sync,
 )
 
@@ -117,12 +117,12 @@ async def _run_async_mode(cfg, runner=None) -> StatsCollector:
 
 
 async def _run_sync_mode(cfg, runner=None) -> StatsCollector:
-    """Drive a thread-pool worker (sync, pac-blocking, or legacy-sync)
+    """Drive a thread-pool worker (sync, pnc-blocking, or legacy-sync)
     from the asyncio loop.
 
     The asyncio loop only runs the ticker + duration sleep; the actual work
     happens on OS threads driven by ``runner``. Defaults to ``run_sync``
-    (PSDK sync); pass ``run_pac_blocking`` for ``--mode pac-blocking`` or
+    (PSDK sync); pass ``run_pnc_blocking`` for ``--mode pnc-blocking`` or
     ``run_legacy_sync`` for ``--mode legacy-sync``.
     """
     _runner = runner or run_sync
@@ -224,7 +224,7 @@ async def _populate(cfg) -> None:
     """
     import time
 
-    from aerospike_async import Key
+    from aerospike_native import Key
     from aerospike_sdk.aio.client import Client
     from aerospike_sdk.policy.behavior import Behavior
 
@@ -282,10 +282,10 @@ async def async_main() -> int:
         # single-loop window worker.
         runner = run_async_pool if cfg.pool_loops > 0 else run_async_many
         stats = await _run_async_mode(cfg, runner=runner)
-    elif cfg.mode == "pac-async":
-        stats = await _run_async_mode(cfg, runner=run_pac_async)
-    elif cfg.mode == "pac-blocking":
-        stats = await _run_sync_mode(cfg, runner=run_pac_blocking)
+    elif cfg.mode == "pnc-async":
+        stats = await _run_async_mode(cfg, runner=run_pnc_async)
+    elif cfg.mode == "pnc-blocking":
+        stats = await _run_sync_mode(cfg, runner=run_pnc_blocking)
     elif cfg.mode == "legacy-sync":
         stats = await _run_sync_mode(cfg, runner=run_legacy_sync)
     elif cfg.mode == "sync":

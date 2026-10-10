@@ -36,8 +36,8 @@ from aerospike_sdk import Key, ResultCode
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import (
     AerospikeError,
-    PacServerError,
-    PacTimeoutError,
+    PncServerError,
+    PncTimeoutError,
     RecordNotFoundError,
     TimeoutError,
 )
@@ -45,30 +45,30 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.sync.session import Session as SyncSession
 
 
-def _make_session(pac_error: Exception) -> Session:
-    pac = MagicMock()
-    pac.get = AsyncMock(side_effect=pac_error)
-    pac.put = AsyncMock(side_effect=pac_error)
-    pac._submit_many_read = AsyncMock(side_effect=pac_error)
-    pac._submit_many_write = AsyncMock(side_effect=pac_error)
+def _make_session(pnc_error: Exception) -> Session:
+    pnc = MagicMock()
+    pnc.get = AsyncMock(side_effect=pnc_error)
+    pnc.put = AsyncMock(side_effect=pnc_error)
+    pnc._submit_many_read = AsyncMock(side_effect=pnc_error)
+    pnc._submit_many_write = AsyncMock(side_effect=pnc_error)
 
     client = MagicMock()
-    client._async_client = pac
+    client._async_client = pnc
     return Session(client=client, behavior=Behavior.DEFAULT)
 
 
-def _make_sync_session(pac_error: Exception) -> SyncSession:
-    pac = MagicMock()
-    pac.get_blocking = MagicMock(side_effect=pac_error)
-    pac.put_blocking = MagicMock(side_effect=pac_error)
+def _make_sync_session(pnc_error: Exception) -> SyncSession:
+    pnc = MagicMock()
+    pnc.get_blocking = MagicMock(side_effect=pnc_error)
+    pnc.put_blocking = MagicMock(side_effect=pnc_error)
 
     client = MagicMock()
-    client.underlying_client = pac
+    client.underlying_client = pnc
     return SyncSession(client=client, behavior=Behavior.DEFAULT)
 
 
-def _pac_timeout(message: str) -> PacTimeoutError:
-    err = PacTimeoutError(message)
+def _pnc_timeout(message: str) -> PncTimeoutError:
+    err = PncTimeoutError(message)
     err.in_doubt = True
     return err
 
@@ -77,60 +77,60 @@ class TestFastPathRaisesSdkTypes:
     """Raised client failures surface as SDK exception types."""
 
     async def test_put_raises_sdk_timeout_with_in_doubt(self):
-        pac_err = _pac_timeout("timed out")
-        session = _make_session(pac_err)
+        pnc_err = _pnc_timeout("timed out")
+        session = _make_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             await session.put(Key("test", "unit", "k1"), {"b": 1})
         assert isinstance(exc_info.value, AerospikeError)
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     async def test_get_raises_sdk_timeout_with_in_doubt(self):
-        pac_err = _pac_timeout("timed out")
-        session = _make_session(pac_err)
+        pnc_err = _pnc_timeout("timed out")
+        session = _make_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             await session.get(Key("test", "unit", "k1"))
         assert isinstance(exc_info.value, AerospikeError)
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     async def test_get_converts_server_error_to_typed_subclass(self):
-        pac_err = PacServerError(
+        pnc_err = PncServerError(
             "not found", ResultCode.KEY_NOT_FOUND_ERROR, False, None, None, None,
         )
-        session = _make_session(pac_err)
+        session = _make_session(pnc_err)
 
         with pytest.raises(RecordNotFoundError) as exc_info:
             await session.get(Key("test", "unit", "k1"))
         assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     async def test_put_many_whole_window_failure_raises_sdk_type(self):
-        pac_err = _pac_timeout("window submit failed")
-        session = _make_session(pac_err)
+        pnc_err = _pnc_timeout("window submit failed")
+        session = _make_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             await session.put_many(
                 [Key("test", "unit", "k1"), Key("test", "unit", "k2")], {"b": 1},
             )
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     async def test_get_many_whole_window_failure_raises_sdk_type(self):
-        pac_err = _pac_timeout("window submit failed")
-        session = _make_session(pac_err)
+        pnc_err = _pnc_timeout("window submit failed")
+        session = _make_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             await session.get_many([Key("test", "unit", "k1")])
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     async def test_catch_all_aerospike_error_matches_fast_path(self):
         """The headline contract: a bare ``except AerospikeError`` catches
         fast-path failures — the exact hole this conversion closes."""
-        session = _make_session(_pac_timeout("timed out"))
+        session = _make_session(_pnc_timeout("timed out"))
 
         with pytest.raises(AerospikeError):
             await session.get(Key("test", "unit", "k1"))
@@ -145,11 +145,11 @@ class TestWindowSlotConversion:
 
     async def test_get_many_slots_are_sdk_typed(self):
         record = MagicMock(name="record")
-        err = PacServerError(
+        err = PncServerError(
             "not found", ResultCode.KEY_NOT_FOUND_ERROR, False, None, None, None,
         )
-        session = _make_session(PacTimeoutError("unused"))
-        session._pac_client._submit_many_read = AsyncMock(
+        session = _make_session(PncTimeoutError("unused"))
+        session._pnc_client._submit_many_read = AsyncMock(
             return_value=([record, err], 1))
 
         slots = await session.get_many(
@@ -159,9 +159,9 @@ class TestWindowSlotConversion:
         assert isinstance(slots[1], AerospikeError)
 
     async def test_put_many_slots_are_sdk_typed(self):
-        err = _pac_timeout("timed out")
-        session = _make_session(PacTimeoutError("unused"))
-        session._pac_client._submit_many_write = AsyncMock(
+        err = _pnc_timeout("timed out")
+        session = _make_session(PncTimeoutError("unused"))
+        session._pnc_client._submit_many_write = AsyncMock(
             return_value=([None, err], 1))
 
         outcomes = await session.put_many(
@@ -176,8 +176,8 @@ class TestWindowSlotConversion:
         """A zero-failure window must return the submission's list unchanged —
         this is the whole point of the flag, so pin it, not just the typing."""
         slots = [MagicMock(name="r1"), MagicMock(name="r2")]
-        session = _make_session(PacTimeoutError("unused"))
-        session._pac_client._submit_many_read = AsyncMock(return_value=(slots, 0))
+        session = _make_session(PncTimeoutError("unused"))
+        session._pnc_client._submit_many_read = AsyncMock(return_value=(slots, 0))
 
         returned = await session.get_many(
             [Key("test", "unit", "k1"), Key("test", "unit", "k2")])
@@ -188,32 +188,32 @@ class TestSyncFastPathRaisesSdkTypes:
     """The sync session's fast paths carry the same conversion contract."""
 
     def test_get_raises_sdk_timeout_with_in_doubt(self):
-        pac_err = _pac_timeout("timed out")
-        session = _make_sync_session(pac_err)
+        pnc_err = _pnc_timeout("timed out")
+        session = _make_sync_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             session.get(Key("test", "unit", "k1"))
         assert isinstance(exc_info.value, AerospikeError)
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     def test_put_raises_sdk_timeout_with_in_doubt(self):
-        pac_err = _pac_timeout("timed out")
-        session = _make_sync_session(pac_err)
+        pnc_err = _pnc_timeout("timed out")
+        session = _make_sync_session(pnc_err)
 
         with pytest.raises(TimeoutError) as exc_info:
             session.put(Key("test", "unit", "k1"), {"b": 1})
         assert isinstance(exc_info.value, AerospikeError)
         assert exc_info.value.in_doubt is True
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err
 
     def test_get_converts_server_error_to_typed_subclass(self):
-        pac_err = PacServerError(
+        pnc_err = PncServerError(
             "not found", ResultCode.KEY_NOT_FOUND_ERROR, False, None, None, None,
         )
-        session = _make_sync_session(pac_err)
+        session = _make_sync_session(pnc_err)
 
         with pytest.raises(RecordNotFoundError) as exc_info:
             session.get(Key("test", "unit", "k1"))
         assert exc_info.value.result_code == ResultCode.KEY_NOT_FOUND_ERROR
-        assert exc_info.value.__cause__ is pac_err
+        assert exc_info.value.__cause__ is pnc_err

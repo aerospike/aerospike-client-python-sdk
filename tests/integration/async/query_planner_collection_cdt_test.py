@@ -30,7 +30,7 @@ These fall back to a scan, so disallowing scans refuses them:
 * range selectors with string bounds;
 * ``.count() == 0`` and ``.exists() == false``.
 
-PAC's query plan does not expose the index-range bytes, so plans are
+PNC's query plan does not expose the index-range bytes, so plans are
 checked by selection, index name and collection type only.
 """
 
@@ -71,7 +71,7 @@ from tests.integration.query_selection_helpers import (
     count_matches_async,
     explain_plan_async,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 CDT_DS = DataSet.of(NS, CDT_SET_NAME)
 HALF = CDT_SIZE // 2

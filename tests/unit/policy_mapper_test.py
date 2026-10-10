@@ -13,12 +13,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Tests for policy_mapper: Settings -> PAC policy type conversion."""
+"""Tests for policy_mapper: Settings -> PNC policy type conversion."""
 
 from datetime import timedelta
 
 import pytest
-from aerospike_async import (
+from aerospike_native import (
     BatchPolicy,
     BatchReadPolicy,
     CommitLevel,
@@ -31,7 +31,7 @@ from aerospike_async import (
     WritePolicy,
 )
 
-from aerospike_sdk.exceptions import PacValueError
+from aerospike_sdk.exceptions import PncValueError
 from aerospike_sdk.policy.policy_mapper import (
     apply_to_read_policy,
     apply_to_write_policy,
@@ -92,12 +92,12 @@ class TestToReadPolicy:
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
         # Out-of-range values are rejected by the underlying client. The SDK
         # surfaces this as a built-in ValueError (matching the rest of the
-        # SDK's input validation), NOT a leaked aerospike_async exception, and
-        # preserves the original PAC error as the cause.
+        # SDK's input validation), NOT a leaked aerospike_native exception, and
+        # preserves the original PNC error as the cause.
         with pytest.raises(ValueError) as exc_info:
             to_read_policy(Settings(read_touch_ttl_percent=bad))
-        assert not isinstance(exc_info.value, PacValueError)
-        assert isinstance(exc_info.value.__cause__, PacValueError)
+        assert not isinstance(exc_info.value, PncValueError)
+        assert isinstance(exc_info.value.__cause__, PncValueError)
 
 
 class TestToWritePolicy:
@@ -159,7 +159,7 @@ class TestToReadOperatePolicy:
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
         with pytest.raises(ValueError) as exc_info:
             to_read_operate_policy(Settings(read_touch_ttl_percent=101))
-        assert not isinstance(exc_info.value, PacValueError)
+        assert not isinstance(exc_info.value, PncValueError)
 
 
 class TestToQueryPolicy:
@@ -258,7 +258,7 @@ class TestToBatchPolicy:
 
     def test_routing_defaults_unchanged(self):
         # Wire-neutrality guard: unset Settings must leave the routing
-        # defaults exactly as PAC constructs them.
+        # defaults exactly as PNC constructs them.
         p = to_batch_policy(Settings())
         assert p.replica == Replica.SEQUENCE
         assert p.read_mode_ap == ReadModeAP.ONE
@@ -296,8 +296,8 @@ class TestToBatchReadPolicy:
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self, bad):
         with pytest.raises(ValueError) as exc_info:
             to_batch_read_policy(Settings(read_touch_ttl_percent=bad))
-        assert not isinstance(exc_info.value, PacValueError)
-        assert isinstance(exc_info.value.__cause__, PacValueError)
+        assert not isinstance(exc_info.value, PncValueError)
+        assert isinstance(exc_info.value.__cause__, PncValueError)
 
 
 class TestApplyToReadPolicy:
@@ -326,8 +326,8 @@ class TestApplyToReadPolicy:
     def test_read_touch_ttl_percent_invalid_raises_builtin_value_error(self):
         with pytest.raises(ValueError) as exc_info:
             apply_to_read_policy(Settings(read_touch_ttl_percent=101), ReadPolicy())
-        assert not isinstance(exc_info.value, PacValueError)
-        assert isinstance(exc_info.value.__cause__, PacValueError)
+        assert not isinstance(exc_info.value, PncValueError)
+        assert isinstance(exc_info.value.__cause__, PncValueError)
 
 
 class TestApplyToWritePolicy:
@@ -378,7 +378,7 @@ class TestTimeoutDelay:
 
 
 class TestToTxnPolicies:
-    """Resolved txn-phase Settings map onto the PAC verify/roll policies."""
+    """Resolved txn-phase Settings map onto the PNC verify/roll policies."""
     def test_verify_all_fields(self):
         s = Settings(
             total_timeout=timedelta(seconds=30),

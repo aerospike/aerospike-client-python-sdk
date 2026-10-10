@@ -20,7 +20,7 @@ Tests expression building and usage with actual database operations.
 
 
 import pytest
-from aerospike_async import FilterExpression
+from aerospike_native import FilterExpression
 
 from aerospike_sdk import Behavior, Exp, in_list, map_keys, map_values, val
 from aerospike_sdk import ExpType, ListReturnType, MapReturnType, ResultCode
@@ -28,7 +28,7 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError
 from aerospike_sdk.policy import Settings
 
-from tests.pac_compat import (
+from tests.pnc_compat import (
     assert_dataset_invalid_ael_rejected_async,
     assert_point_invalid_ael_rejected_async,
     requires_server_compiled_ael,

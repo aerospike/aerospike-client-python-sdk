@@ -39,7 +39,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from aerospike_async import BatchPolicy, Txn
+from aerospike_native import BatchPolicy, Txn
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -72,7 +72,7 @@ def implicit_txn_enabled(sdk_client: Any, txn: Optional[Txn], mode: Optional[Mod
 
 def stamp_txn(policy: Optional[Any], txn: Txn) -> Any:
     """Return ``policy`` with ``txn`` stamped, creating a bare
-    :class:`~aerospike_async.BatchPolicy` when the caller had none."""
+    :class:`~aerospike_native.BatchPolicy` when the caller had none."""
     if policy is None:
         policy = BatchPolicy()
     policy.txn = txn
@@ -88,17 +88,17 @@ def _should_retry(exc: BaseException, attempt: int, attempts: int) -> bool:
 
 
 async def run_in_implicit_txn(
-    pac_client: Any,
+    pnc_client: Any,
     transactions: Any,
     attempt_fn: Callable[[Txn], Awaitable[T]],
 ) -> T:
     """Run one batch attempt inside a fresh implicit transaction (async).
 
-    Creates a :class:`~aerospike_async.Txn`, invokes ``attempt_fn(txn)``
+    Creates a :class:`~aerospike_native.Txn`, invokes ``attempt_fn(txn)``
     (which must stamp the txn on its batch policy), commits on success and
     aborts on failure. Transient MRT conflicts (``MRT_BLOCKED``,
     ``MRT_VERSION_MISMATCH``) and failed commits
-    (:class:`~aerospike_async.exceptions.CommitFailedError`) restart the
+    (:class:`~aerospike_native.exceptions.CommitFailedError`) restart the
     whole attempt with a new transaction, up to
     ``transactions.number_of_attempts`` times. A version mismatch retries
     immediately; anything else waits a jittered
@@ -109,11 +109,11 @@ async def run_in_implicit_txn(
         txn = Txn()
         try:
             result = await attempt_fn(txn)
-            await pac_client.commit(txn)
+            await pnc_client.commit(txn)
             return result
         except Exception as exc:
             try:
-                await pac_client.abort(txn)
+                await pnc_client.abort(txn)
             except Exception:
                 log.debug("implicit txn abort failed", exc_info=True)
             if not _should_retry(exc, attempt, attempts):
@@ -129,7 +129,7 @@ async def run_in_implicit_txn(
 
 
 def run_in_implicit_txn_blocking(
-    pac_client: Any,
+    pnc_client: Any,
     transactions: Any,
     attempt_fn: Callable[[Txn], T],
 ) -> T:
@@ -139,11 +139,11 @@ def run_in_implicit_txn_blocking(
         txn = Txn()
         try:
             result = attempt_fn(txn)
-            pac_client.commit_blocking(txn)
+            pnc_client.commit_blocking(txn)
             return result
         except Exception as exc:
             try:
-                pac_client.abort_blocking(txn)
+                pnc_client.abort_blocking(txn)
             except Exception:
                 log.debug("implicit txn abort failed", exc_info=True)
             if not _should_retry(exc, attempt, attempts):

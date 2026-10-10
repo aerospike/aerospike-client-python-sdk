@@ -49,24 +49,24 @@ class TestMetricsPolicy:
 
     def test_shift_reaches_the_underlying_policy(self):
         """The shift is passed down; the multiplier is derived from it there."""
-        assert MetricsPolicy(latency_shift=1)._to_pac().latency_shift == 1
-        assert MetricsPolicy(latency_shift=1)._to_pac().latency_base == 2
-        assert MetricsPolicy(latency_shift=3)._to_pac().latency_shift == 3
-        assert MetricsPolicy(latency_shift=3)._to_pac().latency_base == 8
+        assert MetricsPolicy(latency_shift=1)._to_pnc().latency_shift == 1
+        assert MetricsPolicy(latency_shift=1)._to_pnc().latency_base == 2
+        assert MetricsPolicy(latency_shift=3)._to_pnc().latency_shift == 3
+        assert MetricsPolicy(latency_shift=3)._to_pnc().latency_base == 8
 
-    def test_fields_pass_through_to_pac(self):
+    def test_fields_pass_through_to_pnc(self):
         mp = MetricsPolicy(
             latency_unit=LatencyUnit.MICROSECONDS,
             latency_columns=18,
             sampler=Sampler.probability(0.25),
             labels=[{"team": "billing"}],
         )
-        pac = mp._to_pac()
-        assert pac.latency_unit == LatencyUnit.MICROSECONDS
-        assert pac.latency_columns == 18
-        assert pac.sampler.range == 1_000_000
-        assert pac.sampler.threshold == 250_000
-        assert pac.labels == [{"team": "billing"}]
+        pnc = mp._to_pnc()
+        assert pnc.latency_unit == LatencyUnit.MICROSECONDS
+        assert pnc.latency_columns == 18
+        assert pnc.sampler.range == 1_000_000
+        assert pnc.sampler.threshold == 250_000
+        assert pnc.labels == [{"team": "billing"}]
 
     def test_shift_below_one_rejected(self):
         with pytest.raises(ValueError):

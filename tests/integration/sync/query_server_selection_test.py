@@ -37,49 +37,49 @@ from tests.integration.query_selection_helpers import (
     count_records_sync,
     explain_plan_blocking,
 )
-from tests.pac_compat import requires_query_selection, requires_server_compiled_ael
+from tests.pnc_compat import requires_query_selection, requires_server_compiled_ael
 
 
 
 class TestSyncQueryExplain:
     @requires_query_selection
     def test_range_selects_secondary_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        plan = explain_plan_blocking(pac, "$.age >= 14 and $.age <= 18")
+        pnc = query_selection_cluster.client.underlying_client
+        plan = explain_plan_blocking(pnc, "$.age >= 14 and $.age <= 18")
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
     @requires_query_selection
     def test_non_indexed_predicate_selects_primary(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        plan = explain_plan_blocking(pac, "$.country == 'US'")
+        pnc = query_selection_cluster.client.underlying_client
+        plan = explain_plan_blocking(pnc, "$.country == 'US'")
 
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
 
     @requires_query_selection
     def test_contradiction_filtered_out(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        plan = explain_plan_blocking(pac, "$.age > 100 and $.age < 10")
+        pnc = query_selection_cluster.client.underlying_client
+        plan = explain_plan_blocking(pnc, "$.age > 100 and $.age < 10")
         assert plan.selection == QuerySelection.FILTERED_OUT
 
     @requires_query_selection
     def test_for_index_hint(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = explain_plan_blocking(
-            pac, where, hint=QueryHint(index_name=INDEX_NAME),
+            pnc, where, hint=QueryHint(index_name=INDEX_NAME),
         )
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
     @requires_query_selection
     def test_plan_bytes_stable_across_repeated_probes(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
-        first = explain_plan_blocking(pac, where)
-        second = explain_plan_blocking(pac, where)
+        first = explain_plan_blocking(pnc, where)
+        second = explain_plan_blocking(pnc, where)
 
         assert first.selection == QuerySelection.SECONDARY_INDEX
         assert first.index_name == INDEX_NAME
@@ -89,10 +89,10 @@ class TestSyncQueryExplain:
 
     @requires_query_selection
     def test_for_index_hint_on_nonexistent_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = explain_plan_blocking(
-            pac, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
+            pnc, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
         )
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -101,10 +101,10 @@ class TestSyncQueryExplain:
 
     @requires_query_selection
     def test_for_index_hint_on_wrong_existing_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=SCORE_INDEX_NAME)
-        plan = explain_plan_blocking(pac, where, hint=hint)
+        plan = explain_plan_blocking(pnc, where, hint=hint)
 
         ages = collect_ages_sync(
             query_selection_cluster.session.query(QSEL_DS)
@@ -164,9 +164,9 @@ class TestSyncQueryExecute:
 
     @requires_query_selection
     def test_plan_then_execute_consistency(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
-        plan = explain_plan_blocking(pac, where)
+        plan = explain_plan_blocking(pnc, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -180,9 +180,9 @@ class TestSyncQueryExecute:
 
     @requires_query_selection
     def test_compound_predicate(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age > 30 and $.country == 'US'"
-        plan = explain_plan_blocking(pac, where)
+        plan = explain_plan_blocking(pnc, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -233,9 +233,9 @@ class TestSyncQueryExecute:
 
     @requires_query_selection
     def test_empty_secondary_index_result(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age == 999"
-        plan = explain_plan_blocking(pac, where)
+        plan = explain_plan_blocking(pnc, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -251,10 +251,10 @@ class TestSyncQueryExecute:
 class TestSyncQuerySelectionRouting:
     @requires_query_selection
     def test_for_index_hint_probes_and_executes(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=INDEX_NAME)
-        plan = explain_plan_blocking(pac, where, hint=hint)
+        plan = explain_plan_blocking(pnc, where, hint=hint)
         ages = collect_ages_sync(
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
@@ -268,10 +268,10 @@ class TestSyncQuerySelectionRouting:
 
     @requires_query_selection
     def test_query_duration_only_hint_still_probes_and_executes(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(query_duration=QueryDuration.SHORT)
-        plan = explain_plan_blocking(pac, where, hint=hint)
+        plan = explain_plan_blocking(pnc, where, hint=hint)
         ages = collect_ages_sync(
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
@@ -300,12 +300,12 @@ class TestSyncQuerySelectionRouting:
 
     @requires_query_selection
     def test_multiple_indexes_auto_select(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         age_where = "$.age >= 14 and $.age <= 18"
         score_where = "$.score >= 40 and $.score <= 44"
 
-        age_plan = explain_plan_blocking(pac, age_where)
-        score_plan = explain_plan_blocking(pac, score_where)
+        age_plan = explain_plan_blocking(pnc, age_where)
+        score_plan = explain_plan_blocking(pnc, score_where)
         ages = collect_ages_sync(
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])

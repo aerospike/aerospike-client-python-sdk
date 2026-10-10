@@ -34,7 +34,7 @@ from aerospike_sdk.operations_shared import (
 
 
 class _FakeClient:
-    """Stand-in for a PAC client exposing the ``cluster_name`` attribute."""
+    """Stand-in for a PNC client exposing the ``cluster_name`` attribute."""
 
     def __init__(self, cluster_name):
         self.cluster_name = cluster_name

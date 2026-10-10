@@ -13,15 +13,15 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Thread-local PAC `LocalClient` proxy.
+"""Thread-local PNC `LocalClient` proxy.
 
 Each Python OS thread that touches this proxy gets its own
-:class:`aerospike_async.LocalClient` — a sync-only client that owns a
+:class:`aerospike_native.LocalClient` — a sync-only client that owns a
 ``current_thread`` Tokio runtime on the calling thread. Eliminates the
 cross-thread worker hop that the shared multi-thread runtime imposes on
 the standard ``Client.*_blocking`` methods.
 
-The proxy duck-types as a PAC ``Client`` for the ``*_blocking`` surface
+The proxy duck-types as a PNC ``Client`` for the ``*_blocking`` surface
 PSDK's sync hot path uses, so :class:`~aerospike_sdk.sync.session.Session` and its builder /
 segment children can use either the shared client or this thread-local
 proxy without code changes.
@@ -53,12 +53,12 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from aerospike_async import ClientPolicy
-from aerospike_async import _LocalClient as LocalClient
+from aerospike_native import ClientPolicy
+from aerospike_native import _LocalClient as LocalClient
 
 
 class _ThreadLocalLocalClient:
-    """Proxy returning a per-thread experimental ``_LocalClient`` from PAC."""
+    """Proxy returning a per-thread experimental ``_LocalClient`` from PNC."""
 
     __slots__ = ("_policy", "_seeds", "_tls", "_closed")
 
@@ -114,7 +114,7 @@ class _ThreadLocalLocalClient:
         # + Python GC).  Future `_get()` calls from any thread error out.
         self._closed = True
 
-    # -- Fallback for any uncommon PAC method ------------------------------
+    # -- Fallback for any uncommon PNC method ------------------------------
 
     def __getattr__(self, name: str) -> Any:
         # Only fires for attrs missing on this proxy; explicit methods above

@@ -24,7 +24,7 @@ import types
 import typing
 from typing import Any, Coroutine, Optional
 
-from aerospike_async import ClientPolicy, UDFLang
+from aerospike_native import ClientPolicy, UDFLang
 
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.node import Node
@@ -45,7 +45,7 @@ from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 
 if typing.TYPE_CHECKING:
-    from aerospike_async import AdminPolicy, RegisterTask, UdfRemoveTask
+    from aerospike_native import AdminPolicy, RegisterTask, UdfRemoveTask
     # These resolve the ClusterBase[_S, _TS] string forward-refs; ruff reads them as unused
     # (F401) because it doesn't count string-subscript usage.
     from aerospike_sdk.aio.session import Session  # noqa: F401
@@ -217,7 +217,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf`
@@ -236,7 +236,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
@@ -257,7 +257,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
@@ -275,7 +275,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.remove_udf`
@@ -287,7 +287,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.list_udf`
@@ -299,7 +299,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.list_indexes`
@@ -459,7 +459,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         # is the single flag the per-op paths test.
         client._cmd_count_on = True
         client._record_on = True
-        client.underlying_client.enable_metrics(effective._to_pac())
+        client.underlying_client.enable_metrics(effective._to_pnc())
         self._start_export_timer(effective)
 
     def disable_metrics(self) -> None:

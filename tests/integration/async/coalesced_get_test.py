@@ -16,7 +16,7 @@
 """Transparent same-tick read coalescer on :meth:`Session.get`.
 
 The coalescer is on by default and must be invisible: a concurrent burst of
-``get`` calls fuses into one PAC crossing, a lone/sequential ``get`` dispatches
+``get`` calls fuses into one PNC crossing, a lone/sequential ``get`` dispatches
 directly, and a missing key raises — every result byte-identical to a read with
 the coalescer disabled.
 """

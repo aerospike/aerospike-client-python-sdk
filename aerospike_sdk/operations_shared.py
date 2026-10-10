@@ -45,7 +45,7 @@ from typing import (
 from typing import Self
 
 
-from aerospike_async import (
+from aerospike_native import (
     Client,
     ExpOperation,
     ExpReadFlags,
@@ -59,12 +59,12 @@ from aerospike_async import (
     Txn,
     WritePolicy,
 )
-from aerospike_async.exceptions import ResultCode
+from aerospike_native.exceptions import ResultCode
 
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.policy.policy_mapper import to_write_policy
@@ -110,7 +110,7 @@ def _cmd_cluster(client: Any) -> Optional[str]:
 
     Read lazily at emit time (only when summaries are enabled), so there is
     no cost on the disabled hot path and no per-operation plumbing. ``client``
-    is the PAC client held by the builder; it exposes ``cluster_name`` when the
+    is the PNC client held by the builder; it exposes ``cluster_name`` when the
     app configured cluster-name validation, else ``None``. ``getattr`` keeps
     this a no-op on client surfaces that predate the attribute.
     """
@@ -453,7 +453,7 @@ class _ChainVerbs(Generic[_QB]):
         """Opt the chain into (or out of) a specific transaction.
 
         Args:
-            txn: The :class:`~aerospike_async.Txn` to participate in, or
+            txn: The :class:`~aerospike_native.Txn` to participate in, or
                 ``None`` to run without a transaction, including an implicit
                 batch-write one.
 
@@ -660,10 +660,10 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
     ) -> Optional[List[Any]]:
         """Try the blocking single-key fast path via the parent query builder.
 
-        Mirrors :meth:`execute` but uses PAC ``_blocking``. Returns a list
+        Mirrors :meth:`execute` but uses PNC ``_blocking``. Returns a list
         of :class:`~aerospike_sdk.record_result.RecordResult` on success,
         ``None`` when the spec shape isn't yet handled by the blocking
-        dispatch. Raises a converted PAC exception on failure.
+        dispatch. Raises a converted PNC exception on failure.
         """
         return self._qb._execute_blocking_fast_path(on_error)
 
@@ -1409,7 +1409,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             if getattr(exc, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
             else None
         )
-        pfc_exc = _convert_pac_exception(exc, hint=hint)
+        pfc_exc = _convert_pnc_exception(exc, hint=hint)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         _cmd_failed(op_type, rc, pfc_exc)
         if rc == ResultCode.KEY_NOT_FOUND_ERROR:

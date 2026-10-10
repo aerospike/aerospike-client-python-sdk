@@ -16,26 +16,26 @@
 """Wire-shape tests for the SDK's ``in_list`` / ``map_keys`` / ``map_values``
 pass-throughs.
 
-These helpers are now thin wrappers around the native PAC ``FilterExpression``
+These helpers are now thin wrappers around the native PNC ``FilterExpression``
 ExpOps introduced in server 8.1.2 (see the design spec
 ``[PRD] DX: enhance expression usability``). The tests pin the wire form via
 base64 round-trip so any divergence between the SDK pass-through and the
-canonical PAC factory shows up immediately.
+canonical PNC factory shows up immediately.
 """
 
 import inspect
 
 import pytest
-from aerospike_async import FilterExpression as Pac
+from aerospike_native import FilterExpression as Pnc
 from aerospike_sdk.exp import Exp, in_list, map_keys, map_values
 
 
 class TestInList:
-    """``in_list`` is a thin pass-through to the native PAC opcode."""
+    """``in_list`` is a thin pass-through to the native PNC opcode."""
 
     def test_emits_native_in_list_opcode(self):
         sdk = in_list(Exp.string_val("admin"), Exp.list_bin("roles"))
-        native = Pac.in_list(Pac.string_val("admin"), Pac.list_bin("roles"))
+        native = Pnc.in_list(Pnc.string_val("admin"), Pnc.list_bin("roles"))
         assert sdk.base64() == native.base64()
 
     def test_signature_has_no_ctx_param(self):
@@ -48,11 +48,11 @@ class TestInList:
 
 
 class TestMapKeys:
-    """``map_keys`` is a thin pass-through to the native PAC opcode."""
+    """``map_keys`` is a thin pass-through to the native PNC opcode."""
 
     def test_emits_native_map_keys_opcode(self):
         sdk = map_keys(Exp.map_bin("scores"))
-        native = Pac.map_keys(Pac.map_bin("scores"))
+        native = Pnc.map_keys(Pnc.map_bin("scores"))
         assert sdk.base64() == native.base64()
 
     def test_signature_has_no_ctx_param(self):
@@ -61,11 +61,11 @@ class TestMapKeys:
 
 
 class TestMapValues:
-    """``map_values`` is a thin pass-through to the native PAC opcode."""
+    """``map_values`` is a thin pass-through to the native PNC opcode."""
 
     def test_emits_native_map_values_opcode(self):
         sdk = map_values(Exp.map_bin("scores"))
-        native = Pac.map_values(Pac.map_bin("scores"))
+        native = Pnc.map_values(Pnc.map_bin("scores"))
         assert sdk.base64() == native.base64()
 
     def test_signature_has_no_ctx_param(self):

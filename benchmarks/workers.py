@@ -25,9 +25,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, List, Optional, Tuple, Union
 
-from aerospike_async import FastRng, Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
-from aerospike_async import _LocalClient as _PacLocalClient
-from aerospike_async.exceptions import RecordNotFound as _AsRecordNotFound
+from aerospike_native import FastRng, Key, ReadPolicy, WritePolicy, new_client, new_client_blocking
+from aerospike_native import _LocalClient as _PncLocalClient
+from aerospike_native.exceptions import RecordNotFound as _AsRecordNotFound
 
 from aerospike_sdk import AsyncPool
 from aerospike_sdk.aio.client import Client
@@ -68,7 +68,7 @@ _SELF_TEST_VAL = 0x5AFEC0DE
 
 # Hard ceiling on each self-test helper. Catches connectivity / partition /
 # TLS / services-alternate-mismatch hangs by failing fast before the timed
-# phase — without this, a PAC retry loop on an unroutable partition keeps
+# phase — without this, a PNC retry loop on an unroutable partition keeps
 # the bench process alive forever even though no real op makes progress.
 # Override via `BENCH_SELFTEST_TIMEOUT_SEC` env var (positive float seconds).
 def _selftest_timeout_default() -> float:
@@ -88,7 +88,7 @@ _SELF_TEST_TIMEOUT_HINT = (
     "Check connectivity to the seed host, that `--services-alternate` / "
     "`--no-services-alternate` matches the cluster's `alternate-access-address` "
     "configuration, that the namespace / set exist, and that TLS settings are "
-    "correct. PAC's default retry policy keeps trying on partition-routing "
+    "correct. PNC's default retry policy keeps trying on partition-routing "
     "errors, so without this fast-fail the bench process hangs."
 )
 
@@ -112,7 +112,7 @@ def _self_test_timeout_fail(mode: str) -> RuntimeError:
 def _run_sync_self_test_with_timeout(mode: str, fn) -> None:
     """Run a sync self-test on a worker thread with a hard wall-clock bound.
 
-    The PAC blocking call is uninterruptible from Python, so we cannot
+    The PNC blocking call is uninterruptible from Python, so we cannot
     cancel an in-flight `*_blocking` op. Instead the watchdog raises a
     ``RuntimeError`` on the caller; the bench framework treats that as
     "abort the run" and the daemon thread is reaped on process exit.
@@ -175,45 +175,45 @@ async def _self_test_psdk_async(session: Session, dataset: DataSet) -> None:
         raise _self_test_timeout_fail("psdk-async")
 
 
-def _self_test_pac_blocking(client: Any, dataset: DataSet) -> None:
+def _self_test_pnc_blocking(client: Any, dataset: DataSet) -> None:
     def _inner() -> None:
         key = dataset.id(_SELF_TEST_KEY)
         client.put_blocking(key, {_SELF_TEST_BIN: _SELF_TEST_VAL}, policy=WritePolicy())
         rec = client.get_blocking(key, policy=ReadPolicy())
         if rec is None:
-            raise _self_test_fail("pac-blocking", "get returned no record after put")
+            raise _self_test_fail("pnc-blocking", "get returned no record after put")
         got = rec.bins.get(_SELF_TEST_BIN)
         if got != _SELF_TEST_VAL:
             raise _self_test_fail(
-                "pac-blocking", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+                "pnc-blocking", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
             )
 
-    _run_sync_self_test_with_timeout("pac-blocking", _inner)
+    _run_sync_self_test_with_timeout("pnc-blocking", _inner)
 
 
-async def _self_test_pac_async(client: Any, dataset: DataSet) -> None:
+async def _self_test_pnc_async(client: Any, dataset: DataSet) -> None:
     async def _inner() -> None:
         key = dataset.id(_SELF_TEST_KEY)
         await client.put(key, {_SELF_TEST_BIN: _SELF_TEST_VAL})
         rec = await client.get(key)
         if rec is None:
-            raise _self_test_fail("pac-async", "get returned no record after put")
+            raise _self_test_fail("pnc-async", "get returned no record after put")
         got = rec.bins.get(_SELF_TEST_BIN)
         if got != _SELF_TEST_VAL:
             raise _self_test_fail(
-                "pac-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
+                "pnc-async", f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}"
             )
 
     try:
         await asyncio.wait_for(_inner(), timeout=_SELF_TEST_TIMEOUT_SEC)
     except asyncio.TimeoutError:
-        raise _self_test_timeout_fail("pac-async")
+        raise _self_test_timeout_fail("pnc-async")
 
 
 def _is_not_found(exc: BaseException) -> bool:
     """A cache miss on a point read — counted as success-with-no-record,
-    not as an error. PAC's blocking/async get raises
-    ``aerospike_async.exceptions.RecordNotFound``; PSDK's fast-path
+    not as an error. PNC's blocking/async get raises
+    ``aerospike_native.exceptions.RecordNotFound``; PSDK's fast-path
     ``session.get`` raises ``aerospike_sdk.exceptions.RecordNotFoundError``
     (a distinct type — both must be recognized here). The legacy
     ``aerospike`` C client raises its own ``RecordNotFound`` (checked
@@ -476,7 +476,7 @@ def _build_op_sync(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
-    # Per-op key construction uses PAC's Key.from_int_user_key fast path —
+    # Per-op key construction uses PNC's Key.from_int_user_key fast path —
     # skips Python str() conversion + PythonValue dispatch (~2 µs → ~500 ns
     # per call). The bench's FastRng (xoshiro256++) supplies kid; key
     # construction stays per-op (matches JSDK methodology).
@@ -654,7 +654,7 @@ def _build_op_async(
 ):
     """Build an async per-op callable for the configured workload.
 
-    Mirrors :func:`_build_op_sync`; the per-op closure awaits PAC's async
+    Mirrors :func:`_build_op_sync`; the per-op closure awaits PNC's async
     surface (``session.get`` / ``session.put`` fast-path or
     ``session.query/upsert(...).execute()`` builder). Single-bin specs use
     the literal ``{b0: kid}`` payload — no per-op rng for values.
@@ -679,7 +679,7 @@ def _build_op_async(
     b0_name = fields_t[0].name
     ds_id = dataset.id
 
-    # Per-op key construction uses PAC's Key.from_int_user_key fast path
+    # Per-op key construction uses PNC's Key.from_int_user_key fast path
     # (skips Python str() + PythonValue dispatch, ~2 µs → ~500 ns per call).
     # Bench's FastRng supplies kid; Key construction stays per-op (JSDK
     # methodology). prebuilt_keys is legacy A/B path.
@@ -1326,10 +1326,10 @@ def run_sync(
 
     # One SyncClient + session across all worker threads. When
     # `cfg.current_thread_runtime` is True, the SyncClient internally
-    # installs a thread-local proxy: each worker thread gets its own PAC
+    # installs a thread-local proxy: each worker thread gets its own PNC
     # `LocalClient` (per-thread Tokio current_thread runtime + per-thread
     # connection pool) on first op. The shared SyncClient is just a
-    # router; the actual PAC clients are thread-bound.
+    # router; the actual PNC clients are thread-bound.
     ct_runtime = bool(getattr(cfg, "current_thread_runtime", False))
     with SyncClient(
         cfg.seeds, policy=policy,
@@ -1399,31 +1399,31 @@ def run_sync(
                 f.result()
 
 
-def run_pac_blocking(
+def run_pnc_blocking(
     cfg: WorkloadConfig,
     stats: StatsCollector,
     stop: threading.Event,
     connected: threading.Event | None = None,
 ) -> None:
-    """Worker for ``--mode pac-blocking`` — direct PAC sync.
+    """Worker for ``--mode pnc-blocking`` — direct PNC sync.
 
-    Each OS thread shares one PAC client built via ``new_client_blocking``
+    Each OS thread shares one PNC client built via ``new_client_blocking``
     and calls ``_blocking`` entries directly — no PSDK session involved.
     Single-bin specs use a literal ``{b0: kid}`` write payload.
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-blocking mode currently supports only RU/I workloads (got {cfg.workload.name})."
+            f"pnc-blocking mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError("pac-blocking mode does not yet support --batch-size > 1.")
+        raise NotImplementedError("pnc-blocking mode does not yet support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     seeds = cfg.seeds
     write_policy = WritePolicy()
     read_policy = ReadPolicy()
     # Mirror PSDK SyncSession's cached-policy plumbing: pass both AP and
-    # SC variants so PAC's `*_blocking` entry picks one at the C boundary
+    # SC variants so PNC's `*_blocking` entry picks one at the C boundary
     # via the in-memory partition map (no Python-side info call).
     write_policy_sc = WritePolicy()
     read_policy_sc = ReadPolicy()
@@ -1444,7 +1444,7 @@ def run_pac_blocking(
     # ct_runtime: each worker thread gets its own `_LocalClient` (per-thread
     # current_thread Tokio runtime, no cross-thread worker hop). Without
     # ct_runtime: one shared multi-thread Client across all workers
-    # (PAC default).
+    # (PNC default).
     ct_runtime = bool(getattr(cfg, "current_thread_runtime", False))
     _tls = threading.local() if ct_runtime else None
 
@@ -1454,7 +1454,7 @@ def run_pac_blocking(
         # thread. So both construction AND drop must happen inside the
         # watchdog thread, not the calling main thread.
         def _ct_runtime_self_test() -> None:
-            client = _PacLocalClient(policy, seeds)
+            client = _PncLocalClient(policy, seeds)
             key = dataset.id(_SELF_TEST_KEY)
             client.put_blocking(
                 key, {_SELF_TEST_BIN: _SELF_TEST_VAL}, policy=WritePolicy(),
@@ -1462,23 +1462,23 @@ def run_pac_blocking(
             rec = client.get_blocking(key, policy=ReadPolicy())
             if rec is None:
                 raise _self_test_fail(
-                    "pac-blocking-ct_runtime",
+                    "pnc-blocking-ct_runtime",
                     "get returned no record after put",
                 )
             got = rec.bins.get(_SELF_TEST_BIN)
             if got != _SELF_TEST_VAL:
                 raise _self_test_fail(
-                    "pac-blocking-ct_runtime",
+                    "pnc-blocking-ct_runtime",
                     f"got {_SELF_TEST_BIN}={got!r} expected {_SELF_TEST_VAL!r}",
                 )
 
         _run_sync_self_test_with_timeout(
-            "pac-blocking-ct_runtime", _ct_runtime_self_test,
+            "pnc-blocking-ct_runtime", _ct_runtime_self_test,
         )
         shared_client = None
     else:
         shared_client = new_client_blocking(policy, seeds)
-        _self_test_pac_blocking(shared_client, dataset)
+        _self_test_pnc_blocking(shared_client, dataset)
     if connected is not None:
         connected.set()
 
@@ -1486,7 +1486,7 @@ def run_pac_blocking(
         if ct_runtime:
             c = getattr(_tls, "client", None)
             if c is None:
-                c = _PacLocalClient(policy, seeds)
+                c = _PncLocalClient(policy, seeds)
                 _tls.client = c
             return c
         return shared_client
@@ -1587,25 +1587,25 @@ def run_pac_blocking(
                 pass
 
 
-async def run_pac_async(
+async def run_pnc_async(
     cfg: WorkloadConfig,
     stats: StatsCollector,
     stop: asyncio.Event,
     connected: asyncio.Event | None = None,
 ) -> None:
-    """Worker for ``--mode pac-async`` — direct PAC async client.
+    """Worker for ``--mode pnc-async`` — direct PNC async client.
 
-    One shared ``aerospike_async`` client and N concurrent asyncio tasks.
+    One shared ``aerospike_native`` client and N concurrent asyncio tasks.
     No PSDK session, no builder; calls ``client.get(k, policy=rp)`` /
     ``client.put(k, bins, policy=wp)`` directly. Single-bin specs use a
     literal ``{b0: kid}`` write payload.
     """
     if cfg.workload not in (WorkloadKind.READ_UPDATE, WorkloadKind.INSERT):
         raise NotImplementedError(
-            f"pac-async mode currently supports only RU/I workloads (got {cfg.workload.name})."
+            f"pnc-async mode currently supports only RU/I workloads (got {cfg.workload.name})."
         )
     if cfg.batch_size > 1:
-        raise NotImplementedError("pac-async mode does not support --batch-size > 1.")
+        raise NotImplementedError("pnc-async mode does not support --batch-size > 1.")
 
     policy = client_policy_from_config(cfg)
     read_policy = ReadPolicy()
@@ -1633,7 +1633,7 @@ async def run_pac_async(
     client = await new_client(policy, cfg.seeds)
     try:
         # Self-test BEFORE `connected.set()` so a failure aborts the bench.
-        await _self_test_pac_async(client, DataSet.of(ns, set_name))
+        await _self_test_pnc_async(client, DataSet.of(ns, set_name))
 
         if connected is not None:
             connected.set()

@@ -16,12 +16,12 @@
 """Tests for client-side circuit-breaker plumbing.
 
 These tests verify the wiring between PSDK ``Client(...)`` constructor
-keywords, the underlying :class:`~aerospike_async.ClientPolicy`, and the
+keywords, the underlying :class:`~aerospike_native.ClientPolicy`, and the
 ``MaxErrorRateError`` exception. They do not contact a server.
 """
 
-from aerospike_async import ClientPolicy
-from aerospike_sdk.exceptions import PacMaxErrorRate, _convert_pac_exception
+from aerospike_native import ClientPolicy
+from aerospike_sdk.exceptions import PncMaxErrorRate, _convert_pnc_exception
 
 from aerospike_sdk import BackoffError, MaxErrorRateError
 from aerospike_sdk.aio.client import Client
@@ -66,9 +66,9 @@ class TestClientPlumbing:
         assert c._policy is cp
         assert c._policy.max_error_rate == 99
 
-    def test_aio_client_default_is_pac_default(self, aerospike_host):
+    def test_aio_client_default_is_pnc_default(self, aerospike_host):
         c = Client(aerospike_host)
-        # No override means the PAC defaults flow through unchanged.
+        # No override means the PNC defaults flow through unchanged.
         assert c._policy.max_error_rate == 100
         assert c._policy.error_rate_window == 1
 
@@ -83,7 +83,7 @@ class TestClientPlumbing:
     def test_sync_client_no_kwargs_uses_default_policy(self, aerospike_host):
         # Without any kwargs and no explicit policy, the inherited Client
         # constructor materializes a default ClientPolicy. The user-visible
-        # invariant (PAC sees a default policy at connect time) is unchanged.
+        # invariant (PNC sees a default policy at connect time) is unchanged.
         sc = SyncClient(aerospike_host)
         try:
             assert sc._policy is not None
@@ -93,10 +93,10 @@ class TestClientPlumbing:
 
 
 class TestExceptionMapping:
-    """``_convert_pac_exception`` translates PAC's ``MaxErrorRate`` to PSDK's ``MaxErrorRateError``."""
+    """``_convert_pnc_exception`` translates PNC's ``MaxErrorRate`` to PSDK's ``MaxErrorRateError``."""
 
-    def test_pac_max_error_rate_maps(self):
-        pac_exc = PacMaxErrorRate("node 10.0.0.1:3000 backing off")
-        sdk_exc = _convert_pac_exception(pac_exc)
+    def test_pnc_max_error_rate_maps(self):
+        pnc_exc = PncMaxErrorRate("node 10.0.0.1:3000 backing off")
+        sdk_exc = _convert_pnc_exception(pnc_exc)
         assert isinstance(sdk_exc, MaxErrorRateError)
         assert "10.0.0.1:3000" in str(sdk_exc)

@@ -300,24 +300,24 @@ def run_legacy(
 
 
 # ---------------------------------------------------------------------------
-# PAC benchmark runner
+# PNC benchmark runner
 # ---------------------------------------------------------------------------
 
-def _resolve_pac_path(args) -> Path:
-    if args.pac_path:
-        return args.pac_path.expanduser()
-    env_path = os.environ.get("PAC_PATH")
+def _resolve_pnc_path(args) -> Path:
+    if args.pnc_path:
+        return args.pnc_path.expanduser()
+    env_path = os.environ.get("PNC_PATH")
     if env_path:
         return Path(env_path).expanduser()
     return Path(os.environ.get(
-        "PAC_PATH",
-        str(Path.home() / "tmp" / "aerospike-client-python-async"),
+        "PNC_PATH",
+        str(Path.home() / "code" / "aerospike-client-python-native"),
     )).expanduser()
 
 
-def run_pac_benchmark(
+def run_pnc_benchmark(
     *,
-    pac_path: Path,
+    pnc_path: Path,
     python: str,
     hosts: str,
     namespace: str,
@@ -330,7 +330,7 @@ def run_pac_benchmark(
     cooldown: int,
     batch_size: int = 0,
 ) -> RunResult:
-    """Run the standalone PAC benchmark and parse its output."""
+    """Run the standalone PNC benchmark and parse its output."""
     cmd = [
         python, "-m", "benchmarks.benchmark",
         "-H", hosts, "-n", namespace, "-s", set_name,
@@ -341,17 +341,17 @@ def run_pac_benchmark(
     if batch_size and batch_size > 1:
         cmd.extend(["--batch-size", str(batch_size)])
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(pac_path)
+    env["PYTHONPATH"] = str(pnc_path)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=str(pac_path),
+            cmd, capture_output=True, text=True, cwd=str(pnc_path),
             env=env, timeout=duration + 60,
         )
     except subprocess.TimeoutExpired:
-        return RunResult(client="PAC", mode="async", error="timeout")
+        return RunResult(client="PNC", mode="async", error="timeout")
 
     result = parse_psdk_output(proc.stdout)
-    result.client = "PAC"
+    result.client = "PNC"
     result.mode = "async"
     result.workload = workload
     if proc.returncode != 0 and not result.tps:
@@ -486,15 +486,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Python interpreter for PSDK (default: resolved from repo's .python-version).",
     )
     p.add_argument(
-        "--pac-path",
+        "--pnc-path",
         type=Path,
         default=None,
-        help="Path to PAC repo root (default: $PAC_PATH or ~/tmp/aerospike-client-python-async).",
+        help="Path to PNC repo root (default: $PNC_PATH or ~/code/aerospike-client-python-native).",
     )
     p.add_argument(
-        "--pac-python",
+        "--pnc-python",
         default=None,
-        help="Python interpreter for PAC (default: resolved from repo's .python-version).",
+        help="Python interpreter for PNC (default: resolved from repo's .python-version).",
     )
     p.add_argument(
         "--legacy-path",
@@ -529,8 +529,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--cooldown", type=int, default=0, help="PSDK cooldown intervals.")
     p.add_argument("--runs", type=int, default=1, help="Number of runs for averaging.")
     p.add_argument(
-        "--modes", default="pac,async,sync",
-        help="Comma-separated PSDK modes to test (default: pac,async,sync).",
+        "--modes", default="pnc,async,sync",
+        help="Comma-separated PSDK modes to test (default: pnc,async,sync).",
     )
     p.add_argument("--csv", default=None, metavar="FILE", help="Export results to CSV.")
     p.add_argument(
@@ -575,8 +575,8 @@ def main() -> int:
 
     psdk_path = args.psdk_path or Path(__file__).resolve().parent.parent
     psdk_python = args.psdk_python or _find_python_for_repo(psdk_path)
-    pac_path = _resolve_pac_path(args)
-    pac_python = args.pac_python or _find_python_for_repo(pac_path)
+    pnc_path = _resolve_pnc_path(args)
+    pnc_python = args.pnc_python or _find_python_for_repo(pnc_path)
     legacy_path = _resolve_legacy_path(args)
     legacy_python = args.legacy_python or _find_python_for_repo(legacy_path)
 
@@ -586,11 +586,11 @@ def main() -> int:
 
     all_aggregates: List[AggregateResult] = []
 
-    # --- PAC runs (standalone subprocess in PAC repo) ---
-    if "pac" in modes:
+    # --- PNC runs (standalone subprocess in PNC repo) ---
+    if "pnc" in modes:
         results: List[RunResult] = []
         for run_idx in range(args.runs):
-            label = f"PAC async run {run_idx + 1}/{args.runs}"
+            label = f"PNC async run {run_idx + 1}/{args.runs}"
             print(f"\n>>> {label} ...")
             # Populate via PSDK on the first run if needed.
             if populate and not has_populated:
@@ -606,13 +606,13 @@ def main() -> int:
                 if r_pop.error:
                     print(f"    POPULATE ERROR: {r_pop.error}")
                 has_populated = True
-            if not pac_path.exists():
-                print(f"    WARNING: PAC path not found: {pac_path}")
-                print("    Set --pac-path or $PAC_PATH. Skipping PAC runs.")
+            if not pnc_path.exists():
+                print(f"    WARNING: PNC path not found: {pnc_path}")
+                print("    Set --pnc-path or $PNC_PATH. Skipping PNC runs.")
                 break
-            r = run_pac_benchmark(
-                pac_path=pac_path,
-                python=pac_python,
+            r = run_pnc_benchmark(
+                pnc_path=pnc_path,
+                python=pnc_python,
                 hosts=args.hosts,
                 namespace=args.namespace,
                 set_name=args.set_name,
@@ -633,7 +633,7 @@ def main() -> int:
             all_aggregates.append(aggregate(results))
 
     # --- PSDK runs ---
-    psdk_modes = [m for m in modes if m != "pac"]
+    psdk_modes = [m for m in modes if m != "pnc"]
     for mode in psdk_modes:
         results = []
         for run_idx in range(args.runs):

@@ -13,9 +13,9 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""InfoCommands — synchronous info-command helpers using PAC ``_blocking``.
+"""InfoCommands — synchronous info-command helpers using PNC ``_blocking``.
 
-Never touches asyncio. Each call routes through PAC's ``info_blocking`` /
+Never touches asyncio. Each call routes through PNC's ``info_blocking`` /
 ``info_on_all_nodes_blocking`` and parses the responses the same way the async
 :class:`~aerospike_sdk.aio.info.InfoCommands` does.
 """
@@ -41,23 +41,23 @@ log = logging.getLogger(SdkLoggers.INFO)
 class InfoCommands(InfoCommandsBase):
     """Synchronous high-level info-command helpers.
 
-    Constructed by :meth:`~aerospike_sdk.sync.session.Session.info` (no args). Calls PAC's
+    Constructed by :meth:`~aerospike_sdk.sync.session.Session.info` (no args). Calls PNC's
     ``info_blocking`` / ``info_on_all_nodes_blocking`` directly — no
     asyncio loop is involved.
     """
 
-    def __init__(self, pac_client: Any) -> None:
-        """Pair with the PAC ``aerospike_async.Client`` from the session."""
-        self._pac = pac_client
+    def __init__(self, pnc_client: Any) -> None:
+        """Pair with the PNC ``aerospike_native.Client`` from the session."""
+        self._pnc = pnc_client
 
     def build(self) -> Set[str]:
         """Build strings from every node."""
-        responses = self._pac.info_on_all_nodes_blocking("build")
+        responses = self._pnc.info_on_all_nodes_blocking("build")
         return self._merge_scalar_set(responses)
 
     def namespaces(self) -> Set[str]:
         """Namespace names across the cluster."""
-        responses = self._pac.info_on_all_nodes_blocking("namespaces")
+        responses = self._pnc.info_on_all_nodes_blocking("namespaces")
         return self._merge_delimited_set(responses, ";")
 
     def namespace_details(self, namespace: str) -> Optional[NamespaceDetail]:
@@ -68,7 +68,7 @@ class InfoCommands(InfoCommandsBase):
         consults.
         """
         try:
-            response = self._pac.info_blocking(f"namespace/{namespace}")
+            response = self._pnc.info_blocking(f"namespace/{namespace}")
         except Exception:
             log.debug("namespace_details(%s) failed", namespace, exc_info=True)
             return None
@@ -100,7 +100,7 @@ class InfoCommands(InfoCommandsBase):
             :meth:`sets_per_node`: Per-node counters instead of merged ones.
         """
         command = "sets" if namespace is None else f"sets/{namespace}"
-        responses = self._pac.info_on_all_nodes_blocking(command)
+        responses = self._pnc.info_on_all_nodes_blocking(command)
         return self._merge_set_details(responses)
 
     def set(self, namespace: str, name: str) -> Optional[SetDetail]:
@@ -124,7 +124,7 @@ class InfoCommands(InfoCommandsBase):
         Returns one :class:`~aerospike_sdk.info_types.Sindex` per index. These
         are mappings, so existing key access keeps working.
         """
-        responses = self._pac.info_on_all_nodes_blocking("sindex-list")
+        responses = self._pnc.info_on_all_nodes_blocking("sindex-list")
         return [Sindex(entry) for entry in parse_index_list(responses, namespace=namespace)]
 
     def secondary_index_details(
@@ -135,7 +135,7 @@ class InfoCommands(InfoCommandsBase):
         Returns the parsed counters, not the raw ``{command: body}`` envelope.
         """
         try:
-            response = self._pac.info_blocking(f"sindex/{namespace}/{index_name}")
+            response = self._pnc.info_blocking(f"sindex/{namespace}/{index_name}")
         except Exception:
             log.debug(
                 "secondary_index_details(%s, %s) failed",
@@ -162,7 +162,7 @@ class InfoCommands(InfoCommandsBase):
             per_node = session.info().namespace_details_per_node("customers")
             modes = {node: d.strong_consistency for node, d in per_node.items()}
         """
-        responses = self._pac.info_on_all_nodes_blocking(f"namespace/{namespace}")
+        responses = self._pnc.info_on_all_nodes_blocking(f"namespace/{namespace}")
         return self._per_node_namespace_details(responses, namespace)
 
     def sets_per_node(self, namespace: str) -> Dict[str, List[SetDetail]]:
@@ -183,7 +183,7 @@ class InfoCommands(InfoCommandsBase):
         See Also:
             :meth:`sets`: One merged view across the cluster.
         """
-        responses = self._pac.info_on_all_nodes_blocking(f"sets/{namespace}")
+        responses = self._pnc.info_on_all_nodes_blocking(f"sets/{namespace}")
         return self._per_node_set_details(responses)
 
     def secondary_indexes_per_node(
@@ -200,7 +200,7 @@ class InfoCommands(InfoCommandsBase):
         See Also:
             :meth:`secondary_indexes`: One deduplicated list for the cluster.
         """
-        responses = self._pac.info_on_all_nodes_blocking("sindex-list")
+        responses = self._pnc.info_on_all_nodes_blocking("sindex-list")
         return self._per_node_sindexes(responses, namespace)
 
     def secondary_index_details_per_node(
@@ -219,24 +219,24 @@ class InfoCommands(InfoCommandsBase):
         Returns:
             One :class:`~aerospike_sdk.info_types.SindexDetail` per node.
         """
-        responses = self._pac.info_on_all_nodes_blocking(
+        responses = self._pnc.info_on_all_nodes_blocking(
             f"sindex/{namespace}/{index_name}"
         )
         return self._per_node_sindex_details(responses, namespace, index_name)
 
     def is_cluster_stable(self) -> bool:
         """``True`` when every node reports ``cluster-stable=true``."""
-        responses = self._pac.info_on_all_nodes_blocking("cluster-stable")
+        responses = self._pnc.info_on_all_nodes_blocking("cluster-stable")
         return self._all_nodes_stable(responses)
 
     def get_cluster_size(self) -> int:
         """Number of cluster nodes."""
-        return len(self._pac.node_names())
+        return len(self._pnc.node_names())
 
     def info(self, command: str) -> Dict[str, str]:
         """Raw info command against one random node."""
-        return self._pac.info_blocking(command)
+        return self._pnc.info_blocking(command)
 
     def info_on_all_nodes(self, command: str) -> Dict[str, Dict[str, str]]:
         """Raw info command against every node."""
-        return self._pac.info_on_all_nodes_blocking(command)
+        return self._pnc.info_on_all_nodes_blocking(command)

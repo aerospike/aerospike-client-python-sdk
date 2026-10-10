@@ -16,7 +16,7 @@
 """Transparent same-tick write coalescer on :meth:`Session.put`.
 
 The coalescer is on by default and must be invisible: a concurrent burst of
-``put`` calls fuses into one PAC crossing while each key keeps its own payload,
+``put`` calls fuses into one PNC crossing while each key keeps its own payload,
 a lone/sequential ``put`` dispatches directly, and errors surface per call —
 every outcome identical to a write with the coalescer disabled.
 """

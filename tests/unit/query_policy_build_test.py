@@ -17,7 +17,7 @@
 
 ``limit()`` and ``records_per_second()`` are builder fields applied when the
 policy is built at execute time, so the Behavior's timeouts and retries still
-reach PAC.
+reach PNC.
 """
 
 from datetime import timedelta

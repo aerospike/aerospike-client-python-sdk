@@ -102,9 +102,9 @@ def txn_spy(monkeypatch):
     calls: list = []
     real = impl.run_in_implicit_txn
 
-    async def spy(pac_client, transactions, attempt_fn):
+    async def spy(pnc_client, transactions, attempt_fn):
         calls.append(transactions)
-        return await real(pac_client, transactions, attempt_fn)
+        return await real(pnc_client, transactions, attempt_fn)
 
     monkeypatch.setattr(query_mod, "run_in_implicit_txn", spy)
     return calls
