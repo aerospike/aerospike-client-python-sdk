@@ -27,7 +27,7 @@ nested-CDT navigation at the AEL path layer instead (e.g. ``$.outer.inner``).
 
 from typing import Any, Dict, List, overload
 
-from aerospike_async import FilterExpression as Exp
+from aerospike_native import FilterExpression as Exp
 
 __all__ = ["Exp", "val", "in_list", "map_keys", "map_values"]
 

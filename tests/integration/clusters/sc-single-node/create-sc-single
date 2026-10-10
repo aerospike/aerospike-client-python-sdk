@@ -60,10 +60,10 @@ sleep 10
 # An SC namespace serves nothing until its roster is set, so this is not
 # optional -- without it every read and write answers "partition unavailable".
 # roster.py drives the node through the client, so it needs an interpreter
-# with aerospike_async installed.
+# with aerospike_native installed.
 PYTHON=${PYTHON:-python3}
-if ! "$PYTHON" -c 'import aerospike_async' 2>/dev/null; then
-    echo "error: '$PYTHON' cannot import aerospike_async." >&2
+if ! "$PYTHON" -c 'import aerospike_native' 2>/dev/null; then
+    echo "error: '$PYTHON' cannot import aerospike_native." >&2
     echo "       Run from the PSDK dev environment, or set PYTHON=/path/to/python." >&2
     exit 1
 fi

@@ -30,7 +30,7 @@ from typing import Any, ClassVar, Generic, List, TYPE_CHECKING, TypeVar, Union, 
 from typing import Self
 
 
-from aerospike_async import FilterExpression, Key
+from aerospike_native import FilterExpression, Key
 
 from aerospike_sdk.operations_shared import _ChainVerbs, _ExpirationVerbs
 from aerospike_sdk.server_filter import bind_ael_params

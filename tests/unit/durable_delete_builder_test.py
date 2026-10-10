@@ -177,7 +177,7 @@ class _PromotedSignal(Exception):
 class TestSingleKeyRecordDeletePromotion:
     """``delete_record()`` must force the segment off the single-key hot path.
 
-    The hot-path operate hands PAC an explicit ``durable_delete`` keyword,
+    The hot-path operate hands PNC an explicit ``durable_delete`` keyword,
     which overrides whatever the mode-resolved policy carries — only the
     promoted ``QueryBuilder`` path resolves the durable-delete default from
     the namespace mode. A record-delete that stayed on the hot path would be

@@ -53,7 +53,7 @@ await task.wait_till_complete()
 To send an operation you already built, pass it to `add_operation()`:
 
 ```python
-from aerospike_async import MapOperation, MapReturnType
+from aerospike_native import MapOperation, MapReturnType
 
 task = await (
     session.background_task()

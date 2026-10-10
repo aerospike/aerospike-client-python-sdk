@@ -18,12 +18,12 @@
 import inspect
 from unittest.mock import AsyncMock, MagicMock
 
-import aerospike_async
+import aerospike_native
 import pytest
 import aerospike_sdk
 from aerospike_sdk import CollectionIndexType, CTX, Exp
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
-from aerospike_async import FilterExpression, IndexType
+from aerospike_native import FilterExpression, IndexType
 
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.operations.index import IndexBuilder
@@ -175,11 +175,11 @@ class TestSetIndexCreateAsync:
         b._client._async_client.create_set_index = AsyncMock(return_value=MagicMock())
         b.on_set().named("users_set_idx")
         task = await b.create()
-        pac = b._client._async_client
-        pac.create_set_index.assert_awaited_once_with("test", "users", "users_set_idx")
-        pac.create_index.assert_not_called()
-        pac.create_index_using_expression.assert_not_called()
-        assert task is pac.create_set_index.return_value
+        pnc = b._client._async_client
+        pnc.create_set_index.assert_awaited_once_with("test", "users", "users_set_idx")
+        pnc.create_index.assert_not_called()
+        pnc.create_index_using_expression.assert_not_called()
+        assert task is pnc.create_set_index.return_value
 
     async def test_missing_name_raises(self):
         with pytest.raises(ValueError, match="index_name"):
@@ -208,7 +208,7 @@ class TestSetIndexCreateAsync:
             await b.create()
         client._async_client.create_set_index.assert_not_called()
 
-    async def test_converts_pac_failure(self):
+    async def test_converts_pnc_failure(self):
         b = _async_builder().on_set().named("idx")
         b._client._async_client.create_set_index = AsyncMock(side_effect=RuntimeError("boom"))
         with pytest.raises(AerospikeError):
@@ -264,11 +264,11 @@ class TestSetIndexCreateSync:
         sync_client = MagicMock()
         b = SyncIB(sync_client, "test", "users").on_set().named("users_set_idx")
         task = b.create()
-        pac = sync_client._async_client
-        pac.create_set_index_blocking.assert_called_once_with("test", "users", "users_set_idx")
-        pac.create_index_blocking.assert_not_called()
-        pac.create_index_using_expression_blocking.assert_not_called()
-        assert task is pac.create_set_index_blocking.return_value
+        pnc = sync_client._async_client
+        pnc.create_set_index_blocking.assert_called_once_with("test", "users", "users_set_idx")
+        pnc.create_index_blocking.assert_not_called()
+        pnc.create_index_using_expression_blocking.assert_not_called()
+        assert task is pnc.create_set_index_blocking.return_value
 
     def test_sync_index_type_rejected(self):
         b = SyncIB(MagicMock(), "test", "users").on_set().named("idx").string()
@@ -279,7 +279,7 @@ class TestSetIndexCreateSync:
 class TestExpressionCreateSync:
 
     def test_routes_to_blocking_expression_entry(self):
-        # Sync-specific dispatch: the blocking terminal must hit PAC's
+        # Sync-specific dispatch: the blocking terminal must hit PNC's
         # `*_blocking` sibling, not the async entry.
         sync_client = MagicMock()
         exp = Exp.int_bin("age")
@@ -290,11 +290,11 @@ class TestExpressionCreateSync:
             .integer()
         )
         b.create()
-        pac = sync_client._async_client
-        pac.create_index_using_expression_blocking.assert_called_once_with(
+        pnc = sync_client._async_client
+        pnc.create_index_using_expression_blocking.assert_called_once_with(
             "test", "users", "users_age_exp_idx", IndexType.INTEGER, exp, None,
         )
-        pac.create_index_blocking.assert_not_called()
+        pnc.create_index_blocking.assert_not_called()
 
 
 class TestAelStringCreate:
@@ -307,9 +307,9 @@ class TestAelStringCreate:
             .integer()
         )
         await b.create()
-        pac = b._client._async_client
-        pac.create_index_using_expression.assert_awaited_once()
-        args = pac.create_index_using_expression.await_args[0]
+        pnc = b._client._async_client
+        pnc.create_index_using_expression.assert_awaited_once()
+        args = pnc.create_index_using_expression.await_args[0]
         assert isinstance(args[4], FilterExpression)
 
     async def test_string_without_server_support_raises(self):
@@ -359,9 +359,9 @@ class TestAelStringCreate:
             .integer()
         )
         b.create()
-        pac = sync_client._async_client
-        pac.create_index_using_expression_blocking.assert_called_once()
-        args = pac.create_index_using_expression_blocking.call_args[0]
+        pnc = sync_client._async_client
+        pnc.create_index_using_expression_blocking.assert_called_once()
+        args = pnc.create_index_using_expression_blocking.call_args[0]
         assert isinstance(args[4], FilterExpression)
 
 
@@ -406,7 +406,7 @@ class TestSyncBinPathValidation:
         with pytest.raises(ValueError, match=r"index_type is required\. Call integer\(\)"):
             b.on_bin("age").named("idx_age").create()
 
-    def test_create_converts_pac_failure(self):
+    def test_create_converts_pnc_failure(self):
         client, b = self._sync_builder()
         client._async_client.create_index_blocking.side_effect = RuntimeError("boom")
         with pytest.raises(AerospikeError):
@@ -425,7 +425,7 @@ class TestSyncBinPathValidation:
         )
         assert task is client._async_client.drop_index_blocking.return_value
 
-    def test_drop_converts_pac_failure(self):
+    def test_drop_converts_pnc_failure(self):
         client, b = self._sync_builder()
         client._async_client.drop_index_blocking.side_effect = RuntimeError("boom")
         with pytest.raises(AerospikeError):
@@ -435,9 +435,9 @@ class TestSyncBinPathValidation:
 class TestIndexEntryPoints:
 
     def test_index_type_is_exported_from_the_package(self):
-        """create_index() takes an IndexType, so callers need not import it from PAC."""
+        """create_index() takes an IndexType, so callers need not import it from PNC."""
         assert "IndexType" in aerospike_sdk.__all__
-        assert aerospike_sdk.IndexType is aerospike_async.IndexType
+        assert aerospike_sdk.IndexType is aerospike_native.IndexType
 
     @pytest.mark.parametrize(
         "owner", [Session, SyncSession, Client, SyncClient],

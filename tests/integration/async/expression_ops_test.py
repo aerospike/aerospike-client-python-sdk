@@ -35,7 +35,7 @@ from aerospike_sdk import DataSet, Key
 from aerospike_sdk.exceptions import ServerError
 from aerospike_sdk.exceptions import AerospikeError
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 NS = general_namespace()

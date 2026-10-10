@@ -33,7 +33,7 @@ from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 

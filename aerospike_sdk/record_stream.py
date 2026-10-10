@@ -20,12 +20,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Sequence
 
-from aerospike_async import Key, PartitionFilter, Record
-from aerospike_async.exceptions import ResultCode
+from aerospike_native import Key, PartitionFilter, Record
+from aerospike_native.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import (
     AerospikeError,
-    _convert_pac_exception,
+    _convert_pnc_exception,
     _result_code_to_exception,
 )
 from aerospike_sdk.record_result import RecordResult
@@ -80,12 +80,12 @@ class RecordStream:
 
     __slots__ = (
         "_source", "_closed", "_single_result",
-        # Underlying closeable PAC producer (BatchRecordStream / Recordset)
+        # Underlying closeable PNC producer (BatchRecordStream / Recordset)
         # when this stream is lazily fed from one; None for materialized
         # sources. close() forwards to it so resources release
         # deterministically instead of at garbage-collection time.
         "_closeable",
-        # Chunked-iteration state (set lazily by _from_chunked_pac_recordset).
+        # Chunked-iteration state (set lazily by _from_chunked_pnc_recordset).
         # Slots so set-after-init is allowed without per-instance dict.
         "_chunked", "_chunk_first", "_chunk_recordset",
         "_chunk_reexecute", "_chunk_limit", "_chunk_count", "_counter_ref",
@@ -98,7 +98,7 @@ class RecordStream:
         # Fast-path cache for single-result streams: avoids async
         # iteration overhead in first() / first_or_raise() / __anext__.
         self._single_result: RecordResult | None = None
-        # Chunked fields lazily initialized: _from_chunked_pac_recordset is the
+        # Chunked fields lazily initialized: _from_chunked_pnc_recordset is the
         # only path that touches them. has_more_chunks() reads via getattr
         # so a freshly-constructed stream needs no extra writes here.
         self._chunked = False
@@ -128,12 +128,12 @@ class RecordStream:
         return cls(_iter())
 
     @classmethod
-    def _from_pac_batch_stream(
-        cls, pac_stream: Any, on_error: ErrorHandler | None = None,
+    def _from_pnc_batch_stream(
+        cls, pnc_stream: Any, on_error: ErrorHandler | None = None,
     ) -> RecordStream:
-        """Lazy-feed adapter over a PAC ``BatchRecordStream`` (internal plumbing).
+        """Lazy-feed adapter over a PNC ``BatchRecordStream`` (internal plumbing).
 
-        The PAC stream yields ``(idx, BatchRecord)`` tuples in completion
+        The PNC stream yields ``(idx, BatchRecord)`` tuples in completion
         order (the node that responds first yields first), not input order.
         ``idx`` is the position of the originating op in the input ops list;
         it's mapped to :attr:`RecordResult.index` so positional consumers
@@ -143,10 +143,10 @@ class RecordStream:
         Per-key errors land on each ``BatchRecord.result_code`` and surface
         as :class:`RecordResult` with ``is_ok=False``. Cluster-level errors
         raise from ``__anext__`` and are converted to PSDK exceptions via
-        :func:`_convert_pac_exception`.
+        :func:`_convert_pnc_exception`.
 
         Args:
-            pac_stream: PAC ``BatchRecordStream`` to drain.
+            pnc_stream: PNC ``BatchRecordStream`` to drain.
             on_error: Optional ``(key, index, exception) -> None`` callback.
                 When set, per-key failures are dispatched to the handler
                 and excluded from the returned stream; cluster-level
@@ -154,7 +154,7 @@ class RecordStream:
         """
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
-                async for idx, br in pac_stream:
+                async for idx, br in pnc_stream:
                     rc = br.result_code
                     if rc is None:
                         rc = ResultCode.OK
@@ -180,20 +180,20 @@ class RecordStream:
                         exp_trace=exp_trace,
                     )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
             finally:
                 # Release the receiver on exhaustion / early GeneratorExit
                 # (e.g. the consumer breaks out of the loop and the generator
                 # is collected) even if close() was never called explicitly.
-                pac_stream.close()
+                pnc_stream.close()
 
         inst = cls(_iter())
-        inst._closeable = pac_stream
+        inst._closeable = pnc_stream
         return inst
 
     @classmethod
-    def _from_pac_recordset(cls, recordset) -> RecordStream:
-        """Wrap a PAC ``Recordset`` (async iterable of ``Record``) — internal plumbing.
+    def _from_pnc_recordset(cls, recordset) -> RecordStream:
+        """Wrap a PNC ``Recordset`` (async iterable of ``Record``) — internal plumbing.
 
         Each yielded ``Record`` is converted to a :class:`RecordResult` with
         ``result_code=OK`` and ``index=-1`` (queries have no positional index).
@@ -208,7 +208,7 @@ class RecordStream:
                         result_code=ResultCode.OK,
                     )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
             finally:
                 recordset.close()
         inst = cls(_iter())
@@ -216,19 +216,19 @@ class RecordStream:
         return inst
 
     @classmethod
-    def _from_chunked_pac_recordset(
+    def _from_chunked_pnc_recordset(
         cls,
         recordset: Any,
         reexecute: Callable[[PartitionFilter], Awaitable[Any]],
         limit: int = 0,
     ) -> RecordStream:
-        """Wrap a PAC ``Recordset`` for chunked iteration — internal plumbing.
+        """Wrap a PNC ``Recordset`` for chunked iteration — internal plumbing.
 
         The stream yields records from the current chunk.  Call
         :meth:`has_more_chunks` to advance to the next server chunk.
 
         Args:
-            recordset: The PAC ``Recordset`` from the first query call.
+            recordset: The PNC ``Recordset`` from the first query call.
             reexecute: An async callable that accepts an updated
                 ``PartitionFilter`` and returns a new ``Recordset``.
             limit: Optional overall record limit (0 = unlimited).
@@ -262,7 +262,7 @@ class RecordStream:
                         key=key, record=record, result_code=ResultCode.OK,
                     )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
 
         inst = cls(_iter())
         inst._chunk_count = already_counted
@@ -347,7 +347,7 @@ class RecordStream:
         Returns ``False`` when:
         * the server cursor is done (all partitions scanned), or
         * the overall ``limit`` has been reached, or
-        * the stream was not created with :meth:`_from_chunked_pac_recordset`.
+        * the stream was not created with :meth:`_from_chunked_pnc_recordset`.
 
         Raises:
             AerospikeError: The cursor read or the next chunk's query failed.
@@ -386,7 +386,7 @@ class RecordStream:
                 return False
             recordset = await self._chunk_reexecute(pf)
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
         # The prior chunk's recordset is fully consumed and its cursor read;
         # release it now rather than at GC time before adopting the new one.
         prior = self._closeable

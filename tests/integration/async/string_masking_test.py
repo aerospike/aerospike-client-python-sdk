@@ -32,9 +32,9 @@ Gated on FOUR conditions:
 PSDK exposes ``Session.info()`` so masking rules are applied via the PSDK
 surface. User/role management is not on PSDK's SDK layer (by design —
 expect ``asadm`` or the low-level client for that), so user setup
-borrows PAC's ``new_client`` admin path. Test bodies and masking-rule
+borrows PNC's ``new_client`` admin path. Test bodies and masking-rule
 plumbing go through PSDK; only ``create_user`` / ``drop_user`` /
-``grant_roles`` drop to PAC.
+``grant_roles`` drop to PNC.
 """
 
 import asyncio
@@ -43,7 +43,7 @@ import os
 import pytest
 import pytest_asyncio
 
-from aerospike_async import ClientPolicy as _PacClientPolicy, new_client
+from aerospike_native import ClientPolicy as _PncClientPolicy, new_client
 from aerospike_sdk.exceptions import ResultCode, SecurityNotEnabled, ServerError
 
 from aerospike_sdk import ClusterDefinition, DataSet, Host
@@ -59,7 +59,7 @@ _BIN_UNMASKED = "public"
 _BIN_CONSTANT = "secret"
 _RECORD_KEY = "psdk_mask_record"
 
-# PSDK-specific user names to avoid collision with PAC's parallel suite
+# PSDK-specific user names to avoid collision with PNC's parallel suite
 _USER_READER = "psdk_strops_reader"
 _USER_BASIC = "psdk_strops_user"
 _USER_PASSWORD = "test_password_123"
@@ -75,7 +75,7 @@ def _services_alternate() -> bool:
 
 
 def _is_role_violation(exc) -> bool:
-    """Match a ROLE_VIOLATION (code 81) heuristically across PAC's exception shapes."""
+    """Match a ROLE_VIOLATION (code 81) heuristically across PNC's exception shapes."""
     code_name = getattr(getattr(exc, "result_code", None), "name", "").lower()
     msg = str(exc).lower()
     type_name = type(exc).__name__.lower()
@@ -84,14 +84,14 @@ def _is_role_violation(exc) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Admin setup via PAC (PSDK Client does not expose user/role/info APIs)
+# Admin setup via PNC (PSDK Client does not expose user/role/info APIs)
 # ---------------------------------------------------------------------------
 
-async def _wait_for_user(admin_pac, username, *, retries=_PROPAGATION_RETRIES):
+async def _wait_for_user(admin_pnc, username, *, retries=_PROPAGATION_RETRIES):
     """Retry query_users until ``username`` is visible (SMD propagation)."""
     for _ in range(retries):
         try:
-            users = await admin_pac.query_users(None)
+            users = await admin_pnc.query_users(None)
             if any(u.user == username for u in users):
                 return
         except ServerError:
@@ -127,8 +127,8 @@ async def _remove_masking(admin_session, *, ns, set_name, bin_name):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def admin_pac(aerospike_host_sec):
-    """PAC admin client — used ONLY for user/role management (create_user,
+async def admin_pnc(aerospike_host_sec):
+    """PNC admin client — used ONLY for user/role management (create_user,
     drop_user, grant_roles, query_users), which PSDK does not expose at
     the SDK layer (by design; users are expected to use ``asadm`` or the
     low-level client for that).
@@ -141,7 +141,7 @@ async def admin_pac(aerospike_host_sec):
         pytest.skip("AEROSPIKE_HOST_SEC unset; masking needs a security-enabled 8.2.0+ cluster")
     user = os.environ.get("AEROSPIKE_AUTH_USER", "admin")
     password = os.environ.get("AEROSPIKE_AUTH_PASSWORD", "admin")
-    cp = _PacClientPolicy()
+    cp = _PncClientPolicy()
     cp.use_services_alternate = _services_alternate()
     cp.user = user
     cp.password = password
@@ -182,10 +182,10 @@ async def admin_pac(aerospike_host_sec):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def admin_cluster(aerospike_host_sec, admin_pac):
+async def admin_cluster(aerospike_host_sec, admin_pnc):
     """PSDK admin Cluster — used for masking-rule application, record put,
     and any test assertion that needs admin privileges. Depends on
-    ``admin_pac`` solely so the security + 8.2.0 probe happens before this
+    ``admin_pnc`` solely so the security + 8.2.0 probe happens before this
     one spins up.
     """
     cluster_def = _psdk_definition(
@@ -199,18 +199,18 @@ async def admin_cluster(aerospike_host_sec, admin_pac):
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def masking_setup(admin_pac, admin_cluster):
-    """User management via PAC; masking-rule application via PSDK ``Session.info``."""
+async def masking_setup(admin_pnc, admin_cluster):
+    """User management via PNC; masking-rule application via PSDK ``Session.info``."""
     for username in (_USER_READER, _USER_BASIC):
         try:
-            await admin_pac.drop_user(username)
+            await admin_pnc.drop_user(username)
         except Exception:
             pass
 
-    await admin_pac.create_user(_USER_READER, _USER_PASSWORD, ["read-write", "read-masked"])
-    await _wait_for_user(admin_pac, _USER_READER)
-    await admin_pac.create_user(_USER_BASIC, _USER_PASSWORD, ["read-write"])
-    await _wait_for_user(admin_pac, _USER_BASIC)
+    await admin_pnc.create_user(_USER_READER, _USER_PASSWORD, ["read-write", "read-masked"])
+    await _wait_for_user(admin_pnc, _USER_READER)
+    await admin_pnc.create_user(_USER_BASIC, _USER_PASSWORD, ["read-write"])
+    await _wait_for_user(admin_pnc, _USER_BASIC)
 
     admin_sess = admin_cluster.create_session()
     await _apply_masking(
@@ -227,7 +227,7 @@ async def masking_setup(admin_pac, admin_cluster):
         await _remove_masking(admin_sess, ns=_NAMESPACE, set_name=_SET, bin_name=bin_name)
     for username in (_USER_READER, _USER_BASIC):
         try:
-            await admin_pac.drop_user(username)
+            await admin_pnc.drop_user(username)
         except Exception:
             pass
 

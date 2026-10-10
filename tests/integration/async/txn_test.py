@@ -177,7 +177,7 @@ async def test_txn_write_conflict(session, mrt_set):
 
 # ---------------------------------------------------------------------------
 # Issuing any command against a non-OPEN txn must raise client-side;
-# PAC exposes a state setter so each forbidden state can be forced directly.
+# PNC exposes a state setter so each forbidden state can be forced directly.
 # ---------------------------------------------------------------------------
 async def test_txn_read_fails_for_all_states_except_open(session, cluster_sc, mrt_set):
     # ``session`` dep triggers the shared SC-namespace skip.

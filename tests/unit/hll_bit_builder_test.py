@@ -18,7 +18,7 @@
 import pytest
 
 from aerospike_sdk import BitPolicy, BitWriteFlags, BitwiseOverflowActions, BitwiseResizeFlags
-from aerospike_async import BitOperation, HllOperation
+from aerospike_native import BitOperation, HllOperation
 
 from aerospike_sdk import Behavior, HllConfig
 from aerospike_sdk.aio.operations.query import (

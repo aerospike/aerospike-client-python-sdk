@@ -17,7 +17,7 @@
 
 The methods here are the sync-runtime terminals' engine: Tier 1 fast path,
 Tier 1b multi-spec, Tier 2 streaming, batch/background helpers — all against
-PAC ``*_blocking`` entries. Mixed into
+PNC ``*_blocking`` entries. Mixed into
 :class:`~aerospike_sdk.sync.operations.query.QueryBuilder` alongside the
 runtime-agnostic :class:`~aerospike_sdk.query_shared._QueryBuilderBase`;
 kept out of the shared base so the base stays runtime-agnostic.
@@ -34,14 +34,14 @@ from typing import (
 )
 
 
-from aerospike_async import (
+from aerospike_native import (
     BatchReadOp,
     BatchWritePolicy,
     Key,
     Operation,
     PartitionFilter,
 )
-from aerospike_async.exceptions import ResultCode
+from aerospike_native.exceptions import ResultCode
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.operations_shared import (
@@ -66,7 +66,7 @@ from aerospike_sdk.implicit_txn import (
     run_in_implicit_txn_blocking,
     stamp_txn,
 )
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 
@@ -239,7 +239,7 @@ class _BlockingQueryDispatch:
         :meth:`_make_write_policy` / :meth:`_make_udf_write_policy`
         helpers as the async path (so filter expressions, generation/TTL/
         durable-delete overrides, and record-delete ops are honored),
-        then dispatches via the matching PAC ``*_blocking`` entry — zero
+        then dispatches via the matching PNC ``*_blocking`` entry — zero
         asyncio. Handles plain reads, ``operate``-style writes, ``delete``,
         ``touch``, ``exists`` and ``udf`` op types. Errors are routed via
         the supplied ``disp`` / ``handler``.
@@ -315,7 +315,7 @@ class _BlockingQueryDispatch:
             )]
 
         if op_type is None and not has_ops:
-            # Simple read — all bins or projected bins. Fast path: PAC's
+            # Simple read — all bins or projected bins. Fast path: PNC's
             # get_blocking builds the per-call ReadPolicy in Rust from the
             # session-cached base + filter_expression / txn. Falls back to
             # `_make_read_policy` when no base is cached (a transaction nulls it).
@@ -362,7 +362,7 @@ class _BlockingQueryDispatch:
             )]
 
         if has_ops:
-            # Write via operate. Fast path: PAC's operate_blocking builds the
+            # Write via operate. Fast path: PNC's operate_blocking builds the
             # per-call WritePolicy in Rust from the session-cached base + the
             # small set of fields the SDK actually varies. Skips
             # _make_write_policy's Python work on the hot path.
@@ -491,7 +491,7 @@ class _BlockingQueryDispatch:
           (two or more segments share a key), each key-disjoint run from
           :meth:`_spec_batch_runs` goes out as its own batch, in chain order,
           results concatenated.
-        - **Mixed batch**: combine all per-spec ops into a single PAC
+        - **Mixed batch**: combine all per-spec ops into a single PNC
           ``batch_blocking`` call.
 
         Returns:
@@ -560,7 +560,7 @@ class _BlockingQueryDispatch:
         """Dataset/SI/scan blocking dispatch returning a streaming source.
 
         For a keyless ``session.query(dataset)``, build the policy +
-        statement synchronously and call PAC ``query_blocking``. Returns
+        statement synchronously and call PNC ``query_blocking``. Returns
         the raw :class:`Recordset` (Python iterator that blocks per
         record) so the caller can wrap it in :class:`RecordStream`
         without materializing — memory stays bounded for arbitrarily large
@@ -569,7 +569,7 @@ class _BlockingQueryDispatch:
         Returns:
             ``(kind, payload)`` where ``kind`` is ``"recordset"`` for
             non-chunked or ``"chunked"`` for chunk-resumable queries. The
-            payload for ``"recordset"`` is the PAC ``Recordset``; for
+            payload for ``"recordset"`` is the PNC ``Recordset``; for
             ``"chunked"`` it is ``(recordset, reexecute_callable, total_limit)``.
             Returns ``None`` when the spec shape isn't a keyless dataset
             query (caller falls back).
@@ -598,7 +598,7 @@ class _BlockingQueryDispatch:
         """Sync counterpart of :meth:`_execute_batch_read`.
 
         Same policy construction and disposition handling, but the dispatch
-        is PAC ``batch_read_blocking`` — zero asyncio. Returns a list of
+        is PNC ``batch_read_blocking`` — zero asyncio. Returns a list of
         :class:`RecordResult` that the caller (the sync builder) wraps with
         :class:`RecordStream.from_list`.
         """
@@ -711,19 +711,19 @@ class _BlockingQueryDispatch:
     def _execute_dataset_query_blocking(self) -> Any:
         """Sync counterpart of :meth:`_execute_dataset_query`.
 
-        Builds the same policy + statement, then dispatches via PAC
+        Builds the same policy + statement, then dispatches via PNC
         ``query_blocking`` which returns a :class:`Recordset` with the
         Python-iterator protocol (blocking ``__next__`` that releases the
         GIL while waiting on the underlying Tokio stream). The caller wraps
         the returned recordset in :class:`RecordStream`.
 
         Returns:
-            The PAC ``Recordset`` (raw). For chunked queries the second
+            The PNC ``Recordset`` (raw). For chunked queries the second
             return value is a sync ``reexecute`` callable; otherwise it is
             ``None``. ``(recordset, reexecute_or_none)``.
 
         Note:
-            Builds the same policy + statement, then dispatches via PAC
+            Builds the same policy + statement, then dispatches via PNC
             ``query_blocking`` which returns a :class:`Recordset` with the
             Python-iterator protocol (blocking ``__next__`` that releases the
             GIL while waiting on the underlying Tokio stream). The caller wraps
@@ -760,7 +760,7 @@ class _BlockingQueryDispatch:
                 use_server_query_selection=use_server_query_selection,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
@@ -793,7 +793,7 @@ class _BlockingQueryDispatch:
         and returns ``[]``; IN_STREAM embeds the error as a
         :class:`RecordResult`.
         """
-        pfc_exc = _convert_pac_exception(exc)
+        pfc_exc = _convert_pnc_exception(exc)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         in_doubt = pfc_exc.in_doubt
         _cmd_failed(op_type, rc, pfc_exc, self._client)

@@ -35,7 +35,7 @@ import threading
 import weakref
 from typing import Dict, List
 
-from aerospike_async import BitOperation, HllOperation, ListOperation, MapOperation
+from aerospike_native import BitOperation, HllOperation, ListOperation, MapOperation
 
 # -- API surface --------------------------------------------------------------
 

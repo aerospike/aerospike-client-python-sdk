@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import pytest
-from aerospike_async.exceptions import IndexNotFound
+from aerospike_native.exceptions import IndexNotFound
 
 from aerospike_sdk import Behavior, QueryHint, ResultCode
 from aerospike_sdk.exceptions import AerospikeError
@@ -34,7 +34,7 @@ from tests.integration.query_selection_helpers import (
     count_records_sync,
     explain_plan_blocking,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 INDEX_ONLY = Behavior.DEFAULT.derive_with_changes(
     name="index_only_sync",
@@ -52,10 +52,10 @@ class TestSyncQuerySelectionHintFlags:
         builder; this one stays because no test there covers ``REQUIRE_INDEX``
         on a plan that has no index to fall back to.
         """
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         with pytest.raises(IndexNotFound) as exc_info:
             explain_plan_blocking(
-                pac,
+                pnc,
                 "$.country == 'US'",
                 set_name=HINT_SET_NAME,
                 hint=QueryHint(allow_scans_with_where=False),
@@ -64,9 +64,9 @@ class TestSyncQuerySelectionHintFlags:
 
     @requires_query_selection
     def test_disallow_scans_with_soft_hint_selects_secondary_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(
-            pac,
+            pnc,
             "$.age == 25",
             set_name=HINT_SET_NAME,
             hint=QueryHint(allow_scans_with_where=False, index_name=HINT_SCORE_INDEX_NAME),
@@ -79,9 +79,9 @@ class TestSyncQuerySelectionHintFlags:
 
     @requires_query_selection
     def test_hard_hint_with_matching_index_selects_hinted_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(
-            pac,
+            pnc,
             "$.age == 25",
             set_name=HINT_SET_NAME,
             hint=QueryHint(index_name=HINT_INDEX_NAME, hard_hint=True),
@@ -91,9 +91,9 @@ class TestSyncQuerySelectionHintFlags:
 
     @requires_query_selection
     def test_disallow_scans_and_hard_hint_selects_hinted_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = explain_plan_blocking(
-            pac,
+            pnc,
             "$.age == 25",
             set_name=HINT_SET_NAME,
             hint=QueryHint(
@@ -112,7 +112,7 @@ class TestSyncQuerySelectionHintFlags:
 
 class TestSyncQuerySelectionBuilderScanBlocking:
     """``allow_scans_with_where`` enforced through the real SDK query builder
-    (``session.query().where().execute()``), not the PAC explain helper."""
+    (``session.query().where().execute()``), not the PNC explain helper."""
 
     @requires_query_selection
     def test_default_via_builder_permits_scan(self, query_selection_cluster):

@@ -17,7 +17,7 @@
 
 import pytest
 from aerospike_sdk import ListOrderType, MapReturnType
-from aerospike_async import ListOperation, ListPolicy, MapOperation, MapPolicy, Operation, WritePolicy
+from aerospike_native import ListOperation, ListPolicy, MapOperation, MapPolicy, Operation, WritePolicy
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
@@ -271,12 +271,12 @@ async def test_chaining(cluster):
 async def test_operate_put_and_get(cluster):
     """Test operate with Put and Get operations."""
     session = cluster.create_session()
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
     k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"bin1": 7, "bin2": "string value"}).execute()
 
-    record = await pac.operate(
+    record = await pnc.operate(
         k,
         [
         Operation.put("bin2", "new string"),
@@ -309,13 +309,13 @@ async def test_operate_get_only(cluster):
 async def test_operate_list_append(cluster):
     """Test operate with ListOperation.append."""
     session = cluster.create_session()
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
     k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"listbin": [1, 2, 3]}).execute()
 
     list_policy = ListPolicy(ListOrderType.ORDERED, None)
-    record = await pac.operate(
+    record = await pnc.operate(
         k,
         [
         ListOperation.append("listbin", 4, list_policy),
@@ -335,13 +335,13 @@ async def test_operate_list_append(cluster):
 async def test_operate_map_put_and_get(cluster):
     """Test operate with MapOperation.put and get_by_key."""
     session = cluster.create_session()
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
     k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"mapbin": {"key1": "value1"}}).execute()
 
     map_policy = MapPolicy(None, None)
-    record = await pac.operate(
+    record = await pnc.operate(
         k,
         [
         MapOperation.put("mapbin", "key2", "value2", map_policy),
@@ -361,12 +361,12 @@ async def test_operate_map_put_and_get(cluster):
 async def test_operate_map_clear(cluster):
     """Test operate with MapOperation.clear."""
     session = cluster.create_session()
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
     k = DataSet.of(general_namespace(), "test").id(1)
 
     await session.upsert(k).put({"mapbin": {"key1": "value1", "key2": "value2"}}).execute()
 
-    record = await pac.operate(
+    record = await pnc.operate(
         k,
         [
         MapOperation.clear("mapbin"),

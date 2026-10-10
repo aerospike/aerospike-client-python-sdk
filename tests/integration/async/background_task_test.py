@@ -15,11 +15,11 @@
 
 """Integration tests for session.background_task() (async)."""
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 import pytest
 import pytest_asyncio
 from aerospike_sdk import Exp, HllConfig, IndexNotFoundError, ResultCode, UDFLang
-from aerospike_async import Filter, MapOperation, MapReturnType
+from aerospike_native import Filter, MapOperation, MapReturnType
 
 from aerospike_sdk import DataSet
 from tests.integration.namespace import general_namespace

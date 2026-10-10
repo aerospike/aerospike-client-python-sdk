@@ -17,7 +17,7 @@
 
 Chain state and chaining methods live on the shared, runtime-agnostic
 :class:`~aerospike_sdk.index_shared._IndexBuilderBase`; this module adds
-``create()`` / ``drop()`` terminals that dispatch through PAC's blocking
+``create()`` / ``drop()`` terminals that dispatch through PNC's blocking
 entries — no asyncio loop is involved.
 """
 
@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aerospike_async import DropIndexTask, IndexTask
+from aerospike_native import DropIndexTask, IndexTask
 
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
 from aerospike_sdk.metrics import usage
 
@@ -83,7 +83,7 @@ class IndexBuilder(_IndexBuilderBase):
                     self._namespace, self._set_name, index_name,
                 )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._async_client,
@@ -98,7 +98,7 @@ class IndexBuilder(_IndexBuilderBase):
                     self._collection_index_type,
                 )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
         bin_name, index_name, index_type = self._validate_bin_create()
         try:
             return self._async_client._async_client.create_index_blocking(
@@ -111,7 +111,7 @@ class IndexBuilder(_IndexBuilderBase):
                 self._ctx,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
     def drop(self) -> DropIndexTask:
         """Drop the index (blocks until the admin call is accepted).
@@ -132,4 +132,4 @@ class IndexBuilder(_IndexBuilderBase):
                 self._namespace, self._set_name, index_name,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e

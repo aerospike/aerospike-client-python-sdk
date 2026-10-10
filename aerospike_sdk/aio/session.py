@@ -33,7 +33,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from aerospike_async import (
+    from aerospike_native import (
         AdminPolicy,
         CollectionIndexType,
         CTX,
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from aerospike_sdk.aio.client import Client
     from aerospike_sdk.aio.transactional_session import TransactionalSession
 
-from aerospike_async import Key, Record, Txn, UDFLang
+from aerospike_native import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.txn_shared import (
     is_retryable_txn_error,
@@ -68,9 +68,9 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
     AerospikeError,
-    PacAerospikeError,
-    PacServerError,
-    _convert_pac_exception,
+    PncAerospikeError,
+    PncServerError,
+    _convert_pnc_exception,
 )
 from aerospike_sdk.policy.behavior import Behavior, OpKind, OpShape
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -100,8 +100,8 @@ def _convert_window_slots(slots: List[Any]) -> List[Any]:
     # Only reached when the window submission reported at least one failed
     # slot, so failure-free windows never pay this scan.
     return [
-        _convert_pac_exception(slot)
-        if isinstance(slot, (PacServerError, PacAerospikeError)) else slot
+        _convert_pnc_exception(slot)
+        if isinstance(slot, (PncServerError, PncAerospikeError)) else slot
         for slot in slots
     ]
 
@@ -156,8 +156,8 @@ class Session(
         # Config hot-reload pushes rebuilt policies into live sessions
         # (weak registration; no per-operation check).
         behavior._register_session(self)
-        # Cache the raw PAC client for fast-path methods.
-        self._pac_client = client._async_client
+        # Cache the raw PNC client for fast-path methods.
+        self._pnc_client = client._async_client
         # Transaction hook. Non-transactional sessions always return None;
         # TransactionalSession overrides this to yield its active Txn so every
         # builder spawned from the session auto-participates.
@@ -199,7 +199,7 @@ class Session(
         mode = cache.get(namespace)
         if mode is not None:
             return mode
-        mode = _namespace_mode_from_partition_map(self._pac_client, cache, namespace)
+        mode = _namespace_mode_from_partition_map(self._pnc_client, cache, namespace)
         if mode is not None:
             return mode
         return Mode.SC if await self.is_namespace_sc(namespace) else Mode.AP
@@ -215,14 +215,14 @@ class Session(
         mode = cache.get(namespace)
         if mode is not None:
             return mode
-        mode = _namespace_mode_from_partition_map(self._pac_client, cache, namespace)
+        mode = _namespace_mode_from_partition_map(self._pnc_client, cache, namespace)
         if mode is not None:
             return mode
-        return _probe_namespace_mode_blocking(self._pac_client, namespace)
+        return _probe_namespace_mode_blocking(self._pnc_client, namespace)
 
     # -- Fast-path single-key operations ------------------------------------
     # These bypass the QueryBuilder/OperationSpec/RecordStream chain for
-    # simple single-key reads and writes, calling the PAC directly.
+    # simple single-key reads and writes, calling the PNC directly.
 
     async def get(
         self, key: Key, bins: Optional[List[str]] = None,
@@ -232,17 +232,17 @@ class Session(
         Bypasses the builder chain (``session.query(key).execute()``) and
         the :class:`~aerospike_sdk.record_stream.RecordStream` wrapper: one
         ``await`` reaches the underlying client and the resulting
-        :class:`~aerospike_async.Record` is returned unwrapped. Use when
+        :class:`~aerospike_native.Record` is returned unwrapped. Use when
         you have a single key and want minimum per-op overhead; use
         :meth:`query` when you need filters, projections, or streaming.
 
         Args:
-            key: Target :class:`~aerospike_async.Key`.
+            key: Target :class:`~aerospike_native.Key`.
             bins: Optional bin-name projection. ``None`` (default) reads
                 all bins.
 
         Returns:
-            The :class:`~aerospike_async.Record` for ``key``.
+            The :class:`~aerospike_native.Record` for ``key``.
 
         Raises:
             AerospikeError: Server or client errors (including
@@ -264,7 +264,7 @@ class Session(
             if self._txn is None:
                 if _COALESCE and bins is None:
                     return await self._coalesced_get(key)
-                return await self._pac_client.get(
+                return await self._pnc_client.get(
                     key, bins,
                     policy=self._cached_read_policy,
                     policy_sc=self._cached_read_policy_sc,
@@ -272,9 +272,9 @@ class Session(
             policy = to_read_policy(
                 self._behavior.get_settings(OpKind.READ, OpShape.POINT))
             policy.txn = self._txn
-            return await self._pac_client.get(key, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+            return await self._pnc_client.get(key, bins, policy=policy)
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
 
     async def _coalesced_get(self, key: Key) -> Record:
         """Opportunistic same-tick coalescing for a no-projection read.
@@ -297,7 +297,7 @@ class Session(
             return await fut
         self._coalesce_scheduled = True
         loop.call_soon(self._flush_coalesced)
-        return await self._pac_client.get(
+        return await self._pnc_client.get(
             key, None,
             policy=self._cached_read_policy,
             policy_sc=self._cached_read_policy_sc,
@@ -327,7 +327,7 @@ class Session(
             return
         self._coalesce_scheduled = True
         loop.call_soon(self._flush_coalesced)
-        await self._pac_client.put(
+        await self._pnc_client.put(
             key, bins,
             policy=self._cached_write_policy,
             policy_sc=self._cached_write_policy_sc,
@@ -346,7 +346,7 @@ class Session(
         including when it fails.
         """
         self._coalesce_scheduled = False
-        # Fire-and-forget: PAC resolves each future through the bridge's drainer
+        # Fire-and-forget: PNC resolves each future through the bridge's drainer
         # the instant its own op completes (per-op delivery — no head-of-line).
         keys = self._coalesce_keys
         if keys:
@@ -354,7 +354,7 @@ class Session(
             self._coalesce_keys = []
             self._coalesce_futs = []
             try:
-                self._pac_client._submit_coalesced_read(
+                self._pnc_client._submit_coalesced_read(
                     keys, futs, None,
                     policy=self._cached_read_policy,
                     policy_sc=self._cached_read_policy_sc,
@@ -374,7 +374,7 @@ class Session(
             self._coalesce_write_futs = []
             self._coalesce_write_bins = []
             try:
-                self._pac_client._submit_coalesced_write(
+                self._pnc_client._submit_coalesced_write(
                     write_keys, write_futs, write_bins,
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
@@ -397,7 +397,7 @@ class Session(
             if fut.done():
                 continue
             try:
-                self._pac_client._submit_coalesced_write(
+                self._pnc_client._submit_coalesced_write(
                     [key], [fut], [bins],
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
@@ -418,7 +418,7 @@ class Session(
         generation checks, durable delete, or filter expressions.
 
         Args:
-            key: Target :class:`~aerospike_async.Key`.
+            key: Target :class:`~aerospike_native.Key`.
             bins: Mapping of bin name to value to write. An empty mapping
                 is permitted.
 
@@ -443,7 +443,7 @@ class Session(
                 if _COALESCE_WRITES:
                     await self._coalesced_put(key, bins)
                     return
-                await self._pac_client.put(
+                await self._pnc_client.put(
                     key, bins,
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
@@ -453,9 +453,9 @@ class Session(
                 self._behavior.get_settings(
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
             policy.txn = self._txn
-            await self._pac_client.put(key, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+            await self._pnc_client.put(key, bins, policy=policy)
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
 
     async def get_many(
         self, keys: List[Key], bins: Optional[List[str]] = None,
@@ -475,7 +475,7 @@ class Session(
 
         Returns:
             A list the same length as ``keys``. Each slot is the
-            :class:`~aerospike_async.Record` for that key, or the
+            :class:`~aerospike_native.Record` for that key, or the
             :class:`~aerospike_sdk.exceptions.AerospikeError` instance (not
             raised) for that key — check with
             ``isinstance(slot, AerospikeError)``. One failed key never fails
@@ -504,7 +504,7 @@ class Session(
         """
         try:
             if self._txn is None:
-                slots, failures = await self._pac_client._submit_many_read(
+                slots, failures = await self._pnc_client._submit_many_read(
                     keys, bins,
                     policy=self._cached_read_policy,
                     policy_sc=self._cached_read_policy_sc,
@@ -513,10 +513,10 @@ class Session(
                 policy = to_read_policy(
                     self._behavior.get_settings(OpKind.READ, OpShape.POINT))
                 policy.txn = self._txn
-                slots, failures = await self._pac_client._submit_many_read(
+                slots, failures = await self._pnc_client._submit_many_read(
                     keys, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
         if failures:
             return _convert_window_slots(slots)
         return slots
@@ -558,7 +558,7 @@ class Session(
         """
         try:
             if self._txn is None:
-                slots, failures = await self._pac_client._submit_many_write(
+                slots, failures = await self._pnc_client._submit_many_write(
                     keys, bins,
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
@@ -568,10 +568,10 @@ class Session(
                     self._behavior.get_settings(
                         OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
                 policy.txn = self._txn
-                slots, failures = await self._pac_client._submit_many_write(
+                slots, failures = await self._pnc_client._submit_many_write(
                     keys, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
         if failures:
             return _convert_window_slots(slots)
         return slots
@@ -620,7 +620,7 @@ class Session(
         batch UDF; results preserve per-key order where applicable.
 
         Args:
-            *keys: One or more :class:`~aerospike_async.Key` targets in the same
+            *keys: One or more :class:`~aerospike_native.Key` targets in the same
                 namespace and set.
 
         Returns:
@@ -848,7 +848,7 @@ class Session(
                 is indexed; mutually exclusive with ``bin_name``.
 
         Returns:
-            An :class:`~aerospike_async.IndexTask`; await
+            An :class:`~aerospike_native.IndexTask`; await
             ``wait_till_complete()`` before querying through the index.
 
         Raises:
@@ -884,7 +884,7 @@ class Session(
             index_name: Name the index was created with.
 
         Returns:
-            A :class:`~aerospike_async.DropIndexTask`; await
+            A :class:`~aerospike_native.DropIndexTask`; await
             ``wait_till_complete()`` until every node has removed it.
 
         Raises:
@@ -913,16 +913,16 @@ class Session(
         Args:
             body: Raw module source (for example UTF-8 encoded Lua).
             server_path: Path name stored on the server (often ends ``.lua``).
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
-            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask`; await
+            A :class:`~aerospike_native.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
             RuntimeError: If the client is not connected.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -949,17 +949,17 @@ class Session(
         Args:
             client_path: Filesystem path to the module on the client machine.
             server_path: Path name stored on the server (often ends ``.lua``).
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
-            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask`; await
+            A :class:`~aerospike_native.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
             RuntimeError: If the client is not connected.
             OSError: If ``client_path`` cannot be read.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -990,18 +990,18 @@ class Session(
             package: Importable package holding the resource (e.g. ``"myapp.udfs"``).
             resource: Resource name within the package (e.g. ``"echo.lua"``).
             server_path: Path name stored on the server.
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
-            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask`; await
+            A :class:`~aerospike_native.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
             RuntimeError: If the client is not connected.
             ModuleNotFoundError: If ``package`` cannot be imported.
             FileNotFoundError: If ``resource`` is not found in the package.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -1025,15 +1025,15 @@ class Session(
 
         Args:
             server_path: The server path used when the module was registered.
-            policy: Optional :class:`~aerospike_async.AdminPolicy`; keyword-only.
+            policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_async.UdfRemoveTask`; await
+            A :class:`~aerospike_native.UdfRemoveTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
             RuntimeError: If the client is not connected.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -1054,7 +1054,7 @@ class Session(
 
         Raises:
             RuntimeError: If the client is not connected.
-            AerospikeError: On cluster or info errors (via PAC).
+            AerospikeError: On cluster or info errors (via PNC).
 
         Example::
 
@@ -1077,7 +1077,7 @@ class Session(
 
         Raises:
             RuntimeError: If the client is not connected.
-            AerospikeError: On cluster or info errors (via PAC).
+            AerospikeError: On cluster or info errors (via PNC).
 
         Example::
 
@@ -1149,7 +1149,7 @@ class Session(
             raise RuntimeError("Client is not connected")
 
         try:
-            result = await self._pac_client.info(f"namespace/{namespace}")
+            result = await self._pnc_client.info(f"namespace/{namespace}")
         except Exception as e:
             raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
 

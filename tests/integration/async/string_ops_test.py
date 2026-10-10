@@ -74,7 +74,7 @@ async def test_str_reads_via_builder(cluster):
     """Chained string reads via ``WriteBinBuilder.str_*`` — single multi-op call.
 
     Multiple ops targeting the same bin return positional results as a list
-    on ``record.bins[bin]`` (PAC's ``Value::MultiResult``).
+    on ``record.bins[bin]`` (PNC's ``Value::MultiResult``).
     """
     sess = cluster.create_session()
     k = _TEST_DS.id("strop_reads")

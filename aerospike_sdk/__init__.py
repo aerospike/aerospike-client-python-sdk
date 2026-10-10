@@ -13,9 +13,9 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Aerospike Python SDK — high-level API built on the ``aerospike_async`` package."""
+"""Aerospike Python SDK — high-level API built on the ``aerospike_native`` package."""
 
-from aerospike_async import (
+from aerospike_native import (
     AuthMode,
     BitPolicy,
     BitwiseOverflowActions,

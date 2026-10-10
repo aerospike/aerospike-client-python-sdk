@@ -36,7 +36,7 @@ from tests.integration.query_selection_helpers import (
     HINT_DS,
     HINT_BOGUS_INDEX_NAME,
 )
-from tests.pac_compat import requires_query_selection
+from tests.pnc_compat import requires_query_selection
 
 # Trailing ``and`` — syntactically invalid AEL.
 _BAD_AEL = "$.age > 30 and"

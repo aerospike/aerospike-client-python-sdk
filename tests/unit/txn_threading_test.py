@@ -17,8 +17,8 @@
 
 These verify that every builder spun up off a Session captures the
 session's current ``Txn`` and that the builder's ``_apply_txn`` helper
-stamps it on every outer policy it hands to the PAC. The tests use
-real PAC types (``WritePolicy``, ``ReadPolicy``, ``QueryPolicy``,
+stamps it on every outer policy it hands to the PNC. The tests use
+real PNC types (``WritePolicy``, ``ReadPolicy``, ``QueryPolicy``,
 ``BatchPolicy``, ``Txn``) so we exercise the real setters; there is no
 network I/O.
 """
@@ -29,11 +29,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from aerospike_sdk import ErrorStrategy, Key, ResultCode, Txn
-from aerospike_async import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
+from aerospike_native import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
 
-from aerospike_async import AbortStatus, CommitStatus
+from aerospike_native import AbortStatus, CommitStatus
 from aerospike_sdk import TransactionalSession
-from aerospike_async.exceptions import CommitFailedError as PacCommitFailedError
+from aerospike_native.exceptions import CommitFailedError as PncCommitFailedError
 from dataclasses import replace
 from datetime import timedelta
 
@@ -53,7 +53,7 @@ from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
 
 class _FakePac:
-    """Stand-in for the PAC client; builders accept any object here."""
+    """Stand-in for the PNC client; builders accept any object here."""
 
 
 class _FakeSdkClient:
@@ -150,13 +150,13 @@ def test_query_builder_with_txn_drops_cached_base_policies(qb_cls) -> None:
     assert qb._base_read_operate_policy_sc is None
 
 
-async def test_with_txn_single_key_read_on_sc_reaches_pac_in_the_txn() -> None:
-    """A read opted into a transaction on an SC namespace carries it to PAC
+async def test_with_txn_single_key_read_on_sc_reaches_pnc_in_the_txn() -> None:
+    """A read opted into a transaction on an SC namespace carries it to PNC
     on the slow path that an ``on_error`` strategy takes."""
-    pac = MagicMock()
-    pac.get = AsyncMock(return_value=MagicMock())
+    pnc = MagicMock()
+    pnc.get = AsyncMock(return_value=MagicMock())
     qb = QueryBuilder(
-        client=pac, namespace="test", set_name="s",
+        client=pnc, namespace="test", set_name="s",
         behavior=Behavior.DEFAULT,
         cached_read_policy=ReadPolicy(), cached_write_policy=WritePolicy(),
         cached_read_policy_sc=ReadPolicy(), cached_write_policy_sc=WritePolicy(),
@@ -165,7 +165,7 @@ async def test_with_txn_single_key_read_on_sc_reaches_pac_in_the_txn() -> None:
     qb._single_key = Key("test", "s", 1)
     txn = Txn()
     await (await qb.with_txn(txn).execute(on_error=ErrorStrategy.IN_STREAM)).collect()
-    kwargs = pac.get.call_args.kwargs
+    kwargs = pnc.get.call_args.kwargs
     assert kwargs.get("txn") is txn or kwargs["policy"].txn is not None
 
 
@@ -275,7 +275,7 @@ def test_session_bind_txn_noop_when_no_active_txn() -> None:
 # -- Session.do_in_transaction retry loop ------------------------------------
 
 class _FakePacClient:
-    """Minimal PAC stand-in for do_in_transaction tests: just enough to
+    """Minimal PNC stand-in for do_in_transaction tests: just enough to
     satisfy TransactionalSession.commit / abort."""
 
     def __init__(self) -> None:
@@ -283,7 +283,7 @@ class _FakePacClient:
         self.abort_calls: list = []
         self._commit_ok = CommitStatus.OK
         self._abort_ok = AbortStatus.OK
-        # PAC raises for an abandoned roll-forward rather than returning a
+        # PNC raises for an abandoned roll-forward rather than returning a
         # status; set this to model that.
         self._commit_raises: BaseException | None = None
 
@@ -353,10 +353,10 @@ async def test_do_in_transaction_retries_on_transient() -> None:
     )
     assert result == "won"
     assert attempts == 3
-    pac = session._client._async_client
+    pnc = session._client._async_client
     # Two failed attempts got aborted; the third was committed.
-    assert len(pac.abort_calls) == 2
-    assert len(pac.commit_calls) == 1
+    assert len(pnc.abort_calls) == 2
+    assert len(pnc.commit_calls) == 1
 
 
 async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
@@ -377,9 +377,9 @@ async def test_do_in_transaction_gives_up_after_max_attempts() -> None:
         )
     assert excinfo.value.result_code == ResultCode.MRT_VERSION_MISMATCH
     assert attempts == 3
-    pac = session._client._async_client
-    assert len(pac.abort_calls) == 3
-    assert len(pac.commit_calls) == 0
+    pnc = session._client._async_client
+    assert len(pnc.abort_calls) == 3
+    assert len(pnc.commit_calls) == 0
 
 
 async def test_do_in_transaction_does_not_retry_on_non_transient() -> None:
@@ -420,9 +420,9 @@ async def test_do_in_transaction_propagates_non_aerospike_errors() -> None:
 
     with pytest.raises(_AppError):
         await session.do_in_transaction(op, max_attempts=5, sleep_between_retries=0.0)
-    pac = session._client._async_client
-    assert len(pac.abort_calls) == 1
-    assert len(pac.commit_calls) == 0
+    pnc = session._client._async_client
+    assert len(pnc.abort_calls) == 1
+    assert len(pnc.commit_calls) == 0
 
 
 async def test_do_in_transaction_retries_commit_failure() -> None:
@@ -434,18 +434,18 @@ async def test_do_in_transaction_retries_commit_failure() -> None:
     async and sync runners share one classifier.
     """
     session = _make_session_for_retry()
-    pac = session._client._async_client
+    pnc = session._client._async_client
     calls = 0
 
     async def commit(txn, **kwargs):
         nonlocal calls
-        pac.commit_calls.append(txn)
+        pnc.commit_calls.append(txn)
         calls += 1
         if calls < 3:
-            raise PacCommitFailedError("commit verify failed")
+            raise PncCommitFailedError("commit verify failed")
         return CommitStatus.OK
 
-    pac.commit = commit
+    pnc.commit = commit
 
     async def op(tx):
         return "done"
@@ -457,17 +457,17 @@ async def test_do_in_transaction_retries_commit_failure() -> None:
 async def test_do_in_transaction_commit_failure_surfaces_psdk_type() -> None:
     """The caller catches a PSDK exception, not the underlying client's."""
     session = _make_session_for_retry()
-    pac = session._client._async_client
+    pnc = session._client._async_client
 
     async def commit(txn, **kwargs):
-        pac.commit_calls.append(txn)
-        raise PacCommitFailedError("commit verify failed")
+        pnc.commit_calls.append(txn)
+        raise PncCommitFailedError("commit verify failed")
 
-    pac.commit = commit
+    pnc.commit = commit
 
     with pytest.raises(CommitError):
         await session.do_in_transaction(lambda tx: _noop(), max_attempts=2, sleep_between_retries=0.0)
-    assert len(pac.commit_calls) == 2
+    assert len(pnc.commit_calls) == 2
 
 
 async def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None:
@@ -477,8 +477,8 @@ async def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None
     holds. One raise, one attempt.
     """
     session = _make_session_for_retry()
-    pac = session._client._async_client
-    pac._commit_raises = CommitError(
+    pnc = session._client._async_client
+    pnc._commit_raises = CommitError(
         "roll forward abandoned",
         commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
     )
@@ -488,28 +488,28 @@ async def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None
             lambda tx: _noop(), max_attempts=5, sleep_between_retries=0.0,
         )
     assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
-    assert len(pac.commit_calls) == 1
+    assert len(pnc.commit_calls) == 1
 
 
 async def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
-    """Current PAC raises CommitFailedError with the roll-forward type."""
+    """Current PNC raises CommitFailedError with the roll-forward type."""
     session = _make_session_for_retry()
-    pac = session._client._async_client
+    pnc = session._client._async_client
 
     async def commit(txn, **kwargs):
-        pac.commit_calls.append(txn)
-        err = PacCommitFailedError("roll forward abandoned")
+        pnc.commit_calls.append(txn)
+        err = PncCommitFailedError("roll forward abandoned")
         err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED
         raise err
 
-    pac.commit = commit
+    pnc.commit = commit
 
     with pytest.raises(CommitError) as excinfo:
         await session.do_in_transaction(
             lambda tx: _noop(), max_attempts=5, sleep_between_retries=0.0,
         )
     assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
-    assert len(pac.commit_calls) == 1
+    assert len(pnc.commit_calls) == 1
 
 
 async def _noop():
@@ -525,7 +525,7 @@ async def test_nested_do_in_transaction_joins_the_outer_one() -> None:
     one guarantee it was written to get.
     """
     session = _make_session_for_retry()
-    pac = session._client._async_client
+    pnc = session._client._async_client
     seen: list = []
 
     async def inner(tx):
@@ -537,8 +537,8 @@ async def test_nested_do_in_transaction_joins_the_outer_one() -> None:
         return await tx.do_in_transaction(inner)
 
     assert await session.do_in_transaction(outer) == "inner"
-    assert len(pac.commit_calls) == 1
-    assert len(pac.abort_calls) == 0
+    assert len(pnc.commit_calls) == 1
+    assert len(pnc.abort_calls) == 0
     assert seen[0] is seen[1]
 
 

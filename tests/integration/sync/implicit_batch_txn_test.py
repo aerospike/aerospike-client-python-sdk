@@ -16,7 +16,7 @@
 """Implicit batch-write transactions on the sync surface (curated subset).
 
 The sync path is an independent implementation — blocking batch
-dispatchers plus ``run_in_implicit_txn_blocking`` (PAC ``commit_blocking``
+dispatchers plus ``run_in_implicit_txn_blocking`` (PNC ``commit_blocking``
 / ``abort_blocking``) — so the wrap is smoke-tested here in its own
 right; the full gate matrix lives in the async suite and the unit tests.
 """
@@ -106,9 +106,9 @@ def txn_spy(monkeypatch):
     calls: list = []
     real = impl.run_in_implicit_txn_blocking
 
-    def spy(pac_client, transactions, attempt_fn):
+    def spy(pnc_client, transactions, attempt_fn):
         calls.append(transactions)
-        return real(pac_client, transactions, attempt_fn)
+        return real(pnc_client, transactions, attempt_fn)
 
     monkeypatch.setattr(query_mod, "run_in_implicit_txn_blocking", spy)
     return calls

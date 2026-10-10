@@ -22,7 +22,7 @@ import types
 from importlib import resources
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from aerospike_async import (
+from aerospike_native import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
@@ -34,7 +34,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.aio.operations.index import IndexBuilder
@@ -84,7 +84,7 @@ class Client(RoutingCapabilitiesMixin):
         Args:
             seeds: Seed address string understood by the async client (for example
                 ``"127.0.0.1:3000"`` or a comma-separated host list if supported).
-            policy: Optional :class:`~aerospike_async.ClientPolicy`; defaults to a
+            policy: Optional :class:`~aerospike_native.ClientPolicy`; defaults to a
                 new client policy when omitted.
             max_error_rate: Per-node circuit-breaker threshold. When a node's
                 error count crosses this value within ``error_rate_window``
@@ -166,7 +166,7 @@ class Client(RoutingCapabilitiesMixin):
         Idempotent: if already connected, returns immediately.
 
         Raises:
-            ConnectionError: If the async client cannot reach the cluster (from PAC).
+            ConnectionError: If the async client cannot reach the cluster (from PNC).
 
         See Also:
             :meth:`close`: Release the connection.
@@ -186,8 +186,8 @@ class Client(RoutingCapabilitiesMixin):
             log.debug("Connecting to cluster seeds=%r", self._seeds)
         try:
             self._client = await new_client(self._policy, self._seeds)
-        except PacAerospikeError as exc:
-            raise _convert_pac_exception(exc) from exc
+        except PncAerospikeError as exc:
+            raise _convert_pnc_exception(exc) from exc
         self._connected = True
         self._warm_routing_capabilities()
         log.info(
@@ -268,23 +268,23 @@ class Client(RoutingCapabilitiesMixin):
     @property
     def underlying_client(self) -> AsyncClient:
         """
-        The underlying aerospike_async (PAC) Client for direct API access.
+        The underlying aerospike_native (PNC) Client for direct API access.
 
-        Use this when you need PAC calls that are not wrapped by the SDK API,
+        Use this when you need PNC calls that are not wrapped by the SDK API,
         e.g. info(), nodes(), get_node(). The returned client is the same
         instance used internally by the SDK API.
 
         Example::
 
             async with Client("localhost:3000") as client:
-                pac = client.underlying_client
-                response = await pac.info("sindex-list")
-                nodes = pac.nodes()
-                node = pac.get_node(nodes[0].name)
+                pnc = client.underlying_client
+                response = await pnc.info("sindex-list")
+                nodes = pnc.nodes()
+                node = pnc.get_node(nodes[0].name)
                 response = await node.info("build")
 
         Returns:
-            The aerospike_async Client instance.
+            The aerospike_native Client instance.
 
         Raises:
             RuntimeError: If the client is not connected.
@@ -355,7 +355,7 @@ class Client(RoutingCapabilitiesMixin):
     ) -> "TransactionalSession":
         """Create a multi-record transaction (MRT) session.
 
-        Allocates a fresh :class:`~aerospike_async.Txn` on entry. Operations
+        Allocates a fresh :class:`~aerospike_native.Txn` on entry. Operations
         chained off the returned session (``tx.upsert(...)``, ``tx.query(...)``,
         ...) auto-participate in the transaction — every
         builder stamps ``policy.txn = tx.txn`` under the hood. On clean exit
@@ -437,17 +437,17 @@ class Client(RoutingCapabilitiesMixin):
         Args:
             body: Raw module source (for example UTF-8 encoded Lua).
             server_path: Path name stored on the server (often ends with ``.lua``).
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
-            policy: Optional :class:`~aerospike_async.AdminPolicy` (PAC leading
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
+            policy: Optional :class:`~aerospike_native.AdminPolicy` (PNC leading
                 argument); use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask`; await
+            A :class:`~aerospike_native.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         See Also:
             :meth:`register_udf_from_file`: Load source from disk.
@@ -472,16 +472,16 @@ class Client(RoutingCapabilitiesMixin):
         Args:
             client_path: Filesystem path to the module file on the client machine.
             server_path: Path name stored on the server.
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask` for completion polling.
+            A :class:`~aerospike_native.RegisterTask` for completion polling.
 
         Raises:
             RuntimeError: If not connected.
             OSError: If ``client_path`` cannot be read.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         See Also:
             :meth:`register_udf`: Register from bytes.
@@ -513,17 +513,17 @@ class Client(RoutingCapabilitiesMixin):
             package: Importable package holding the resource (e.g. ``"myapp.udfs"``).
             resource: Resource name within the package (e.g. ``"record_example.lua"``).
             server_path: Path name stored on the server.
-            language: :class:`~aerospike_async.UDFLang`; default is Lua.
+            language: :class:`~aerospike_native.UDFLang`; default is Lua.
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_async.RegisterTask` for completion polling.
+            A :class:`~aerospike_native.RegisterTask` for completion polling.
 
         Raises:
             RuntimeError: If not connected.
             ModuleNotFoundError: If ``package`` cannot be imported.
             FileNotFoundError: If ``resource`` is not found in the package.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -550,11 +550,11 @@ class Client(RoutingCapabilitiesMixin):
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_async.UdfRemoveTask`; await completion like register.
+            A :class:`~aerospike_native.UdfRemoveTask`; await completion like register.
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -573,7 +573,7 @@ class Client(RoutingCapabilitiesMixin):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster or admin errors (via PAC).
+            AerospikeError: On cluster or admin errors (via PNC).
 
         Example::
 
@@ -597,7 +597,7 @@ class Client(RoutingCapabilitiesMixin):
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster or info errors (via PAC).
+            AerospikeError: On cluster or info errors (via PNC).
 
         Example::
 

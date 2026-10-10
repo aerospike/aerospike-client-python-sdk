@@ -28,7 +28,7 @@ from aerospike_sdk import ClusterDefinition, DataSet
 from aerospike_sdk.policy.behavior_settings import Settings
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "test"

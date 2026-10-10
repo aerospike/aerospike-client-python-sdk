@@ -22,7 +22,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Optional
 
-from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
+from aerospike_native import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 
 class OpKind(Enum):

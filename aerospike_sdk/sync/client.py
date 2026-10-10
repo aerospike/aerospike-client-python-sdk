@@ -15,8 +15,8 @@
 
 """Synchronous SDK client.
 
-Owns a PAC ``aerospike_async.Client``. Every lifecycle and IO entry calls
-PAC's ``_blocking`` methods; no asyncio event loop is constructed.
+Owns a PNC ``aerospike_native.Client``. Every lifecycle and IO entry calls
+PNC's ``_blocking`` methods; no asyncio event loop is constructed.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import types
 from importlib import resources
 from typing import Any, Callable, Dict, Optional
 
-from aerospike_async import (
+from aerospike_native import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
@@ -37,7 +37,7 @@ from aerospike_async import (
 )
 
 from aerospike_sdk.dataset import DataSet
-from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
@@ -91,7 +91,7 @@ class SyncClient(RoutingCapabilitiesMixin):
         Args:
             seeds: Aerospike cluster seed addresses (e.g., "localhost:3000").
             policy: Optional client policy. When not supplied, defaults to a
-                fresh ``ClientPolicy`` left at PAC's own defaults. Pass an
+                fresh ``ClientPolicy`` left at PNC's own defaults. Pass an
                 explicit ``ClientPolicy`` to override any client-level
                 setting.
             max_error_rate: Per-node circuit-breaker threshold (see
@@ -100,7 +100,7 @@ class SyncClient(RoutingCapabilitiesMixin):
                 counter resets.
             current_thread_runtime: **Experimental — opt-in, subject to
                 removal.** When ``True``, each calling OS thread gets its
-                own PAC ``_LocalClient`` (sync-only, backed by a per-thread
+                own PNC ``_LocalClient`` (sync-only, backed by a per-thread
                 ``current_thread`` Tokio runtime). Eliminates the
                 cross-thread worker hop on every op for ~+30-40% TPS lift
                 on 32-thread sync workloads. Open caveat before production
@@ -184,13 +184,13 @@ class SyncClient(RoutingCapabilitiesMixin):
     def connect(self) -> None:
         """Open a connection to the cluster synchronously.
 
-        Calls :func:`aerospike_async.new_client_blocking` directly — no
+        Calls :func:`aerospike_native.new_client_blocking` directly — no
         asyncio loop is constructed.
 
-        When ``current_thread_runtime=True``, no PAC Client is constructed
+        When ``current_thread_runtime=True``, no PNC Client is constructed
         here. Instead a thread-local proxy is installed; each calling OS
         thread lazy-constructs its own
-        :class:`aerospike_async.LocalClient` on first op.
+        :class:`aerospike_native.LocalClient` on first op.
 
         Idempotent: returns early if already connected.
         """
@@ -203,12 +203,12 @@ class SyncClient(RoutingCapabilitiesMixin):
             log.debug("Connecting (blocking) to cluster seeds=%r", self._seeds)
         try:
             if self._current_thread_runtime:
-                # type: ignore[assignment] — proxy duck-types as PAC Client.
+                # type: ignore[assignment] — proxy duck-types as PNC Client.
                 self._client = _ThreadLocalLocalClient(self._policy, self._seeds)  # type: ignore[assignment]
             else:
                 self._client = new_client_blocking(self._policy, self._seeds)
-        except PacAerospikeError as exc:
-            raise _convert_pac_exception(exc) from exc
+        except PncAerospikeError as exc:
+            raise _convert_pnc_exception(exc) from exc
         self._connected = True
         self._warm_routing_capabilities()
         log.info(
@@ -219,7 +219,7 @@ class SyncClient(RoutingCapabilitiesMixin):
     def close(self) -> None:
         """Close the connection synchronously.
 
-        Calls PAC's ``close_blocking``. Safe to call when already closed.
+        Calls PNC's ``close_blocking``. Safe to call when already closed.
         """
         if self._sdk_config_monitor is not None:
             self._sdk_config_monitor.stop()
@@ -254,9 +254,9 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     @property
     def underlying_client(self) -> AsyncClient:
-        """The underlying PAC ``aerospike_async.Client``.
+        """The underlying PNC ``aerospike_native.Client``.
 
-        Use for PAC calls the SDK doesn't wrap (info, nodes, etc.).
+        Use for PNC calls the SDK doesn't wrap (info, nodes, etc.).
         """
         if not self._connected or self._client is None:
             raise RuntimeError("SyncClient is not connected. Call connect() first or use `with`.")
@@ -274,8 +274,8 @@ class SyncClient(RoutingCapabilitiesMixin):
             self.connect()
         return self
 
-    def _pac_client(self) -> AsyncClient:
-        """Return the underlying PAC ``aerospike_async.Client`` (post-connect)."""
+    def _pnc_client(self) -> AsyncClient:
+        """Return the underlying PNC ``aerospike_native.Client`` (post-connect)."""
         self._ensure_connected()
         return self.underlying_client
 
@@ -285,11 +285,11 @@ class SyncClient(RoutingCapabilitiesMixin):
         mode = cache.get(namespace)
         if mode is not None:
             return mode
-        pac = self.underlying_client
-        mode = _namespace_mode_from_partition_map(pac, cache, namespace)
+        pnc = self.underlying_client
+        mode = _namespace_mode_from_partition_map(pnc, cache, namespace)
         if mode is not None:
             return mode
-        return _probe_namespace_mode_blocking(pac, namespace)
+        return _probe_namespace_mode_blocking(pnc, namespace)
 
     # -- Factories: query / index / session ------------------------------------
 
@@ -309,7 +309,7 @@ class SyncClient(RoutingCapabilitiesMixin):
     def truncate(
         self, dataset: DataSet, before_nanos: Optional[int] = None,
     ) -> None:
-        """Truncate a set, synchronously (PAC ``truncate_blocking``)."""
+        """Truncate a set, synchronously (PNC ``truncate_blocking``)."""
         self.underlying_client.truncate_blocking(
             dataset.namespace, dataset.set_name, before_nanos,
         )

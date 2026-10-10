@@ -16,13 +16,13 @@
 """AsyncPool ``use_uvloop`` free-threading gate.
 
 Under free-threading the pool may use uvloop only when uvloop's libuv race
-(#720) is mitigated: PAC's pipe-wake transport active, or a fixed uvloop
+(#720) is mitigated: PNC's pipe-wake transport active, or a fixed uvloop
 release. Construction-time decision only — no I/O, no cluster, no asyncio
 loops (``AsyncPool.__init__`` performs no connection).
 
-The pipe-wake check MUST mirror PAC's ``should_use_pipe`` exactly — ``1`` or
+The pipe-wake check MUST mirror PNC's ``should_use_pipe`` exactly — ``1`` or
 ``auto``/unset activate it, any other value (``0``, empty, a typo) does not.
-A looser check would let the pool enable uvloop while PAC stayed on the racy
+A looser check would let the pool enable uvloop while PNC stayed on the racy
 ``call_soon_threadsafe`` path — uvloop with no pipe, which wedges. These tests
 pin that mapping.
 """
@@ -47,7 +47,7 @@ def _definition_fixture(aerospike_host) -> ClusterDefinition:
 
 
 class TestUvloopSafeUnderFt:
-    """Pipe-wake activation mapping — must match PAC ``should_use_pipe``."""
+    """Pipe-wake activation mapping — must match PNC ``should_use_pipe``."""
 
     @pytest.mark.parametrize("val", ["1", "auto"])
     def test_active_values_are_safe(self, val, monkeypatch):
@@ -60,7 +60,7 @@ class TestUvloopSafeUnderFt:
 
     @pytest.mark.parametrize("val", ["0", "", "yes", "true", "on", "Auto"])
     def test_inactive_values_defer_to_version_check(self, val, monkeypatch):
-        # Anything other than 1/auto leaves PAC on the racy path, so safety
+        # Anything other than 1/auto leaves PNC on the racy path, so safety
         # hinges solely on a fixed uvloop — never on the pipe transport.
         monkeypatch.setenv("AEROSPIKE_PIPE_WAKE", val)
         with patch("aerospike_sdk.aio.pool._uvloop_has_721_fix", return_value=False):

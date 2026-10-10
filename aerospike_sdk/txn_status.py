@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from aerospike_async import AbortStatus, CommitStatus
+from aerospike_native import AbortStatus, CommitStatus
 
 
 class TxnStatus(Enum):
@@ -77,7 +77,7 @@ class TxnStatus(Enum):
     """
 
 
-# PAC's ``CommitStatus.ROLL_FORWARD_ABANDONED`` and
+# PNC's ``CommitStatus.ROLL_FORWARD_ABANDONED`` and
 # ``AbortStatus.COMMIT_FAILED`` are never returned: both outcomes are raised.
 _FROM_COMMIT = {
     CommitStatus.OK: TxnStatus.COMMITTED,

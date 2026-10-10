@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from aerospike_sdk.exceptions import PacAerospikeError, _convert_pac_exception
+from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.node_shared import NodeBase
 
 
@@ -70,6 +70,6 @@ class Node(NodeBase):
             command on every node at once.
         """
         try:
-            return self._pac.info_blocking(command)
-        except PacAerospikeError as e:
-            raise _convert_pac_exception(e) from e
+            return self._pnc.info_blocking(command)
+        except PncAerospikeError as e:
+            raise _convert_pnc_exception(e) from e

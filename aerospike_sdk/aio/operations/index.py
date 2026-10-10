@@ -24,9 +24,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aerospike_async import DropIndexTask, IndexTask
+from aerospike_native import DropIndexTask, IndexTask
 
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.index_shared import _IndexBuilderBase
 from aerospike_sdk.metrics import usage
 
@@ -74,7 +74,7 @@ class IndexBuilder(_IndexBuilderBase):
         """
         Args:
             client: Connected SDK client; admin calls dispatch through its
-                underlying PAC client, and AEL-string chains read its
+                underlying PNC client, and AEL-string chains read its
                 server-capability gate.
             namespace: Namespace containing the set to index.
             set_name: Set name within the namespace.
@@ -124,7 +124,7 @@ class IndexBuilder(_IndexBuilderBase):
                     self._namespace, self._set_name, index_name,
                 )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
         if self._expression is not None:
             index_name, index_type, expression = self._validate_expression_create(
                 self._client,
@@ -139,7 +139,7 @@ class IndexBuilder(_IndexBuilderBase):
                     self._collection_index_type,
                 )
             except Exception as e:
-                raise _convert_pac_exception(e) from e
+                raise _convert_pnc_exception(e) from e
         bin_name, index_name, index_type = self._validate_bin_create()
         try:
             return await self._client._async_client.create_index(
@@ -152,7 +152,7 @@ class IndexBuilder(_IndexBuilderBase):
                 self._ctx,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
     async def drop(self) -> DropIndexTask:
         """Drop a previously created index by name.
@@ -185,4 +185,4 @@ class IndexBuilder(_IndexBuilderBase):
             return await self._client._async_client.drop_index(
                 self._namespace, self._set_name, index_name)
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e

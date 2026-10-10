@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import List, Union
 
-from aerospike_async import Key
+from aerospike_native import Key
 
 from aerospike_sdk.error_strategy import OnError
 from aerospike_sdk.sync.operations.query import QueryBuilder

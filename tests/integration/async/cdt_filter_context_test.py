@@ -24,7 +24,7 @@ not expose ``ctx`` yet.
 """
 
 from aerospike_sdk import CTX, Behavior, Filter
-from aerospike_async import IndexType
+from aerospike_native import IndexType
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.policy import Settings
@@ -76,11 +76,11 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     keys = (key_hi, key_lo, key_missing_inner)
 
     session = cluster.create_session(_SEND_KEY)
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
 
     await _cleanup_records(session, keys)
     try:
-        await pac.drop_index(_NS, _SET, _INDEX)
+        await pnc.drop_index(_NS, _SET, _INDEX)
     except Exception:
         pass
 
@@ -105,7 +105,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
 
     flt = Filter.equal(_BIN, target).context([CTX.map_key(_OUTER), CTX.map_key(_INNER)])
     try:
-        index_task = await pac.create_index(
+        index_task = await pnc.create_index(
             _NS,
             _SET,
             _BIN,
@@ -141,7 +141,7 @@ async def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
         assert sorted(_user_keys_from_stream(found2)) == ["cdt_ctx_lo"]
     finally:
         try:
-            await pac.drop_index(_NS, _SET, _INDEX)
+            await pnc.drop_index(_NS, _SET, _INDEX)
         except Exception:
             pass
         await _cleanup_records(session, keys)
@@ -155,13 +155,13 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     keys = (key_match, key_other)
 
     session = cluster.create_session(_SEND_KEY)
-    pac = cluster._client.underlying_client
+    pnc = cluster._client.underlying_client
     index_name = f"{_INDEX}_flat"
     val = 5150
 
     await _cleanup_records(session, keys)
     try:
-        await pac.drop_index(_NS, _SET, index_name)
+        await pnc.drop_index(_NS, _SET, index_name)
     except Exception:
         pass
 
@@ -178,7 +178,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
 
     flt = Filter.equal(_BIN, val).context([CTX.map_key(_INNER)])
     try:
-        index_task = await pac.create_index(
+        index_task = await pnc.create_index(
             _NS,
             _SET,
             _BIN,
@@ -202,7 +202,7 @@ async def test_query_filter_equal_single_map_key_context(cluster, enterprise):
         assert sorted(_user_keys_from_stream(found)) == ["cdt_ctx_flat_a"]
     finally:
         try:
-            await pac.drop_index(_NS, _SET, index_name)
+            await pnc.drop_index(_NS, _SET, index_name)
         except Exception:
             pass
         await _cleanup_records(session, keys)

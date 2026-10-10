@@ -27,7 +27,7 @@ from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
 from aerospike_sdk.sync import Cluster
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from tests.integration.namespace import general_namespace
 
 

@@ -14,7 +14,7 @@
 # the License.
 
 """Integration tests for Behavior: verify that derived behaviors
-correctly flow through Session -> operation builders -> PAC policies
+correctly flow through Session -> operation builders -> PNC policies
 when performing real cluster operations."""
 
 from datetime import timedelta

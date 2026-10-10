@@ -67,7 +67,7 @@ def main():
 main()
 ```
 
-The sync surface is an independent synchronous implementation that calls PAC's
+The sync surface is an independent synchronous implementation that calls PNC's
 blocking entry points directly — there is no per-call event loop and no
 per-thread loop runner. Sessions, behaviors, builders, and AEL filters are
 identical to the async surface.

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Dict, Optional
 
-from aerospike_async import ClientPolicy
+from aerospike_native import ClientPolicy
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -29,7 +29,7 @@ class TransactionSettings:
     """SDK-runtime transaction behavior, read at operation time.
 
     Unlike the connection and refresh groups on :class:`SystemSettings`,
-    these fields do not map onto :class:`~aerospike_async.ClientPolicy`;
+    these fields do not map onto :class:`~aerospike_native.ClientPolicy`;
     they configure how the SDK itself drives multi-record transactions.
     ``None`` means "not set" — the value falls through to the next
     configuration layer (see :class:`SystemSettings` for layering), ending

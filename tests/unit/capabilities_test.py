@@ -16,7 +16,7 @@
 """Unit tests for server-capability resolution (minimum version across nodes).
 
 The folds are pure functions over per-node version objects, so a lightweight
-stand-in for PAC's ``Version`` (four version fields + the ``supports_*``
+stand-in for PNC's ``Version`` (four version fields + the ``supports_*``
 predicate methods) exercises every rule without a cluster. The load-bearing
 property: a single lagging node makes the cluster answer unsupported.
 """
@@ -25,7 +25,7 @@ from aerospike_sdk import capabilities
 
 
 class _FakeVersion:
-    """Stand-in for PAC ``Version``: version fields + predicate methods."""
+    """Stand-in for PNC ``Version``: version fields + predicate methods."""
 
     def __init__(self, major, minor, patch, build=0, *,
                  ael=None, query_ops=None, string_ops=None, query_selection=None):
@@ -100,8 +100,8 @@ class TestAllNodesFolds:
         assert not capabilities.supports_string_operations([])
         assert not capabilities.supports_query_selection([])
 
-    def test_predicates_delegate_to_pac_not_version_floor(self):
-        # Every predicate reads PAC's Version.supports_*(), not a hardcoded
+    def test_predicates_delegate_to_pnc_not_version_floor(self):
+        # Every predicate reads PNC's Version.supports_*(), not a hardcoded
         # version check: a node reporting the predicate False despite a high
         # version is honored.
         vs = [_FakeVersion(9, 0, 0, ael=False, string_ops=False, query_ops=False,

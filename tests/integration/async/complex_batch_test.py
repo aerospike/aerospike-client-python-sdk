@@ -19,7 +19,7 @@ import asyncio
 
 import pytest
 
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import ResultCode
 from aerospike_sdk.policy.behavior import Behavior

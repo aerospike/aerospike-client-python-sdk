@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from aerospike_async import Txn
+from aerospike_native import Txn
 
 
 class TransactionalSessionBase:
@@ -30,7 +30,7 @@ class TransactionalSessionBase:
     transaction-lifecycle *view* — :attr:`txn` and :attr:`active` — is defined
     exactly once. The lifecycle *terminals* (``commit`` / ``abort`` and the
     context-manager protocol) stay per-leaf because they differ by runtime
-    (async ``await`` vs blocking) and by the PAC entry they call.
+    (async ``await`` vs blocking) and by the PNC entry they call.
     """
 
     # Set by the leaf ``Session.__init__`` (``_txn``, initially ``None``) and by
@@ -42,13 +42,13 @@ class TransactionalSessionBase:
 
     @property
     def txn(self) -> Txn:
-        """Return the active :class:`~aerospike_async.Txn`.
+        """Return the active :class:`~aerospike_native.Txn`.
 
         Raises:
             RuntimeError: If the session has not been entered (no active txn).
 
         Returns:
-            The active :class:`~aerospike_async.Txn`.
+            The active :class:`~aerospike_native.Txn`.
 
         Example::
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable, Union
 
-from aerospike_async import Key
+from aerospike_native import Key
 
 from aerospike_sdk.exceptions import AerospikeError
 

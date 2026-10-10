@@ -66,7 +66,7 @@ class TestStringOpFactoryShape:
 
     def test_str_snip_truncate_form_rejects_flags(self):
         # The server parses snip args by position, so flags cannot ride on
-        # the 1-arg form; PAC refuses rather than silently dropping them.
+        # the 1-arg form; PNC refuses rather than silently dropping them.
         wbb, _ = _make_wbb()
         with pytest.raises(ValueError, match="explicit end"):
             wbb.str_snip(5, flags=StringWriteFlags.NO_FAIL)

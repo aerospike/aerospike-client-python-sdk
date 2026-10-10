@@ -49,7 +49,7 @@ class TestCapabilityProbes:
                       cluster.supports_query_selection):
             assert isinstance(probe(), bool)
 
-    async def test_probes_agree_with_pac_version_predicates(self, cluster):
+    async def test_probes_agree_with_pnc_version_predicates(self, cluster):
         """Wiring: cluster probe → ``capabilities.supports_*`` over live node versions.
 
         This alone is tautological (same fold on both sides); pair with

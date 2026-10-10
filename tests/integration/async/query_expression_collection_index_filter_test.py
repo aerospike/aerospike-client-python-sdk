@@ -17,7 +17,7 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_async import Filter
+from aerospike_native import Filter
 
 from aerospike_sdk import (
     CollectionIndexType,
@@ -28,7 +28,7 @@ from aerospike_sdk import (
     ResultCode,
 )
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 DS = DataSet.of(general_namespace(), "query_exp_coll_filter")
 INDEX_NAME = "query_exp_coll_filter_idx"

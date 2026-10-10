@@ -13,13 +13,13 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""PAC capability markers and skip helpers shared by unit and integration tests.
+"""PNC capability markers and skip helpers shared by unit and integration tests.
 
 Integration tests declare requirements with :data:`requires_server_compiled_ael`
 or :data:`requires_query_selection`; ``tests/integration/conftest.py`` probes the
 marker's seed (``host=``, default ``aerospike_host``) once per session and calls
 the matching skip helper (the same ``supports_*`` flags the client derives from
-PAC ``Version.supports_*``).
+PNC ``Version.supports_*``).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 import pytest
-from aerospike_async.exceptions import InvalidRequest
+from aerospike_native.exceptions import InvalidRequest
 
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 

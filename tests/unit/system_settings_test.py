@@ -18,7 +18,7 @@
 from datetime import timedelta
 
 import pytest
-from aerospike_async import ClientPolicy
+from aerospike_native import ClientPolicy
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition as AsyncClusterDefinition
 from aerospike_sdk.policy.system_settings import (

@@ -15,7 +15,7 @@
 
 """Unit tests for TransactionalSession API shape and implicit txn threading.
 
-These tests mock the underlying PAC client so they can verify the
+These tests mock the underlying PNC client so they can verify the
 PSDK-level API contract (txn lifecycle, commit/abort dispatch,
 context-manager semantics, and implicit Session -> builder threading)
 without requiring an SC cluster.
@@ -26,7 +26,7 @@ from datetime import timedelta
 import pytest
 
 from aerospike_sdk import TxnState
-from aerospike_async import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC, WritePolicy
+from aerospike_native import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC, WritePolicy
 
 from aerospike_sdk import Txn, TransactionalSession, TxnStatus
 from aerospike_sdk.aio.session import Session
@@ -36,14 +36,14 @@ from aerospike_sdk.policy.behavior_settings import Settings
 
 
 class _FakePacClient:
-    """Minimal async stand-in for the PAC Client with commit/abort plus
+    """Minimal async stand-in for the PNC Client with commit/abort plus
     put/get/operate/etc. stubs used by higher-level SDK paths."""
 
     def __init__(self) -> None:
         self.commit_calls: list = []
         self.abort_calls: list = []
         self.commit_return: CommitStatus = CommitStatus.OK
-        # PAC raises for an abandoned roll-forward rather than returning
+        # PNC raises for an abandoned roll-forward rather than returning
         # a status; set this to model that.
         self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
@@ -318,21 +318,21 @@ async def test_session_transaction_forwards_behavior(
     assert tx.behavior is custom
 
 
-# -- PAC Txn surface guards ---------------------------------------------------
-# These lock in the PAC Txn shape that the MRT integration tests
-# depend on. If PAC later adds ``set_state`` / ``set_timeout`` setters,
+# -- PNC Txn surface guards ---------------------------------------------------
+# These lock in the PNC Txn shape that the MRT integration tests
+# depend on. If PNC later adds ``set_state`` / ``set_timeout`` setters,
 # these tests will start failing and tell us to lift the ``@pytest.skip``
 # on the two currently-stubbed integration tests.
 
-def test_pac_txn_has_expected_state_enum() -> None:
-    """PAC must expose the four Txn state values (even if read-only)."""
+def test_pnc_txn_has_expected_state_enum() -> None:
+    """PNC must expose the four Txn state values (even if read-only)."""
     assert {
         TxnState.OPEN, TxnState.COMMITTED, TxnState.ABORTED, TxnState.VERIFIED,
     } == {getattr(TxnState, n) for n in ("OPEN", "COMMITTED", "ABORTED", "VERIFIED")}
 
 
-def test_pac_txn_state_is_writable_and_round_trips() -> None:
-    """PAC exposes ``Txn.state`` as a writable property (used by the
+def test_pnc_txn_state_is_writable_and_round_trips() -> None:
+    """PNC exposes ``Txn.state`` as a writable property (used by the
     ``test_txn_read_fails_for_all_states_except_open`` integration test).
     """
     t = Txn()
@@ -342,7 +342,7 @@ def test_pac_txn_state_is_writable_and_round_trips() -> None:
         assert t.state == target
 
 
-def test_pac_txn_timeout_is_writable_before_sharing() -> None:
+def test_pnc_txn_timeout_is_writable_before_sharing() -> None:
     """``Txn.timeout`` is writable while the underlying ``Arc<Txn>`` is
     uniquely held — i.e. before the txn has been handed to a policy or
     operation builder. This is the path
@@ -356,10 +356,10 @@ def test_pac_txn_timeout_is_writable_before_sharing() -> None:
     assert t.timeout == 0
 
 
-def test_pac_txn_timeout_setter_rejects_after_sharing() -> None:
+def test_pnc_txn_timeout_setter_rejects_after_sharing() -> None:
     """Mutating ``Txn.timeout`` after the txn has been cloned into a policy
     raises ``ValueError``. Pins the set-before-use contract documented on
-    the PAC setter so a future regression (silent no-op, wrong error type)
+    the PNC setter so a future regression (silent no-op, wrong error type)
     is caught here at the PSDK boundary.
     """
     t = Txn()

@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 from aerospike_sdk import Filter, HllConfig, Txn
-from aerospike_async import (
+from aerospike_native import (
     ExpOperation,
     Expiration,
     HllOperation,
@@ -184,7 +184,7 @@ def test_filter_after_where_keeps_both():
 
 
 async def test_execute_sends_filter_and_filter_expression_together():
-    """Both channels reach PAC: the statement filter and the write policy's expression."""
+    """Both channels reach PNC: the statement filter and the write policy's expression."""
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
@@ -231,22 +231,22 @@ def test_udf_filter_rejects_none():
 
 async def test_udf_execute_sends_filter_and_filter_expression_together():
     b = _udf_builder()
-    pac = b._session._client._client
-    pac.query_execute_udf = AsyncMock(return_value=MagicMock())
+    pnc = b._session._client._client
+    pnc.query_execute_udf = AsyncMock(return_value=MagicMock())
     await b.filter(Filter.range("n", 1, 3)).where("$.n > 1").execute()
-    call = pac.query_execute_udf.call_args
+    call = pnc.query_execute_udf.call_args
     assert len(call[0][0].filters) == 1
     assert call.kwargs["write_policy"].filter_expression is not None
 
 
 def test_sync_udf_filter_reaches_the_blocking_terminal():
     inner = _udf_builder()
-    pac = inner._session._client._client
-    pac.query_execute_udf_blocking = MagicMock(return_value=MagicMock())
+    pnc = inner._session._client._client
+    pnc.query_execute_udf_blocking = MagicMock(return_value=MagicMock())
     b = SyncBackgroundUdfBuilder(inner)
     assert b.filter(Filter.range("n", 1, 3)) is b
     b.execute()
-    assert len(pac.query_execute_udf_blocking.call_args[0][0].filters) == 1
+    assert len(pnc.query_execute_udf_blocking.call_args[0][0].filters) == 1
 
 
 async def test_delete_execute_passes_statement_filter():
@@ -279,7 +279,7 @@ _EXPIRY_VERBS = [
 
 
 @pytest.mark.parametrize("verb, _ttl, expected", _EXPIRY_VERBS)
-async def test_expiry_verbs_reach_the_policy_pac_receives(verb, _ttl, expected):
+async def test_expiry_verbs_reach_the_policy_pnc_receives(verb, _ttl, expected):
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     b = BackgroundOperationBuilder(s, DataSet.of("test", "bgset"), _OpType.TOUCH)
@@ -361,8 +361,8 @@ def test_records_per_second_defaults_to_unthrottled():
     assert wp.records_per_second == 0
 
 
-async def test_records_per_second_reaches_the_policy_pac_receives():
-    """End of the chain: the value the builder took is on the policy PAC gets."""
+async def test_records_per_second_reaches_the_policy_pnc_receives():
+    """End of the chain: the value the builder took is on the policy PNC gets."""
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")
@@ -373,7 +373,7 @@ async def test_records_per_second_reaches_the_policy_pac_receives():
     assert wp.records_per_second == 2500
 
 
-async def test_update_sends_collection_steps_to_pac():
+async def test_update_sends_collection_steps_to_pnc():
     s = _session_mock()
     s._client._client.query_operate = AsyncMock(return_value=MagicMock())
     ds = DataSet.of("test", "bgset")

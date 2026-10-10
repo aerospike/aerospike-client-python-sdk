@@ -13,13 +13,13 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Map resolved Settings to PAC policy objects."""
+"""Map resolved Settings to PNC policy objects."""
 
 from __future__ import annotations
 
 from typing import Optional
 
-from aerospike_async import (
+from aerospike_native import (
     BatchPolicy,
     BatchReadPolicy,
     Concurrency,
@@ -29,19 +29,19 @@ from aerospike_async import (
     TxnVerifyPolicy,
     WritePolicy,
 )
-from aerospike_async.exceptions import ValueError as _PacValueError
+from aerospike_native.exceptions import ValueError as _PncValueError
 
 from aerospike_sdk.policy.behavior_settings import Settings
 
 
-def _to_value_error(exc: _PacValueError) -> ValueError:
-    """Translate a PAC policy-validation error into a built-in ``ValueError``.
+def _to_value_error(exc: _PncValueError) -> ValueError:
+    """Translate a PNC policy-validation error into a built-in ``ValueError``.
 
     ``read_touch_ttl`` is the only policy field the underlying async client
-    (PAC) validates on assignment, raising ``aerospike_async.exceptions``. We
+    (PNC) validates on assignment, raising ``aerospike_native.exceptions``. We
     surface it as a built-in :exc:`ValueError` so callers only ever catch
     Python/SDK exceptions, consistent with the rest of the SDK's input
-    validation, rather than reaching into ``aerospike_async``.
+    validation, rather than reaching into ``aerospike_native``.
     """
     return ValueError(str(exc))
 
@@ -97,7 +97,7 @@ def to_read_policy(settings: Settings) -> ReadPolicy:
             compression_threshold=settings.compression_threshold,
             error_detail_verbosity=settings.error_detail_verbosity,
         )
-    except _PacValueError as e:
+    except _PncValueError as e:
         raise _to_value_error(e) from e
 
 
@@ -131,7 +131,7 @@ def to_write_policy(settings: Settings) -> WritePolicy:
 def to_read_operate_policy(settings: Settings) -> WritePolicy:
     """Build the WritePolicy for an operate call that only reads.
 
-    PAC's ``operate`` takes only a ``WritePolicy``, so read settings ride on
+    PNC's ``operate`` takes only a ``WritePolicy``, so read settings ride on
     one, ``replica`` included: an operate whose ops all read is routed like
     a read.
 
@@ -149,7 +149,7 @@ def to_read_operate_policy(settings: Settings) -> WritePolicy:
             policy.read_mode_sc = settings.read_mode_sc
         if settings.read_touch_ttl_percent is not None:
             policy.read_touch_ttl = settings.read_touch_ttl_percent
-    except _PacValueError as e:
+    except _PncValueError as e:
         raise _to_value_error(e) from e
     return policy
 
@@ -201,7 +201,7 @@ def to_batch_read_policy(settings: Settings) -> BatchReadPolicy:
     if settings.read_touch_ttl_percent is not None:
         try:
             p.read_touch_ttl = settings.read_touch_ttl_percent
-        except _PacValueError as e:
+        except _PncValueError as e:
             raise _to_value_error(e) from e
     return p
 
@@ -323,7 +323,7 @@ def apply_to_read_policy(settings: Settings, policy: ReadPolicy) -> ReadPolicy:
     if settings.read_touch_ttl_percent is not None and policy.read_touch_ttl == 0:
         try:
             policy.read_touch_ttl = settings.read_touch_ttl_percent
-        except _PacValueError as e:
+        except _PncValueError as e:
             raise _to_value_error(e) from e
     if settings.use_compression is not None:
         policy.use_compression = settings.use_compression

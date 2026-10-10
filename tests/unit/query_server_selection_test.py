@@ -22,7 +22,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import ClientPolicy, FilterExpression, QueryPolicy, QueryWhereFlags
+from aerospike_native import ClientPolicy, FilterExpression, QueryPolicy, QueryWhereFlags
 
 from aerospike_sdk import Behavior, Filter, Key, QueryDuration, QueryHint, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
@@ -34,11 +34,11 @@ from aerospike_sdk.aio.session import Session
 
 
 class _ClientSupportsSelection:
-    """PAC client stub — capability is threaded via QueryBuilder kwarg."""
+    """PNC client stub — capability is threaded via QueryBuilder kwarg."""
 
 
 class _ClientNoSelection:
-    """PAC client stub — capability is threaded via QueryBuilder kwarg."""
+    """PNC client stub — capability is threaded via QueryBuilder kwarg."""
 
 
 def _async_builder(
@@ -182,7 +182,7 @@ class TestExplainWhereFlags:
         assert _requires_index(_scan_policy_builder(None), None) is False
 
     def test_hintless_query_still_explains_and_does_not_hard_hint(self):
-        # Only EXPLAIN is left, which PAC sends when the flags are omitted.
+        # Only EXPLAIN is left, which PNC sends when the flags are omitted.
         assert _scan_policy_builder(None)._query_explain_where_flags(None) is None
 
     def test_hard_hint_sets_hard_hint_flag(self):

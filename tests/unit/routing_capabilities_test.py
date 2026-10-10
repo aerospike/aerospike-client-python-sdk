@@ -21,7 +21,7 @@ import pytest
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.routing_capabilities_shared import (
     RoutingCapabilitiesMixin,
-    _pac_default_tend_interval_seconds,
+    _pnc_default_tend_interval_seconds,
 )
 
 
@@ -43,7 +43,7 @@ class _FakeNode:
 
 
 class _FakePacClient:
-    """Stands in for PAC ``Client``: exposes ``nodes`` on the class."""
+    """Stands in for PNC ``Client``: exposes ``nodes`` on the class."""
 
     def __init__(self, *versions: _FakeVersion) -> None:
         self._nodes = [_FakeNode(v) for v in versions]
@@ -54,7 +54,7 @@ class _FakePacClient:
         return list(self._nodes)
 
     def join(self, version: _FakeVersion) -> None:
-        """A node appears in the list PAC's tend loop publishes."""
+        """A node appears in the list PNC's tend loop publishes."""
         self._nodes.append(_FakeNode(version))
 
     def leave(self) -> None:
@@ -65,7 +65,7 @@ class _FakeThreadLocalProxy:
     """Stands in for ``_ThreadLocalLocalClient``.
 
     No ``nodes`` on the class, and any *instance* attribute miss falls
-    through ``__getattr__`` — which in the real proxy builds a per-thread PAC
+    through ``__getattr__`` — which in the real proxy builds a per-thread PNC
     client. Misses are recorded so a test can assert none happened.
     """
 
@@ -78,8 +78,8 @@ class _FakeThreadLocalProxy:
 
 
 class _Client(RoutingCapabilitiesMixin):
-    def __init__(self, pac, tend_interval: timedelta | None = None) -> None:
-        self._client = pac
+    def __init__(self, pnc, tend_interval: timedelta | None = None) -> None:
+        self._client = pnc
         self._connected = True
         self._sdk_settings = SystemSettings(tend_interval=tend_interval)
         self._init_routing_capability_cache()
@@ -158,15 +158,15 @@ def test_disconnected_client_reports_no_capabilities():
 
 
 class TestTendIntervalRefresh:
-    """Gates track the node list PAC tends, within one tend interval."""
+    """Gates track the node list PNC tends, within one tend interval."""
 
     def test_lagging_node_joining_after_connect_closes_the_gates(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
+        pnc = _FakePacClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
         assert client.supports_server_compiled_ael is True
 
-        pac.join(_FakeVersion(ael=False, query_selection=False))
+        pnc.join(_FakeVersion(ael=False, query_selection=False))
         clock.advance(1.0)
 
         assert client.supports_server_compiled_ael is False
@@ -174,15 +174,15 @@ class TestTendIntervalRefresh:
 
     def test_gates_reopen_when_the_lagging_node_leaves(self, clock):
         """Gates reopen when a lagging node leaves, without reconnecting."""
-        pac = _FakePacClient(
+        pnc = _FakePacClient(
             _FakeVersion(),
             _FakeVersion(ael=False, query_selection=False),
         )
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
         assert client.supports_server_compiled_ael is False
 
-        pac.leave()
+        pnc.leave()
         clock.advance(1.0)
 
         assert client.supports_server_compiled_ael is True
@@ -190,23 +190,23 @@ class TestTendIntervalRefresh:
 
     def test_within_the_interval_the_node_list_is_not_rewalked(self, clock):
         """Hot-path reads must stay a cached-boolean lookup between tends."""
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
+        pnc = _FakePacClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
-        calls_after_warm = pac.list_calls
+        calls_after_warm = pnc.list_calls
 
         clock.advance(0.9)
         for _ in range(100):
             assert client.supports_server_compiled_ael is True
             assert client.supports_query_selection is True
 
-        assert pac.list_calls == calls_after_warm
+        assert pnc.list_calls == calls_after_warm
 
     def test_a_configured_interval_sets_the_refresh_window(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=30))
+        pnc = _FakePacClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=30))
         client._warm_routing_capabilities()
-        pac.join(_FakeVersion(ael=False, query_selection=False))
+        pnc.join(_FakeVersion(ael=False, query_selection=False))
 
         clock.advance(29.0)
         assert client.supports_server_compiled_ael is True
@@ -214,10 +214,10 @@ class TestTendIntervalRefresh:
         clock.advance(1.0)
         assert client.supports_server_compiled_ael is False
 
-    def test_unset_interval_falls_back_to_the_pac_default(self):
+    def test_unset_interval_falls_back_to_the_pnc_default(self):
         client = _Client(_FakePacClient(_FakeVersion()))
         assert client._routing_capability_ttl_seconds() == pytest.approx(
-            _pac_default_tend_interval_seconds(),
+            _pnc_default_tend_interval_seconds(),
         )
 
     def test_unlistable_client_refresh_never_touches_the_proxy_instance(self, clock):
@@ -279,25 +279,25 @@ class TestRefreshUnderARunningLoop:
 
     @pytest.mark.asyncio
     async def test_a_stale_read_refreshes_before_answering(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
+        pnc = _FakePacClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
 
-        pac.join(_FakeVersion(ael=False, query_selection=False))
+        pnc.join(_FakeVersion(ael=False, query_selection=False))
         clock.advance(1.0)
 
         assert client.supports_server_compiled_ael is False
         assert client.supports_query_selection is False
 
     def test_a_failed_refresh_keeps_the_previous_gates(self, clock):
-        pac = _FakePacClient(_FakeVersion())
-        client = _Client(pac, tend_interval=timedelta(seconds=1))
+        pnc = _FakePacClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
         client._warm_routing_capabilities()
 
         def _unreachable():
             raise ConnectionError("cluster unreachable")
 
-        pac.nodes = _unreachable
+        pnc.nodes = _unreachable
         clock.advance(1.0)
 
         assert client.supports_server_compiled_ael is True

@@ -22,7 +22,7 @@ import weakref
 from datetime import timedelta
 from typing import ClassVar, Dict, List, Optional, Tuple
 
-from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
+from aerospike_native import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy.behavior_registry import _register
 from aerospike_sdk.policy.behavior_settings import (

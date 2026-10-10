@@ -20,7 +20,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock
 
 import pytest
-from aerospike_async import ReadModeAP, ReadModeSC, Replica
+from aerospike_native import ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy import behavior_registry
 from aerospike_sdk.policy import sdk_config_loader as loader

@@ -30,16 +30,16 @@ from time import perf_counter
 from typing import List, Optional, Union
 
 
-from aerospike_async import Key
+from aerospike_native import Key
 
-from aerospike_async import ResultCode
+from aerospike_native import ResultCode
 
 from aerospike_sdk.query_shared import (
     QueryBinBuilder,
     _QueryBuilderBase,
 )
 from aerospike_sdk.sync.operations.query_dispatch import _BlockingQueryDispatch
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.operations_shared import (
     _OP_TYPE_TO_REA,
     _SingleKeyWriteSegmentBase,
@@ -93,7 +93,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
     sync ``execute()`` that routes
     through Tier 1 (fast path / multi-key list dispatch), Tier 1b
     (multi-spec blocking dispatch), or Tier 2 (dataset / SI / scan
-    streaming) using PAC ``_blocking`` entries. No asyncio loop involved.
+    streaming) using PNC ``_blocking`` entries. No asyncio loop involved.
 
     Multi-key chains are split into per-node sub-batches, and a node whose
     sub-batch holds a single key is sent a regular single-record command
@@ -142,11 +142,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         """Run the configured query/write chain synchronously.
 
         Tier 1: single-key + multi-key + all op-types (returns list).
-        Tier 1b: multi-spec sequential dispatch via PAC ``batch_blocking``.
+        Tier 1b: multi-spec sequential dispatch via PNC ``batch_blocking``.
         Tier 2: dataset / SI / scan streams (returns Recordset; lazy).
         """
         # Aggressive bypass: trivial single-key plain read with no per-op
-        # overrides → call PAC's get_blocking directly, skipping
+        # overrides → call PNC's get_blocking directly, skipping
         # _finalize_current_spec / _OperationSpec /
         # _execute_single_key_direct_blocking. Falls back to the full builder
         # on any non-trivial case (filter expression, default filter, ops,
@@ -179,7 +179,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
                     txn=self._txn,
                 )
             except Exception as e:
-                psdk_exc = _convert_pac_exception(e)
+                psdk_exc = _convert_pnc_exception(e)
                 rc = psdk_exc.result_code
                 # Mirror _is_actionable / _should_include_result semantics for
                 # the slow path: KEY_NOT_FOUND_ERROR on a plain read is
@@ -240,10 +240,10 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         if stream_kind is not None:
             kind, payload = stream_kind
             if kind == "recordset":
-                return RecordStream._from_pac_recordset(payload)
+                return RecordStream._from_pnc_recordset(payload)
             if kind == "chunked":
                 recordset, reexecute, chunk_total_limit = payload
-                return RecordStream._from_chunked_pac_recordset(
+                return RecordStream._from_chunked_pnc_recordset(
                     recordset, reexecute, limit=chunk_total_limit,
                 )
 
@@ -313,7 +313,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
         materializes every result before returning (writes complete on
-        return), this dispatches the key-batch through PAC's blocking
+        return), this dispatches the key-batch through PNC's blocking
         ``batch_stream`` and yields each row as its node responds — the first
         results are available as soon as the first node responds, without
         waiting for the rest, and peak memory stays bounded to the in-flight
@@ -352,11 +352,11 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            pac_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
+            pnc_stream = self._client.batch_stream_blocking(all_ops, batch_policy=batch_policy)
         except Exception as e:
             return RecordStream._from_list(
                 self._handle_batch_error_list(all_keys, e, disp, handler))
-        return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
+        return RecordStream._from_pnc_batch_stream(pnc_stream, on_error=handler)
 
 
 class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
@@ -498,7 +498,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         # Aggressive bypass: when the segment has accumulated put-style
         # ops on a single key with no durable-delete overrides and on_error
         # is the default (THROW), we can skip _promote()/QueryBuilder
-        # allocation entirely and call PAC's operate_blocking directly.
+        # allocation entirely and call PNC's operate_blocking directly.
         # Crucial guard: `self._ops` must be non-empty — the bypass
         # dispatches via `operate` which requires at least one op.
         # Delete/touch/exists single-key paths (no ops) fall through to the
@@ -518,7 +518,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             and (self._write_policy is not None or self._write_policy_sc is not None)
         ):
             # Hot path: when both AP + SC base policies are pre-built (the
-            # common no-txn case), hand them to PAC and let Rust resolve
+            # common no-txn case), hand them to PNC and let Rust resolve
             # namespace mode and pick. Otherwise (txn nulled one of them),
             # fall back to the Python-side resolver.
             if self._write_policy is not None and self._write_policy_sc is not None:
@@ -561,7 +561,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     if getattr(e, "result_code", None) == ResultCode.BIN_NAME_TOO_LONG
                     else None
                 )
-                psdk_exc = _convert_pac_exception(e, hint=hint)
+                psdk_exc = _convert_pnc_exception(e, hint=hint)
                 rc = psdk_exc.result_code
                 if (
                     rc == ResultCode.KEY_NOT_FOUND_ERROR

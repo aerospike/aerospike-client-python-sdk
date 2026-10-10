@@ -30,7 +30,7 @@ from aerospike_sdk.policy.behavior_settings import Settings
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "test"
@@ -43,7 +43,7 @@ MODULE = "record_example"
 
 
 def _wait_task(cluster, task) -> bool:
-    """Wait for ``task`` synchronously via PAC's blocking sibling."""
+    """Wait for ``task`` synchronously via PNC's blocking sibling."""
     return task.wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
 
 

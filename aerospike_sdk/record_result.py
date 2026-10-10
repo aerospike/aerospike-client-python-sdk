@@ -21,15 +21,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from aerospike_async import ExpressionTrace, Key, Record
-from aerospike_async.exceptions import ResultCode
+from aerospike_native import ExpressionTrace, Key, Record
+from aerospike_native.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import _result_code_to_exception
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.operation_result import OperationResult
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
-    from aerospike_async import BatchRecord
+    from aerospike_native import BatchRecord
     from aerospike_sdk.exceptions import AerospikeError
 
 
@@ -43,10 +43,10 @@ class RecordResult:
     by the server.
 
     Attributes:
-        key: Target :class:`~aerospike_async.Key` for this row.
-        record: :class:`~aerospike_async.Record` payload, or ``None`` if not
+        key: Target :class:`~aerospike_native.Key` for this row.
+        record: :class:`~aerospike_native.Record` payload, or ``None`` if not
             returned (errors, not found, or UDF error rows).
-        result_code: The row's :class:`~aerospike_async.exceptions.ResultCode`:
+        result_code: The row's :class:`~aerospike_native.exceptions.ResultCode`:
             the server's code, or a client code (such as ``CLIENT_ERROR``) for
             a row that failed before the server answered.
         in_doubt: ``True`` when a write may have completed despite an error.
@@ -234,7 +234,7 @@ class RecordResult:
         """Return :attr:`record`, raising if the result is not OK.
 
         Returns:
-            The non-``None`` :class:`~aerospike_async.Record`.
+            The non-``None`` :class:`~aerospike_native.Record`.
 
         Raises:
             Same as :meth:`or_raise`, plus ``ValueError`` if the result is OK
@@ -456,11 +456,11 @@ def batch_records_to_results(
     """Convert ``BatchRecord`` entries to :class:`RecordResult` (library internal).
 
     Args:
-        batch_records: Sequence of :class:`~aerospike_async.BatchRecord` from
+        batch_records: Sequence of :class:`~aerospike_native.BatchRecord` from
             the async client.
         keys: The request's keys, positionally parallel to ``batch_records``.
             Rows carry these objects rather than each row's key read back
-            from PAC, which would allocate a copy per row.
+            from PNC, which would allocate a copy per row.
 
     Returns:
         Parallel list with :attr:`~RecordResult.index` set to each row's

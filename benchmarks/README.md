@@ -12,7 +12,7 @@ throughput and latency against a live Aerospike cluster.
 ## Install / update (standalone bench checkout)
 
 The benchmarks run against your **installed** ``aerospike-sdk`` (and its
-``aerospike-async`` dependency) — they are not shipped in the wheel, so check
+``aerospike-native`` dependency) — they are not shipped in the wheel, so check
 out just this directory. Updating the bench never touches your installed PSDK.
 
 ```bash
@@ -48,7 +48,7 @@ python -m benchmarks.benchmark -k 100000 -z 32 -w RU,50 -d 10 --truncate --load
 # Multi-bin read/write mix (80% reads; 60% read-all; 30% write-all)
 python -m benchmarks.benchmark -o I1,S128 -w RU,80,60,30 -d 10 --truncate --load
 
-# PSDK sync client (delegates to PAC `_blocking` per op, no per-op event loop)
+# PSDK sync client (delegates to PNC `_blocking` per op, no per-op event loop)
 python -m benchmarks.benchmark --mode sync -w RU,50 --threads 4 -d 10 --truncate --load
 
 # Batch commands (each operation touches 20 keys)
@@ -74,11 +74,11 @@ python -m benchmarks.benchmark -H host:tls_name:port --tls-ca-file ca.pem -U adm
 | ``-c`` | Stop after this many successful operations |
 | ``--batch-size`` | Keys per batch command (``0`` or ``1`` for single-record) |
 | ``--latency`` | ``COLUMNS,SHIFT`` histogram shape |
-| ``--mode`` | ``async`` (default, PSDK), ``async-many`` (PSDK window API — ``get_many``/``put_many``, see ``--many-size``), ``sync`` (PSDK SyncClient), ``pac-blocking`` (PAC sync direct), ``pac-async`` (PAC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
+| ``--mode`` | ``async`` (default, PSDK), ``async-many`` (PSDK window API — ``get_many``/``put_many``, see ``--many-size``), ``sync`` (PSDK SyncClient), ``pnc-blocking`` (PNC sync direct), ``pnc-async`` (PNC async direct), or ``legacy-sync`` (legacy ``aerospike`` C client) |
 | ``--many-size`` | For ``--mode async-many``: keys per ``get_many``/``put_many`` window (default: 16) |
 | ``--fast-path`` | Use ``Session.get``/``put`` shortcut methods (bypass the builder + stream); pair with ``async`` or ``sync`` |
 | ``--pool-loops`` | Use ``AsyncPool`` with N event loops instead of a single Client (each loop gets ``-z`` tasks; free-threaded only). Composes with ``--mode async-many`` to run the window API across loops — the highest-throughput async config (peak at 4 loops × an 8-key window; the sweet-spot window *shrinks* as loops grow, since in-flight = ``loops × z × k``). |
-| ``--current-thread-runtime`` | (sync) per-thread PAC ``LocalClient`` on its own current-thread Tokio runtime |
+| ``--current-thread-runtime`` | (sync) per-thread PNC ``LocalClient`` on its own current-thread Tokio runtime |
 | ``--with-telemetry`` | Per-second TPS ticker, sampled latency histograms, and warmup/cooldown windowing |
 | ``--warmup`` / ``--cooldown`` | Full-second intervals dropped from the summary |
 | ``--load`` | Populate keys ``1..K`` before a read workload so reads fetch real records and never miss (mirrors a separate insert phase). No-op for ``-w I``. **Recommended for all read workloads; pair with ``--truncate``.** |
@@ -108,7 +108,7 @@ Read from the environment, not passed as flags — so they do **not** appear in
 
 - ``make bench`` -- populate 100k keys then run a 10s ``RU,50`` async benchmark.
 - ``make bench-quick`` -- short smoke run (still requires a live cluster).
-- ``make bench-compare`` -- full comparison: PAC, PSDK async, PSDK sync, and legacy client.
+- ``make bench-compare`` -- full comparison: PNC, PSDK async, PSDK sync, and legacy client.
 
 ## Comparison tool
 
@@ -118,7 +118,7 @@ side-by-side table with TPS, latency percentiles, and memory usage.
 ```bash
 python -m benchmarks.compare --help
 
-# Full comparison (PAC, PSDK async, sync, legacy)
+# Full comparison (PNC, PSDK async, sync, legacy)
 python -m benchmarks.compare -k 100000 -z 32 --threads 4 -d 15
 
 # PSDK-only (skip legacy)
@@ -132,20 +132,20 @@ python -m benchmarks.compare -k 100000 -d 30 --runs 3 --csv results.csv
 
 | Client | Description | Concurrency |
 |--------|-------------|-------------|
-| **PAC** | Raw Python Async Client (no SDK layer) | ``-z`` async tasks |
+| **PNC** | Raw Python Native Client (no SDK layer) | ``-z`` async tasks |
 | **PSDK async** | Full SDK with builder chain | ``-z`` async tasks |
-| **PSDK sync** | SDK SyncClient via PAC `_blocking` (per-thread loop runner, no per-op event loop) | ``--threads`` OS threads |
+| **PSDK sync** | SDK SyncClient via PNC `_blocking` (per-thread loop runner, no per-op event loop) | ``--threads`` OS threads |
 | **Legacy** | C-extension client (``get``/``operate``, same ops as PSDK) | Single-threaded (hardcoded) |
 
 ### Configuration
 
 Client paths are resolved from:
-1. CLI flags (``--pac-path``, ``--legacy-path``)
-2. Environment variables (``PAC_PATH``, ``LEGACY_CLIENT_PATH``)
+1. CLI flags (``--pnc-path``, ``--legacy-path``)
+2. Environment variables (``PNC_PATH``, ``LEGACY_CLIENT_PATH``)
 3. Each repo's ``.python-version`` file (for pyenv interpreter resolution)
-4. Fallback defaults (``~/tmp/aerospike-client-python-async``, ``~/code/aerospike-client-python``)
+4. Fallback defaults (``~/code/aerospike-client-python-native``, ``~/code/aerospike-client-python``)
 
-Set ``PAC_PATH`` and ``LEGACY_CLIENT_PATH`` in your ``aerospike.env`` for
+Set ``PNC_PATH`` and ``LEGACY_CLIENT_PATH`` in your ``aerospike.env`` for
 persistent configuration.
 
 ## Output

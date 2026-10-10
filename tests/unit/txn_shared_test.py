@@ -17,7 +17,7 @@
 
 
 from aerospike_sdk import ResultCode
-from aerospike_async import CommitErrorType
+from aerospike_native import CommitErrorType
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.system_settings import TransactionSettings
 from aerospike_sdk.txn_shared import (

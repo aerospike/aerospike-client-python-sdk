@@ -27,7 +27,7 @@ Covers:
 import pytest
 
 from aerospike_sdk import Behavior, Exp, Key
-from aerospike_async import RecordExistsAction, WritePolicy, FilterExpression
+from aerospike_native import RecordExistsAction, WritePolicy, FilterExpression
 
 from aerospike_sdk.aio.operations.query import (
     _OperationSpec,

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Any, Union, overload
 
 
-from aerospike_async import ExecuteTask, Filter, FilterExpression
+from aerospike_native import ExecuteTask, Filter, FilterExpression
 
 from aerospike_sdk.aio.background import (
     BackgroundOperationBuilder as AsyncBackgroundOperationBuilder,

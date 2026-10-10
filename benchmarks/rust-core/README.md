@@ -5,7 +5,7 @@ Pure-Rust bench against `aerospike-core` — same workload shape as
 latency, env-var-driven config, single-line output.
 
 Use this to establish a Rust-only reference point on the same hardware the
-Python clients run on. The gap between this and PAC sync direct is the cost
+Python clients run on. The gap between this and PNC sync direct is the cost
 of the PyO3 + Python boundary.
 
 Note: at `aerospike-core` defaults, rust-core async lands around 290K @ t=32

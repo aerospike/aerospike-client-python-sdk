@@ -25,7 +25,7 @@ the selection. These tests drive the fluent form; the equivalent low-level
 from __future__ import annotations
 
 import pytest
-from aerospike_async import GeoJSON
+from aerospike_native import GeoJSON
 
 from aerospike_sdk import (
     CTX,
@@ -39,7 +39,7 @@ from aerospike_sdk import (
 )
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 SET_NAME = "cdt_path_test"
 
@@ -1110,8 +1110,8 @@ class TestFilterAfterIndexStep:
     async def test_truncated_reply_is_not_a_panic(self, cluster):
         """The server's truncated reply fails as a typed error, not a caught panic.
 
-        PAC surfaces a core panic as a bare ``RuntimeError``; a parse error
-        arrives as one of PAC's typed exceptions.
+        PNC surfaces a core panic as a bare ``RuntimeError``; a parse error
+        arrives as one of PNC's typed exceptions.
         """
         try:
             await self._select_after_map_index(cluster.create_session(), 51)

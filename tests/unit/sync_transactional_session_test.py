@@ -15,7 +15,7 @@
 
 """Unit tests for SyncTransactionalSession API shape and lifecycle.
 
-The underlying PAC client is mocked so these tests don't need an SC cluster.
+The underlying PNC client is mocked so these tests don't need an SC cluster.
 """
 
 import time
@@ -30,8 +30,8 @@ from aerospike_sdk import Txn, TxnStatus
 from aerospike_sdk.sync.transactional_session import (
     TransactionalSession as SyncTransactionalSession,
 )
-from aerospike_async.exceptions import CommitFailedError
-from aerospike_async import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC
+from aerospike_native.exceptions import CommitFailedError
+from aerospike_native import AbortStatus, CommitErrorType, CommitStatus, ReadModeSC
 from aerospike_sdk.policy.sdk_config_loader import fill_hard_defaults
 from aerospike_sdk.exceptions import AerospikeError, CommitError
 from aerospike_sdk.policy.behavior import Behavior
@@ -41,13 +41,13 @@ from aerospike_sdk.sync.session import Session as SyncSession
 
 
 class _FakePacClient:
-    """Minimal stand-in for the PAC Client with commit/abort_blocking stubs."""
+    """Minimal stand-in for the PNC Client with commit/abort_blocking stubs."""
 
     def __init__(self) -> None:
         self.commit_calls: list = []
         self.abort_calls: list = []
         self.commit_return: CommitStatus = CommitStatus.OK
-        # PAC raises for an abandoned roll-forward rather than returning
+        # PNC raises for an abandoned roll-forward rather than returning
         # a status; set this to model that.
         self.commit_raises: BaseException | None = None
         self.abort_return: AbortStatus = AbortStatus.OK
@@ -71,7 +71,7 @@ class _FakeSyncClient:
     """Stand-in for :class:`aerospike_sdk.sync.client.SyncClient`."""
 
     def __init__(self) -> None:
-        self._pac = _FakePacClient()
+        self._pnc = _FakePacClient()
         self._indexes_monitor = None
         self._namespace_mode_cache: dict = {}
         # Mirrors the real client: the retry plan is resolved from here.
@@ -79,7 +79,7 @@ class _FakeSyncClient:
 
     @property
     def underlying_client(self):
-        return self._pac
+        return self._pnc
 
     def _resolve_namespace_mode_blocking(self, namespace):
         return Mode.AP
@@ -129,9 +129,9 @@ def test_clean_exit_commits(
 ) -> None:
     with sync_tx as tx:
         txn_ref = tx.txn
-    assert len(sync_client._pac.commit_calls) == 1
-    assert sync_client._pac.commit_calls[0] is txn_ref
-    assert len(sync_client._pac.abort_calls) == 0
+    assert len(sync_client._pnc.commit_calls) == 1
+    assert sync_client._pnc.commit_calls[0] is txn_ref
+    assert len(sync_client._pnc.abort_calls) == 0
     assert sync_tx.active is False
 
 
@@ -146,8 +146,8 @@ def test_exception_exit_aborts(
         with sync_tx as tx:
             _ = tx.txn
             raise _Boom("oops")
-    assert len(sync_client._pac.abort_calls) == 1
-    assert len(sync_client._pac.commit_calls) == 0
+    assert len(sync_client._pnc.abort_calls) == 1
+    assert len(sync_client._pnc.commit_calls) == 0
     assert sync_tx.active is False
 
 
@@ -160,14 +160,14 @@ def test_explicit_commit_returns_status(
         assert status is TxnStatus.COMMITTED
         assert tx.active is False
     # __exit__ must not double-commit after an explicit commit:
-    assert len(sync_client._pac.commit_calls) == 1
+    assert len(sync_client._pnc.commit_calls) == 1
 
 
 def test_roll_forward_abandoned_raises_on_explicit_commit(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,
 ) -> None:
-    sync_client._pac.commit_raises = CommitError(
+    sync_client._pnc.commit_raises = CommitError(
         "roll forward abandoned",
         commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
     )
@@ -176,15 +176,15 @@ def test_roll_forward_abandoned_raises_on_explicit_commit(
             tx.commit()
         assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
         assert tx.active is False
-    assert len(sync_client._pac.commit_calls) == 1
-    assert len(sync_client._pac.abort_calls) == 0
+    assert len(sync_client._pnc.commit_calls) == 1
+    assert len(sync_client._pnc.abort_calls) == 0
 
 
 def test_roll_forward_abandoned_raises_on_clean_exit(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,
 ) -> None:
-    sync_client._pac.commit_raises = CommitError(
+    sync_client._pnc.commit_raises = CommitError(
         "roll forward abandoned",
         commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
     )
@@ -192,15 +192,15 @@ def test_roll_forward_abandoned_raises_on_clean_exit(
         with sync_tx:
             pass
     assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
-    assert len(sync_client._pac.commit_calls) == 1
-    assert len(sync_client._pac.abort_calls) == 0
+    assert len(sync_client._pnc.commit_calls) == 1
+    assert len(sync_client._pnc.abort_calls) == 0
 
 
 def test_close_abandoned_is_still_success(
     sync_tx: SyncTransactionalSession,
     sync_client: _FakeSyncClient,
 ) -> None:
-    sync_client._pac.commit_return = CommitStatus.CLOSE_ABANDONED
+    sync_client._pnc.commit_return = CommitStatus.CLOSE_ABANDONED
     with sync_tx as tx:
         status = tx.commit()
     assert status is TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED
@@ -225,8 +225,8 @@ def test_explicit_abort_returns_status(
         status = tx.abort()
         assert status is TxnStatus.ABORTED
         assert tx.active is False
-    assert len(sync_client._pac.abort_calls) == 1
-    assert len(sync_client._pac.commit_calls) == 0
+    assert len(sync_client._pnc.abort_calls) == 1
+    assert len(sync_client._pnc.commit_calls) == 0
 
 
 def test_commit_without_active_txn_raises(
@@ -318,8 +318,8 @@ def test_do_in_transaction_commits_on_success() -> None:
 
     result = sync_session.do_in_transaction(op)
     assert result == "ok"
-    assert len(client._pac.commit_calls) == 1
-    assert len(client._pac.abort_calls) == 0
+    assert len(client._pnc.commit_calls) == 1
+    assert len(client._pnc.abort_calls) == 0
 
 
 def test_do_in_transaction_aborts_on_non_retryable() -> None:
@@ -330,8 +330,8 @@ def test_do_in_transaction_aborts_on_non_retryable() -> None:
 
     with pytest.raises(AerospikeError):
         sync_session.do_in_transaction(op)
-    assert len(client._pac.commit_calls) == 0
-    assert len(client._pac.abort_calls) == 1
+    assert len(client._pnc.commit_calls) == 0
+    assert len(client._pnc.abort_calls) == 1
 
 
 def test_do_in_transaction_retries_then_succeeds() -> None:
@@ -351,8 +351,8 @@ def test_do_in_transaction_retries_then_succeeds() -> None:
     assert result == "eventually"
     assert calls == 3
     # Two aborted attempts + one committed attempt:
-    assert len(client._pac.abort_calls) == 2
-    assert len(client._pac.commit_calls) == 1
+    assert len(client._pnc.abort_calls) == 2
+    assert len(client._pnc.commit_calls) == 1
 
 
 def test_do_in_transaction_exhausts_retries() -> None:
@@ -366,8 +366,8 @@ def test_do_in_transaction_exhausts_retries() -> None:
 
     with pytest.raises(AerospikeError):
         sync_session.do_in_transaction(op, max_attempts=3, sleep_between_retries=0.0)
-    assert len(client._pac.abort_calls) == 3
-    assert len(client._pac.commit_calls) == 0
+    assert len(client._pnc.abort_calls) == 3
+    assert len(client._pnc.commit_calls) == 0
 
 
 def test_do_in_transaction_rejects_zero_attempts() -> None:
@@ -390,13 +390,13 @@ def test_do_in_transaction_retries_commit_failure() -> None:
 
     def commit_blocking(txn, **kwargs):
         nonlocal calls
-        client._pac.commit_calls.append(txn)
+        client._pnc.commit_calls.append(txn)
         calls += 1
         if calls < 3:
             raise CommitFailedError("commit verify failed")
         return CommitStatus.OK
 
-    client._pac.commit_blocking = commit_blocking
+    client._pnc.commit_blocking = commit_blocking
 
     assert sync_session.do_in_transaction(
         lambda tx: "done", max_attempts=5, sleep_between_retries=0.0,
@@ -414,20 +414,20 @@ def test_do_in_transaction_commit_failure_exhausts_retries() -> None:
     sync_session, client = _make_sync_session()
 
     def commit_blocking(txn, **kwargs):
-        client._pac.commit_calls.append(txn)
+        client._pnc.commit_calls.append(txn)
         raise CommitFailedError("commit verify failed")
 
-    client._pac.commit_blocking = commit_blocking
+    client._pnc.commit_blocking = commit_blocking
 
     with pytest.raises(CommitError):
         sync_session.do_in_transaction(lambda tx: None, max_attempts=3, sleep_between_retries=0.0)
-    assert len(client._pac.commit_calls) == 3
+    assert len(client._pnc.commit_calls) == 3
 
 
 def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None:
     """An abandoned roll-forward is not a conflict: the server will commit."""
     sync_session, client = _make_sync_session()
-    client._pac.commit_raises = CommitError(
+    client._pnc.commit_raises = CommitError(
         "roll forward abandoned",
         commit_error_type=CommitErrorType.ROLL_FORWARD_ABANDONED,
     )
@@ -435,25 +435,25 @@ def test_do_in_transaction_does_not_retry_roll_forward_abandoned() -> None:
     with pytest.raises(CommitError) as excinfo:
         sync_session.do_in_transaction(lambda tx: None, max_attempts=5, sleep_between_retries=0.0)
     assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
-    assert len(client._pac.commit_calls) == 1
+    assert len(client._pnc.commit_calls) == 1
 
 
 def test_do_in_transaction_does_not_retry_raised_roll_forward() -> None:
-    """Current PAC raises CommitFailedError with the roll-forward type."""
+    """Current PNC raises CommitFailedError with the roll-forward type."""
     sync_session, client = _make_sync_session()
 
     def commit_blocking(txn, **kwargs):
-        client._pac.commit_calls.append(txn)
+        client._pnc.commit_calls.append(txn)
         err = CommitFailedError("roll forward abandoned")
         err.commit_error_type = CommitErrorType.ROLL_FORWARD_ABANDONED
         raise err
 
-    client._pac.commit_blocking = commit_blocking
+    client._pnc.commit_blocking = commit_blocking
 
     with pytest.raises(CommitError) as excinfo:
         sync_session.do_in_transaction(lambda tx: None, max_attempts=5, sleep_between_retries=0.0)
     assert excinfo.value.commit_error_type is CommitErrorType.ROLL_FORWARD_ABANDONED
-    assert len(client._pac.commit_calls) == 1
+    assert len(client._pnc.commit_calls) == 1
 
 
 def test_nested_do_in_transaction_joins_the_outer_one() -> None:
@@ -470,8 +470,8 @@ def test_nested_do_in_transaction_joins_the_outer_one() -> None:
         return tx.do_in_transaction(inner)
 
     assert sync_session.do_in_transaction(outer) == "inner"
-    assert len(client._pac.commit_calls) == 1
-    assert len(client._pac.abort_calls) == 0
+    assert len(client._pnc.commit_calls) == 1
+    assert len(client._pnc.abort_calls) == 0
     assert seen[0] is seen[1]
 
 
@@ -571,7 +571,7 @@ def test_commit_passes_behavior_txn_policies(sync_client: _FakeSyncClient) -> No
     )  # type: ignore[arg-type]
     with session:
         pass
-    verify, roll = sync_client._pac.commit_policies[0]
+    verify, roll = sync_client._pnc.commit_policies[0]
     assert verify.total_timeout == 30_000
     # Untouched fields carry the factory txn defaults through inheritance.
     assert verify.read_mode_sc == ReadModeSC.LINEARIZE
@@ -589,4 +589,4 @@ def test_abort_passes_behavior_roll_policy(sync_client: _FakeSyncClient) -> None
     with pytest.raises(RuntimeError):
         with session:
             raise RuntimeError("force abort")
-    assert sync_client._pac.abort_policies[0].max_retries == 9
+    assert sync_client._pnc.abort_policies[0].max_retries == 9

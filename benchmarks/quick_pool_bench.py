@@ -44,8 +44,8 @@ import random
 import time
 from typing import List, Tuple
 
-from aerospike_async import ClientPolicy
-from aerospike_async.exceptions import RecordNotFound
+from aerospike_native import ClientPolicy
+from aerospike_native.exceptions import RecordNotFound
 from aerospike_sdk import AsyncPool, ClusterDefinition, Host
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.dataset import DataSet

@@ -16,8 +16,8 @@
 """Multi-loop async pool for scaling past the single-event-loop ceiling.
 
 Each pool thread runs its own event loop with its own
-:class:`~aerospike_sdk.aio.cluster.Cluster` (backed by one PAC client
-apiece).  Because each PAC client carries its own ``CompletionBridge``,
+:class:`~aerospike_sdk.aio.cluster.Cluster` (backed by one PNC client
+apiece).  Because each PNC client carries its own ``CompletionBridge``,
 completions never cross loops — loop A's completions enqueue into loop A's
 Cluster bridge and drain on loop A's thread.
 
@@ -93,14 +93,14 @@ def _uvloop_has_721_fix() -> bool:
 def _uvloop_safe_under_ft() -> bool:
     """True when uvloop's #720 free-threading race is mitigated for a pool.
 
-    Two mitigations qualify: PAC's pipe-wake transport is active, which routes
+    Two mitigations qualify: PNC's pipe-wake transport is active, which routes
     cross-thread wakes through a self-pipe the racy ready-queue API never
     touches — or the installed uvloop already contains the #721 fix.
 
-    The pipe-wake check MUST mirror PAC's ``should_use_pipe`` exactly: PAC
+    The pipe-wake check MUST mirror PNC's ``should_use_pipe`` exactly: PNC
     enables the transport only for ``1`` (force) or ``auto``/unset (auto on
     uvloop + FT). Any other value — including ``0``, empty, or a typo — leaves
-    PAC on the racy ``call_soon_threadsafe`` path, so the pool must NOT enable
+    PNC on the racy ``call_soon_threadsafe`` path, so the pool must NOT enable
     uvloop for those (a looser check here would pair uvloop with no pipe and
     wedge).
     """
@@ -114,7 +114,7 @@ class AsyncPool:
     parallel async work.
 
     Each loop runs on a dedicated OS thread with its own
-    :class:`~aerospike_sdk.aio.cluster.Cluster` (and therefore its own PAC
+    :class:`~aerospike_sdk.aio.cluster.Cluster` (and therefore its own PNC
     ``CompletionBridge``).  Submitted coroutines are dispatched round-robin
     (or by explicit index) across loops.  The pool is defined by a
     :class:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition`; one
@@ -133,7 +133,7 @@ class AsyncPool:
 
     **Per-Client Tokio runtime.**  When ``loop_count >= 4``, AsyncPool
     automatically configures each per-loop Cluster to use its own dedicated
-    PAC Tokio runtime instead of the shared global one. This eliminates the
+    PNC Tokio runtime instead of the shared global one. This eliminates the
     cross-loop scheduler contention that previously caused throughput to
     collapse beyond 4 loops. Controlled via the ``per_client_runtime``
     kwarg; see its docstring for the threshold rationale and override.
@@ -142,7 +142,7 @@ class AsyncPool:
     ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) would stall a
     multi-loop pool under a free-threaded (GIL-off) build — the per-loop race
     fires across all loops at once and wedges.  Pool loops therefore use
-    uvloop under FT only when the race is mitigated: PAC's pipe-wake transport
+    uvloop under FT only when the race is mitigated: PNC's pipe-wake transport
     active (the default) or a fixed uvloop release; otherwise they fall back to
     the stdlib selector loop.  Under GIL-on Python the race can't fire, so
     uvloop is always used.  Override with the ``use_uvloop`` kwarg.
@@ -200,7 +200,7 @@ class AsyncPool:
                 describing the cluster (seeds, auth, TLS, system settings).
                 The pool builds ``loop_count`` :class:`Cluster` handles from
                 this single definition; each connects on its own loop, binding
-                its PAC ``CompletionBridge`` to that loop.  One definition
+                its PNC ``CompletionBridge`` to that loop.  One definition
                 builds one ``ClientPolicy``, shared by every handle — which is
                 the invariant the one-shot per-Cluster-runtime policy mutation
                 relies on.  Config-file hot-reload is not armed for pool
@@ -216,7 +216,7 @@ class AsyncPool:
             loop_count: Number of event loops / OS threads.  Defaults to
                 ``os.cpu_count()`` (or ``4`` if indeterminate).
             per_client_runtime: Whether each pool Client should run on its
-                own dedicated PAC Tokio runtime (per-loop runtime isolation,
+                own dedicated PNC Tokio runtime (per-loop runtime isolation,
                 eliminates cross-loop scheduler contention).
 
                 * ``None`` (default): auto-enable when ``loop_count >= 4``.
@@ -233,7 +233,7 @@ class AsyncPool:
 
                 * ``None`` (default): auto. Under GIL-on Python, enabled. Under
                   free-threading, enabled when uvloop's libuv race
-                  (MagicStack/uvloop #720, #721) is mitigated — PAC's pipe-wake
+                  (MagicStack/uvloop #720, #721) is mitigated — PNC's pipe-wake
                   transport active (``AEROSPIKE_PIPE_WAKE`` != ``0``, the
                   default) or a fixed uvloop release — otherwise the stdlib
                   selector loop is used.
@@ -298,7 +298,7 @@ class AsyncPool:
         # pool when the GIL is disabled: the per-loop (waker-thread vs
         # loop-thread) race fires across all N loops and wedges (a hard hang on
         # the fast-path pool path). It is mitigated two ways (see
-        # `_uvloop_safe_under_ft`): PAC's pipe-wake transport (default `auto`)
+        # `_uvloop_safe_under_ft`): PNC's pipe-wake transport (default `auto`)
         # routes cross-thread wakes through a self-pipe the racy API never
         # touches, or a fixed uvloop release (#721). So under FT enable uvloop
         # only when the race is mitigated; under GIL-on it can't fire, so uvloop
@@ -326,7 +326,7 @@ class AsyncPool:
         Each thread starts an ``asyncio`` event loop, then the pool connects
         one :class:`Cluster` per loop (via
         ``run_coroutine_threadsafe``).  Because the connect awaits
-        ``new_client(…)`` on the pool loop, the PAC ``CompletionBridge`` is
+        ``new_client(…)`` on the pool loop, the PNC ``CompletionBridge`` is
         naturally bound to the correct loop.
 
         Raises:
@@ -345,7 +345,7 @@ class AsyncPool:
         clients: List[Client] = self._definition._build_pool_members(self._n)
 
         # One-shot policy mutation.  Per-Client Tokio runtime must
-        # be set BEFORE connect() because PAC's new_client() reads this
+        # be set BEFORE connect() because PNC's new_client() reads this
         # field at construction.  All Clients share a single ClientPolicy
         # PyO3 object, by construction from the one definition, so a single
         # mutation on clients[0]._policy applies to all of them via that
@@ -441,7 +441,7 @@ class AsyncPool:
         Protocol:
 
         1. **Fence** — reject new ``run``/``map`` calls.
-        2. **Close each client** — stops new PAC operations, flushes
+        2. **Close each client** — stops new PNC operations, flushes
            connection pools.  Runs on each client's own loop so
            ``Client.close()`` awaits properly.
         3. **Stop event loops** — ``loop.stop()`` is scheduled via
@@ -613,7 +613,7 @@ class AsyncPool:
         ``asyncio.SelectorEventLoop`` is constructed directly, bypassing the
         global policy.  Under free-threading, uvloop is used only when its
         libuv ``loop._ready_len`` race (MagicStack/uvloop #720, #721) is
-        mitigated — PAC's pipe-wake transport active (the default) or a fixed
+        mitigated — PNC's pipe-wake transport active (the default) or a fixed
         uvloop release; otherwise the stdlib loop is used, since the unmitigated
         race stalls multi-loop pools (a hard hang on the fast-path pool path).
         """

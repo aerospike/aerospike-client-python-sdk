@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Union
 
-from aerospike_async import FilterExpression
+from aerospike_native import FilterExpression
 
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 

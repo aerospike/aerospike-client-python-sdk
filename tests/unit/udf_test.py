@@ -19,7 +19,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from aerospike_async import Expiration, FilterExpression
+from aerospike_native import Expiration, FilterExpression
 
 from aerospike_sdk import Key, Txn
 from aerospike_sdk.exceptions import ResultCode

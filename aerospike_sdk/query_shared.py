@@ -49,7 +49,7 @@ from typing import (
 
 from typing import Self
 
-from aerospike_async import (
+from aerospike_native import (
     BatchDeleteOp,
     BatchDeletePolicy,
     BatchPolicy,
@@ -99,7 +99,7 @@ from aerospike_async import (
     Txn,
     WritePolicy,
 )
-from aerospike_async.exceptions import ResultCode
+from aerospike_native.exceptions import ResultCode
 
 
 from aerospike_sdk.aio.operations.cdt_read import (
@@ -150,7 +150,7 @@ from aerospike_sdk.implicit_txn import (
     implicit_txn_enabled,
 )
 from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
+    _convert_pnc_exception,
     _result_code_to_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
@@ -216,7 +216,7 @@ def _resolve_hll_flags(
 
     ``create_only`` and ``update_only`` are mutually exclusive; passing both
     raises :class:`ValueError`. Returns an int bitmask suitable as the
-    ``flags`` argument to PAC ``HllOperation.init`` / ``add`` / ``set_union``.
+    ``flags`` argument to PNC ``HllOperation.init`` / ``add`` / ``set_union``.
     """
     if create_only and update_only:
         raise ValueError(
@@ -304,7 +304,7 @@ class _OperationSpec:
     or ``"exists"``.
 
     ``put_bins`` holds the segment's leading ``put(bins)`` writes as a dict
-    so the batch path can hand it to PAC whole, skipping an ``Operation``
+    so the batch path can hand it to PNC whole, skipping an ``Operation``
     per bin. Every other path reads :attr:`operations`, which expands it.
     """
 
@@ -378,7 +378,7 @@ class _QueryBuilderBase:
 
     Holds all the configuration state (filters, bins, partitions, write specs,
     durable-delete flags, namespace/MRT plumbing), the policy factories that
-    convert that state into PAC policy objects, and the blocking IO
+    convert that state into PNC policy objects, and the blocking IO
     dispatchers (``execute_blocking_*``, ``_execute_*_blocking``) — they are
     sync code paths that both concrete subclasses can route to.
 
@@ -496,9 +496,9 @@ class _QueryBuilderBase:
             cached_write_policy: Pre-computed write policy from the session.
             cached_read_operate_policy: Pre-computed policy for single-key
                 operate calls that only read, from the session.
-            txn: Optional active :class:`~aerospike_async.Txn` captured from
+            txn: Optional active :class:`~aerospike_native.Txn` captured from
                 a transactional session at construction; every policy this
-                builder hands to the PAC gets stamped with it. ``None``
+                builder hands to the PNC gets stamped with it. ``None``
                 means no transaction participation. Callers rarely pass
                 this directly — transactional sessions thread it through
                 automatically.
@@ -600,10 +600,10 @@ class _QueryBuilderBase:
         propagates uniformly without the caller touching the policy.
 
         Args:
-            policy: A :class:`~aerospike_async.ReadPolicy`,
-                :class:`~aerospike_async.WritePolicy`,
-                :class:`~aerospike_async.QueryPolicy`, or
-                :class:`~aerospike_async.BatchPolicy` (or ``None``).
+            policy: A :class:`~aerospike_native.ReadPolicy`,
+                :class:`~aerospike_native.WritePolicy`,
+                :class:`~aerospike_native.QueryPolicy`, or
+                :class:`~aerospike_native.BatchPolicy` (or ``None``).
 
         Returns:
             The same ``policy`` object, for fluent use.
@@ -725,7 +725,7 @@ class _QueryBuilderBase:
         guaranteeing the operation runs in no transaction at all.
 
         Args:
-            txn: The :class:`~aerospike_async.Txn` to participate in, or
+            txn: The :class:`~aerospike_native.Txn` to participate in, or
                 ``None`` to run without a transaction.
 
         Returns:
@@ -812,7 +812,7 @@ class _QueryBuilderBase:
         ``CdtOperation.select_values("bin", [...])``.
 
         Args:
-            *ops: One or more native ``aerospike_async`` read operations.
+            *ops: One or more native ``aerospike_native`` read operations.
 
         Returns:
             This builder for method chaining.
@@ -905,7 +905,7 @@ class _QueryBuilderBase:
         """Apply a server-side filter for dataset queries or keyed reads that support it.
 
         String arguments are AEL, compiled by the server. Pass a pre-built
-        :class:`~aerospike_async.FilterExpression` when constructing filters
+        :class:`~aerospike_native.FilterExpression` when constructing filters
         programmatically.
 
         Supplying *params* interpolates them into the template with printf
@@ -943,7 +943,7 @@ class _QueryBuilderBase:
         return self
 
     def partition(self, partition_filter: PartitionFilter) -> Self:
-        """Restrict the query using a PAC :class:`~aerospike_async.PartitionFilter`.
+        """Restrict the query using a PNC :class:`~aerospike_native.PartitionFilter`.
 
         Prefer :meth:`on_partition` or :meth:`on_partition_range` for common
         cases. A filter reused from an earlier dataset query resumes where that
@@ -1851,14 +1851,14 @@ class _QueryBuilderBase:
     ) -> RecordStream:
         """Route a per-key error according to the resolved disposition.
 
-        The PAC raises ``ServerError`` for ``KEY_NOT_FOUND_ERROR`` and
+        The PNC raises ``ServerError`` for ``KEY_NOT_FOUND_ERROR`` and
         ``FILTERED_OUT`` rather than returning a sentinel. Whether these
         codes are routed through disposition depends on the operation
         context (see ``_is_actionable``). An actionable code under IN_STREAM
         is always embedded; only non-actionable codes go through
         :meth:`_should_include_result`.
         """
-        pfc_exc = _convert_pac_exception(exc)
+        pfc_exc = _convert_pnc_exception(exc)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         in_doubt = pfc_exc.in_doubt
         _cmd_failed(op_type, rc, pfc_exc, self._client)
@@ -1893,7 +1893,7 @@ class _QueryBuilderBase:
         example, its keys span namespaces), and the caller asked for the
         whole call to succeed or fail as one.
         """
-        pfc_exc = _convert_pac_exception(exc)
+        pfc_exc = _convert_pnc_exception(exc)
         rc = pfc_exc.result_code or ResultCode.CLIENT_ERROR
         in_doubt = pfc_exc.in_doubt
         _cmd_failed("batch", rc, pfc_exc, self._client)
@@ -1957,7 +1957,7 @@ class _QueryBuilderBase:
     def _read_operate_policy(self) -> WritePolicy:
         """Base ``WritePolicy`` for a single-key operate with no write verb.
 
-        Callers pass the spec's filter and the transaction to PAC per call, so
+        Callers pass the spec's filter and the transaction to PNC per call, so
         the base is shared across filters.
         """
         if self._base_read_operate_policy is None:
@@ -2117,7 +2117,7 @@ class _QueryBuilderBase:
             )
 
     def _use_server_query_selection(self) -> bool:
-        """Route string-AEL dataset queries through PAC explain→execute (field 44)."""
+        """Route string-AEL dataset queries through PNC explain→execute (field 44)."""
         if self._where_ael is None:
             return False
         if self._filter is not None:
@@ -2297,7 +2297,7 @@ class _QueryBuilderBase:
         ``function(package, name)`` next.
 
         Args:
-            *keys: One or more :class:`~aerospike_async.Key` targets for the
+            *keys: One or more :class:`~aerospike_native.Key` targets for the
                 UDF segment.
 
         Returns:
@@ -2518,7 +2518,7 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec,
     ) -> list:
         """Convert one spec into a list of ``BatchReadOp`` / ``BatchWriteOp``
-        / ``BatchDeleteOp`` objects for the PAC mixed-batch API.
+        / ``BatchDeleteOp`` objects for the PNC mixed-batch API.
 
         Write-family row policies are mode-scoped (SC defaults durable
         delete), so when the batch spans namespaces the policy is resolved
@@ -5087,7 +5087,7 @@ class _BinWriteSteps(Generic[_W]):
             index: List index (0-based, negative counts from end).
             order: If set (or if *pad* is ``True``), use create-on-missing
                 list context with this order; when only *pad* is ``True``,
-                defaults to :data:`~aerospike_async.ListOrderType.UNORDERED`.
+                defaults to :data:`~aerospike_native.ListOrderType.UNORDERED`.
             pad: When using create-on-missing context, allow sparse indexes.
 
         Returns:
@@ -6193,7 +6193,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         Args:
             order: If set (or if *pad* is ``True``), use create-on-missing
                 list context with this order; when only *pad* is ``True``,
-                defaults to :data:`~aerospike_async.ListOrderType.UNORDERED`.
+                defaults to :data:`~aerospike_native.ListOrderType.UNORDERED`.
             pad: When using create-on-missing context, allow sparse indexes.
 
         Example::

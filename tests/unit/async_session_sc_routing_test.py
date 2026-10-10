@@ -16,7 +16,7 @@
 """SC-mode routing on the async fast path.
 
 Regression guard for :meth:`Session.get` / :meth:`Session.put`: both must
-pass BOTH the cached AP and SC base policies to PAC (as ``policy=`` and
+pass BOTH the cached AP and SC base policies to PNC (as ``policy=`` and
 ``policy_sc=``) so the Rust side can pick the right one per key based on
 the namespace mode read from the in-memory partition map.
 
@@ -37,45 +37,45 @@ from aerospike_sdk.policy.behavior import Behavior
 
 
 def _make_session() -> tuple[Session, MagicMock]:
-    pac = MagicMock()
-    pac.get = AsyncMock(return_value=MagicMock(name="Record"))
-    pac.put = AsyncMock(return_value=None)
+    pnc = MagicMock()
+    pnc.get = AsyncMock(return_value=MagicMock(name="Record"))
+    pnc.put = AsyncMock(return_value=None)
 
     client = MagicMock()
-    client._async_client = pac
+    client._async_client = pnc
     session = Session(client=client, behavior=Behavior.DEFAULT)
-    return session, pac
+    return session, pnc
 
 
 async def test_session_get_passes_both_ap_and_sc_policies():
-    session, pac = _make_session()
+    session, pnc = _make_session()
     key = Key("test", "unit", "k1")
 
     await session.get(key)
 
-    pac.get.assert_called_once()
-    _args, kwargs = pac.get.call_args
+    pnc.get.assert_called_once()
+    _args, kwargs = pnc.get.call_args
 
     assert "policy" in kwargs and kwargs["policy"] is session._cached_read_policy
     assert "policy_sc" in kwargs, (
-        "policy_sc must be passed so PAC can switch to the SC policy when "
+        "policy_sc must be passed so PNC can switch to the SC policy when "
         "the namespace is configured for strong consistency"
     )
     assert kwargs["policy_sc"] is session._cached_read_policy_sc
 
 
 async def test_session_put_passes_both_ap_and_sc_policies():
-    session, pac = _make_session()
+    session, pnc = _make_session()
     key = Key("test", "unit", "k1")
 
     await session.put(key, {"b": 1})
 
-    pac.put.assert_called_once()
-    _args, kwargs = pac.put.call_args
+    pnc.put.assert_called_once()
+    _args, kwargs = pnc.put.call_args
 
     assert "policy" in kwargs and kwargs["policy"] is session._cached_write_policy
     assert "policy_sc" in kwargs, (
-        "policy_sc must be passed so PAC can switch to the SC policy when "
+        "policy_sc must be passed so PNC can switch to the SC policy when "
         "the namespace is configured for strong consistency"
     )
     assert kwargs["policy_sc"] is session._cached_write_policy_sc

@@ -1,5 +1,5 @@
 site_name: Aerospike Python SDK
-site_description: High-level Aerospike API for Python, built on the Aerospike Python Async Client
+site_description: High-level Aerospike API for Python, built on the Aerospike Python Native Client
 repo_url: https://github.com/aerospike/aerospike-client-python-sdk
 repo_name: aerospike-client-python-sdk
 

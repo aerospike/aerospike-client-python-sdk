@@ -38,8 +38,8 @@ source_suffix = {
 }
 
 # -- Autodoc -------------------------------------------------------------
-# If aerospike_async (PAC) is not installed, uncomment the next line:
-# autodoc_mock_imports = ["aerospike_async"]
+# If aerospike_native (PNC) is not installed, uncomment the next line:
+# autodoc_mock_imports = ["aerospike_native"]
 autodoc_default_options = {
     "members": True,
     "show-inheritance": True,

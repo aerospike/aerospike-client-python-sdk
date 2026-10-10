@@ -15,7 +15,7 @@
 
 """Integration tests for two-phase server query selection (explain → execute).
 
-Requires Aerospike cluster on ``AEROSPIKE_HOST``. Tests are skipped when PAC
+Requires Aerospike cluster on ``AEROSPIKE_HOST``. Tests are skipped when PNC
 reports no query-selection support (``Version.supports_query_selection()``).
 """
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from aerospike_async import IndexType
+from aerospike_native import IndexType
 
 from aerospike_sdk import DataSet, Exp, QueryDuration, QueryHint, ResultCode, val
 from aerospike_sdk.exceptions import AerospikeError
@@ -47,7 +47,7 @@ from tests.integration.query_selection_helpers import (
     drop_index_quiet_async,
     explain_plan_async,
 )
-from tests.pac_compat import requires_query_selection, requires_server_compiled_ael
+from tests.pnc_compat import requires_query_selection, requires_server_compiled_ael
 
 # Long enough that the planner cannot carry it as index range bytes, so the
 # plan falls back to the primary index instead of a secondary one.
@@ -57,9 +57,9 @@ OVERSIZED_LITERAL = "x" * 2048
 class TestQueryExplain:
     @requires_query_selection
     async def test_range_selects_secondary_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
-        plan = await pac.query_explain(NS, where, set_name=SET_NAME)
+        plan = await pnc.query_explain(NS, where, set_name=SET_NAME)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.namespace == NS
@@ -69,8 +69,8 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_non_indexed_predicate_selects_primary(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        plan = await pac.query_explain(
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await pnc.query_explain(
             NS, "$.country == 'US'", set_name=SET_NAME,
         )
 
@@ -80,8 +80,8 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_contradiction_filtered_out(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
-        plan = await pac.query_explain(
+        pnc = query_selection_cluster.client.underlying_client
+        plan = await pnc.query_explain(
             NS, "$.age > 100 and $.age < 10", set_name=SET_NAME,
         )
 
@@ -90,10 +90,10 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_for_index_hint(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = await explain_plan_async(
-            pac, where, hint=QueryHint(index_name=INDEX_NAME),
+            pnc, where, hint=QueryHint(index_name=INDEX_NAME),
         )
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -101,11 +101,11 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_plan_bytes_stable_across_repeated_probes(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
 
-        first = await explain_plan_async(pac, where)
-        second = await explain_plan_async(pac, where)
+        first = await explain_plan_async(pnc, where)
+        second = await explain_plan_async(pnc, where)
 
         assert first.selection == QuerySelection.SECONDARY_INDEX
         assert first.index_name == INDEX_NAME
@@ -115,10 +115,10 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_index_probe_planner_smoke(self, query_selection_cluster):
-        """PAC explain path smoke test via ``query_explain``."""
-        pac = query_selection_cluster.client.underlying_client
+        """PNC explain path smoke test via ``query_explain``."""
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
-        plan = await explain_plan_async(pac, where)
+        plan = await explain_plan_async(pnc, where)
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
@@ -126,10 +126,10 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_for_index_hint_on_nonexistent_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         plan = await explain_plan_async(
-            pac, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
+            pnc, where, hint=QueryHint(index_name=BOGUS_INDEX_NAME),
         )
 
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -138,10 +138,10 @@ class TestQueryExplain:
 
     @requires_query_selection
     async def test_for_index_hint_on_wrong_existing_index(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=SCORE_INDEX_NAME)
-        plan = await explain_plan_async(pac, where, hint=hint)
+        plan = await explain_plan_async(pnc, where, hint=hint)
 
         stream = await (
             query_selection_cluster.session.query(QSEL_DS)
@@ -161,9 +161,9 @@ class TestQueryExplain:
     async def test_oversized_literal_on_an_unindexed_bin_falls_back_to_primary(
         self, query_selection_cluster,
     ):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
-            pac, f"$.{BIN_COUNTRY} == '{OVERSIZED_LITERAL}'",
+            pnc, f"$.{BIN_COUNTRY} == '{OVERSIZED_LITERAL}'",
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
@@ -172,9 +172,9 @@ class TestQueryExplain:
     async def test_oversized_literal_on_an_indexed_bin_falls_back_to_primary(
         self, query_selection_cluster,
     ):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
-            pac, f"$.{BIN_AGE} == '{OVERSIZED_LITERAL}'",
+            pnc, f"$.{BIN_AGE} == '{OVERSIZED_LITERAL}'",
         )
         assert plan.selection == QuerySelection.PRIMARY_INDEX
         assert plan.index_name is None
@@ -184,9 +184,9 @@ class TestQueryExplain:
         self, query_selection_cluster,
     ):
         """One unusable conjunct does not cost the plan its usable one."""
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         plan = await explain_plan_async(
-            pac,
+            pnc,
             f"$.{BIN_AGE} >= 14 and $.{BIN_COUNTRY} == '{OVERSIZED_LITERAL}'",
         )
         assert plan.selection == QuerySelection.SECONDARY_INDEX
@@ -197,12 +197,12 @@ class TestQueryExplain:
         self, query_selection_cluster,
     ):
         """An OR the index cannot serve does not disqualify the AND beside it."""
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         for where in (
             "$.age > 10 and ($.age < 50 or $.country == 'US')",
             "($.age < 50 or $.country == 'US') and $.age > 10",
         ):
-            plan = await explain_plan_async(pac, where)
+            plan = await explain_plan_async(pnc, where)
             assert plan.selection == QuerySelection.SECONDARY_INDEX, where
             assert plan.index_name == INDEX_NAME, where
 
@@ -256,10 +256,10 @@ class TestQueryExecute:
     async def test_plan_then_execute_consistency_for_secondary_index(
         self, query_selection_cluster,
     ):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
 
-        plan = await explain_plan_async(pac, where)
+        plan = await explain_plan_async(pnc, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -273,10 +273,10 @@ class TestQueryExecute:
 
     @requires_query_selection
     async def test_compound_predicate(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age > 30 and $.country == 'US'"
 
-        plan = await explain_plan_async(pac, where)
+        plan = await explain_plan_async(pnc, where)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -329,9 +329,9 @@ class TestQueryExecute:
 
     @requires_query_selection
     async def test_empty_secondary_index_result(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age == 999"
-        plan = await pac.query_explain(NS, where, set_name=SET_NAME)
+        plan = await pnc.query_explain(NS, where, set_name=SET_NAME)
         assert plan.selection == QuerySelection.SECONDARY_INDEX
         assert plan.index_name == INDEX_NAME
 
@@ -393,11 +393,11 @@ class TestQueryExecute:
 class TestQuerySelectionRouting:
     @requires_query_selection
     async def test_for_index_hint_probes_and_executes(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(index_name=INDEX_NAME)
 
-        plan = await explain_plan_async(pac, where, hint=hint)
+        plan = await explain_plan_async(pnc, where, hint=hint)
         stream = await (
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
@@ -415,11 +415,11 @@ class TestQuerySelectionRouting:
     async def test_query_duration_only_hint_still_probes_and_executes(
         self, query_selection_cluster,
     ):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         where = "$.age >= 14 and $.age <= 18"
         hint = QueryHint(query_duration=QueryDuration.SHORT)
 
-        plan = await explain_plan_async(pac, where, hint=hint)
+        plan = await explain_plan_async(pnc, where, hint=hint)
         stream = await (
             query_selection_cluster.session.query(QSEL_DS)
             .bins([BIN_AGE])
@@ -450,12 +450,12 @@ class TestQuerySelectionRouting:
 
     @requires_query_selection
     async def test_multiple_indexes_auto_select(self, query_selection_cluster):
-        pac = query_selection_cluster.client.underlying_client
+        pnc = query_selection_cluster.client.underlying_client
         age_where = "$.age >= 14 and $.age <= 18"
         score_where = "$.score >= 40 and $.score <= 44"
 
-        age_plan = await explain_plan_async(pac, age_where)
-        score_plan = await explain_plan_async(pac, score_where)
+        age_plan = await explain_plan_async(pnc, age_where)
+        score_plan = await explain_plan_async(pnc, score_where)
 
         age_stream = await (
             query_selection_cluster.session.query(QSEL_DS)

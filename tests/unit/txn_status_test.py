@@ -13,11 +13,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Mapping of PAC commit and abort statuses onto :class:`TxnStatus`."""
+"""Mapping of PNC commit and abort statuses onto :class:`TxnStatus`."""
 
 import pytest
 
-from aerospike_async import AbortStatus, CommitStatus
+from aerospike_native import AbortStatus, CommitStatus
 
 from aerospike_sdk import TxnStatus
 from aerospike_sdk.txn_status import _FROM_ABORT, _FROM_COMMIT, _from_abort, _from_commit
@@ -28,19 +28,19 @@ def _members(enum_type):
 
 
 @pytest.mark.parametrize(
-    ("pac_status", "expected"),
+    ("pnc_status", "expected"),
     [
         (CommitStatus.OK, TxnStatus.COMMITTED),
         (CommitStatus.ALREADY_COMMITTED, TxnStatus.ALREADY_COMMITTED),
         (CommitStatus.CLOSE_ABANDONED, TxnStatus.ROLL_FORWARD_CLOSE_ABANDONED),
     ],
 )
-def test_commit_status_maps(pac_status, expected):
-    assert _from_commit(pac_status) is expected
+def test_commit_status_maps(pnc_status, expected):
+    assert _from_commit(pnc_status) is expected
 
 
 @pytest.mark.parametrize(
-    ("pac_status", "expected"),
+    ("pnc_status", "expected"),
     [
         (AbortStatus.OK, TxnStatus.ABORTED),
         (AbortStatus.ALREADY_ABORTED, TxnStatus.ALREADY_ABORTED),
@@ -48,12 +48,12 @@ def test_commit_status_maps(pac_status, expected):
         (AbortStatus.CLOSE_ABANDONED, TxnStatus.ROLL_BACK_CLOSE_ABANDONED),
     ],
 )
-def test_abort_status_maps(pac_status, expected):
-    assert _from_abort(pac_status) is expected
+def test_abort_status_maps(pnc_status, expected):
+    assert _from_abort(pnc_status) is expected
 
 
-def test_every_returnable_pac_status_is_mapped():
-    """A status PAC adds later must fail here, not as a ``KeyError`` mid-commit."""
+def test_every_returnable_pnc_status_is_mapped():
+    """A status PNC adds later must fail here, not as a ``KeyError`` mid-commit."""
     raised_not_returned = {CommitStatus.ROLL_FORWARD_ABANDONED, AbortStatus.COMMIT_FAILED}
     for status in _members(CommitStatus):
         if status not in raised_not_returned:

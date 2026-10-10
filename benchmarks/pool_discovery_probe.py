@@ -66,7 +66,7 @@ import sys
 import threading
 from typing import Any, Dict, List, Optional, Sequence
 
-from aerospike_async.exceptions import RecordNotFound
+from aerospike_native.exceptions import RecordNotFound
 
 from aerospike_sdk import AsyncPool, ClusterDefinition, Host
 from aerospike_sdk.aio.client import Client
@@ -148,7 +148,7 @@ def _is_routing_error(exc: BaseException) -> bool:
 
 
 def _node_attr(node: Any, attr: str) -> Any:
-    """Read *attr* off a PAC ``Node`` whether it is exposed as a getter or a value."""
+    """Read *attr* off a PNC ``Node`` whether it is exposed as a getter or a value."""
     try:
         value = getattr(node, attr)
         return value() if callable(value) else value
@@ -156,10 +156,10 @@ def _node_attr(node: Any, attr: str) -> Any:
         return f"<{type(exc).__name__}: {exc}>"
 
 
-def _node_rows(pac: Any) -> List[Dict[str, Any]]:
-    """Per-node identity and generation state from a connected PAC client."""
+def _node_rows(pnc: Any) -> List[Dict[str, Any]]:
+    """Per-node identity and generation state from a connected PNC client."""
     rows: List[Dict[str, Any]] = []
-    for node in pac.nodes():
+    for node in pnc.nodes():
         rows.append({
             attr: _node_attr(node, attr)
             for attr in ("name", "host", "partition_generation", "failures", "is_active")
@@ -167,10 +167,10 @@ def _node_rows(pac: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-async def _node_info(pac: Any) -> Dict[str, Dict[str, str]]:
+async def _node_info(pnc: Any) -> Dict[str, Dict[str, str]]:
     """Raw discovery-relevant info responses, per node."""
     out: Dict[str, Dict[str, str]] = {}
-    for node in pac.nodes():
+    for node in pnc.nodes():
         answers: Dict[str, str] = {}
         for cmd in _NODE_INFO_CMDS:
             try:
@@ -205,14 +205,14 @@ async def _routing_probe(cluster_or_client: Any, dataset: DataSet, keys: int) ->
 
 async def _report(
     label: str,
-    pac: Any,
+    pnc: Any,
     cluster_or_client: Any,
     dataset: DataSet,
     keys: int,
     show_info: bool,
 ) -> int:
     """Print one client's discovery state; return its node count."""
-    rows = _node_rows(pac)
+    rows = _node_rows(pnc)
     tally = await _routing_probe(cluster_or_client, dataset, keys)
     routable = keys - tally["routing"]
     pct = (100.0 * tally["routing"] / keys) if keys else 0.0
@@ -223,7 +223,7 @@ async def _report(
               f"part_gen={row['partition_generation']}  "
               f"failures={row['failures']}  active={row['is_active']}")
     if show_info:
-        for name, answers in (await _node_info(pac)).items():
+        for name, answers in (await _node_info(pnc)).items():
             print(f"      info[{name}]:")
             for cmd, value in answers.items():
                 shown = value if len(value) <= 300 else value[:300] + "…"

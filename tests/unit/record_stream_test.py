@@ -23,7 +23,7 @@ from aerospike_sdk import Key
 from aerospike_sdk.exceptions import (
     AerospikeError,
     ConnectionError,
-    PacConnectionError,
+    PncConnectionError,
     ResultCode,
 )
 
@@ -115,7 +115,7 @@ class TestFromError:
 
 
 class _FakeBatchStream:
-    """Minimal async-iterable stand-in for a PAC ``BatchRecordStream``.
+    """Minimal async-iterable stand-in for a PNC ``BatchRecordStream``.
 
     Models the real producer's ``close()`` contract so resource-release
     behavior can be asserted.
@@ -139,7 +139,7 @@ class _FakeBatchStream:
 
 
 class TestFromPacBatchStreamOnError:
-    """``_from_pac_batch_stream(on_error=...)`` routes non-OK BatchRecords to
+    """``_from_pnc_batch_stream(on_error=...)`` routes non-OK BatchRecords to
     the callback and excludes them from the yielded stream."""
 
     async def test_no_handler_includes_failures(self):
@@ -151,7 +151,7 @@ class TestFromPacBatchStreamOnError:
             key=_key(2), record=None,
             result_code=ResultCode.KEY_NOT_FOUND_ERROR, in_doubt=False, sub_code=None, server_message=None, exp_trace=None,
         )
-        stream = RecordStream._from_pac_batch_stream(
+        stream = RecordStream._from_pnc_batch_stream(
             _FakeBatchStream([(0, br_ok), (1, br_fail)]),
         )
         results = await stream.collect()
@@ -169,7 +169,7 @@ class TestFromPacBatchStreamOnError:
         )
 
         captured: list = []
-        stream = RecordStream._from_pac_batch_stream(
+        stream = RecordStream._from_pnc_batch_stream(
             _FakeBatchStream([(0, br_ok), (1, br_fail)]),
             on_error=lambda k, i, e: captured.append((k, i, e)),
         )
@@ -189,14 +189,14 @@ class TestFromPacBatchStreamOnError:
             server_message="index out of bounds", exp_trace=None,
         )
 
-        stream = RecordStream._from_pac_batch_stream(_FakeBatchStream([(0, br_fail)]))
+        stream = RecordStream._from_pnc_batch_stream(_FakeBatchStream([(0, br_fail)]))
         results = await stream.collect()
         assert results[0].sub_code == 4
         assert results[0].server_message == "index out of bounds"
         assert results[0].exp_trace is None
 
         captured: list = []
-        stream = RecordStream._from_pac_batch_stream(
+        stream = RecordStream._from_pnc_batch_stream(
             _FakeBatchStream([(0, br_fail)]),
             on_error=lambda k, i, e: captured.append(e),
         )
@@ -206,11 +206,11 @@ class TestFromPacBatchStreamOnError:
 
 
 # ---------------------------------------------------------------------------
-# _from_pac_recordset
+# _from_pnc_recordset
 # ---------------------------------------------------------------------------
 
 class _FakeRecordset:
-    """Minimal async-iterable stand-in for a PAC Recordset.
+    """Minimal async-iterable stand-in for a PNC Recordset.
 
     Models the real producer's ``close()`` contract so resource-release
     behavior can be asserted.
@@ -239,19 +239,19 @@ class TestFromRecordset:
         rec1 = SimpleNamespace(bins={"a": 1}, key=_key(1))
         rec2 = SimpleNamespace(bins={"b": 2}, key=_key(2))
 
-        stream = RecordStream._from_pac_recordset(_FakeRecordset([rec1, rec2]))
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([rec1, rec2]))
         results = await stream.collect()
         assert len(results) == 2
         assert all(r.is_ok for r in results)
         assert results[0].record is rec1
 
     async def test_empty_recordset(self):
-        stream = RecordStream._from_pac_recordset(_FakeRecordset([]))
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([]))
         assert await stream.collect() == []
 
     async def test_fallback_key_when_no_key_attribute(self):
         rec = SimpleNamespace(bins={"x": 1})
-        stream = RecordStream._from_pac_recordset(_FakeRecordset([rec]))
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([rec]))
         results = await stream.collect()
         assert len(results) == 1
         assert results[0].record is rec
@@ -269,10 +269,10 @@ class TestChunkedRefetchFailure:
 
     async def test_failed_refetch_raises_sdk_error(self):
         async def _reexecute(pf):
-            raise PacConnectionError("node 10.0.0.1:3000 dropped the connection")
+            raise PncConnectionError("node 10.0.0.1:3000 dropped the connection")
 
         rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
-        stream = RecordStream._from_chunked_pac_recordset(
+        stream = RecordStream._from_chunked_pnc_recordset(
             _FakeChunkRecordset([rec]), reexecute=_reexecute,
         )
         assert await stream.has_more_chunks()
@@ -360,7 +360,7 @@ class TestPopKeepsOpen:
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None))
             for i in range(3)
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         await stream.pop()
         assert fake.close_calls == 0          # still open
         rest = await stream.collect()          # drains → generator finally closes
@@ -378,7 +378,7 @@ class TestFirstIsTerminal:
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None))
             for i in range(5)
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         head = await stream.first()
         assert head.index == 0
         assert fake.close_calls >= 1           # closed by first()
@@ -392,7 +392,7 @@ class TestFirstIsTerminal:
             (1, SimpleNamespace(key=_key(1), record=_record(),
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None)),
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         head = await stream.first_or_raise()
         assert head.is_ok
         assert fake.close_calls >= 1
@@ -403,7 +403,7 @@ class TestFirstIsTerminal:
                                 result_code=ResultCode.KEY_NOT_FOUND_ERROR,
                                 in_doubt=False, sub_code=None, server_message=None, exp_trace=None)),
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         with pytest.raises(AerospikeError):
             await stream.first_or_raise()
         # close() ran despite the raise (first() closes in a finally).
@@ -411,7 +411,7 @@ class TestFirstIsTerminal:
 
     async def test_first_empty_closes(self):
         fake = _FakeBatchStream([])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         assert await stream.first() is None
         assert fake.close_calls >= 1
 
@@ -492,7 +492,7 @@ class TestExhaustion:
 # ---------------------------------------------------------------------------
 
 class TestCloseReleasesProducer:
-    """close() must forward to the underlying PAC producer (deterministic
+    """close() must forward to the underlying PNC producer (deterministic
     release) and stop further iteration."""
 
     async def test_close_forwards_to_batch_stream(self):
@@ -502,7 +502,7 @@ class TestCloseReleasesProducer:
             (1, SimpleNamespace(key=_key(2), record=_record(),
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None)),
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         # Consume one, then abandon.
         first = await stream.__anext__()
         assert first.key == _key(1)
@@ -515,13 +515,13 @@ class TestCloseReleasesProducer:
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None))
             for i in range(5)
         ])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         stream.close()
         assert await stream.collect() == []
 
     async def test_close_is_idempotent(self):
         fake = _FakeBatchStream([])
-        stream = RecordStream._from_pac_batch_stream(fake)
+        stream = RecordStream._from_pnc_batch_stream(fake)
         stream.close()
         stream.close()
         stream.close()
@@ -533,7 +533,7 @@ class TestCloseReleasesProducer:
             SimpleNamespace(bins={"a": 1}, key=_key(1)),
             SimpleNamespace(bins={"b": 2}, key=_key(2)),
         ])
-        stream = RecordStream._from_pac_recordset(fake)
+        stream = RecordStream._from_pnc_recordset(fake)
         rows = await stream.collect()
         assert len(rows) == 2
         # Draining to exhaustion releases the recordset via the generator's
@@ -568,7 +568,7 @@ class TestAsyncContextManager:
             for i in range(3)
         ])
         rows = []
-        async with RecordStream._from_pac_batch_stream(fake) as stream:
+        async with RecordStream._from_pnc_batch_stream(fake) as stream:
             async for r in stream:
                 rows.append(r)
         assert len(rows) == 3
@@ -580,7 +580,7 @@ class TestAsyncContextManager:
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None))
             for i in range(10)
         ])
-        async with RecordStream._from_pac_batch_stream(fake) as stream:
+        async with RecordStream._from_pnc_batch_stream(fake) as stream:
             async for _ in stream:
                 break
         assert fake.close_calls >= 1
@@ -591,7 +591,7 @@ class TestAsyncContextManager:
                                 result_code=ResultCode.OK, in_doubt=False, sub_code=None, server_message=None, exp_trace=None)),
         ])
         with pytest.raises(RuntimeError, match="boom"):
-            async with RecordStream._from_pac_batch_stream(fake) as stream:
+            async with RecordStream._from_pnc_batch_stream(fake) as stream:
                 async for _ in stream:
                     raise RuntimeError("boom")
         assert fake.close_calls >= 1

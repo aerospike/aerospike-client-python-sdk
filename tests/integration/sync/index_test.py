@@ -17,11 +17,11 @@
 
 import pytest
 
-from aerospike_async import FilterExpression, IndexType
+from aerospike_native import FilterExpression, IndexType
 from aerospike_sdk import DataSet, Filter
 from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import requires_server_compiled_ael
+from tests.pnc_compat import requires_server_compiled_ael
 
 NS = general_namespace()
 SET = "ael_idx_set_sync"
@@ -118,7 +118,7 @@ def test_sync_namespace_wide_index_and_query(cluster):
 def test_sync_create_set_index(cluster):
     """The blocking builder creates, lists, and drops a set index.
 
-    The sync terminal dispatches through PAC's blocking set-index entry, which
+    The sync terminal dispatches through PNC's blocking set-index entry, which
     async coverage cannot reach. Two rounds prove the drop removed it.
     """
     index_name = "psdk_set_idx_sync"

@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aerospike_async import AuthMode, ClientPolicy, TlsConfig
+from aerospike_native import AuthMode, ClientPolicy, TlsConfig
 
 
 def _load_env_file(path: Path, *, override: bool = False) -> None:
@@ -200,7 +200,7 @@ def maybe_enable_metrics(client, cfg) -> None:
     if hasattr(client, "enable_metrics"):
         client.enable_metrics(policy)
         return
-    client.underlying_client.enable_metrics(policy._to_pac())
+    client.underlying_client.enable_metrics(policy._to_pnc())
     client._cmd_count_on = True
     client._record_on = True
     client._usage_on = policy.usage_enabled

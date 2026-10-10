@@ -27,7 +27,7 @@ import random
 from datetime import timedelta
 from typing import Any, Optional, Union
 
-from aerospike_async import CommitErrorType, ResultCode
+from aerospike_native import CommitErrorType, ResultCode
 
 from aerospike_sdk.exceptions import CommitError
 

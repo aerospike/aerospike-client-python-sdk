@@ -12,7 +12,7 @@ against a restarted container: dead partitions are revived.
 import asyncio
 import sys
 
-from aerospike_async import ClientPolicy, new_client
+from aerospike_native import ClientPolicy, new_client
 
 SEED = "127.0.0.1:3130"
 NAMESPACE = "test_sc"

@@ -2,7 +2,7 @@
 
 A high-level, chainable API for the [Aerospike](https://aerospike.com/) database,
 built on top of the
-[Aerospike Python Async Client](https://github.com/aerospike/aerospike-client-python-async).
+[Aerospike Python Native Client](https://github.com/aerospike/aerospike-client-python-native).
 
 ```{important}
 The Aerospike Python SDK supports only Aerospike Server 8.2.0 and later.
@@ -126,7 +126,7 @@ pip install -e ".[dev]"
   security support; the floor rises in minor releases as versions reach
   end-of-life)
 - Aerospike Server 8.2.0 or later; earlier servers are not supported
-- [aerospike-client-python-async](https://github.com/aerospike/aerospike-client-python-async)
+- [aerospike-client-python-native](https://github.com/aerospike/aerospike-client-python-native)
 
 ## Next Steps
 

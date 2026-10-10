@@ -18,7 +18,7 @@
 from datetime import timedelta
 
 import pytest
-from aerospike_async import CommitLevel, ReadModeAP, ReadModeSC, Replica
+from aerospike_native import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_registry import (

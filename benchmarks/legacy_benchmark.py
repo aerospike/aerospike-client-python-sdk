@@ -106,7 +106,7 @@ def _random_value(kind: str, size: int):
 
 
 # ---------------------------------------------------------------------------
-# Stats (same lightweight collector as PAC benchmark)
+# Stats (same lightweight collector as PNC benchmark)
 # ---------------------------------------------------------------------------
 
 class _Stats:

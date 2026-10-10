@@ -20,7 +20,7 @@ from aerospike_sdk.exceptions import AerospikeError, InvalidNamespaceError, Resu
 
 from aerospike_sdk import DataSet, ErrorStrategy, QueryDuration, QueryHint
 from tests.integration.namespace import general_namespace
-from tests.pac_compat import (
+from tests.pnc_compat import (
     assert_dataset_invalid_ael_rejected_sync,
     assert_point_invalid_ael_rejected_sync,
     requires_server_compiled_ael,

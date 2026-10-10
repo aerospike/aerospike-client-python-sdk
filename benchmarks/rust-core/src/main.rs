@@ -202,7 +202,7 @@ async fn worker_async(
 }
 
 /// Sync mode: N OS threads, each calling client.get/put via the shared
-/// Tokio runtime's `Handle::block_on`. Closest to the PAC `pac-blocking`
+/// Tokio runtime's `Handle::block_on`. Closest to the PNC `pnc-blocking`
 /// pattern (sync wrapper around an async core).
 async fn run_sync(
     client: Arc<Client>,

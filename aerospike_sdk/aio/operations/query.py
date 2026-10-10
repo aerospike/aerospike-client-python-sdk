@@ -27,14 +27,14 @@ from typing import (
 )
 
 
-from aerospike_async import (
+from aerospike_native import (
     BatchReadOp,
     BatchWritePolicy,
     Key,
     Operation,
     PartitionFilter,
 )
-from aerospike_async.exceptions import ResultCode
+from aerospike_native.exceptions import ResultCode
 
 
 from aerospike_sdk.loggers import SdkLoggers
@@ -68,7 +68,7 @@ from aerospike_sdk.implicit_txn import (
     stamp_txn,
 )
 from aerospike_sdk.exceptions import (
-    _convert_pac_exception,
+    _convert_pnc_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
@@ -220,7 +220,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         # Ultra-early bypass: virgin single-key read shape from
         # `session.query(key).execute()`. Skips _finalize_current_spec +
         # _OperationSpec allocation + _execute_single_key_direct spec-unpacking
-        # and dispatches directly to PAC get. Any chained
+        # and dispatches directly to PNC get. Any chained
         # method (.bin/.bins/.where/.with_txn/.ensure_generation/.expire_record/
         # write verbs) flips a tracked field that disqualifies this path,
         # so correctness for those flows is preserved.
@@ -243,7 +243,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             and self._partition_filter is None
             and on_error is None
         ):
-            # Hot path: hand AP + SC base policies to PAC, let Rust resolve
+            # Hot path: hand AP + SC base policies to PNC, let Rust resolve
             # namespace mode (cached) and pick. Skips the per-op
             # `_ensure_namespace_mode` await on the SDK side entirely when
             # both policies are pre-built (the common no-txn case).
@@ -290,7 +290,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
                 # Ultra-fast path: single-key operations with no spec-level
                 # overrides bypass the full _execute_spec → policy-build →
-                # RecordStream chain and call the PAC directly.
+                # RecordStream chain and call the PNC directly.
                 # Namespace mode is already resolved via _ensure_namespace_mode();
                 # the direct path applies _resolved_namespace_mode() in policy helpers.
                 # Durable-delete / record-delete specs are excluded below so SC delete
@@ -415,7 +415,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
 
         The streaming counterpart to :meth:`execute`. Where :meth:`execute`
         awaits every result then returns a materialized stream (writes
-        complete on return), this dispatches the key-batch through PAC's
+        complete on return), this dispatches the key-batch through PNC's
         lazy ``batch_stream`` and yields each ``(index, RecordResult)`` as
         its node responds — the first results are available as soon as the
         first node responds, without waiting for the rest, and peak memory
@@ -459,13 +459,13 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             all_keys.extend(spec.keys)
             all_ops.extend(self._spec_to_batch_ops(spec))
         try:
-            pac_stream = await self._client.batch_stream(all_ops, batch_policy=batch_policy)
+            pnc_stream = await self._client.batch_stream(all_ops, batch_policy=batch_policy)
         except Exception as e:
             disp = _resolve_disposition(on_error, is_single_key=False)
             return self._handle_batch_error(all_keys, e, disp, handler)
         # The lazy path only honors the callback form of on_error; an
         # ErrorStrategy enum collapses to inline errors (the stream default).
-        return RecordStream._from_pac_batch_stream(pac_stream, on_error=handler)
+        return RecordStream._from_pnc_batch_stream(pnc_stream, on_error=handler)
 
     # -- Private helpers -------------------------------------------------------
 
@@ -649,10 +649,10 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     ) -> Optional[RecordStream]:
         """Ultra-fast path for single-key reads and writes.
 
-        Calls the PAC directly, bypassing _execute_spec, policy
+        Calls the PNC directly, bypassing _execute_spec, policy
         construction, and full RecordStream wrapping.  Returns
         ``None`` if the operation type is not supported by this path
-        (caller falls back to the normal chain).  On PAC exceptions,
+        (caller falls back to the normal chain).  On PNC exceptions,
         uses the standard error disposition (single-key default = THROW).
         """
         key = spec.keys[0]
@@ -660,7 +660,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         has_ops = bool(spec.operations)
 
         if op_type is None and not has_ops:
-            # Simple read — PAC builds the per-call policy in Rust from the
+            # Simple read — PNC builds the per-call policy in Rust from the
             # session-cached base ReadPolicy + filter / txn.
             if self._base_read_policy is None:
                 self._base_read_policy = self._apply_txn(to_read_policy(
@@ -682,7 +682,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 spec, _ErrorDisposition.THROW, None)
 
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
-            # Write via operate — PAC builds the per-call policy in Rust from
+            # Write via operate — PNC builds the per-call policy in Rust from
             # the session-cached base WritePolicy + REA + overrides.
             if self._base_write_policy is None:
                 self._base_write_policy = self._apply_txn(to_write_policy(
@@ -806,7 +806,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
     ) -> RecordStream:
         """Dispatch one spec whose keys span AP and SC namespaces.
 
-        The single-policy PAC entries (``batch_operate`` / ``batch_delete``)
+        The single-policy PNC entries (``batch_operate`` / ``batch_delete``)
         apply one write policy to every key, which cannot express per-row
         durable-delete defaults; route through the mixed-batch API instead,
         which carries a policy per row (``_spec_to_batch_ops`` resolves it
@@ -985,7 +985,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 use_server_query_selection=use_server_query_selection,
             )
         except Exception as e:
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
@@ -999,13 +999,13 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 async def _reexecute(pf: PartitionFilter) -> Any:
                     return await client.query(statement, pf, policy=policy)
 
-            return RecordStream._from_chunked_pac_recordset(
+            return RecordStream._from_chunked_pnc_recordset(
                 recordset,
                 reexecute=_reexecute,
                 limit=chunk_total_limit,
             )
 
-        return RecordStream._from_pac_recordset(recordset)
+        return RecordStream._from_pnc_recordset(recordset)
 
 
 class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):
@@ -1065,7 +1065,7 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
 class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
     """Lightweight single-key write path that bypasses QueryBuilder overhead.
 
-    On the hot path (put + execute), calls the PAC directly without
+    On the hot path (put + execute), calls the PNC directly without
     ``_finalize_current_spec``, ``_OperationSpec``, or ``execute()`` dispatch.
     Advanced features (``where``, TTL, generation, chaining) trigger in-place
     promotion: ``self._qb`` is populated so all inherited
@@ -1159,11 +1159,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         cmd_t0 = perf_counter() if _cmd_enabled(_CMD_DEBUG) else 0.0
 
         # Hot path: when both AP + SC base policies are pre-built (the
-        # common no-txn case), hand them to PAC and let Rust resolve
+        # common no-txn case), hand them to PNC and let Rust resolve
         # namespace mode (cached, lazy on first miss) and pick.
         # Eliminates the per-op `_namespace_mode_resolver` await + dict
         # lookup that would otherwise fire here. Delete/touch/exists keep
-        # their own PAC entries below.
+        # their own PNC entries below.
         if (
             op_type not in ("delete", "touch", "exists")
             and self._write_policy is not None
@@ -1199,7 +1199,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             cached_wp = self._write_policy
             cached_rp = self._read_policy
 
-        # -- delete (PAC returns bool, no record) --
+        # -- delete (PNC returns bool, no record) --
         if op_type == "delete":
             wp = cached_wp if cached_wp is not None else self._get_write_policy(mode)
             wp = self._apply_txn(wp)

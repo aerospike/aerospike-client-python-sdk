@@ -15,7 +15,7 @@
 
 """Synchronous SDK session.
 
-IO methods call PAC's ``_blocking`` entries; builder factories return
+IO methods call PNC's ``_blocking`` entries; builder factories return
 the synchronous builders (:class:`QueryBuilder`, etc.).
 """
 
@@ -26,7 +26,7 @@ import typing
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, overload
 
-from aerospike_async import Key, Record, Txn, UDFLang
+from aerospike_native import Key, Record, Txn, UDFLang
 
 from aerospike_sdk.aio.background import BackgroundTaskSession as AsyncBackgroundTaskSession
 from aerospike_sdk.txn_shared import (
@@ -38,9 +38,9 @@ from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
 from aerospike_sdk.exceptions import (
     AerospikeError,
-    PacAerospikeError,
-    PacServerError,
-    _convert_pac_exception,
+    PncAerospikeError,
+    PncServerError,
+    _convert_pnc_exception,
 )
 from aerospike_sdk.session_shared import (
     NamespaceScStatus,
@@ -60,7 +60,7 @@ from aerospike_sdk.sync.operations.query import (
 from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
 if TYPE_CHECKING:
-    from aerospike_async import (
+    from aerospike_native import (
         AdminPolicy,
         CollectionIndexType,
         CTX,
@@ -102,8 +102,8 @@ class Session(
         # Config hot-reload pushes rebuilt policies into live sessions
         # (weak registration; no per-operation check).
         behavior._register_session(self)
-        # Cache the PAC client for fast-path methods.
-        self._pac_client = client.underlying_client
+        # Cache the PNC client for fast-path methods.
+        self._pnc_client = client.underlying_client
         # Non-transactional sessions always return None;
         # TransactionalSession overrides this to yield its active Txn.
         self._txn: Optional[Txn] = None
@@ -144,17 +144,17 @@ class Session(
         Bypasses the builder chain (``session.query(key).execute()``) and
         the :class:`~aerospike_sdk.sync.record_stream.RecordStream` wrapper:
         one blocking call reaches the underlying client and the resulting
-        :class:`~aerospike_async.Record` is returned unwrapped. Passes the
-        AP + SC cached policies; PAC picks the right one based on the key's
+        :class:`~aerospike_native.Record` is returned unwrapped. Passes the
+        AP + SC cached policies; PNC picks the right one based on the key's
         namespace mode (from the in-memory partition map).
 
         Args:
-            key: Target :class:`~aerospike_async.Key`.
+            key: Target :class:`~aerospike_native.Key`.
             bins: Optional bin-name projection. ``None`` (default) reads
                 all bins.
 
         Returns:
-            The :class:`~aerospike_async.Record` for ``key``.
+            The :class:`~aerospike_native.Record` for ``key``.
 
         Raises:
             AerospikeError: Server or client errors (including
@@ -174,7 +174,7 @@ class Session(
         """
         try:
             if self._txn is None:
-                return self._pac_client.get_blocking(
+                return self._pnc_client.get_blocking(
                     key, bins,
                     policy=self._cached_read_policy,
                     policy_sc=self._cached_read_policy_sc,
@@ -184,14 +184,14 @@ class Session(
             policy = to_read_policy(
                 self._behavior.get_settings(OpKind.READ, OpShape.POINT))
             policy.txn = self._txn
-            return self._pac_client.get_blocking(key, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+            return self._pnc_client.get_blocking(key, bins, policy=policy)
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
 
     def put(self, key: Key, bins: Dict[str, Any]) -> None:
         """Direct single-key upsert — no builder, no stream — synchronous.
 
-        Passes the AP + SC cached policies; PAC picks the right one based
+        Passes the AP + SC cached policies; PNC picks the right one based
         on the key's namespace mode.
 
         Raises:
@@ -200,7 +200,7 @@ class Session(
         """
         try:
             if self._txn is None:
-                self._pac_client.put_blocking(
+                self._pnc_client.put_blocking(
                     key, bins,
                     policy=self._cached_write_policy,
                     policy_sc=self._cached_write_policy_sc,
@@ -210,12 +210,12 @@ class Session(
                 self._behavior.get_settings(
                     OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
             policy.txn = self._txn
-            self._pac_client.put_blocking(key, bins, policy=policy)
-        except (PacServerError, PacAerospikeError) as e:
-            raise _convert_pac_exception(e) from e
+            self._pnc_client.put_blocking(key, bins, policy=policy)
+        except (PncServerError, PncAerospikeError) as e:
+            raise _convert_pnc_exception(e) from e
 
     def truncate(self, dataset: DataSet, before_nanos: Optional[int] = None) -> None:
-        """Truncate a set, synchronously (PAC ``truncate_blocking``).
+        """Truncate a set, synchronously (PNC ``truncate_blocking``).
 
         .. warning::
 
@@ -225,7 +225,7 @@ class Session(
         client = self._client
         if client._record_on:
             usage.record_call(client, (usage.ADMIN_TRUNCATE,))
-        self._pac_client.truncate_blocking(
+        self._pnc_client.truncate_blocking(
             dataset.namespace, dataset.set_name, before_nanos,
         )
 
@@ -234,7 +234,7 @@ class Session(
     def namespace_sc_status(self, namespace: str) -> NamespaceScStatus:
         """Describe whether a namespace is SC; includes a reason when it is not."""
         try:
-            result = self._pac_client.info_blocking(f"namespace/{namespace}")
+            result = self._pnc_client.info_blocking(f"namespace/{namespace}")
         except Exception as e:
             raise ValueError(f"Failed to check namespace '{namespace}': {e}") from e
 
@@ -256,8 +256,8 @@ class Session(
     ) -> Union[InfoCommands, Dict[str, str]]:
         """Sync info: return :class:`~aerospike_sdk.sync.info.InfoCommands` or raw blocking result."""
         if command is not None:
-            return self._pac_client.info_blocking(command)
-        return InfoCommands(self._pac_client)
+            return self._pnc_client.info_blocking(command)
+        return InfoCommands(self._pnc_client)
 
     # -- Builder factories ----------------------------------------------------
 
@@ -290,7 +290,7 @@ class Session(
         """
         if key is not None:
             builder = QueryBuilder(
-                client=self._pac_client,
+                client=self._pnc_client,
                 namespace=key.namespace,
                 set_name=key.set_name,
                 behavior=self._behavior,
@@ -312,7 +312,7 @@ class Session(
             ns = keys[0].namespace
             sn = keys[0].set_name
             builder = QueryBuilder(
-                client=self._pac_client,
+                client=self._pnc_client,
                 namespace=ns,
                 set_name=sn,
                 behavior=self._behavior,
@@ -330,7 +330,7 @@ class Session(
 
         assert dataset is not None
         return QueryBuilder(
-            client=self._pac_client,
+            client=self._pnc_client,
             namespace=dataset.namespace,
             set_name=dataset.set_name,
             behavior=self._behavior,
@@ -389,7 +389,7 @@ class Session(
         create a set index.
 
         Returns:
-            An :class:`~aerospike_async.IndexTask`; call
+            An :class:`~aerospike_native.IndexTask`; call
             ``wait_till_complete_blocking()`` before querying through the index.
 
         See Also:
@@ -423,7 +423,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf`
@@ -442,7 +442,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf_from_file`
@@ -463,7 +463,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.register_udf_from_resource`
@@ -481,7 +481,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.remove_udf`
@@ -493,7 +493,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.list_udf`
@@ -505,7 +505,7 @@ class Session(
 
         Raises:
             RuntimeError: If not connected.
-            AerospikeError: On cluster errors (via PAC).
+            AerospikeError: On cluster errors (via PNC).
 
         See Also:
             :meth:`aerospike_sdk.aio.session.Session.list_indexes`
@@ -586,7 +586,7 @@ class Session(
     def _fast_write_segment(self, op_type: str, key: Key) -> WriteSegmentBuilder:
         """Single-key fast-path write segment (sync)."""
         return _SingleKeyWriteSegment(
-            client=self._pac_client,
+            client=self._pnc_client,
             key=key,
             op_type=op_type,
             behavior=self._behavior,

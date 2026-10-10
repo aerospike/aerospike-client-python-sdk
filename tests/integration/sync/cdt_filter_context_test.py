@@ -16,12 +16,12 @@
 """Sync integration tests for query Filter with CDT context (nested map path).
 
 See async :mod:`tests.integration.async.cdt_filter_context_test` for notes on
-``Filter.context`` and PAC ``create_index`` with ``ctx``.
+``Filter.context`` and PNC ``create_index`` with ``ctx``.
 """
 
 import pytest
 from aerospike_sdk import CTX, Behavior, Filter
-from aerospike_async import IndexTask, IndexType
+from aerospike_native import IndexTask, IndexType
 
 from aerospike_sdk import DataSet
 from aerospike_sdk.policy import Settings
@@ -69,12 +69,12 @@ def _user_keys_from_stream(stream):
     return keys
 
 
-def _admin_drop(pac, ns: str, st: str, name: str) -> None:
-    pac.drop_index_blocking(ns, st, name)
+def _admin_drop(pnc, ns: str, st: str, name: str) -> None:
+    pnc.drop_index_blocking(ns, st, name)
 
 
-def _admin_create_nested(pac) -> IndexTask:
-    return pac.create_index_blocking(
+def _admin_create_nested(pnc) -> IndexTask:
+    return pnc.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -85,8 +85,8 @@ def _admin_create_nested(pac) -> IndexTask:
     )
 
 
-def _admin_create_flat(pac, index_name: str) -> IndexTask:
-    return pac.create_index_blocking(
+def _admin_create_flat(pnc, index_name: str) -> IndexTask:
+    return pnc.create_index_blocking(
         _NS,
         _SET,
         _BIN,
@@ -106,12 +106,12 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
     keys = (key_hi, key_lo, key_missing_inner)
 
     session = cluster.create_session(_SEND_KEY)
-    # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
-    pac = cluster._client.underlying_client
+    # No Cluster surface for ctx-bearing index admin yet; reach through to PNC.
+    pnc = cluster._client.underlying_client
 
     _cleanup_records(session, keys)
     try:
-        _admin_drop(pac, _NS, _SET, _INDEX)
+        _admin_drop(pnc, _NS, _SET, _INDEX)
     except Exception:
         pass
 
@@ -138,7 +138,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
 
     try:
         # The build task is authoritative; a query probe only infers readiness.
-        _admin_create_nested(pac).wait_till_complete_blocking()
+        _admin_create_nested(pnc).wait_till_complete_blocking()
 
         stream = session.query(_DS).filter(flt).bins([_BIN]).execute()
         try:
@@ -156,7 +156,7 @@ def test_query_filter_equal_with_map_nested_context(cluster, enterprise):
             stream2.close()
     finally:
         try:
-            _admin_drop(pac, _NS, _SET, _INDEX)
+            _admin_drop(pnc, _NS, _SET, _INDEX)
         except Exception:
             pass
         _cleanup_records(session, keys)
@@ -170,14 +170,14 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise):
     keys = (key_match, key_other)
 
     session = cluster.create_session(_SEND_KEY)
-    # No Cluster surface for ctx-bearing index admin yet; reach through to PAC.
-    pac = cluster._client.underlying_client
+    # No Cluster surface for ctx-bearing index admin yet; reach through to PNC.
+    pnc = cluster._client.underlying_client
     index_name = f"{_INDEX}_flat"
     val = 5150
 
     _cleanup_records(session, keys)
     try:
-        _admin_drop(pac, _NS, _SET, index_name)
+        _admin_drop(pnc, _NS, _SET, index_name)
     except Exception:
         pass
 
@@ -196,7 +196,7 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise):
 
     try:
         # The build task is authoritative; a query probe only infers readiness.
-        _admin_create_flat(pac, index_name).wait_till_complete_blocking()
+        _admin_create_flat(pnc, index_name).wait_till_complete_blocking()
 
         stream = session.query(_DS).filter(flt).bins([_BIN]).execute()
         try:
@@ -205,7 +205,7 @@ def test_query_filter_equal_single_map_key_context(cluster, enterprise):
             stream.close()
     finally:
         try:
-            _admin_drop(pac, _NS, _SET, index_name)
+            _admin_drop(pnc, _NS, _SET, index_name)
         except Exception:
             pass
         _cleanup_records(session, keys)

@@ -36,7 +36,7 @@ from typing import (
 )
 
 
-from aerospike_async import Key
+from aerospike_native import Key
 
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.info_types import NamespaceDetail
@@ -49,7 +49,7 @@ from aerospike_sdk.policy.policy_mapper import (
 )
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete builders live per-tree.
-    from aerospike_async import Txn
+    from aerospike_native import Txn
 
     from aerospike_sdk.operations_shared import (
         _DataSetWriteBuilderBase,
@@ -121,9 +121,9 @@ def _namespace_sc_status(
 
 
 def _namespace_mode_from_partition_map(
-    pac_client: Any, cache: Dict[str, Mode], namespace: str,
+    pnc_client: Any, cache: Dict[str, Mode], namespace: str,
 ) -> Optional[Mode]:
-    """Resolve SC or AP from PAC's partition map, caching the answer.
+    """Resolve SC or AP from PNC's partition map, caching the answer.
 
     The partition map answers without I/O. ``None`` means the map does not list
     the namespace (unknown to the cluster, or not yet tended); callers then ask
@@ -131,21 +131,21 @@ def _namespace_mode_from_partition_map(
     namespace's mode for the life of the client. A namespace cannot change mode
     without a server restart, so a definite answer is safe to keep.
     """
-    is_sc = pac_client.is_strong_consistency(namespace)
+    is_sc = pnc_client.is_strong_consistency(namespace)
     if is_sc is None:
         return None
     mode = cache[namespace] = Mode.SC if is_sc else Mode.AP
     return mode
 
 
-def _probe_namespace_mode_blocking(pac_client: Any, namespace: str) -> Mode:
+def _probe_namespace_mode_blocking(pnc_client: Any, namespace: str) -> Mode:
     """Ask the server for *namespace*'s mode; AP when the probe fails.
 
     Only reached for a namespace the partition map does not list, where the
     operation about to run will surface the server's own error.
     """
     try:
-        result = pac_client.info_blocking(f"namespace/{namespace}")
+        result = pnc_client.info_blocking(f"namespace/{namespace}")
     except Exception:
         return Mode.AP
     detail = NamespaceDetail.from_response(result, namespace)
@@ -188,8 +188,8 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
     _client: Any
 
     # -- Shared lifecycle / state ---------------------------------------------
-    # ``__init__`` stays per-leaf (it differs only by the source of the raw PAC
-    # client handle, and hoisting it would loosen the ``_client`` / ``_pac_client``
+    # ``__init__`` stays per-leaf (it differs only by the source of the raw PNC
+    # client handle, and hoisting it would loosen the ``_client`` / ``_pnc_client``
     # types the hot paths rely on). The substantive construction logic lives here.
 
     def _refresh_cached_policies(self) -> None:
@@ -238,13 +238,13 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         """The active transaction for this session, or ``None``.
 
         Regular sessions always hold ``None``; only a transactional session
-        inside its active block exposes a live :class:`~aerospike_async.Txn`.
+        inside its active block exposes a live :class:`~aerospike_native.Txn`.
         Builders spawned from the session read this and thread the result
-        through every policy they hand to the PAC, so operations started inside
+        through every policy they hand to the PNC, so operations started inside
         a transaction auto-participate.
 
         Returns:
-            The active :class:`~aerospike_async.Txn`, or ``None`` outside a
+            The active :class:`~aerospike_native.Txn`, or ``None`` outside a
             transaction.
 
         Example::
@@ -270,7 +270,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         """Start a multi-record transaction (MRT) using this session's behavior.
 
         Returns a context manager that allocates a fresh
-        :class:`~aerospike_async.Txn`. Every operation run on the returned
+        :class:`~aerospike_native.Txn`. Every operation run on the returned
         session auto-participates — builders stamp ``policy.txn`` under the hood,
         so user code never touches a policy object. On clean exit the
         transaction is committed; if an exception propagates out of the block it
@@ -367,7 +367,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         the record must not already exist.
 
         Args:
-            arg1: A single :class:`~aerospike_async.Key`, a list of keys, or a
+            arg1: A single :class:`~aerospike_native.Key`, a list of keys, or a
                 :class:`~aerospike_sdk.dataset.DataSet` for a tabular write
                 (rows follow via ``bins(...)``).
             *keys: Additional keys when ``arg1`` is a key.
@@ -659,7 +659,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         This session's behavior is applied to the underlying query builder; use
         :meth:`session_for` to run a query under a different one. Supported
         shapes: a :class:`~aerospike_sdk.dataset.DataSet` (set-wide query), a
-        single :class:`~aerospike_async.Key`, or multiple keys (varargs or a
+        single :class:`~aerospike_native.Key`, or multiple keys (varargs or a
         list). Multi-key queries are split into per-node sub-batches, and a node
         whose sub-batch holds a single key is sent a regular single-record
         command automatically — size-1 batches need no special-casing by the

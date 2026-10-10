@@ -24,7 +24,7 @@ silently never run.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aerospike_async import Key, PartitionFilter, ReadPolicy
+from aerospike_native import Key, PartitionFilter, ReadPolicy
 
 from aerospike_sdk import Behavior
 from aerospike_sdk.aio.operations.query import QueryBuilder

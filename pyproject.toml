@@ -10,10 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # Dev-channel version published to the internal package index on every
-    # PAC merge; promoted versions land on public PyPI at release. CI
-    # resolves this from the internal index; see README "Local PAC checkout"
-    # for working against a local PAC tree instead.
-    "aerospike-async==0.6.0a7.dev113",
+    # PNC merge; promoted versions land on public PyPI at release. CI
+    # resolves this from the internal index; see README "Local PNC checkout"
+    # for working against a local PNC tree instead.
+    "aerospike-native==0.6.0a7.dev115",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]

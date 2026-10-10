@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Sequence
 
-from aerospike_async import (
+from aerospike_native import (
     CTX,
     ListOperation,
     ListOrderType,
@@ -142,8 +142,8 @@ class _RemoveMixin:
 
         Args:
             return_type: What the server should return about the removed
-                elements. Use :class:`~aerospike_async.MapReturnType` or
-                :class:`~aerospike_async.ListReturnType` (for example
+                elements. Use :class:`~aerospike_native.MapReturnType` or
+                :class:`~aerospike_native.ListReturnType` (for example
                 ``MapReturnType.VALUE``, ``ListReturnType.COUNT``). When
                 omitted, the server returns no removal metadata (``NONE``).
 

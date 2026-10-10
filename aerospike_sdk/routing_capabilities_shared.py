@@ -23,8 +23,8 @@ into ``Client`` and
 The cache is warmed at connect and re-derived once a tend interval has elapsed,
 so a node joining with an older version closes the gates and the client reports
 a clean ``OP_NOT_APPLICABLE`` instead of letting that node reject the filter
-mid-stream. It reopens once that node leaves. PAC exposes no tend callback, so
-this reads the node list PAC's own tend loop already publishes — an in-memory
+mid-stream. It reopens once that node leaves. PNC exposes no tend callback, so
+this reads the node list PNC's own tend loop already publishes — an in-memory
 walk, not a round trip, so it runs inline on both runtimes. See
 :meth:`RoutingCapabilitiesMixin._routing_capability_ttl_seconds` for the window.
 
@@ -40,22 +40,22 @@ import logging
 import time
 from typing import Any, List, Optional, Protocol, Tuple
 
-from aerospike_async import ClientPolicy
+from aerospike_native import ClientPolicy
 
 from aerospike_sdk import capabilities
 from aerospike_sdk.policy.system_settings import SystemSettings
 
 log = logging.getLogger(__name__)
 
-_pac_default_tend_interval_seconds_value: Optional[float] = None
+_pnc_default_tend_interval_seconds_value: Optional[float] = None
 
 
-def _pac_default_tend_interval_seconds() -> float:
-    """PAC's default tend interval, read once on first use (not at import)."""
-    global _pac_default_tend_interval_seconds_value
-    if _pac_default_tend_interval_seconds_value is None:
-        _pac_default_tend_interval_seconds_value = ClientPolicy().tend_interval / 1000.0
-    return _pac_default_tend_interval_seconds_value
+def _pnc_default_tend_interval_seconds() -> float:
+    """PNC's default tend interval, read once on first use (not at import)."""
+    global _pnc_default_tend_interval_seconds_value
+    if _pnc_default_tend_interval_seconds_value is None:
+        _pnc_default_tend_interval_seconds_value = ClientPolicy().tend_interval / 1000.0
+    return _pnc_default_tend_interval_seconds_value
 
 
 class _RoutingCapabilitiesClient(Protocol):
@@ -102,17 +102,17 @@ class RoutingCapabilitiesMixin:
         self._routing_capability_ttl = None
 
     def _client_can_list_nodes(self: _RoutingCapabilitiesClient) -> bool:
-        """Whether this client's PAC handle exposes a node list.
+        """Whether this client's PNC handle exposes a node list.
 
-        The ``current_thread_runtime`` proxy wraps PAC's ``_LocalClient``, which
-        has no node-listing surface. Probed on ``type(pac)`` rather than the
+        The ``current_thread_runtime`` proxy wraps PNC's ``_LocalClient``, which
+        has no node-listing surface. Probed on ``type(pnc)`` rather than the
         instance: an instance lookup falls through the proxy's ``__getattr__``,
         which would build a per-thread client just to answer this question.
         """
-        pac = self._client
-        if pac is None:
+        pnc = self._client
+        if pnc is None:
             return False
-        return hasattr(type(pac), "nodes")
+        return hasattr(type(pnc), "nodes")
 
     def _cluster_versions(self: _RoutingCapabilitiesClient) -> List[Any]:
         """Live node versions, or ``[]`` when this client cannot list nodes.
@@ -166,11 +166,11 @@ class RoutingCapabilitiesMixin:
         self._cached_supports_server_compiled_ael = True
 
     def _routing_capability_ttl_seconds(self: _RoutingCapabilitiesClient) -> float:
-        """How long a derived gate stays trusted: one PAC tend interval.
+        """How long a derived gate stays trusted: one PNC tend interval.
 
-        Re-deriving faster than PAC tends would walk the same node list and reach
+        Re-deriving faster than PNC tends would walk the same node list and reach
         the same answer, so the tend cadence is the useful floor. ``None`` means
-        the caller never overrode it and PAC's own default applies. The float is
+        the caller never overrode it and PNC's own default applies. The float is
         cached and recomputed when ``_sdk_settings`` is swapped wholesale.
         """
         settings = self._sdk_settings
@@ -179,7 +179,7 @@ class RoutingCapabilitiesMixin:
             return cached[1]
         interval = settings.tend_interval
         if interval is None:
-            ttl = _pac_default_tend_interval_seconds()
+            ttl = _pnc_default_tend_interval_seconds()
         else:
             ttl = interval.total_seconds()
         # The settings marker and the value travel as one tuple through one

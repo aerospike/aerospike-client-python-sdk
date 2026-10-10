@@ -22,9 +22,9 @@ import typing
 from typing import Any, Optional, TYPE_CHECKING
 
 
-from aerospike_async import Txn, TxnState
+from aerospike_native import Txn, TxnState
 
-from aerospike_sdk.exceptions import _convert_pac_exception
+from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
@@ -41,9 +41,9 @@ class TransactionalSession(TransactionalSessionBase, Session):
     Subclasses :class:`~aerospike_sdk.aio.session.Session`, so every session
     API (``query``, ``upsert``, ``insert``, ``batch``, ...) works unchanged
     inside ``async with``; builders capture the active
-    :class:`~aerospike_async.Txn` via
+    :class:`~aerospike_native.Txn` via
     :attr:`~aerospike_sdk.aio.session.Session.current_transaction` and
-    thread it onto every policy they hand to the PAC — the user never
+    thread it onto every policy they hand to the PNC — the user never
     touches a policy.
 
     On clean exit the transaction is committed; if an exception propagates
@@ -177,7 +177,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             if not self._commit_is_retryable():
                 self._finalized = True
                 self._txn = None
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
         self._finalized = True
         # Drop the txn reference so operations issued after an explicit
         # commit run transaction-free instead of stamping the finalized
@@ -225,7 +225,7 @@ class TransactionalSession(TransactionalSessionBase, Session):
             if not self._commit_is_retryable():
                 self._finalized = True
                 self._txn = None
-            raise _convert_pac_exception(e) from e
+            raise _convert_pnc_exception(e) from e
         self._finalized = True
         self._txn = None
         return _from_abort(status)

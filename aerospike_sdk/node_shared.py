@@ -25,17 +25,17 @@ from __future__ import annotations
 
 from typing import Any, List, Tuple
 
-from aerospike_async import Version
+from aerospike_native import Version
 
 
 class NodeBase:
     """Properties common to the async and sync node views."""
 
-    __slots__ = ("_pac",)
+    __slots__ = ("_pnc",)
 
-    def __init__(self, pac_node: Any) -> None:
-        """Wrap a PAC node; obtained from ``Cluster.nodes`` or ``Cluster.get_node``."""
-        self._pac = pac_node
+    def __init__(self, pnc_node: Any) -> None:
+        """Wrap a PNC node; obtained from ``Cluster.nodes`` or ``Cluster.get_node``."""
+        self._pnc = pnc_node
 
     @property
     def name(self) -> str:
@@ -54,7 +54,7 @@ class NodeBase:
         See Also:
             :attr:`address`: Where the client reaches this node.
         """
-        return self._pac.name
+        return self._pnc.name
 
     @property
     def address(self) -> str:
@@ -70,7 +70,7 @@ class NodeBase:
         See Also:
             :attr:`host`: The same address as a ``(host, port)`` tuple.
         """
-        return self._pac.address
+        return self._pnc.address
 
     @property
     def host(self) -> Tuple[str, int]:
@@ -87,7 +87,7 @@ class NodeBase:
         See Also:
             :attr:`address`: The same address as a string.
         """
-        return self._pac.host
+        return self._pnc.host
 
     @property
     def is_active(self) -> bool:
@@ -106,7 +106,7 @@ class NodeBase:
         See Also:
             :meth:`Cluster.nodes`: The current, active node list.
         """
-        return self._pac.is_active
+        return self._pnc.is_active
 
     @property
     def version(self) -> Version:
@@ -123,12 +123,12 @@ class NodeBase:
                 print(f"mixed-version cluster: {versions}")
 
         Returns:
-            The node's :class:`~aerospike_async.Version`.
+            The node's :class:`~aerospike_native.Version`.
 
         See Also:
             :meth:`Cluster.server_version`: The minimum across all nodes.
         """
-        return self._pac.version
+        return self._pnc.version
 
     @property
     def failures(self) -> int:
@@ -145,7 +145,7 @@ class NodeBase:
         See Also:
             :attr:`is_active`: Whether the node is still in the cluster.
         """
-        return self._pac.failures
+        return self._pnc.failures
 
     @property
     def partition_generation(self) -> int:
@@ -161,7 +161,7 @@ class NodeBase:
         See Also:
             :attr:`rebalance_generation`: The generation for rebalance events.
         """
-        return self._pac.partition_generation
+        return self._pnc.partition_generation
 
     @property
     def rebalance_generation(self) -> int:
@@ -178,7 +178,7 @@ class NodeBase:
         See Also:
             :attr:`partition_generation`: The generation for partition-map changes.
         """
-        return self._pac.rebalance_generation
+        return self._pnc.rebalance_generation
 
     def aliases(self) -> List[Tuple[str, int]]:
         """Every ``(host, port)`` the client has seen this node answer on.
@@ -197,7 +197,7 @@ class NodeBase:
         See Also:
             :attr:`host`: The address the client currently connects to.
         """
-        return self._pac.aliases()
+        return self._pnc.aliases()
 
     def __repr__(self) -> str:
         return f"Node(name={self.name!r}, address={self.address!r}, active={self.is_active})"

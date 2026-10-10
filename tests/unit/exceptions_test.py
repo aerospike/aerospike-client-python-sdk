@@ -15,11 +15,11 @@
 
 """Tests for the SDK exception hierarchy, factory, and dependency converter."""
 
-import aerospike_async
+import aerospike_native
 import aerospike_sdk
 import pytest
-from aerospike_async import Operation, SubCode
-from aerospike_async.exceptions import _RC_TO_CLS
+from aerospike_native import Operation, SubCode
+from aerospike_native.exceptions import _RC_TO_CLS
 from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.exceptions import (
     AerospikeError,
@@ -34,7 +34,7 @@ from aerospike_sdk.exceptions import (
     CapacityError,
     CommitError,
     ConnectionError,
-    _convert_pac_exception,
+    _convert_pnc_exception,
     ElementError,
     ElementExistsError,
     ElementNotFoundError,
@@ -62,16 +62,16 @@ from aerospike_sdk.exceptions import (
     UdfError,
     _RC_TO_TYPE,
 )
-# The dependency-converter tests construct real PAC exceptions. PSDK's own
-# AerospikeError/ConnectionError/TimeoutError shadow the PAC names, so pull
-# the PAC types via the Pac* aliases the exceptions module already binds.
+# The dependency-converter tests construct real PNC exceptions. PSDK's own
+# AerospikeError/ConnectionError/TimeoutError shadow the PNC names, so pull
+# the PNC types via the Pnc* aliases the exceptions module already binds.
 from aerospike_sdk.exceptions import (
-    PacAerospikeError,
-    PacConnectionError,
-    PacInvalidNodeError,
-    PacServerError,
-    PacTimeoutError,
-    PacUDFBadResponse,
+    PncAerospikeError,
+    PncConnectionError,
+    PncInvalidNodeError,
+    PncServerError,
+    PncTimeoutError,
+    PncUDFBadResponse,
 )
 
 class TestExceptionHierarchy:
@@ -276,134 +276,134 @@ class TestResultCodeToException:
 
 
 class TestConvertPacException:
-    """Verify PAC-to-PSDK exception conversion."""
+    """Verify PNC-to-PSDK exception conversion."""
 
     def test_server_error_mapped(self):
-        pac = PacServerError("gen mismatch", ResultCode.GENERATION_ERROR)
-        pfc = _convert_pac_exception(pac)
+        pnc = PncServerError("gen mismatch", ResultCode.GENERATION_ERROR)
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is GenerationError
         assert pfc.result_code == ResultCode.GENERATION_ERROR
         assert pfc.in_doubt is False
 
     def test_server_error_in_doubt_propagated(self):
-        pac = PacServerError("write failed", ResultCode.SERVER_ERROR, True)
-        pfc = _convert_pac_exception(pac)
+        pnc = PncServerError("write failed", ResultCode.SERVER_ERROR, True)
+        pfc = _convert_pnc_exception(pnc)
         assert pfc.in_doubt is True
 
-    def test_pac_timeout(self):
-        pac = PacTimeoutError("timed out")
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_timeout(self):
+        pnc = PncTimeoutError("timed out")
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TimeoutError
         assert pfc.in_doubt is False
 
-    def test_pac_timeout_in_doubt_propagated(self):
-        pac = PacTimeoutError("timed out")
-        pac.in_doubt = True
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_timeout_in_doubt_propagated(self):
+        pnc = PncTimeoutError("timed out")
+        pnc.in_doubt = True
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TimeoutError
         assert pfc.in_doubt is True
 
-    def test_pac_connection(self):
-        pac = PacConnectionError("conn refused")
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_connection(self):
+        pnc = PncConnectionError("conn refused")
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is ConnectionError
         assert pfc.in_doubt is False
 
-    def test_pac_connection_in_doubt_propagated(self):
-        pac = PacConnectionError("conn reset mid-write")
-        pac.in_doubt = True
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_connection_in_doubt_propagated(self):
+        pnc = PncConnectionError("conn reset mid-write")
+        pnc.in_doubt = True
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is ConnectionError
         assert pfc.in_doubt is True
 
-    def test_pac_invalid_node(self):
-        pac = PacInvalidNodeError("node gone")
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_invalid_node(self):
+        pnc = PncInvalidNodeError("node gone")
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is InvalidNodeError
 
-    def test_pac_udf_bad_response(self):
-        pac = PacUDFBadResponse("1000:Invalid value")
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_udf_bad_response(self):
+        pnc = PncUDFBadResponse("1000:Invalid value")
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is UdfError
         assert pfc.result_code == ResultCode.UDF_BAD_RESPONSE
 
-    def test_pac_generic_aerospike_error(self):
-        pac = PacAerospikeError("something broke")
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_generic_aerospike_error(self):
+        pnc = PncAerospikeError("something broke")
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is AerospikeError
         assert pfc.in_doubt is False
 
-    def test_pac_generic_in_doubt_propagated(self):
-        pac = PacAerospikeError("batch failed over an in-doubt write")
-        pac.in_doubt = True
-        pfc = _convert_pac_exception(pac)
+    def test_pnc_generic_in_doubt_propagated(self):
+        pnc = PncAerospikeError("batch failed over an in-doubt write")
+        pnc.in_doubt = True
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is AerospikeError
         assert pfc.in_doubt is True
 
     def test_client_failure_keeps_its_client_code(self):
-        pac = PacConnectionError("no node reachable")
-        pac.result_code = ResultCode.SERVER_NOT_AVAILABLE
-        pfc = _convert_pac_exception(pac)
+        pnc = PncConnectionError("no node reachable")
+        pnc.result_code = ResultCode.SERVER_NOT_AVAILABLE
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is ConnectionError
         assert pfc.result_code == ResultCode.SERVER_NOT_AVAILABLE
         assert pfc.result_code == -8
 
     def test_retry_exhaustion_is_told_apart_from_a_slow_server(self):
-        pac = PacTimeoutError("gave up after 3 attempts")
-        pac.result_code = ResultCode.MAX_RETRIES_EXCEEDED
-        pfc = _convert_pac_exception(pac)
+        pnc = PncTimeoutError("gave up after 3 attempts")
+        pnc.result_code = ResultCode.MAX_RETRIES_EXCEEDED
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TimeoutError
         assert pfc.client is True
         assert pfc.result_code == ResultCode.MAX_RETRIES_EXCEEDED
 
     def test_refused_abort_is_a_transaction_error(self):
-        pac = PacAerospikeError("Error -17: Transaction failed")
-        pac.result_code = ResultCode.TXN_FAILED
-        pfc = _convert_pac_exception(pac)
+        pnc = PncAerospikeError("Error -17: Transaction failed")
+        pnc.result_code = ResultCode.TXN_FAILED
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TransactionError
         assert pfc.result_code == ResultCode.TXN_FAILED
         assert pfc.base_message == "Transaction failed"
 
     def test_client_cut_stream_is_a_terminated_query(self):
-        pac = PacAerospikeError("Error -4: Scan was terminated")
-        pac.result_code = ResultCode.SCAN_TERMINATED
-        pfc = _convert_pac_exception(pac)
+        pnc = PncAerospikeError("Error -4: Scan was terminated")
+        pnc.result_code = ResultCode.SCAN_TERMINATED
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is QueryTerminatedError
         assert pfc.result_code == ResultCode.SCAN_TERMINATED
 
     def test_unknown_exception_wrapped(self):
-        pfc = _convert_pac_exception(RuntimeError("wat"))
+        pfc = _convert_pnc_exception(RuntimeError("wat"))
         assert type(pfc) is AerospikeError
         assert "wat" in str(pfc)
 
     def test_cause_chaining(self):
         """Callers should use ``raise ... from`` for proper chaining."""
-        pac = PacServerError("gen fail", ResultCode.GENERATION_ERROR)
-        pfc = _convert_pac_exception(pac)
+        pnc = PncServerError("gen fail", ResultCode.GENERATION_ERROR)
+        pfc = _convert_pnc_exception(pnc)
         try:
-            raise pfc from pac
+            raise pfc from pnc
         except GenerationError as caught:
-            assert caught.__cause__ is pac
+            assert caught.__cause__ is pnc
 
 
 class TestRetryContextPropagation:
-    """Retry/diagnostic context flows from PAC exceptions onto the base."""
+    """Retry/diagnostic context flows from PNC exceptions onto the base."""
 
-    def test_defaults_when_pac_lacks_fields(self):
-        pfc = _convert_pac_exception(PacTimeoutError("timed out"))
+    def test_defaults_when_pnc_lacks_fields(self):
+        pfc = _convert_pnc_exception(PncTimeoutError("timed out"))
         assert pfc.node is None
         assert pfc.iteration is None
         assert pfc.base_message is None
         assert pfc.sub_exceptions == ()
 
     def test_client_side_fields_propagated(self):
-        pac = PacTimeoutError("Error 9: retried out")
-        pac.node = "BB9020011AC4202"
-        pac.iteration = 3
-        pac.base_message = "Client Timeout: Timeout after 3 tries"
-        pac.sub_exceptions = [PacTimeoutError("attempt 1"), PacTimeoutError("attempt 2")]
+        pnc = PncTimeoutError("Error 9: retried out")
+        pnc.node = "BB9020011AC4202"
+        pnc.iteration = 3
+        pnc.base_message = "Client Timeout: Timeout after 3 tries"
+        pnc.sub_exceptions = [PncTimeoutError("attempt 1"), PncTimeoutError("attempt 2")]
 
-        pfc = _convert_pac_exception(pac)
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TimeoutError
         assert pfc.node == "BB9020011AC4202"
         assert pfc.iteration == 3
@@ -414,11 +414,11 @@ class TestRetryContextPropagation:
         assert all(isinstance(s, AerospikeError) for s in pfc.sub_exceptions)
 
     def test_server_error_fields_propagated(self):
-        pac = PacServerError(
+        pnc = PncServerError(
             "fail", ResultCode.GENERATION_ERROR, True, 2, "conflict", None,
             "BB9020011AC4202", 4, "Generation error", None,
         )
-        pfc = _convert_pac_exception(pac)
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is GenerationError
         assert pfc.node == "BB9020011AC4202"
         assert pfc.iteration == 4
@@ -428,11 +428,11 @@ class TestRetryContextPropagation:
         assert pfc.server_message == "conflict"
 
     def test_server_error_sub_exceptions_converted(self):
-        pac = PacServerError(
+        pnc = PncServerError(
             "fail", ResultCode.TIMEOUT, False, None, None, None,
-            None, 2, None, [PacTimeoutError("attempt 1")],
+            None, 2, None, [PncTimeoutError("attempt 1")],
         )
-        pfc = _convert_pac_exception(pac)
+        pfc = _convert_pnc_exception(pnc)
         assert len(pfc.sub_exceptions) == 1
         assert isinstance(pfc.sub_exceptions[0], TimeoutError)
 
@@ -443,14 +443,14 @@ class TestTimeoutProvenance:
     def test_default_is_server(self):
         assert TimeoutError("t").client is False
 
-    def test_pac_client_timeout_sets_client_true(self):
-        pfc = _convert_pac_exception(PacTimeoutError("deadline"))
+    def test_pnc_client_timeout_sets_client_true(self):
+        pfc = _convert_pnc_exception(PncTimeoutError("deadline"))
         assert type(pfc) is TimeoutError
         assert pfc.client is True
 
     def test_server_timeout_code_keeps_client_false(self):
-        pac = PacServerError("timeout", ResultCode.TIMEOUT, True)
-        pfc = _convert_pac_exception(pac)
+        pnc = PncServerError("timeout", ResultCode.TIMEOUT, True)
+        pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is TimeoutError
         assert pfc.client is False
 
@@ -510,23 +510,23 @@ class TestSubsystemTypedMappings:
 class TestTypedCoverageMatchesDependency:
     """Every result code the dependency types must be typed here too.
 
-    Guards the two maps against drifting: a code PAC gives a dedicated
+    Guards the two maps against drifting: a code PNC gives a dedicated
     subclass should never fall through to the bare base in this SDK.
     """
 
-    def test_pac_typed_codes_are_typed_here(self):
+    def test_pnc_typed_codes_are_typed_here(self):
         untyped = [code for code in _RC_TO_CLS if code not in _RC_TO_TYPE]
-        # PARAMETER_ERROR is deliberate: PAC types it (InvalidRequest) while
+        # PARAMETER_ERROR is deliberate: PNC types it (InvalidRequest) while
         # this SDK keeps it on the base pending a dedicated class decision.
         allowed = {ResultCode.PARAMETER_ERROR}
-        assert set(untyped) <= allowed, f"codes typed by PAC but not here: {untyped}"
+        assert set(untyped) <= allowed, f"codes typed by PNC but not here: {untyped}"
 
 
 class TestSubCodeCatalogReExport:
     """The SubCode catalog is a re-export, never a hand-kept copy."""
 
     def test_identity(self):
-        assert aerospike_sdk.SubCode is aerospike_async.SubCode
+        assert aerospike_sdk.SubCode is aerospike_native.SubCode
 
     def test_spec_named_families_present(self):
         for name in (
@@ -595,13 +595,13 @@ class TestResultCodeGuidance:
         assert exc.hint == "bin 'x' is the problem"
         assert "error_detail_verbosity" not in str(exc)
 
-    def test_bare_parameter_error_hint_survives_the_pac_boundary(self):
-        pac = PacServerError(
+    def test_bare_parameter_error_hint_survives_the_pnc_boundary(self):
+        pnc = PncServerError(
             "Code: ParameterError, In Doubt: false, Node: 10.0.0.4:3000",
             ResultCode.PARAMETER_ERROR, False, None, None, None,
             "BB9020011AC4202", 1, None, None,
         )
-        exc = _convert_pac_exception(pac)
+        exc = _convert_pnc_exception(pnc)
         assert exc.result_code == ResultCode.PARAMETER_ERROR
         assert "error_detail_verbosity" in exc.hint
 
@@ -636,10 +636,10 @@ class TestResultCodeGuidance:
         assert str(exc) == "Error 5: Key already exists"
         assert exc.base_message == "custom"
 
-    def test_guidance_survives_the_pac_boundary(self):
-        # Real errors arrive as PAC exceptions, so the converter must carry it.
-        pac = PacServerError("Code: BinNameTooLong", ResultCode.BIN_NAME_TOO_LONG)
-        converted = _convert_pac_exception(pac)
+    def test_guidance_survives_the_pnc_boundary(self):
+        # Real errors arrive as PNC exceptions, so the converter must carry it.
+        pnc = PncServerError("Code: BinNameTooLong", ResultCode.BIN_NAME_TOO_LONG)
+        converted = _convert_pnc_exception(pnc)
         assert converted.hint is not None
         assert "15 characters" in converted.hint
         assert "15 characters" in str(converted)
