@@ -32,7 +32,11 @@ async with ClusterDefinition("localhost", 3100).connect() as cluster:
 ```
 
 If anything inside the `with` raises, the transaction is aborted and the
-exception propagates.
+exception propagates. The block runs once: a transient conflict such as
+`MRT_BLOCKED` surfaces as an exception rather than a retry, because Python
+cannot re-execute a `with` body. Use
+[`do_in_transaction`](#txn-retry) when you want the
+SDK to retry for you.
 
 ### Commit and Abort Status
 
@@ -63,6 +67,7 @@ raises `TransactionError` with `ResultCode.TXN_ALREADY_COMMITTED` or
 so a write that was meant to be transactional cannot slip through after an
 abort. Start a new `session.transaction()` for further work.
 
+(txn-retry)=
 ### Retrying on Transient Conflicts
 
 Strong-consistency transactions can fail with transient conflicts when
