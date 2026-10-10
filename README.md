@@ -1,23 +1,18 @@
 # Aerospike Python SDK
 
-Ultra-High-performance, developer-friendly interface for Aerospike. A dual first-class
-sync/async, Pythonic API — both high-performance — with a chainable session model,
+A high-performance, developer-friendly Python interface for Aerospike. A dual first-class
+sync/async Pythonic API with a chainable session model,
 fluent query builder, and AEL string filters layered over the
 [Aerospike Python Native Client](https://pypi.org/project/aerospike-native/)
-(PNC) — with first-class free-threaded Python (`cp314t`) support for parallel-
-thread throughput well past what GIL-bound clients can sustain.
-
-> **Status:** Public preview (alpha). Not yet production-ready; feedback welcome
-> via [GitHub Issues](https://github.com/aerospike/aerospike-client-python-sdk/issues).
+(PNC) with first-class free-threaded Python support.
 
 > **Server requirement:** The Aerospike Python SDK supports only Aerospike Server
 > 8.2.0 and later.
 
 ## AI coding agent entry point
 
-PyPI package `aerospike-sdk`. Authoritative version: the root `VERSION` file —
-currently `0.9.0-alpha.5`, a public preview whose signatures may change between
-releases. Python 3.11+. Aerospike Server 8.2.0 or later only; earlier servers are
+PyPI package `aerospike-sdk`. Authoritative version: the root `VERSION` file,
+currently `1.0.0`. Python 3.11+. Aerospike Server 8.2.0 or later only; earlier servers are
 not supported. Async-first: the top-level `aerospike_sdk` package is the async
 surface; `aerospike_sdk.sync` is an independent synchronous implementation of
 the same surface. Both connect through `ClusterDefinition`.
@@ -85,7 +80,7 @@ Guides: https://aerospike.com/docs/develop/client/sdk/
 
 ### Precedence when sources disagree
 
-This is an alpha and the code moves faster than the prose:
+The code can move faster than the prose:
 
 1. Docstrings and inline type hints in `aerospike_sdk/` for signatures. The files
    under `docs/api/` are thin autodoc wrappers, so the docstrings are the reference.
@@ -155,7 +150,7 @@ pip install aerospike-sdk
 Pin to a specific release if you need reproducible builds:
 
 ```bash
-pip install aerospike-sdk==0.9.0a5
+pip install aerospike-sdk==1.0.0
 ```
 
 This installs the SDK plus its dependency on the Aerospike Python Native Client
@@ -268,8 +263,8 @@ every public symbol.
 ## Versioning
 
 PSDK follows [SemVer](https://semver.org/). Pre-releases use the
-`MAJOR.MINOR.PATCH-{alpha,beta,rc}.N` form (e.g. `0.9.0-alpha.1`). PyPI
-normalizes these on upload to the equivalent PEP 440 spelling (`0.9.0a1`).
+`MAJOR.MINOR.PATCH-{alpha,beta,rc}.N` form (e.g. `1.1.0-rc.1`). PyPI
+normalizes these on upload to the equivalent PEP 440 spelling (`1.1.0rc1`).
 
 The top-level `VERSION` file is the single source of truth; `pyproject.toml`
 reads it dynamically, so the wheel and the working tree are guaranteed to
@@ -280,7 +275,7 @@ bump procedure.
 
 Every merge to `stage` publishes a wheel and an sdist to Aerospike's internal
 package index, versioned as a dev release leading toward the next
-pre-release — `0.9.0a6.dev123`, where `123` is the publishing workflow's run
+release — `1.0.1.dev123`, where `123` is the publishing workflow's run
 number. This is for Aerospike test teams and internal consumers who need a
 specific dev build; external users should use the public PyPI releases.
 
@@ -301,15 +296,15 @@ With that in place, installing needs no repository checkout:
 
 ```bash
 pip index versions aerospike-sdk --pre        # what's available
-pip install "aerospike-sdk==0.9.0a6.dev123"   # a specific build
+pip install "aerospike-sdk==1.0.1.dev123"     # a specific build
 ```
 
 Pin the exact dev version rather than reaching for `--pre --upgrade`. If the
 index is unconfigured or the token has expired, `--pre` quietly resolves the
-newest *public* pre-release instead and looks like it worked; an exact dev
+newest *public* release instead and looks like it worked; an exact dev
 version fails loudly with "no matching distribution".
 
-The same index also serves the pinned `aerospike-native` (PNC) pre-release, so
+The same index also serves `aerospike-native` (PNC) dev builds, so
 one credential setup resolves both. Adding `--only-binary aerospike-native` is
 worth it on unusual platforms: it turns a missing PNC wheel into a clear
 resolution error instead of a slow source build that needs a Rust toolchain.
@@ -330,7 +325,7 @@ git clone --depth 1 --branch stage --filter=blob:none --sparse \
 cd psdk-bench
 git sparse-checkout set benchmarks           # directories only; root files come free
 
-pip install "aerospike-sdk==0.9.0a6.dev123"
+pip install "aerospike-sdk==1.0.1.dev123"
 
 export AEROSPIKE_HOST=10.0.0.5:3000
 export AEROSPIKE_USE_SERVICES_ALTERNATE=false
@@ -497,11 +492,11 @@ Bumps are manual and happen in PRs against `stage`. Promotion workflows
 
 ```bash
 # 1. Edit VERSION:
-#    e.g. 0.9.0-alpha.1  →  0.9.0-alpha.2
-echo '0.9.0-alpha.2' > VERSION
+#    e.g. 1.0.0  →  1.0.1
+echo '1.0.1' > VERSION
 
 # 2. Confirm:
-bin/get-version    # prints 0.9.0-alpha.2
+bin/get-version    # prints 1.0.1
 
 # 3. Open a PR against stage with just this change.
 ```
@@ -516,13 +511,13 @@ Releases **must** pin a public PyPI version:
 ```toml
 [project]
 dependencies = [
-    "aerospike-native==0.6.0a6",
+    "aerospike-native==1.0.0",
     # ...other deps
 ]
 ```
 
-Between releases, `dev` may instead pin a dev-channel build from the internal
-index (e.g. `aerospike-native==0.6.0a7.dev75`) to pick up unreleased PNC work.
+Between releases, `stage` may instead pin a dev-channel build from the internal
+index (e.g. `aerospike-native==1.0.1.dev119`) to pick up unreleased PNC work.
 
 To bump: change the version, reinstall, and confirm the environment matches:
 
@@ -540,7 +535,7 @@ it.
 Anywhere a build script, CI step, or release tool needs the version:
 
 ```bash
-bin/get-version    # → 0.9.0-alpha.1
+bin/get-version    # → 1.0.0
 ```
 
 The script reads `VERSION` and trims trailing whitespace. No Python or

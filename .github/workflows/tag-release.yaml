@@ -1,4 +1,9 @@
-name: Promote to prod
+name: Tag release
+
+# Runs when main is fast-forwarded to stage after a release bundle has been
+# promoted to PROD and published. Tags the release commit and drafts the
+# GitHub release; the bundle promotion and the PyPI upload happen outside
+# this repo.
 
 on:
   push:

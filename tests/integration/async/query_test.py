@@ -745,6 +745,17 @@ class TestSingleRecordTerminals:
         ).record_or_raise()
         assert via_builder.bins == via_stream.bins
 
+    async def test_write_segment_first_terminals(self, cluster):
+        """Write-side builders carry the same one-await terminals as reads."""
+        session = cluster.create_session()
+        key = QUERY_DS.id("write_segment_first")
+        await session.delete(key).execute()
+        assert (await session.exists(key).first()).as_bool() is False
+        row = await session.upsert(key).put({"n": 1}).first_or_raise()
+        assert row.is_ok
+        assert (await session.exists(key).first()).as_bool() is True
+        assert (await session.delete(key).first()).as_bool() is True
+
     async def test_first_returns_none_when_nothing_matches(self, cluster):
         session = cluster.create_session()
         ds = QUERY_DS

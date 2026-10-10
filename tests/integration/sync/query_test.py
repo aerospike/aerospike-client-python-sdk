@@ -359,6 +359,14 @@ class TestSingleRecordTerminals:
         via_builder = session.query(ds.id(0)).first_or_raise().record_or_raise()
         assert via_builder.bins == via_stream.bins
 
+    def test_write_segment_first_terminals(self, session):
+        key = QUERY_DS.id("sync_write_segment_first")
+        session.delete(key).execute()
+        assert session.exists(key).first().as_bool() is False
+        assert session.upsert(key).put({"n": 1}).first_or_raise().is_ok
+        assert session.exists(key).first().as_bool() is True
+        assert session.delete(key).first().as_bool() is True
+
     def test_first_returns_none_when_nothing_matches(self, session):
         ds = QUERY_DS
         assert session.query(ds.id("no_such_key_xyz")).first() is None

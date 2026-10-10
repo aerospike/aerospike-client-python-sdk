@@ -447,6 +447,56 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
         assert isinstance(self._qb, QueryBuilder)
         return self._qb.execute(on_error)
 
+    def first(self, on_error: Optional[OnError] = None) -> Optional["RecordResult"]:
+        """Execute and return the first row, or ``None`` when there are none.
+
+        The write-side twin of :meth:`QueryBuilder.first`: one call for the
+        common single-key outcome check instead of a stream plus a row.
+        Semantics come from :meth:`RecordStream.first`; the stream is closed
+        either way.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the operation produced no row.
+
+        Example::
+
+            exists = session.exists(key).first().as_bool()
+
+        See Also:
+            :meth:`first_or_raise`: Raises instead of returning ``None``.
+        """
+        return self.execute(on_error).first()
+
+    def first_or_raise(self, on_error: Optional[OnError] = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        The write-side twin of :meth:`QueryBuilder.first_or_raise`. Semantics
+        come from :meth:`RecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            RecordNotFoundError: The operation produced no row.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            row = session.upsert(key).put({"count": 1}).first_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return self.execute(on_error).first_or_raise()
+
     def stream(
         self, on_error: Optional[OnError] = None,
     ) -> RecordStream:

@@ -1049,6 +1049,56 @@ class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs[
         """
         return await self._qb.execute(on_error)
 
+    async def first(self, on_error: OnError | None = None) -> "RecordResult | None":
+        """Execute and return the first row, or ``None`` when there are none.
+
+        The write-side twin of :meth:`QueryBuilder.first`: one await for the
+        common single-key outcome check instead of a stream plus a row.
+        Semantics come from :meth:`RecordStream.first`; the stream is closed
+        either way.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first :class:`~aerospike_sdk.record_result.RecordResult`, or
+            ``None`` when the operation produced no row.
+
+        Example::
+
+            exists = (await session.exists(key).first()).as_bool()
+
+        See Also:
+            :meth:`first_or_raise`: Raises instead of returning ``None``.
+        """
+        return await (await self.execute(on_error)).first()
+
+    async def first_or_raise(self, on_error: OnError | None = None) -> "RecordResult":
+        """Execute and return the first row, requiring it to exist and be OK.
+
+        The write-side twin of :meth:`QueryBuilder.first_or_raise`. Semantics
+        come from :meth:`RecordStream.first_or_raise`.
+
+        Args:
+            on_error: Per-operation error handling, as for :meth:`execute`.
+
+        Returns:
+            The first successful
+            :class:`~aerospike_sdk.record_result.RecordResult`.
+
+        Raises:
+            RecordNotFoundError: The operation produced no row.
+            AerospikeError: The first row reported a failure.
+
+        Example::
+
+            row = await session.upsert(key).put({"count": 1}).first_or_raise()
+
+        See Also:
+            :meth:`first`: Returns ``None`` on an empty result instead.
+        """
+        return await (await self.execute(on_error)).first_or_raise()
+
     def stream(
         self, on_error: OnError | None = None,
     ) -> AwaitableContext[RecordStream]:
