@@ -30,6 +30,12 @@ client's event loop would stall every in-flight operation behind it. Writing
 an async exporter for the async client keeps that IO off the critical path
 without the SDK moving user code onto a thread behind their back.
 
+Which exporters receive the push is chosen by the ``metrics.exporter``
+setting (:class:`MetricsExporterType`): ``file``, the default, sends it to
+the built-in log writer only; ``custom`` to the exporters registered with
+``add_exporter`` only; and ``none`` to nobody. The modes do not combine, so an
+application that registers its own exporter also selects ``custom``.
+
 An exporter that keeps failing is suspended rather than allowed to fail every
 interval forever: after three consecutive failures it is skipped, then retried
 every tenth interval, and a success puts it back on the normal cadence. Other
@@ -43,6 +49,8 @@ policy change does not.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from enum import Enum
 import inspect
 import logging
 import os
@@ -73,17 +81,63 @@ SUSPEND_AFTER_CONSECUTIVE_FAILURES = 3
 # ...and retried once every this many intervals until it succeeds again.
 SUSPENDED_RETRY_EVERY_INTERVALS = 10
 
+
+
+class MetricsExporterType(str, Enum):
+    """Where the periodic push goes: the ``metrics.exporter`` setting.
+
+    The values are the configuration-file spellings; construction is
+    case-insensitive, so ``MetricsExporterType("FILE")`` is :attr:`FILE`.
+
+    Attributes:
+        FILE: The built-in log writer under ``report_dir``, and nothing else.
+            The default.
+        CUSTOM: The exporters registered with ``add_exporter``, in
+            registration order, and nothing else.
+        NONE: No periodic push; snapshots remain available by polling.
+
+    Example::
+
+        settings = SystemSettings(metrics=MetricsSettings(exporter=MetricsExporterType.CUSTOM))
+        cluster = await ClusterDefinition(host).with_system_settings(settings).connect()
+        cluster.add_exporter(my_exporter)
+    """
+
+    FILE = "file"
+    CUSTOM = "custom"
+    NONE = "none"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Optional["MetricsExporterType"]:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            for member in cls:
+                if member.value == lowered:
+                    return member
+        return None
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Smallest non-zero rotation size. Below this a busy client would rotate
+# every few intervals and scatter one run across a directory of files.
+MIN_REPORT_SIZE_LIMIT = 1_000_000
+
 __all__ = [
     "DEFAULT_EXPORT_INTERVAL_SECONDS",
+    "MIN_REPORT_SIZE_LIMIT",
     "SUSPEND_AFTER_CONSECUTIVE_FAILURES",
     "SUSPENDED_RETRY_EVERY_INTERVALS",
     "AsyncMetricsExportTimer",
     "AsyncMetricsExporter",
-    "LearnMetricsFileExporter",
     "MetricsExporter",
+    "MetricsExporterType",
+    "MetricsWriter",
     "SyncMetricsExportTimer",
     "built_in_exporter",
     "check_exporter",
+    "export_mode",
 ]
 
 
@@ -157,24 +211,16 @@ class AsyncMetricsExporter(Protocol):
         ...
 
 
-# Fields the legacy line format carries that this client cannot measure. Named
-# in the header so whoever owns the log shipper learns it from the file rather
-# than from a parse failure downstream.
-# Format fields this SDK cannot fill; named in the header when non-empty.
-_UNAVAILABLE_FIELDS: tuple = ()
-
-# Usage counters on the cluster line, in the order and under the names the
-# format defines. Values come from the canonical snapshot's ``usage``.
+# Cluster-line usage columns, in format order, keyed by the usage counter each
+# one reports.
 _USAGE_FILE_COLUMNS = (
-    ("single_count", "feature.shape.point"),
-    ("batch_count", "feature.shape.batch"),
-    ("query_count", "feature.shape.query"),
-    ("blocking_count", "feature.api.blocking"),
-    ("deferred_count", "feature.api.deferred"),
-    ("background_count", "feature.api.background"),
+    "feature.api.blocking",
+    "feature.api.deferred",
+    "feature.api.background",
+    "feature.transaction",
 )
 
-# Latency segment order, as the legacy format writes it.
+# Latency segment order on every namespace, as the format writes it.
 _LATENCY_ORDER = (
     LatencyType.CONN,
     LatencyType.WRITE,
@@ -183,57 +229,58 @@ _LATENCY_ORDER = (
     LatencyType.QUERY,
 )
 
+_HEADER_FIELDS = (
+    "header(5)"
+    " cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,"
+    "recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,"
+    "background_count,tran_count,command_retries,nodes[]]"
+    " labels[name,value]"
+    " nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,"
+    "namespaces[]]"
+    " namespaces[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]]"
+)
 
-class LearnMetricsFileExporter:
-    """Writes the legacy line-oriented metrics log under a report directory.
 
-    Kept so existing log shippers keep working. Data lines are positional;
-    the header line declares the schema, naming its fields in snake_case
-    (``key_busy``, ``bytes_in``) so they read the same as every other name
-    this SDK emits. Other clients writing this format spell the same fields
-    in camelCase, so a shipper that parses the header by name needs its field
-    map updated to read these files.
+class MetricsWriter:
+    """Writes the line-oriented metrics log under a report directory.
+
+    Every line starts with a local timestamp. The first line of each file is
+    a header declaring the schema; each export appends one positional
+    ``cluster[...]`` line carrying the cluster totals, its labels, and every
+    node with its namespaces. A node that left the cluster since the previous
+    export is written once more in that list, with its final counters.
+
+    The four usage columns (``blocking_count``, ``deferred_count``,
+    ``background_count``, ``tran_count``) carry the canonical snapshot's
+    ``feature.api.*`` and ``feature.transaction`` counters, and read 0 unless
+    usage counters are enabled. ``command_count`` and ``command_retries``
+    read 0 unless operational metrics are enabled. A namespace's ``errors``
+    excludes the failures counted under ``timeouts`` and ``key_busy``, and
+    ``timeouts`` counts server-reported timeouts.
+
+    The header names the latency unit, column count and shift. A file only
+    ever describes one histogram shape: an export whose shape differs from
+    the header's starts a new file.
 
     An ordinary exporter, not a client lifecycle: the first :meth:`export`
-    creates the directory, opens ``metrics-<timestamp>.log`` and writes the
-    header; each later one appends a cluster line, plus a final node line for
-    every entry the snapshot reports departed. The application calls
-    :meth:`close` when done -- the client never closes it. IO errors propagate
-    to the export timer, which logs them and suspends the exporter after
-    repeated failures.
-
-    Six fields the format defines cannot be filled: ``cpu`` and ``mem`` (process
-    statistics this client does not sample), ``in_use`` and ``in_pool`` (the
-    client keeps a single open-connection gauge, not the split),
-    ``recover_queue_size`` and ``invalid_node_count``. They are omitted rather than
-    written as zero, and the header line names them so a downstream parser sees
-    why.
-
-    The six feature-usage columns (``single_count`` through ``background_count``)
-    carry the counters of the same name from the canonical snapshot's ``usage``
-    mapping, and ``retry_count`` carries its ``cluster.command_retries``. The
-    format has no field for the per-call ``command_count``; read that off
-    :meth:`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` instead,
-    under ``cluster.command_count``.
-
-    The ``latency(columns,shift)`` pair is written whatever the latency unit
-    is. The format has no field for the unit -- it predates microsecond
-    buckets, where milliseconds was the only resolution -- so a reader that
-    assumes the legacy meaning will read microsecond buckets as milliseconds.
-    Writing the pair anyway is the lesser problem: omitting it for microseconds
-    would leave the histogram shape undescribed as well as its unit. Configure
-    ``latency_unit: microseconds`` only where whatever consumes these files
-    knows to expect it.
+    creates the directory and opens ``metrics-<timestamp>.log``. The
+    application calls :meth:`close` when done -- the client never closes an
+    exporter it did not install. IO errors propagate to the export timer,
+    which logs them and suspends the exporter after repeated failures.
 
     Args:
         report_dir: Directory for log files; created if absent. An empty
             directory makes the exporter a no-op, matching the config default.
-        report_size_limit: Rotate once the file exceeds this many bytes.
+        report_size_limit: Rotate once the file reaches this many bytes.
             ``0`` never rotates.
+
+    Raises:
+        ValueError: If ``report_size_limit`` is neither 0 nor at least
+            1,000,000.
 
     Example::
 
-        exporter = LearnMetricsFileExporter("/var/log/aerospike")
+        exporter = MetricsWriter("/var/log/aerospike", 10_000_000)
         cluster.add_exporter(exporter)
         ...
         exporter.close()
@@ -243,28 +290,36 @@ class LearnMetricsFileExporter:
     """
 
     def __init__(self, report_dir: str, report_size_limit: int = 0) -> None:
+        if report_size_limit and report_size_limit < MIN_REPORT_SIZE_LIMIT:
+            raise ValueError(
+                f"report_size_limit must be 0 or at least {MIN_REPORT_SIZE_LIMIT}, "
+                f"got {report_size_limit}"
+            )
         self._dir = report_dir
         self._limit = report_size_limit
         self._file: Optional[Any] = None
         self._written = 0
-        # Histogram shape of the snapshot being written; the latency segment
-        # prints it, so it is captured when the cluster line is built.
-        self._columns: Any = ""
-        self._shift: Any = ""
+        # Histogram shape the open file's header declares.
+        self._shape: Optional[Tuple[str, Any, Any]] = None
 
     # -- exporter contract ----------------------------------------------------
 
     def export(self, snapshot: MetricsSnapshot) -> None:
-        """Append one cluster line, and a final line per departed node."""
+        """Append one cluster line, opening a file first when needed."""
         if not self._dir:
             return
+        doc = snapshot.to_canonical_dict()
+        shape = (
+            str(doc.get("latency_unit", "milliseconds")).upper(),
+            doc.get("latency_columns", ""),
+            doc.get("latency_shift", ""),
+        )
+        if self._file is not None and shape != self._shape:
+            self.close()
         if self._file is None:
             os.makedirs(self._dir, exist_ok=True)
-            self._open()
-        doc = snapshot.to_canonical_dict()
+            self._open(shape)
         self._write(self._cluster_line(doc))
-        for node in doc.get("nodes_departed", []):
-            self._write(f"node[{self._node_segment(node)}]")
 
     def close(self) -> None:
         """Close the log file. Exporting again afterwards opens a new one."""
@@ -277,7 +332,7 @@ class LearnMetricsFileExporter:
 
     # -- file handling ------------------------------------------------------
 
-    def _open(self) -> None:
+    def _open(self, shape: Tuple[str, Any, Any]) -> None:
         # A timestamp alone is not unique: rotation can fire several times
         # within one second, and every one of those would reopen and append to
         # the same file rather than starting a new one.
@@ -289,20 +344,13 @@ class LearnMetricsFileExporter:
             sequence += 1
         self._file = open(path, "a", encoding="utf-8")
         self._written = 0
-        usage_names = ",".join(name for name, _ in _USAGE_FILE_COLUMNS)
-        header = (
-            "header(3) cluster[name,client_type,client_version,app_id,label[],"
-            f"cpu,mem,recover_queue_size,invalid_node_count,{usage_names},retry_count,node[]] "
-            "label[name,value] "
-            "node[name,address,port,conn,namespace[]] "
-            "conn[in_use,in_pool,opened,closed] "
-            "namespace[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]] "
-            "latency(unit,columns,shift)[type[buckets]]"
-            + (f" unavailable[{','.join(_UNAVAILABLE_FIELDS)}]" if _UNAVAILABLE_FIELDS else "")
+        self._shape = shape
+        unit, columns, shift = shape
+        # Not through _write: the header must never trip rotation.
+        self._append(
+            f"{_line_time(datetime.now())} {_HEADER_FIELDS}"
+            f" latency({unit},{columns},{shift})[type[l1,l2,l3...]]"
         )
-        # Not through _write: the header must never trip rotation, or a limit
-        # smaller than the header rotates forever.
-        self._append(header)
 
     def _append(self, line: str) -> None:
         """Write one line, without considering rotation."""
@@ -317,57 +365,76 @@ class LearnMetricsFileExporter:
             return
         self._append(line)
         if self._limit and self._written >= self._limit:
+            shape = self._shape
             self.close()
-            self._open()
+            if shape is not None:
+                self._open(shape)
 
     # -- formatting ---------------------------------------------------------
 
     def _cluster_line(self, doc: Dict[str, Any]) -> str:
-        # Recorded before the node segments are built: they print the shape.
-        self._columns = doc.get("latency_columns", "")
-        self._shift = doc.get("latency_shift", "")
-        labels = ",".join(f"{k}={v}" for k, v in sorted(doc.get("labels", {}).items()))
+        # Positional, and bracketed exactly as existing parsers of this format
+        # expect, which is not balanced. Do not "fix" the brackets.
+        labels = ",".join(f"[{k},{v}]" for k, v in (doc.get("labels") or {}).items())
         usage = doc.get("usage") or {}
-        counts = ",".join(str(int(usage.get(key, 0))) for _, key in _USAGE_FILE_COLUMNS)
+        counts = ",".join(str(int(usage.get(key, 0) or 0)) for key in _USAGE_FILE_COLUMNS)
         cluster = doc.get("cluster") or {}
-        # The line format's own name for the canonical `command_retries`.
-        retry_count = int(cluster.get("command_retries", 0) or 0)
-        recover = int((cluster.get("recover_queue") or {}).get("size", 0) or 0)
-        invalid = int((cluster.get("nodes") or {}).get("invalid", 0) or 0)
-        # The format writes cpu as a whole percent and mem as bytes.
-        cpu = int(cluster.get("cpu_percent", 0) or 0)
-        mem = int(cluster.get("memory_bytes", 0) or 0)
-        nodes = ",".join(self._node_segment(n) for n in doc.get("nodes", []))
+        columns = int(doc.get("latency_columns") or 0)
+        nodes = ",".join(
+            self._node_segment(node, columns)
+            for node in [*doc.get("nodes", []), *doc.get("nodes_departed", [])]
+        )
         return (
-            f"cluster[{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
-            f"{doc.get('client_version', '')},{doc.get('app_id', '')},"
-            f"label[{labels}],{cpu},{mem},{recover},{invalid},{counts},{retry_count},node[{nodes}]]"
+            f"{_line_time(_parse_timestamp(doc.get('timestamp')))} cluster["
+            f"{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
+            f"{doc.get('client_version', '')},{doc.get('app_id', '')},[{labels}],"
+            f"{float(cluster.get('cpu_percent', 0.0) or 0.0)},"
+            f"{int(cluster.get('memory_bytes', 0) or 0)},"
+            f"{int((cluster.get('recover_queue') or {}).get('size', 0) or 0)},"
+            f"{int((cluster.get('nodes') or {}).get('invalid', 0) or 0)},"
+            f"{int(cluster.get('command_count', 0) or 0)},{counts},"
+            f"{int(cluster.get('command_retries', 0) or 0)},[{nodes}]"
         )
 
-    def _node_segment(self, node: Dict[str, Any]) -> str:
-        conns = node.get("connections", {})
-        namespaces = ",".join(
-            self._namespace_segment(ns) for ns in node.get("namespaces", [])
-        )
-        return (
-            f"{node.get('name', '')},{node.get('address', '')},{node.get('port', '')},"
-            f"conn[{conns.get('in_use', 0)},{conns.get('in_pool', 0)},"
-            f"{conns.get('opened', 0)},{conns.get('closed', 0)}],namespace[{namespaces}]"
-        )
+    @staticmethod
+    def _node_segment(node: Dict[str, Any], columns: int) -> str:
+        conns = node.get("connections") or {}
+        parts = [
+            f"[{node.get('name', '')},{node.get('address', '')},{node.get('port', '')},"
+            f"{conns.get('in_use', 0)},{conns.get('in_pool', 0)},"
+            f"{conns.get('opened', 0)},{conns.get('closed', 0)},["
+        ]
+        for i, namespace in enumerate(node.get("namespaces") or []):
+            if i:
+                parts.append(",[")
+            latency = namespace.get("latency") or {}
+            types = ",".join(
+                f"{kind.value}[{','.join(str(b) for b in (latency.get(kind.value) or [0] * columns))}]"
+                for kind in _LATENCY_ORDER
+            )
+            parts.append(
+                f"{namespace.get('name', '')},{namespace.get('errors', 0)},"
+                f"{namespace.get('timeouts', 0)},{namespace.get('key_busy', 0)},"
+                f"{namespace.get('bytes_in', 0)},{namespace.get('bytes_out', 0)},"
+                f"[{types}]]"
+            )
+        parts.append("]]")
+        return "".join(parts)
 
-    def _namespace_segment(self, namespace: Dict[str, Any]) -> str:
-        latency = namespace.get("latency", {})
-        segments: List[str] = []
-        for kind in _LATENCY_ORDER:
-            buckets = latency.get(kind.value)
-            if buckets:
-                segments.append(f"{kind.value}[{','.join(str(b) for b in buckets)}]")
-        return (
-            f"{namespace.get('name', '')},{namespace.get('errors', 0)},"
-            f"{namespace.get('timeouts', 0)},{namespace.get('key_busy', 0)},"
-            f"{namespace.get('bytes_in', 0)},{namespace.get('bytes_out', 0)},"
-            f"latency({self._columns},{self._shift})[{','.join(segments)}]"
-        )
+
+def _parse_timestamp(value: Any) -> datetime:
+    """The snapshot's own wall time in local time, or now if it has none."""
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).astimezone()
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _line_time(moment: datetime) -> str:
+    """The line prefix: local time to the millisecond."""
+    return moment.strftime("%Y-%m-%d %H:%M:%S.") + f"{moment.microsecond // 1000:03d}"
 
 
 class _NodeCloseTracker:
@@ -429,8 +496,8 @@ class _MetricsExportTimer:
         self._health: Dict[int, _ExporterHealth] = {}
 
     def exporters_to_run(self) -> List[Any]:
-        """The exporters this cycle calls, honoring suspensions."""
-        current = list(self.cluster._exporters)
+        """The exporters this cycle calls, honoring the mode and suspensions."""
+        current = self.cluster._export_targets()
         ids = {id(e) for e in current}
         # Health for a removed exporter would pin its id forever, and a new
         # exporter can land on a recycled id; prune to the live list.
@@ -447,7 +514,7 @@ class _MetricsExportTimer:
             # Taking a snapshot drains and aggregates per-node state in the
             # client core; skip that work when nothing would consume it.
             return None
-        snapshot = self.cluster.metrics()
+        snapshot = self.cluster.metrics_snapshot()
         snapshot._mark_departed(self.tracker)
         return snapshot, runnable
 
@@ -663,12 +730,27 @@ class SyncMetricsExportTimer:
                 self._deliver(*batch)
 
 
-def built_in_exporter(metrics: Any, *, awaitable: bool = False) -> Optional[Any]:
-    """Build the exporter the configuration asks for, if it asks for one.
+def export_mode(metrics: Any) -> MetricsExporterType:
+    """Resolve ``metrics.exporter`` to the mode the push runs in.
 
-    Only consulted when the application registered no exporter of its own:
-    a configured exporter is a convenience install, never a replacement for
-    what application code set up.
+    Args:
+        metrics: The resolved ``metrics`` settings group, or ``None``.
+
+    Returns:
+        The configured :class:`MetricsExporterType`;
+        :attr:`~MetricsExporterType.FILE` when unset.
+    """
+    mode = getattr(metrics, "exporter", None)
+    return MetricsExporterType.FILE if mode is None else MetricsExporterType(mode)
+
+
+def built_in_exporter(metrics: Any, *, awaitable: bool = False) -> Optional[Any]:
+    """Build the built-in log writer when the configuration selects it.
+
+    Built when ``exporter`` is ``file`` (or unset, which means the same) and
+    ``report_dir`` is set. Choosing ``file`` by name with nowhere to write is
+    logged, since that configuration exports nothing; the default with no
+    directory is silent.
 
     Args:
         metrics: The resolved ``metrics`` settings group, or ``None``.
@@ -676,24 +758,20 @@ def built_in_exporter(metrics: Any, *, awaitable: bool = False) -> Optional[Any]
             awaited. The built-in writes files, so its call runs off-loop.
 
     Returns:
-        A :class:`LearnMetricsFileExporter` when ``exporter`` names it (the
-        default) and ``report_dir`` is set; otherwise ``None`` -- nothing to
-        install.
+        A :class:`MetricsWriter`, or ``None`` when there is
+        nothing to install.
     """
-    if metrics is None:
+    if metrics is None or export_mode(metrics) is not MetricsExporterType.FILE:
         return None
-    name = (metrics.exporter or "").strip().lower()
-    if name == "none":
+    report_dir = metrics.report_dir or ""
+    if not report_dir:
+        if metrics.exporter is not None:
+            log.warning(
+                "Metrics: exporter is 'file' but report_dir is empty; snapshots are not exported"
+            )
         return None
-    if name in ("", "learn_metrics_file"):
-        report_dir = metrics.report_dir or ""
-        if not report_dir:
-            # The documented default with nowhere to write installs nothing.
-            return None
-        exporter = LearnMetricsFileExporter(report_dir, metrics.report_size_limit or 0)
-        return _AsyncExporterAdapter(exporter) if awaitable else exporter
-    log.warning("Metrics: unknown exporter %r; not installing a built-in exporter", name)
-    return None
+    exporter = MetricsWriter(report_dir, metrics.report_size_limit or 0)
+    return _AsyncExporterAdapter(exporter) if awaitable else exporter
 
 
 class _AsyncExporterAdapter:

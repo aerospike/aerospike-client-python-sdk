@@ -40,7 +40,8 @@ from aerospike_sdk.policy.sdk_config_loader import (
     parse_config_bytes,
 )
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
-from aerospike_sdk.metrics import LatencyUnit, policy_from_settings
+from aerospike_sdk.metrics import LatencyUnit
+from aerospike_sdk.metrics.policy import _policy_from_settings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 
 _FULL = """
@@ -639,12 +640,34 @@ system:
         assert "metrics.latency_columns" in caplog.text
 
     def test_policy_round_trip(self):
-        policy = policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
+        policy = _policy_from_settings(parse_sdk_config(self.FULL)["DEFAULT"].metrics)
         assert policy.operational_enabled is True
         assert policy.latency_unit == LatencyUnit.MICROSECONDS
         assert policy.latency_columns == 18
         assert policy.latency_shift == 2
-        assert policy.labels == [{"owner": "platform-team"}]
+        assert policy.labels == {"owner": "platform-team"}
+
+    def test_exporter_is_case_insensitive(self):
+        text = "system:\n  DEFAULT:\n    metrics:\n      exporter: FILE\n"
+        assert parse_sdk_config(text)["DEFAULT"].metrics.exporter == "file"
+
+    def test_an_unknown_exporter_is_dropped_with_a_warning(self, caplog):
+        text = "system:\n  DEFAULT:\n    metrics:\n      exporter: learn_metrics_file\n"
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.exporter is None
+        assert "metrics.exporter" in caplog.text
+
+    def test_a_report_size_limit_under_the_minimum_is_dropped(self, caplog):
+        text = "system:\n  DEFAULT:\n    metrics:\n      report_size_limit: 64kb\n"
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.report_size_limit is None
+        assert "report_size_limit" in caplog.text
+
+    def test_a_report_size_limit_of_zero_means_unbounded(self):
+        text = "system:\n  DEFAULT:\n    metrics:\n      report_size_limit: 0\n"
+        assert parse_sdk_config(text)["DEFAULT"].metrics.report_size_limit == 0
 
     def test_metrics_merges_per_field(self):
         higher = parse_sdk_config(

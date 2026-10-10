@@ -27,6 +27,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from types import SimpleNamespace
 
 from aerospike_sdk import ErrorStrategy, Key, ResultCode, Txn
 from aerospike_native import BatchPolicy, QueryPolicy, ReadPolicy, WritePolicy, CommitErrorType
@@ -47,6 +48,7 @@ from aerospike_sdk.aio.operations.query import (
 )
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
@@ -61,6 +63,7 @@ class _FakeSdkClient:
         self._async_client = _FakePnc()
         self._client = self._async_client
         self._indexes_monitor = None
+        self._usage_on = False
 
 
 # -- QueryBuilder ------------------------------------------------------------
@@ -305,6 +308,7 @@ class _FakeSdkClientForRetry:
         self._async_client = _FakePncClient()
         self._client = self._async_client
         self._indexes_monitor = None
+        self._usage_on = False
         # Mirrors the real client: the retry plan is resolved from here.
         self._sdk_settings = fill_hard_defaults(None)
 
@@ -357,6 +361,31 @@ async def test_do_in_transaction_retries_on_transient() -> None:
     # Two failed attempts got aborted; the third was committed.
     assert len(pnc.abort_calls) == 2
     assert len(pnc.commit_calls) == 1
+
+
+async def test_do_in_transaction_counts_one_transaction_across_retries() -> None:
+    """The usage counter sees one transaction per call, however many attempts it takes."""
+    session = _make_session_for_retry()
+    counted: list = []
+    session._client._usage_on = True
+    session._client._usage_counters = SimpleNamespace(add=lambda f: counted.append(list(f)))
+    attempts = 0
+
+    async def flaky(tx):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise AerospikeError("blocked", result_code=ResultCode.MRT_BLOCKED)
+        return "won"
+
+    await session.do_in_transaction(flaky, max_attempts=5, sleep_between_retries=0.0)
+    assert attempts == 3
+    assert counted == [[usage.TRANSACTION]]
+
+    # Entered directly, the transaction still counts itself.
+    async with session.transaction():
+        pass
+    assert counted == [[usage.TRANSACTION], [usage.TRANSACTION]]
 
 
 async def test_do_in_transaction_gives_up_after_max_attempts() -> None:

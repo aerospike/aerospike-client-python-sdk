@@ -13,25 +13,32 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-"""Unit tests for metrics export: fan-out, suspension, the file exporter."""
+"""Unit tests for metrics export: fan-out, suspension, selection, the file exporter."""
 
 import asyncio
 import logging
 import re
+from types import SimpleNamespace
 
 import pytest
 
+from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.metrics.export import (
     SUSPEND_AFTER_CONSECUTIVE_FAILURES,
     SUSPENDED_RETRY_EVERY_INTERVALS,
     AsyncMetricsExportTimer,
-    LearnMetricsFileExporter,
+    MetricsWriter,
+    MetricsExporterType,
     SyncMetricsExportTimer,
     built_in_exporter,
     check_exporter,
+    export_mode,
 )
 from aerospike_sdk.metrics.export import _NodeCloseTracker
 from aerospike_sdk.policy.system_settings import MetricsSettings
+
+# A timestamp, then one space, starts every line.
+_STAMP = r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} "
 
 
 class _RecordingExporter:
@@ -56,25 +63,30 @@ class _StubSnapshot:
 
 
 class _StubCluster:
-    """The two attributes the export timer reads: the exporter list, metrics()."""
+    """What the export timer reads: this interval's targets and a snapshot."""
 
     def __init__(self, exporters, doc=None):
         self._exporters = exporters
         self._doc = doc if doc is not None else _DOC
         self.polls = 0
 
-    def metrics(self):
+    def _export_targets(self):
+        return list(self._exporters)
+
+    def metrics_snapshot(self):
         self.polls += 1
         return _StubSnapshot(self._doc)
 
 
 _DOC = {
+    "timestamp": "2026-10-09T17:00:00.123000+00:00",
     "cluster_name": "c1",
-    "client_type": "python",
+    "client_type": "python-sdk",
     "client_version": "9.9.9",
     "app_id": "billing",
     "labels": {"owner": "platform"},
-    "latency_columns": 7,
+    "latency_unit": "milliseconds",
+    "latency_columns": 2,
     "latency_shift": 1,
     "cluster": {"command_count": 57, "command_retries": 3},
     "nodes": [
@@ -82,7 +94,7 @@ _DOC = {
             "name": "BB9",
             "address": "10.0.0.1",
             "port": 3000,
-            "connections": {"opened": 4, "closed": 1, "open": 3, "open_failure": 0},
+            "connections": {"opened": 4, "closed": 1, "in_use": 1, "in_pool": 2},
             "namespaces": [
                 {
                     "name": "test",
@@ -105,7 +117,7 @@ def _export_once(cluster):
 
 
 class TestExportFanOut:
-    """Every registered exporter receives the same snapshot, in order."""
+    """Every selected exporter receives the same snapshot, in order."""
 
     def test_all_exporters_receive_the_snapshot(self):
         a, b = _RecordingExporter("a"), _RecordingExporter("b")
@@ -207,218 +219,232 @@ class TestNodeCloseTracker:
         assert tracker.departed(["a:1"], ["a:1"]) == []
 
 
-class TestLearnMetricsFileExporter:
-    """The legacy line format, including what it cannot fill in."""
+class TestMetricsWriter:
+    """The line format, field for field."""
 
-    def _write_one(self, tmp_path, limit=0, doc=None):
-        exporter = LearnMetricsFileExporter(str(tmp_path), limit)
+    def _lines(self, tmp_path, doc=None, limit=0):
+        exporter = MetricsWriter(str(tmp_path), limit)
         exporter.export(_StubSnapshot(doc if doc is not None else _DOC))
         exporter.close()
-        return sorted(tmp_path.glob("metrics-*.log"))
+        return sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()
 
     def test_first_export_opens_the_file_and_writes_the_header(self, tmp_path):
         """The file appears on the first export, not at registration."""
-        exporter = LearnMetricsFileExporter(str(tmp_path))
+        exporter = MetricsWriter(str(tmp_path))
         assert list(tmp_path.iterdir()) == []
         exporter.export(_StubSnapshot(_DOC))
         exporter.close()
         lines = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()
-        assert lines[0].startswith("header(3)")
-        assert lines[1].startswith("cluster[")
+        assert re.match(_STAMP + r"header\(5\) ", lines[0])
+        assert re.match(_STAMP + r"cluster\[", lines[1])
 
-    def test_header_carries_every_format_field(self, tmp_path):
-        """Nothing is unavailable any more, so the header names no such segment."""
-        header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
-        assert "unavailable[" not in header
-        assert "retry_count,node[]]" in header
-
-    def test_header_declares_the_cluster_columns_in_the_format_order(self, tmp_path):
-        """cpu, mem, recover depth and invalid nodes precede the six usage columns and retry_count."""
-        header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
-        assert (
-            "label[],cpu,mem,recover_queue_size,invalid_node_count,single_count,batch_count,query_count,"
-            "blocking_count,deferred_count,background_count,retry_count" in header
+    def test_header_is_the_shared_schema(self, tmp_path):
+        header = self._lines(tmp_path)[0].split(" ", 2)[2]
+        assert header == (
+            "header(5)"
+            " cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,"
+            "recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,"
+            "background_count,tran_count,command_retries,nodes[]]"
+            " labels[name,value]"
+            " nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,"
+            "namespaces[]]"
+            " namespaces[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]]"
+            " latency(MILLISECONDS,2,1)[type[l1,l2,l3...]]"
         )
-        # The format has no field for the per-call count.
-        assert "commandCount" not in header
 
-    def test_cluster_line_writes_the_process_samples(self, tmp_path):
-        """cpu is written as a whole percent and mem as bytes, in the header's positions."""
-        doc = dict(_DOC, cluster={"command_count": 57, "command_retries": 3,
-                                  "cpu_percent": 12.7, "memory_bytes": 1048576,
-                                  "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1}})
-        exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.export(_StubSnapshot(doc))
-        exporter.close()
-        line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[1]
-        assert "label[owner=platform],12,1048576,2,1," in line
+    def test_cluster_line_is_positional_in_header_order(self, tmp_path):
+        doc = dict(
+            _DOC,
+            cluster={
+                "command_count": 57, "command_retries": 3,
+                "cpu_percent": 12.5, "memory_bytes": 1048576,
+                "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1},
+            },
+            usage={
+                "feature.api.blocking": 40, "feature.api.deferred": 7,
+                "feature.api.background": 2, "feature.transaction": 5,
+                "feature.shape.point": 900,
+            },
+        )
+        line = self._lines(tmp_path, doc)[1].split(" ", 2)[2]
+        assert line == (
+            "cluster[c1,python-sdk,9.9.9,billing,[[owner,platform]],12.5,1048576,2,1,"
+            "57,40,7,2,5,3,"
+            "[[BB9,10.0.0.1,3000,1,2,4,1,"
+            "[test,2,1,0,10,20,[conn[5,0],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
+        )
 
-    def test_conn_segment_uses_the_legacy_layout(self, tmp_path):
-        """`conn[in_use,in_pool,opened,closed]`, the order existing parsers expect."""
-        doc = dict(_DOC, cluster={"command_count": 57, "command_retries": 3,
-                                  "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1}})
-        doc["nodes"] = [dict(_DOC["nodes"][0], connections={
-            "opened": 4, "closed": 1, "open": 3, "in_use": 1, "in_pool": 2, "open_failure": 0,
-        })]
-        exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.export(_StubSnapshot(doc))
-        exporter.close()
-        header, line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[:2]
-        assert "conn[in_use,in_pool,opened,closed]" in header
-        assert "conn[1,2,4,1]" in line
-        # cpu and mem (absent here, so 0) then recover_queue_size and
-        # invalid_node_count sit after the labels.
-        assert "label[owner=platform],0,0,2,1," in line
+    def test_usage_columns_read_zero_when_usage_is_off(self, tmp_path):
+        line = self._lines(tmp_path)[1]
+        assert ",9.9.9,billing,[[owner,platform]],0.0,0,0,0,57,0,0,0,0,3,[" in line
 
-    def test_cluster_line_carries_identity_and_labels(self, tmp_path):
-        line = self._write_one(tmp_path)[0].read_text().splitlines()[1]
-        assert "python" in line and "9.9.9" in line
-        assert "label[owner=platform]" in line
-        assert "c1" in line and "billing" in line
-        # The labels follow app_id, then the usage columns, per the header.
-        assert "billing,label[owner=platform]," in line
+    def test_only_the_api_and_transaction_counters_reach_the_file(self, tmp_path):
+        """The other feature counters stay in the structured snapshot."""
+        text = "\n".join(self._lines(tmp_path, dict(_DOC, usage={"feature.shape.point": 900})))
+        assert "900" not in text
+        assert "feature." not in text
 
-    def test_header_field_names_are_snake_case(self, tmp_path):
-        """Every header field name, not just a sample, reads as snake_case."""
-        header = self._write_one(tmp_path)[0].read_text().splitlines()[0]
-        assert "key_busy" in header and "bytes_in" in header
+    def test_no_labels_write_an_empty_list(self, tmp_path):
+        line = self._lines(tmp_path, dict(_DOC, labels={}))[1]
+        assert ",billing,[],0.0," in line
+
+    def test_departed_nodes_follow_the_live_ones_in_the_node_list(self, tmp_path):
+        departed = {
+            "name": "BB8", "address": "10.0.0.9", "port": 3000,
+            "connections": {"opened": 9, "closed": 9, "in_use": 0, "in_pool": 0},
+            "namespaces": [],
+        }
+        lines = self._lines(tmp_path, dict(_DOC, nodes_departed=[departed]))
+        assert len(lines) == 2, "no separate line per departed node"
+        assert lines[1].endswith(",[BB8,10.0.0.9,3000,0,0,9,9,[]]]")
+
+    def test_field_names_are_snake_case(self, tmp_path):
+        header = self._lines(tmp_path)[0]
         assert not re.search(r"[a-z][A-Z]", header), header
 
-    def test_latency_segment_reports_the_shape(self, tmp_path):
-        line = self._write_one(tmp_path)[0].read_text().splitlines()[1]
-        assert "latency(7,1)" in line
-        assert "conn[5,0]" in line and "read[1,2]" in line and "write[3,0]" in line
+    def test_line_time_is_the_snapshot_time(self, tmp_path):
+        line = self._lines(tmp_path)[1]
+        assert re.match(_STAMP, line)
+        assert line[20:23] == "123"
 
-    def test_departed_nodes_get_a_final_line(self, tmp_path):
-        doc = dict(_DOC, nodes_departed=[
-            {
-                "name": "BB8",
-                "address": "10.0.0.9",
-                "port": 3000,
-                "connections": {"opened": 9, "closed": 9, "open": 0},
-                "namespaces": [],
-            }
-        ])
-        lines = self._write_one(tmp_path, doc=doc)[0].read_text().splitlines()
-        final = [ln for ln in lines if ln.startswith("node[")]
-        assert len(final) == 1
-        assert "BB8" in final[0] and "10.0.0.9" in final[0]
+    def test_microsecond_buckets_are_named_in_the_header(self, tmp_path):
+        doc = dict(_DOC, latency_unit="microseconds", latency_columns=18)
+        assert "latency(MICROSECONDS,18,1)" in self._lines(tmp_path, doc)[0]
+
+    def test_a_changed_shape_starts_a_new_file(self, tmp_path):
+        """A header describes one histogram shape; a re-enabled policy gets its own file."""
+        exporter = MetricsWriter(str(tmp_path))
+        exporter.export(_StubSnapshot(_DOC))
+        exporter.export(_StubSnapshot(dict(_DOC, latency_columns=9)))
+        exporter.close()
+        headers = sorted(f.read_text().splitlines()[0] for f in tmp_path.glob("metrics-*.log"))
+        assert len(headers) == 2
+        assert any("latency(MILLISECONDS,9,1)" in h for h in headers)
 
     def test_empty_report_dir_writes_nothing(self, tmp_path):
-        exporter = LearnMetricsFileExporter("")
+        exporter = MetricsWriter("")
         exporter.export(_StubSnapshot(_DOC))
         assert list(tmp_path.iterdir()) == []
 
     def test_export_after_close_opens_a_new_file(self, tmp_path):
-        exporter = LearnMetricsFileExporter(str(tmp_path))
+        exporter = MetricsWriter(str(tmp_path))
         exporter.export(_StubSnapshot(_DOC))
         exporter.close()
         exporter.export(_StubSnapshot(_DOC))
         exporter.close()
         assert len(list(tmp_path.glob("metrics-*.log"))) == 2
 
-    def test_rotates_past_the_size_limit(self, tmp_path):
-        exporter = LearnMetricsFileExporter(str(tmp_path), report_size_limit=200)
-        for _ in range(4):
-            exporter.export(_StubSnapshot(_DOC))
-        exporter.close()
-        files = list(tmp_path.glob("metrics-*.log"))
-        assert len(files) > 1, "rotation should start a new file"
-        # Each file is its header plus at most one line: the limit here is
-        # smaller than a single cluster line, so every write rotates.
-        assert all(len(f.read_text().splitlines()) <= 2 for f in files)
+    def test_a_size_limit_under_the_minimum_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="report_size_limit"):
+            MetricsWriter(str(tmp_path), report_size_limit=200)
 
-    def test_rotation_within_one_second_does_not_reuse_a_name(self, tmp_path):
-        """The name stamp is per-second, so several rotations can collide in it."""
-        exporter = LearnMetricsFileExporter(str(tmp_path), report_size_limit=200)
+    def test_rotates_past_the_size_limit(self, tmp_path):
+        exporter = MetricsWriter(str(tmp_path), report_size_limit=1_000_000)
+        exporter._limit = 200       # below the minimum, so every write rotates
         for _ in range(3):
             exporter.export(_StubSnapshot(_DOC))
         exporter.close()
-        names = [f.name for f in tmp_path.glob("metrics-*.log")]
-        assert len(names) == len(set(names)) > 1
+        files = list(tmp_path.glob("metrics-*.log"))
+        names = [f.name for f in files]
+        # Rotation follows the write that crosses the limit, so three writes
+        # leave three full files and a fresh one holding just its header.
+        # They land in the same second; each still gets its own name.
+        assert len(names) == len(set(names)) == 4
+        assert sorted(len(f.read_text().splitlines()) for f in files) == [1, 2, 2, 2]
 
     def test_an_unwritable_directory_raises_to_the_timer(self, tmp_path):
         """IO failures propagate; the export timer's suspension handles them."""
         blocker = tmp_path / "not-a-dir"
         blocker.write_text("")
-        exporter = LearnMetricsFileExporter(str(blocker / "reports"))
+        exporter = MetricsWriter(str(blocker / "reports"))
         with pytest.raises(OSError):
             exporter.export(_StubSnapshot(_DOC))
 
 
-class TestLegacyFormatIsNotExtended:
-    """The file format is externally defined; we do not add fields to it."""
+class TestExportMode:
+    """`metrics.exporter`, and what unset resolves to."""
 
-    def test_no_usage_segment_even_when_counters_are_on(self, tmp_path):
-        """Usage counters reach consumers via the snapshot, not this file.
+    def test_unset_is_file(self):
+        assert export_mode(MetricsSettings()) is MetricsExporterType.FILE
+        assert export_mode(None) is MetricsExporterType.FILE
 
-        The legacy format's field list has no place for them, and its readers
-        are tools this SDK does not control, so inventing a segment would make
-        the file non-interoperable with the other clients that read and write
-        it. The cross-SDK spec routes anything outside the legacy field list
-        through the canonical snapshot.
-        """
-        doc = dict(_DOC, usage={"feature.shape.point": 900})
-        exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.export(_StubSnapshot(doc))
-        exporter.close()
-        text = sorted(tmp_path.glob("metrics-*.log"))[0].read_text()
-        assert "usage[" not in text
-        assert "feature." not in text
+    def test_strings_in_any_case_name_the_member(self):
+        assert MetricsExporterType("FILE") is MetricsExporterType.FILE
+        assert MetricsSettings(exporter="Custom").exporter is MetricsExporterType.CUSTOM
+        assert export_mode(MetricsSettings(exporter="none")) is MetricsExporterType.NONE
+        # The member reads as its configuration-file spelling.
+        assert str(MetricsExporterType.FILE) == "file"
 
-    def test_header_declares_only_the_legacy_segments(self, tmp_path):
-        exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.export(_StubSnapshot(_DOC))
-        exporter.close()
-        header = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[0]
-        for segment in ("cluster[", "node[", "namespace[", "latency("):
-            assert segment in header
-        assert "usage[" not in header
+    def test_unknown_names_are_rejected(self):
+        with pytest.raises(ValueError, match="exporter"):
+            MetricsSettings(exporter="learn_metrics_file")
 
 
-class TestLatencyShapeIsAlwaysWritten:
-    """The (columns,shift) pair goes in whatever the unit is."""
+class TestExportTargets:
+    """Which exporters a cluster's interval actually calls."""
 
-    def test_shape_is_written_for_microsecond_buckets(self, tmp_path):
-        """Omitting it would lose the shape as well as the unit.
+    def _cluster(self, exporter=None, registered=()):
+        built_in = _RecordingExporter("built-in")
+        cluster = SimpleNamespace(
+            _sdk_client=SimpleNamespace(
+                _sdk_settings=SimpleNamespace(metrics=MetricsSettings(exporter=exporter)),
+            ),
+            _exporters=list(registered),
+            _installed_exporter=built_in,
+        )
+        return cluster, built_in
 
-        The legacy format has no unit field, so a microsecond histogram is
-        indistinguishable from a millisecond one to a legacy reader. Writing
-        the pair anyway keeps the shape recoverable; the ambiguity is
-        documented rather than papered over by dropping data.
-        """
-        doc = dict(_DOC, latency_unit="microseconds", latency_columns=18, latency_shift=1)
-        exporter = LearnMetricsFileExporter(str(tmp_path))
-        exporter.export(_StubSnapshot(doc))
-        exporter.close()
-        line = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()[1]
-        assert "latency(18,1)" in line
+    def test_file_calls_only_the_built_in(self):
+        app = _RecordingExporter("app")
+        cluster, built_in = self._cluster("file", [app])
+        assert ClusterBase._export_targets(cluster) == [built_in]
+
+    def test_custom_calls_only_the_registered_list(self):
+        app = _RecordingExporter("app")
+        cluster, _ = self._cluster("custom", [app])
+        assert ClusterBase._export_targets(cluster) == [app]
+
+    def test_none_calls_nobody(self):
+        cluster, _ = self._cluster("none", [_RecordingExporter("app")])
+        assert ClusterBase._export_targets(cluster) == []
+
+    def test_unset_is_file_whatever_is_registered(self):
+        """Registering alone does not switch the mode; `custom` must be selected."""
+        cluster, built_in = self._cluster(registered=[_RecordingExporter("app")])
+        assert ClusterBase._export_targets(cluster) == [built_in]
 
 
-class TestBuiltInExporterSelection:
-    """What `exporter:` and `report_dir` select."""
+class TestBuiltInExporter:
+    """When the configuration installs the log writer."""
 
-    def test_none_installs_nothing(self):
-        assert built_in_exporter(MetricsSettings(exporter="none")) is None
+    def test_none_and_custom_install_nothing(self, tmp_path):
+        for mode in ("none", "custom"):
+            settings = MetricsSettings(exporter=mode, report_dir=str(tmp_path))
+            assert built_in_exporter(settings) is None
 
     def test_default_without_a_report_dir_installs_nothing(self):
-        """The documented default with nowhere to write is a no-op, not an error."""
+        """The default with nowhere to write is a no-op, not an error."""
         assert built_in_exporter(MetricsSettings()) is None
 
-    def test_default_with_a_report_dir_writes_files(self, tmp_path):
-        settings = MetricsSettings(report_dir=str(tmp_path))
-        assert isinstance(built_in_exporter(settings), LearnMetricsFileExporter)
+    def test_file_or_unset_with_a_report_dir_writes_files(self, tmp_path):
+        for mode in (None, "file"):
+            settings = MetricsSettings(exporter=mode, report_dir=str(tmp_path))
+            assert isinstance(built_in_exporter(settings), MetricsWriter)
 
-    def test_unknown_name_warns_and_installs_nothing(self, caplog):
+    def test_file_by_name_without_a_report_dir_warns(self, caplog):
+        """Asking for the file and giving it nowhere to go is worth a line in the log."""
         with caplog.at_level(logging.WARNING):
-            result = built_in_exporter(MetricsSettings(exporter="prometheus"))
-        assert result is None
-        assert "prometheus" in caplog.text
+            assert built_in_exporter(MetricsSettings(exporter="file")) is None
+        assert "report_dir" in caplog.text
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert built_in_exporter(MetricsSettings()) is None
+        assert "report_dir" not in caplog.text
 
     def test_awaitable_wraps_for_the_async_client(self, tmp_path):
         settings = MetricsSettings(report_dir=str(tmp_path))
         wrapped = built_in_exporter(settings, awaitable=True)
-        assert isinstance(wrapped.inner, LearnMetricsFileExporter)
+        assert isinstance(wrapped.inner, MetricsWriter)
 
     async def test_the_wrapped_built_in_exports_off_loop(self, tmp_path):
         settings = MetricsSettings(report_dir=str(tmp_path))
@@ -469,14 +495,7 @@ class TestAsyncExportTimer:
                 failures.append(1)
                 raise RuntimeError("destination is down")
 
-        class Cluster:
-            def __init__(self):
-                self._exporters = [Bad(), Good()]
-
-            def metrics(self):
-                return _StubSnapshot(_DOC)
-
-        timer = AsyncMetricsExportTimer(Cluster(), 3600.0)
+        timer = AsyncMetricsExportTimer(_StubCluster([Bad(), Good()]), 3600.0)
         with caplog.at_level(logging.WARNING):
             await timer._export_once()
         assert len(received) == 1 and len(failures) == 1
@@ -492,7 +511,7 @@ class _AsyncRecordingExporter:
 
 
 class _FailingSnapshotCluster(_StubCluster):
-    def metrics(self):
+    def metrics_snapshot(self):
         raise RuntimeError("client core is gone")
 
 

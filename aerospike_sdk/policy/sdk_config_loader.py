@@ -49,6 +49,7 @@ import yaml
 from aerospike_native import ReadModeAP, ReadModeSC, Replica
 
 from aerospike_sdk.loggers import SdkLoggers
+from aerospike_sdk.metrics.export import MIN_REPORT_SIZE_LIMIT, MetricsExporterType
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_registry import get_behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
@@ -155,9 +156,9 @@ _OPERATIONAL_HANDLED_ELSEWHERE = frozenset({"sampler"})
 _METRICS_KEYS: _KeyMap = {
     "enabled": ("enabled", bool),
     "export_interval": ("export_interval", "duration"),
-    "exporter": ("exporter", str),
+    "exporter": ("exporter", "exporter"),
     "report_dir": ("report_dir", str),
-    "report_size_limit": ("report_size_limit", "size"),
+    "report_size_limit": ("report_size_limit", "report_size"),
 }
 _OPERATIONAL_KEYS: _KeyMap = {
     "enabled": ("operational_enabled", bool),
@@ -341,6 +342,21 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
         return parse_duration(raw)
     if converter == "size":
         return parse_size(raw)
+    if converter == "report_size":
+        size = parse_size(raw)
+        if size and size < MIN_REPORT_SIZE_LIMIT:
+            raise ValueError(
+                f"{disk_key} must be 0 or at least {MIN_REPORT_SIZE_LIMIT} bytes, got {raw!r}"
+            )
+        return size
+    if converter == "exporter":
+        # Case-insensitive, so the upper-case spelling other clients document
+        # reads the same.
+        try:
+            return MetricsExporterType(raw)
+        except ValueError:
+            names = ", ".join(member.value for member in MetricsExporterType)
+            raise ValueError(f"{disk_key} must be one of {names}, got {raw!r}") from None
     if converter == "latency_unit":
         if not isinstance(raw, str) or raw.lower() not in _LATENCY_UNITS:
             raise ValueError(

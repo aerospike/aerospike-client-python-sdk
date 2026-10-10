@@ -29,6 +29,7 @@ import os
 import pytest
 
 from aerospike_sdk import Behavior, ClusterDefinition, DataSet
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy import get_behavior
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -155,7 +156,7 @@ async def test_metrics_hot_reload_applies_the_whole_policy(aerospike_host, tmp_p
             for i in range(3):
                 await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-            document = cluster.metrics().to_canonical_dict()
+            document = cluster.metrics_snapshot().to_canonical_dict()
             # Present only if the cluster took the policy, not just the flag.
             assert document["latency_columns"] == 24
             assert document["latency_unit"] == "microseconds"
@@ -180,7 +181,7 @@ async def test_usage_counters_enable_from_the_config_file(aerospike_host, tmp_pa
             for i in range(3):
                 await session.upsert(ds.id(i)).put({"n": i}).execute()
 
-            usage = cluster.metrics().usage
+            usage = cluster.metrics_snapshot().usage
             assert usage, "usage counters should be populated"
             assert any(name.startswith("feature.") for name in usage)
 
@@ -348,3 +349,34 @@ async def test_connect_time_settings_in_a_discovered_block_are_reported(
         assert settings.transactions.implicit_batch_write_transactions is True
     else:
         assert "cannot take effect" not in caplog.text
+
+
+async def test_the_file_owns_the_switch_it_sets(aerospike_host, tmp_path):
+    """While the file sets ``metrics.enabled``, the API refuses to flip it."""
+    host, port = _host_port(aerospike_host)
+    path = _write(tmp_path, "sdk.yaml", "system:\n  DEFAULT:\n    metrics:\n      enabled: false\n")
+    with _sdk_config_env(path):
+        async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            with pytest.raises(AerospikeError) as info:
+                cluster.enable_metrics()
+            assert info.value.result_code == ResultCode.PARAMETER_ERROR
+            assert cluster.metrics_enabled() is False
+
+    path = _write(tmp_path, "on.yaml", "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n")
+    with _sdk_config_env(path):
+        async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is True
+            with pytest.raises(AerospikeError):
+                cluster.disable_metrics()
+            assert cluster.metrics_enabled() is True
+
+
+async def test_a_file_silent_on_enabled_leaves_the_switch_to_code(aerospike_host, tmp_path):
+    host, port = _host_port(aerospike_host)
+    path = _write(tmp_path, "sdk.yaml", "system:\n  DEFAULT:\n    metrics:\n      labels:\n        owner: ops\n")
+    with _sdk_config_env(path):
+        async with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            cluster.enable_metrics()
+            assert cluster.metrics_enabled() is True
+            cluster.disable_metrics()
+            assert cluster.metrics_enabled() is False

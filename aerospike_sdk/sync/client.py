@@ -41,7 +41,7 @@ from aerospike_sdk.exceptions import PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.routing_capabilities_shared import RoutingCapabilitiesMixin
 from aerospike_sdk.udf_shared import parse_udf_list
 from aerospike_sdk.index_list import parse_index_list
-from aerospike_sdk.metrics import apply_metrics_settings
+from aerospike_sdk.metrics.policy import _apply_metrics_settings
 from aerospike_sdk.metrics.usage import UsageCounters
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Mode
@@ -167,7 +167,7 @@ class SyncClient(RoutingCapabilitiesMixin):
             # Full re-apply: collection, the export timer and the usage gate.
             cluster._apply_metrics_settings(settings.metrics)
         else:
-            apply_metrics_settings(self.underlying_client, settings.metrics)
+            _apply_metrics_settings(self.underlying_client, settings.metrics)
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
         """Arm config-file hot-reload; swaps ``_sdk_settings`` on change."""

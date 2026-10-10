@@ -74,6 +74,7 @@ class _FakeSyncClient:
         self._pnc = _FakePncClient()
         self._indexes_monitor = None
         self._namespace_mode_cache: dict = {}
+        self._usage_on = False
         # Mirrors the real client: the retry plan is resolved from here.
         self._sdk_settings = fill_hard_defaults(None)
 

@@ -82,7 +82,7 @@ BACKGROUND_OPERATE = "feature.background.operate"
 
 # -- Transactions, CDT, writes ------------------------------------------------
 
-#: Multi-record transaction.
+#: Multi-record transaction, once per transaction opened.
 TRANSACTION = "feature.transaction"
 #: CDT list/map/bit/hyperloglog operation on the wire.
 CDT = "feature.cdt"
@@ -102,6 +102,7 @@ ADMIN_TRUNCATE = "feature.admin.truncate"
 # because it is handed to :meth:`UsageCounters.add` on every call.
 COMMAND_COUNT = "command.count"
 COMMAND_COUNT_KEY = (COMMAND_COUNT,)
+_TRANSACTION_KEY = (TRANSACTION,)
 
 
 # Collection-data-type operations, for the CDT counter. String operations are
@@ -217,7 +218,7 @@ def record(sdk_client, features) -> None:
         counters.add(features)
 
 
-def record_point(sdk_client, execution_mode: str, txn=None, operations=()) -> None:
+def record_point(sdk_client, execution_mode: str, operations=()) -> None:
     """Record the counters for a single-key call taken on a fast path.
 
     The fast paths bypass the builder's segment bookkeeping, so they report
@@ -226,18 +227,15 @@ def record_point(sdk_client, execution_mode: str, txn=None, operations=()) -> No
     Args:
         sdk_client: The owning SDK client, or ``None`` to stay silent.
         execution_mode: One of :data:`API_BLOCKING` or :data:`API_DEFERRED`.
-        txn: The enclosing transaction, if the call joined one.
         operations: Operations on the call, checked for collection types.
     """
     features = [execution_mode, SHAPE_POINT]
-    if txn is not None:
-        features.append(TRANSACTION)
     if has_cdt(operations):
         features.append(CDT)
     record(sdk_client, features)
 
 
-def record_call_point(sdk_client, execution_mode: str, txn=None, operations=()) -> None:
+def record_call_point(sdk_client, execution_mode: str, operations=()) -> None:
     """Record a fast-path call: the command count, and usage when on.
 
     The fast-path twin of the builder's ``_record_call`` — reached behind the
@@ -246,7 +244,18 @@ def record_call_point(sdk_client, execution_mode: str, txn=None, operations=()) 
     if sdk_client._cmd_count_on:
         sdk_client._command_counts.add(COMMAND_COUNT_KEY)
     if sdk_client._usage_on:
-        record_point(sdk_client, execution_mode, txn, operations)
+        record_point(sdk_client, execution_mode, operations)
+
+
+def record_transaction(sdk_client) -> None:
+    """Record one transaction opened, when usage is on.
+
+    Counted where the transaction begins rather than on each call inside it,
+    so a transaction of many operations is still one transaction. A retry
+    that opens a fresh transaction counts again.
+    """
+    if sdk_client._usage_on:
+        sdk_client._usage_counters.add(_TRANSACTION_KEY)
 
 
 def record_call(sdk_client, features=()) -> None:

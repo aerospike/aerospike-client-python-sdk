@@ -26,6 +26,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from aerospike_native import Txn, TxnState
 
 from aerospike_sdk.exceptions import _convert_pnc_exception
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.policy_mapper import to_txn_roll_policy, to_txn_verify_policy
 from aerospike_sdk.sync.session import Session
 from aerospike_sdk.transactional_session_shared import TransactionalSessionBase
@@ -57,6 +58,11 @@ class TransactionalSession(TransactionalSessionBase, Session):
         :meth:`~aerospike_sdk.sync.session.Session.transaction`:
             Preferred construction entry.
     """
+
+    # Whether entering records the transaction for the usage counters. A
+    # retrying ``do_in_transaction`` counts once per call and clears this on
+    # the sessions it opens per attempt.
+    _count_on_enter: bool = True
 
     def __init__(self, client: SyncClient, behavior: Behavior) -> None:
         """Construct via :meth:`~aerospike_sdk.sync.session.Session.transaction` rather than directly."""
@@ -205,6 +211,8 @@ class TransactionalSession(TransactionalSessionBase, Session):
             raise RuntimeError("TransactionalSession is already active.")
         self._txn = Txn()
         self._finalized = False
+        if self._count_on_enter:
+            usage.record_transaction(self._client)
         return self
 
     def __exit__(

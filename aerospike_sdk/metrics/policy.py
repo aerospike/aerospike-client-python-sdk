@@ -20,7 +20,7 @@ output side.
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from aerospike_native import (
     CommandType,
@@ -38,8 +38,6 @@ __all__ = [
     "LatencyUnit",
     "MetricsPolicy",
     "Sampler",
-    "apply_metrics_settings",
-    "policy_from_settings",
 ]
 
 class LatencyType(Enum):
@@ -136,8 +134,8 @@ class MetricsPolicy:
             the first bucket multiplies by ``2**latency_shift``. Defaults to
             1 (no skipped powers of two). Must be at least 1.
         operational_enabled: Record the operational tier -- latency and byte
-            histograms, result codes, and the command retry/error and
-            connection failure counters. Off by default, leaving the always-on
+            histograms, result codes, the command count, and the command
+            retry/error and connection failure counters. Off by default, leaving the always-on
             gauges: pool occupancy, connections opened and closed, tend counts
             and node membership. The histogram settings above shape this tier
             and do nothing while it is off.
@@ -148,8 +146,8 @@ class MetricsPolicy:
             (:mod:`aerospike_sdk.metrics.usage`). Off by default. Recorded by this SDK
             rather than the client core, and independent of latency
             collection -- usage counters ignore the sampler.
-        labels: Static label maps attached to every snapshot, e.g.
-            ``[{"team": "billing"}]``.
+        labels: Static labels attached to every snapshot, e.g.
+            ``{"team": "billing"}``.
 
     Raises:
         ValueError: If ``latency_shift`` is less than 1.
@@ -176,7 +174,7 @@ class MetricsPolicy:
         latency_columns: int = _DEFAULT_LATENCY_COLUMNS,
         latency_shift: int = _DEFAULT_LATENCY_SHIFT,
         sampler: Optional[Sampler] = None,
-        labels: Optional[List[Dict[str, str]]] = None,
+        labels: Optional[Dict[str, str]] = None,
         usage_enabled: bool = False,
     ) -> None:
         if latency_shift < 1:
@@ -186,7 +184,7 @@ class MetricsPolicy:
         self.latency_columns = latency_columns
         self.latency_shift = latency_shift
         self.sampler = sampler if sampler is not None else Sampler.all()
-        self.labels = labels if labels is not None else []
+        self.labels = dict(labels) if labels is not None else {}
         self.usage_enabled = usage_enabled
 
     def _to_pnc(self) -> _PncMetricsPolicy:
@@ -201,7 +199,8 @@ class MetricsPolicy:
         pnc.latency_columns = self.latency_columns
         pnc.latency_shift = self.latency_shift
         pnc.sampler = self.sampler
-        pnc.labels = self.labels
+        # PNC takes a list of label maps; this policy carries the one map.
+        pnc.labels = [self.labels] if self.labels else []
         return pnc
 
     def __repr__(self) -> str:
@@ -213,7 +212,7 @@ class MetricsPolicy:
         )
 
 
-def policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
+def _policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
     """Build a :class:`MetricsPolicy` from configuration-file settings.
 
     Fields the file did not set keep the policy default, so a block naming
@@ -239,8 +238,7 @@ def policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
     if settings.latency_shift is not None:
         kwargs["latency_shift"] = settings.latency_shift
     if settings.labels is not None:
-        # The file carries one label map; the policy takes a list of them.
-        kwargs["labels"] = [settings.labels]
+        kwargs["labels"] = settings.labels
     if settings.sampler_range is not None and settings.sampler_threshold is not None:
         kwargs["sampler"] = Sampler(settings.sampler_range, settings.sampler_threshold)
     if settings.usage_enabled is not None:
@@ -248,7 +246,7 @@ def policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
     return MetricsPolicy(**kwargs)
 
 
-def apply_metrics_settings(underlying_client: Any, settings: "MetricsSettings") -> None:
+def _apply_metrics_settings(underlying_client: Any, settings: "MetricsSettings") -> None:
     """Turn core metrics on or off to match *settings*.
 
     A block that never names ``enabled`` leaves collection exactly as it is —
@@ -263,6 +261,6 @@ def apply_metrics_settings(underlying_client: Any, settings: "MetricsSettings") 
     if settings.enabled is None:
         return
     if settings.enabled:
-        underlying_client.enable_metrics(policy_from_settings(settings)._to_pnc())
+        underlying_client.enable_metrics(_policy_from_settings(settings)._to_pnc())
     else:
         underlying_client.disable_metrics()

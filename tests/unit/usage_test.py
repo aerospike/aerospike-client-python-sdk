@@ -96,16 +96,23 @@ class TestRecording:
         usage.record_point(client, usage.API_DEFERRED)
         assert client.calls == [[usage.API_DEFERRED, usage.SHAPE_POINT]]
 
-    def test_point_call_adds_transaction_and_collection(self):
+    def test_point_call_adds_collection(self):
         client = _Recorder()
         usage.record_point(
             client, usage.API_BLOCKING,
-            txn=Txn(),
             operations=[ListOperation.append("l", 1, ListPolicy())],
         )
-        assert client.calls == [[
-            usage.API_BLOCKING, usage.SHAPE_POINT, usage.TRANSACTION, usage.CDT,
-        ]]
+        assert client.calls == [[usage.API_BLOCKING, usage.SHAPE_POINT, usage.CDT]]
+
+    def test_a_transaction_is_counted_on_its_own(self):
+        client = _Recorder()
+        usage.record_transaction(client)
+        assert client.calls == [[usage.TRANSACTION]]
+
+    def test_a_transaction_is_not_counted_with_usage_off(self):
+        client = _Recorder(usage_on=False, cmd_count_on=True)
+        usage.record_transaction(client)
+        assert client.calls == [] and client.command_calls == []
 
 
 class TestBuilderAccumulation:
@@ -122,13 +129,12 @@ class TestBuilderAccumulation:
         )
         return qb, client
 
-    def test_transaction_participation_is_counted(self):
+    def test_a_call_inside_a_transaction_does_not_count_the_transaction(self):
+        """The transaction is counted once when it opens, not once per call."""
         qb, client = self._builder()
         qb._txn = Txn()
         qb._record_call(usage.API_BLOCKING, usage.SHAPE_POINT)
-        assert client.calls == [[
-            usage.API_BLOCKING, usage.SHAPE_POINT, usage.TRANSACTION,
-        ]]
+        assert client.calls == [[usage.API_BLOCKING, usage.SHAPE_POINT]]
 
     def test_durable_delete_is_collected_from_the_segment(self):
         qb, client = self._builder()

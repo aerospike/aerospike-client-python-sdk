@@ -36,10 +36,8 @@ from aerospike_sdk.metrics.export import (
     check_exporter,
     AsyncMetricsExportTimer,
 )
-from aerospike_sdk.metrics import (
-    MetricsPolicy,
-    policy_from_settings,
-)
+from aerospike_sdk.metrics import MetricsPolicy
+from aerospike_sdk.metrics.policy import _policy_from_settings
 from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
@@ -315,16 +313,18 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
     @property
     def exporters(self) -> tuple:
-        """The registered exporters, in the order snapshots reach them."""
+        """The exporters the application registered, in registration order."""
         return tuple(self._exporters)
 
     def add_exporter(self, exporter: Any) -> None:
         """Register an exporter; snapshots are pushed to each one registered.
 
-        Exporters receive every snapshot in registration order. One that keeps
-        raising is suspended and periodically retried without affecting the
-        others. The cluster never closes an exporter registered here -- the
-        application owns its lifecycle.
+        Registered exporters receive the push while ``metrics.exporter`` is
+        ``custom``; ``file`` (the default) and ``none`` leave them uncalled.
+        They receive every snapshot in registration order. One that keeps raising is
+        suspended and periodically retried without affecting the others. The
+        cluster never closes an exporter registered here -- the application
+        owns its lifecycle.
 
         Args:
             exporter: An :class:`~aerospike_sdk.metrics.AsyncMetricsExporter`
@@ -336,7 +336,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Example::
 
-            exporter = LearnMetricsFileExporter("/var/log/aerospike")
+            exporter = MetricsWriter("/var/log/aerospike")
             cluster.add_exporter(exporter)
 
         See Also:
@@ -372,18 +372,17 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         if metrics is None or metrics.enabled is None:
             return
         if metrics.enabled:
-            self.enable_metrics(policy_from_settings(metrics))
+            self._enable_metrics(_policy_from_settings(metrics))
         else:
-            self.disable_metrics()
+            self._disable_metrics()
 
     def _start_export_timer(self, policy: MetricsPolicy) -> None:
-        """Begin pushing snapshots to the registered exporters.
+        """Begin pushing snapshots to the selected exporters.
 
         Replaces any running timer, and re-evaluates the configured built-in
-        exporter: the config file installs one only while the application has
-        registered nothing itself. The timer runs whenever metrics are on --
-        an interval with no exporters skips the snapshot, so a registration
-        made after enabling still takes effect.
+        log writer. The timer runs whenever metrics are on -- an interval with
+        nothing to export skips the snapshot, so a registration made after
+        enabling still takes effect.
         """
         self._stop_export_timer()
         settings = getattr(self._sdk_client, "_sdk_settings", None)
@@ -391,11 +390,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         interval = DEFAULT_EXPORT_INTERVAL_SECONDS
         if metrics is not None and metrics.export_interval is not None:
             interval = metrics.export_interval.total_seconds()
-        if not self._exporters and metrics is not None:
-            built_in = built_in_exporter(metrics, awaitable=True)
-            if built_in is not None:
-                self._exporters.append(built_in)
-                self._installed_exporter = built_in
+        self._installed_exporter = built_in_exporter(metrics, awaitable=True)
         self._export_timer = AsyncMetricsExportTimer(
             self, interval, metrics, after=self._final_export,
         )
@@ -408,8 +403,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         registered are its to close.
         """
         installed, self._installed_exporter = self._installed_exporter, None
-        if installed is not None and installed in self._exporters:
-            self._exporters.remove(installed)
         return installed
 
     def _stop_export_timer(self, *, final: bool = False) -> None:
@@ -442,23 +435,32 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
                 :class:`~aerospike_sdk.metrics.MetricsPolicy`'s milliseconds/7-column
                 scheme with every command recorded.
 
+        Raises:
+            AerospikeError: With ``PARAMETER_ERROR`` when a loaded configuration
+                file sets ``metrics.enabled``; the file owns the switch.
+
         Example::
 
             cluster.enable_metrics(MetricsPolicy(sampler=Sampler.probability(0.1)))
 
         See Also:
-            :meth:`metrics`, :meth:`disable_metrics`
+            :meth:`metrics_snapshot`, :meth:`disable_metrics`
         """
+        self._check_metrics_switch_is_free("enable_metrics")
+        self._enable_metrics(policy)
+
+    def _enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
+        """Enable collection; the configuration-file path, which owns no guard."""
         effective = policy if policy is not None else MetricsPolicy()
         # Kept because the snapshot does not carry its own histogram shape,
         # which the structured export has to report.
         self._metrics_policy = effective
         client = self._sdk_client
         client._usage_on = effective.usage_enabled
-        # The command count rides on metrics being enabled at all; `_record_on`
-        # is the single flag the per-op paths test.
-        client._cmd_count_on = True
-        client._record_on = True
+        # The command count is an operational metric; `_record_on` is the
+        # single flag the per-op paths test.
+        client._cmd_count_on = effective.operational_enabled
+        client._record_on = client._usage_on or client._cmd_count_on
         client.underlying_client.enable_metrics(effective._to_pnc())
         self._start_export_timer(effective)
 
@@ -477,6 +479,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         scheduled on the running loop.
 
         Raises:
+            AerospikeError: With ``PARAMETER_ERROR`` when a loaded configuration
+                file sets ``metrics.enabled``; the file owns the switch.
             RuntimeError: If called off the event loop's thread while
                 metrics are enabled and an exporter is registered.
 
@@ -489,6 +493,11 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         See Also:
             :meth:`enable_metrics`, :meth:`add_exporter`
         """
+        self._check_metrics_switch_is_free("disable_metrics")
+        self._disable_metrics()
+
+    def _disable_metrics(self) -> None:
+        """Disable collection; the configuration-file path, which owns no guard."""
         self._stop_export_timer(final=True)
         client = self._sdk_client
         client.underlying_client.disable_metrics()

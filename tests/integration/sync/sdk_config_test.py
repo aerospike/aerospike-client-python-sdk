@@ -28,6 +28,7 @@ import time
 import pytest
 
 from aerospike_sdk import Behavior, DataSet
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy import SystemSettings, TransactionSettings
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
@@ -251,3 +252,34 @@ def test_connect_time_settings_in_a_discovered_block_are_reported(
         assert settings.transactions.implicit_batch_write_transactions is True
     else:
         assert "cannot take effect" not in caplog.text
+
+
+def test_the_file_owns_the_switch_it_sets(aerospike_host, tmp_path):
+    """While the file sets ``metrics.enabled``, the API refuses to flip it."""
+    host, port = _host_port(aerospike_host)
+    path = _write(tmp_path, "sdk.yaml", "system:\n  DEFAULT:\n    metrics:\n      enabled: false\n")
+    with _sdk_config_env(path):
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            with pytest.raises(AerospikeError) as info:
+                cluster.enable_metrics()
+            assert info.value.result_code == ResultCode.PARAMETER_ERROR
+            assert cluster.metrics_enabled() is False
+
+    path = _write(tmp_path, "on.yaml", "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n")
+    with _sdk_config_env(path):
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            assert cluster.metrics_enabled() is True
+            with pytest.raises(AerospikeError):
+                cluster.disable_metrics()
+            assert cluster.metrics_enabled() is True
+
+
+def test_a_file_silent_on_enabled_leaves_the_switch_to_code(aerospike_host, tmp_path):
+    host, port = _host_port(aerospike_host)
+    path = _write(tmp_path, "sdk.yaml", "system:\n  DEFAULT:\n    metrics:\n      labels:\n        owner: ops\n")
+    with _sdk_config_env(path):
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            cluster.enable_metrics()
+            assert cluster.metrics_enabled() is True
+            cluster.disable_metrics()
+            assert cluster.metrics_enabled() is False

@@ -23,6 +23,11 @@ from typing import Dict, Optional
 
 from aerospike_native import ClientPolicy
 
+from aerospike_sdk.metrics.export import (
+    MIN_REPORT_SIZE_LIMIT as _MIN_REPORT_SIZE_LIMIT,
+    MetricsExporterType,
+)
+
 
 @dataclass(frozen=True, kw_only=True)
 class TransactionSettings:
@@ -87,12 +92,20 @@ class MetricsSettings:
     ``metrics.enabled`` sits above both: it turns collection on at all, and on
     its own yields the always-on gauges.
 
+    ``exporter`` selects where the periodic push goes, as a
+    :class:`~aerospike_sdk.metrics.MetricsExporterType`: ``file`` (the
+    default; the built-in log writer under ``report_dir``), ``custom`` (the
+    exporters registered with ``add_exporter``) or ``none``. A string in any
+    case is accepted and stored as the enum member.
+
     Example::
 
         # system:
         #   DEFAULT:
         #     metrics:
         #       enabled: true
+        #       exporter: file
+        #       report_dir: /var/log/aerospike/metrics
         #       labels:
         #         owner: platform-team
         #       extended:
@@ -100,6 +113,10 @@ class MetricsSettings:
         #           enabled: true
         #           latency_unit: microseconds
         #           latency_columns: 18
+
+    Raises:
+        ValueError: If ``exporter`` is not ``file``, ``custom`` or ``none``,
+            or ``report_size_limit`` is neither 0 nor at least 1,000,000.
 
     See Also:
         :class:`~aerospike_sdk.metrics.MetricsPolicy`: The runtime policy these
@@ -111,7 +128,7 @@ class MetricsSettings:
     latency_columns: Optional[int] = None
     latency_shift: Optional[int] = None
     export_interval: Optional[timedelta] = None
-    exporter: Optional[str] = None
+    exporter: Optional[MetricsExporterType] = None
     report_dir: Optional[str] = None
     report_size_limit: Optional[int] = None
     sampler_range: Optional[int] = None
@@ -119,6 +136,23 @@ class MetricsSettings:
     labels: Optional[Dict[str, str]] = None
     operational_enabled: Optional[bool] = None
     usage_enabled: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        if self.exporter is not None:
+            try:
+                exporter = MetricsExporterType(self.exporter)
+            except ValueError:
+                names = ", ".join(member.value for member in MetricsExporterType)
+                raise ValueError(
+                    f"metrics exporter must be one of {names}, got {self.exporter!r}"
+                ) from None
+            object.__setattr__(self, "exporter", exporter)
+        limit = self.report_size_limit
+        if limit and limit < _MIN_REPORT_SIZE_LIMIT:
+            raise ValueError(
+                f"metrics report_size_limit must be 0 or at least "
+                f"{_MIN_REPORT_SIZE_LIMIT}, got {limit}"
+            )
 
 
 @dataclass(frozen=True, kw_only=True)

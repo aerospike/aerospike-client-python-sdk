@@ -22,6 +22,7 @@ without requiring an SC cluster.
 """
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,7 @@ from aerospike_native import AbortStatus, CommitErrorType, CommitStatus, ReadMod
 from aerospike_sdk import Txn, TransactionalSession, TxnStatus
 from aerospike_sdk.aio.session import Session
 from aerospike_sdk.exceptions import CommitError
+from aerospike_sdk.metrics import usage
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_settings import Settings
 
@@ -72,6 +74,7 @@ class _FakeSdkClient:
     """
 
     def __init__(self) -> None:
+        self._usage_on = False
         self._async_client = _FakePncClient()
         self._client = self._async_client
         self._indexes_monitor = None
@@ -111,6 +114,18 @@ async def test_aenter_allocates_txn(
         assert tx is tx_session
         assert isinstance(tx.txn, Txn)
         assert tx.active is True
+
+
+async def test_a_transaction_is_counted_once_however_many_calls_it_makes(
+    tx_session: TransactionalSession,
+    sdk_client: _FakeSdkClient,
+) -> None:
+    counted: list = []
+    sdk_client._usage_on = True
+    sdk_client._usage_counters = SimpleNamespace(add=lambda f: counted.append(list(f)))
+    async with tx_session:
+        pass
+    assert counted == [[usage.TRANSACTION]]
 
 
 async def test_clean_exit_commits(

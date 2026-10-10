@@ -22,13 +22,25 @@ from aerospike_sdk import UDFLang
 from aerospike_sdk.sync import ClusterDefinition
 
 from tests.integration.general_auth import apply_general_auth, general_auth_enabled
+from aerospike_sdk.metrics import MetricsExporterType
+from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
+
 from tests.integration.namespace import general_namespace
+
+# Registered exporters receive the push only under `custom`; the default is
+# the file writer.
+_CUSTOM_EXPORT = SystemSettings(
+    metrics=MetricsSettings(exporter=MetricsExporterType.CUSTOM),
+)
 
 
 @pytest.fixture(scope="module")
 def metrics_cluster(aerospike_host, make_cluster_definition):
     """Module-scoped cluster so metrics state isn't shared with other suites."""
-    with make_cluster_definition(aerospike_host, sync=True).connect() as c:
+    definition = make_cluster_definition(aerospike_host, sync=True).with_system_settings(
+        _CUSTOM_EXPORT
+    )
+    with definition.connect() as c:
         yield c
 
 
@@ -62,9 +74,10 @@ class TestSyncMetrics:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         _do_some_ops(metrics_cluster, count=5)
 
-        snapshot = metrics_cluster.metrics()
+        snapshot = metrics_cluster.metrics_snapshot()
         assert snapshot.total_nodes >= 1
-        assert snapshot.open_connections >= 1
+        conns = snapshot.to_canonical_dict()["cluster"]["connections"]
+        assert conns["in_use"] + conns["in_pool"] >= 1
 
         agg = snapshot.cluster_aggregated
         assert agg.latency_unit == LatencyUnit.MICROSECONDS
@@ -89,72 +102,67 @@ class TestSyncMetrics:
             latency_columns=24,
             sampler=Sampler.never(),
         )
-        before = metrics_cluster.metrics().latency(LatencyType.READ).count
+        before = metrics_cluster.metrics_snapshot().latency(LatencyType.READ).count
         metrics_cluster.enable_metrics(policy)
         _do_some_ops(metrics_cluster, count=3)
 
-        assert metrics_cluster.metrics().latency(LatencyType.READ).count == before
-        metrics_cluster.disable_metrics()
-
-    def test_to_dict_stable_names(self, metrics_cluster):
-        metrics_cluster.enable_metrics(_SHAPE_SAFE)
-        _do_some_ops(metrics_cluster, count=1)
-
-        d = metrics_cluster.metrics().to_dict()
-        assert d["total_nodes"] >= 1
-        assert d["cluster_aggregated_metrics"]["latency_unit"] == "us"
+        assert metrics_cluster.metrics_snapshot().latency(LatencyType.READ).count == before
         metrics_cluster.disable_metrics()
 
     def test_usage_counters_record_and_gate(self, metrics_cluster):
         """Usage counters are recorded on the sync surface, and only when asked."""
         metrics_cluster.enable_metrics(MetricsPolicy())          # usage off
         _do_some_ops(metrics_cluster, count=3)
-        assert metrics_cluster.metrics().usage == {}
+        assert metrics_cluster.metrics_snapshot().usage == {}
 
         metrics_cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
         _do_some_ops(metrics_cluster, count=3)
-        usage = metrics_cluster.metrics().usage
+        usage = metrics_cluster.metrics_snapshot().usage
         assert usage.get("feature.api.blocking", 0) >= 3, usage
         assert usage.get("feature.shape.point", 0) >= 3, usage
         metrics_cluster.disable_metrics()
 
-    def test_command_count_is_kept_without_the_usage_group(
+    def test_command_count_follows_the_operational_tier(
         self, aerospike_host, make_cluster_definition,
     ):
-        """The call count needs no opt-in, and counts a batch once."""
+        """The call count is operational, independent of usage, and counts a batch once."""
         # Own cluster: the count is cumulative for the client lifetime, so a
         # shared fixture could not be asserted against exact numbers.
         with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-            cluster.enable_metrics(MetricsPolicy())              # usage off
             session = cluster.create_session()
             ds = DataSet.of(general_namespace(), "sdk_metrics_cc")
+            cluster.enable_metrics(MetricsPolicy())              # both tiers off
+            session.upsert(ds.id(0)).put({"n": 0}).execute()
+            assert cluster.metrics_snapshot().command_count == 0
+
+            cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
             for i in range(4):
                 session.upsert(ds.id(i)).put({"n": i}).execute()
 
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             assert snapshot.usage == {}, "usage was off"
             assert snapshot.command_count == 4
 
             # One call, four keys: the count follows calls, not records.
             session.query(ds.id(0), ds.id(1), ds.id(2), ds.id(3)).execute().collect()
-            assert cluster.metrics().command_count == 5
-            assert cluster.metrics().to_canonical_dict()["cluster"]["command_count"] == 5
+            assert cluster.metrics_snapshot().command_count == 5
+            assert cluster.metrics_snapshot().to_canonical_dict()["cluster"]["command_count"] == 5
 
     def test_command_count_stops_with_collection(
         self, aerospike_host, make_cluster_definition,
     ):
         """Disabling metrics freezes the count; traffic after it is not added."""
         with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-            cluster.enable_metrics(MetricsPolicy())
+            cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
             session = cluster.create_session()
             ds = DataSet.of(general_namespace(), "sdk_metrics_cc_off")
             session.upsert(ds.id("a")).put({"n": 1}).execute()
             cluster.disable_metrics()
 
-            frozen = cluster.metrics().command_count
+            frozen = cluster.metrics_snapshot().command_count
             assert frozen == 1
             session.upsert(ds.id("b")).put({"n": 2}).execute()
-            assert cluster.metrics().command_count == frozen
+            assert cluster.metrics_snapshot().command_count == frozen
 
     def test_usage_counters_record_background(
         self, aerospike_host, make_cluster_definition,
@@ -163,7 +171,7 @@ class TestSyncMetrics:
         # Own cluster: usage totals are cumulative for the client lifetime,
         # and the module-scoped fixture is asserted empty when usage is off.
         with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
-            cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
+            cluster.enable_metrics(MetricsPolicy(operational_enabled=True, usage_enabled=True))
             session = cluster.create_session()
             ds = DataSet.of(general_namespace(), "sdk_metrics_bg")
             session.upsert(ds.id("k")).put({"n": 1}).execute()
@@ -174,7 +182,7 @@ class TestSyncMetrics:
                 .execute()
             )
             task.wait_till_complete_blocking()
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             counts = snapshot.usage
             assert counts.get("feature.api.background", 0) >= 1, counts
             assert counts.get("feature.shape.query", 0) >= 1, counts
@@ -191,12 +199,12 @@ class TestSyncMetrics:
             cluster.register_udf_from_file(
                 os.path.normpath(lua), "record_example.lua", UDFLang.LUA
             ).wait_till_complete_blocking(sleep_time=0.2, timeout=10.0)
-            cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
+            cluster.enable_metrics(MetricsPolicy(operational_enabled=True, usage_enabled=True))
             session = cluster.create_session()
             key = DataSet.of(general_namespace(), "sdk_metrics_udf").id("k")
             session.upsert(key).put({"n": 1}).execute()
             session.execute_udf(key).function("record_example", "readBin").passing("n").execute()
-            snapshot = cluster.metrics()
+            snapshot = cluster.metrics_snapshot()
             counts = snapshot.usage
             assert counts.get("feature.udf.record", 0) == 1, counts
             assert counts.get("feature.api.blocking", 0) == 2, counts
@@ -212,7 +220,7 @@ class TestSyncMetrics:
             ds = DataSet.of(general_namespace(), "sdk_metrics_proc")
             for i in range(50):
                 session.upsert(ds.id(i)).put({"n": i}).execute()
-            doc = cluster.metrics().to_canonical_dict()
+            doc = cluster.metrics_snapshot().to_canonical_dict()
             assert doc["cluster"]["memory_bytes"] > 0
             assert doc["cluster"]["cpu_percent"] >= 0.0
 
@@ -222,7 +230,7 @@ class TestSyncMetrics:
         """An application that named none is still attributable."""
         with make_cluster_definition(aerospike_host, sync=True).connect() as cluster:
             cluster.enable_metrics(MetricsPolicy())
-            app_id = cluster.metrics().to_canonical_dict()["app_id"]
+            app_id = cluster.metrics_snapshot().to_canonical_dict()["app_id"]
         expected = os.environ.get("AEROSPIKE_AUTH_USER", "") if general_auth_enabled() else ""
         assert app_id == (expected or "not-set")
 
@@ -234,7 +242,7 @@ class TestSyncMetrics:
         ).app_id("sdk-metrics-itest")
         with definition.connect() as cluster:
             cluster.enable_metrics(MetricsPolicy())
-            assert cluster.metrics().to_canonical_dict()["app_id"] == "sdk-metrics-itest"
+            assert cluster.metrics_snapshot().to_canonical_dict()["app_id"] == "sdk-metrics-itest"
 
     def test_exporter_receives_pushed_snapshots(self, metrics_cluster):
         received = []
@@ -250,7 +258,7 @@ class TestSyncMetrics:
             metrics_cluster._export_timer._export_once()
             assert len(received) == 1
             doc = received[0].to_canonical_dict()
-            assert doc["client_type"] == "python"
+            assert doc["client_type"] == "python-sdk"
             assert doc["nodes_departed"] == []
         finally:
             metrics_cluster.disable_metrics()
@@ -274,7 +282,7 @@ class TestCommandCount:
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
         session = metrics_cluster.create_session()
         ds = DataSet.of(general_namespace(), "cmd_count")
-        base = metrics_cluster.metrics().command_count
+        base = metrics_cluster.metrics_snapshot().command_count
 
         for i in range(3):
             session.upsert(ds.id(i)).put({"n": i}).execute()
@@ -283,12 +291,12 @@ class TestCommandCount:
         batch = session.query(ds.id(0), ds.id(1), ds.id(2)).execute()
         assert len(batch.collect()) == 3
 
-        after = metrics_cluster.metrics().command_count
+        after = metrics_cluster.metrics_snapshot().command_count
         # Three writes, one point read, one batch read: the batch is one
         # call however many keys it carries.
         assert after - base == 5
 
-        doc = metrics_cluster.metrics().to_canonical_dict()
+        doc = metrics_cluster.metrics_snapshot().to_canonical_dict()
         assert doc["cluster"]["command_count"] == after
         # Derived from the per-node counters the client core keeps.
         assert doc["cluster"]["command_retries"] >= 0
@@ -302,9 +310,9 @@ class TestCommandCount:
         session.upsert(ds.id(1)).put({"n": 1}).execute()
         metrics_cluster.disable_metrics()
 
-        frozen = metrics_cluster.metrics().command_count
+        frozen = metrics_cluster.metrics_snapshot().command_count
         session.upsert(ds.id(2)).put({"n": 2}).execute()
-        assert metrics_cluster.metrics().command_count == frozen
+        assert metrics_cluster.metrics_snapshot().command_count == frozen
 
 
 class _CommandCounts:
@@ -325,7 +333,7 @@ class TestSyncFinalExport:
         metrics_cluster.add_exporter(exporter)
         try:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
-            base = metrics_cluster.metrics().command_count
+            base = metrics_cluster.metrics_snapshot().command_count
             _do_some_ops(metrics_cluster, count=3)
             metrics_cluster.disable_metrics()
             assert exporter.counts == [base + 6]
@@ -336,10 +344,13 @@ class TestSyncFinalExport:
         self, aerospike_host, make_cluster_definition,
     ):
         exporter = _CommandCounts()
-        cluster = make_cluster_definition(aerospike_host, sync=True).connect()
+        definition = make_cluster_definition(aerospike_host, sync=True).with_system_settings(
+            _CUSTOM_EXPORT
+        )
+        cluster = definition.connect()
         cluster.add_exporter(exporter)
         cluster.enable_metrics(_SHAPE_SAFE)
-        base = cluster.metrics().command_count
+        base = cluster.metrics_snapshot().command_count
         _do_some_ops(cluster, count=3)
         cluster.close()
         assert exporter.counts == [base + 6]

@@ -38,15 +38,20 @@ cluster.enable_metrics(MetricsPolicy(operational_enabled=True))
 
 # ... application traffic ...
 
-snapshot = cluster.metrics()   # plain on both the async and sync Cluster
+snapshot = cluster.metrics_snapshot()   # plain on both the async and sync Cluster
 reads = snapshot.latency(LatencyType.READ)
 print(f"{reads.count} reads, avg {reads.average:.1f} ms")
 ```
 
 Snapshot values are **cumulative** since metrics were enabled — they are not
-deltas since the last poll. Connection gauges (`open_connections`) are
+deltas since the last poll. Connection gauges (`in_use`, `in_pool`) are
 point-in-time. Snapshotting drains and aggregates per-node state, so poll on
 an interval (for example every 30 seconds), not per operation.
+
+A snapshot can be taken whether or not collection is on; while it is off the
+counters are frozen at their last values. `metrics_enabled`,
+`operational_metrics_enabled` and `usage_metrics_enabled` on the snapshot (and
+in its canonical document) say which tiers were collecting when it was taken.
 
 ## Collection tiers
 
@@ -55,7 +60,7 @@ Collection comes in tiers, so the cost of measuring is opt-in:
 | Tier | Contents | Switched on by |
 |---|---|---|
 | Always on | Pool occupancy, connections opened/closed, tend counts, node membership | `enable_metrics()` |
-| Operational | Latency and byte histograms, result codes, retry and error counters | `operational_enabled=True` |
+| Operational | Latency and byte histograms, result codes, retry and error counters, the per-call command count | `operational_enabled=True` |
 | Usage | Which SDK features the application uses | `usage_enabled=True` |
 
 `enable_metrics()` on its own gives the always-on gauges and nothing more: no
@@ -132,9 +137,9 @@ if detail is not None:
 
 {meth}`~aerospike_sdk.metrics.MetricsSnapshot.latency` derives the classic five-way
 grouping (`conn`/`read`/`write`/`batch`/`query`) from those categories, and
-{meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_dict` renders the whole snapshot
-with the cross-client-stable serialized names for logging or shipping to an
-external system.
+{meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` renders the
+snapshot as the cross-client document for logging or shipping to an external
+system.
 
 ### Attributing a snapshot
 
@@ -173,7 +178,7 @@ entry of `nodes` for one node; both expose the same methods:
 ```python
 from aerospike_sdk.metrics import CommandType
 
-snapshot = cluster.metrics()
+snapshot = cluster.metrics_snapshot()
 
 agg = snapshot.cluster_aggregated
 for namespace in agg.detailed_namespaces():
@@ -238,7 +243,7 @@ cluster.enable_metrics(MetricsPolicy(usage_enabled=True))
 
 # ... application traffic ...
 
-snapshot = cluster.metrics()
+snapshot = cluster.metrics_snapshot()
 print(snapshot.usage)
 # {'feature.api.deferred': 1042, 'feature.shape.point': 900,
 #  'feature.shape.batch': 142, 'feature.filter.ael': 37}
@@ -263,7 +268,9 @@ traffic issued through the underlying client directly does not appear.
 
 The `execution_mode` of a call is carried in the counter name rather than as
 a separate dimension: `feature.api.blocking`, `feature.api.deferred`, and
-`feature.api.background`.
+`feature.api.background`. `feature.transaction` counts transactions opened,
+once each however many calls run inside it; the calls themselves are counted
+under their own shape and mode.
 
 Three counters defined by the cross-SDK specification have no equivalent here
 and are never emitted: `feature.object_mapping.read`,
@@ -273,8 +280,9 @@ rather than an oversight.
 
 ## Exporting snapshots
 
-Rather than polling, register exporters and the client pushes each snapshot to
-every one of them on an interval. An exporter implements a single method,
+Rather than polling, let the client push a snapshot on an interval, either to
+the built-in [log file writer](#writing-metrics-to-files) or to exporters the
+application registers. An exporter implements a single method,
 `export(snapshot)`; it never sees the cluster or its lifecycle, and whatever
 it writes to — a file, an HTTP client — it opens itself and the application
 closes when done. The client never closes an exporter it did not create.
@@ -313,52 +321,63 @@ metrics are on restarts the push without a closing snapshot.
 A node that has left the cluster appears once under the snapshot's
 `nodes_departed`, same shape as `nodes` with its final counters, so an
 exporter can flush that node's series. Only the export push tracks
-departures — a snapshot from `cluster.metrics()` always carries an empty
-`nodes_departed`.
+departures — a snapshot from `cluster.metrics_snapshot()` always carries an
+empty `nodes_departed`.
+
+### Choosing who receives snapshots
+
+`metrics.exporter` in the configuration file selects the recipients of each
+interval's snapshot. The value is case-insensitive:
+
+| `exporter` | Each interval goes to |
+| --- | --- |
+| `file` | the built-in log file writer only, into `report_dir` |
+| `custom` | the exporters registered with `add_exporter()` only |
+| `none` | nobody; snapshots are still available by polling |
+| unset | `file` |
+
+The modes do not combine: with `exporter: file` a registered exporter is not
+called, and with `exporter: custom` no file is written. Since the default is
+`file`, an application that registers its own exporter also selects `custom`,
+in the configuration file or in code on the cluster definition:
+
+```python
+from aerospike_sdk.metrics import MetricsExporterType
+from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
+
+definition = ClusterDefinition(host).with_system_settings(
+    SystemSettings(metrics=MetricsSettings(exporter=MetricsExporterType.CUSTOM))
+)
+```
 
 {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` is the payload an
 exporter should serialize: a stable `snake_case` document independent of how
 the underlying client names its own fields.
 
-Within each namespace object, `errors` is the total of *every* non-OK outcome.
-Timeouts, hot keys, oversized records and device overloads are part of that
-total and are also reported on their own as `timeouts`, `key_busy`,
-`record_too_big` and `device_overload`, so those four are counted twice by
-design. An exporter that wants a breakdown should subtract rather than add:
+Within each namespace object, each failed command is counted under exactly
+one of `timeouts`, `key_busy`, `record_too_big`, `device_overload` or
+`errors`; `errors` holds whatever has none of the four named causes. The
+total failure count is therefore their sum:
 
 ```python
 namespace = document["nodes"][0]["namespaces"][0]
-named = ("timeouts", "key_busy", "record_too_big", "device_overload")
-other_errors = namespace["errors"] - sum(namespace[k] for k in named)
+causes = ("errors", "timeouts", "key_busy", "record_too_big", "device_overload")
+failures = sum(namespace[k] for k in causes)
 ```
 
 These are server answers. A command that runs out of client-side deadline
-never receives a result code, so it is not in `timeouts`; it is counted once,
-cluster-wide, under `exceeded_total_timeout` or `exceeded_max_retries`. The
-two cluster counters together are the client-side timeouts, and they never
-overlap with `timeouts`. Read them as a pair: the underlying client
-attributes an expiry to the retry budget whenever that budget is also spent,
-so with retries disabled every client-side timeout lands in
-`exceeded_max_retries`.
+never receives a result code, so it is in none of them. It is counted once,
+cluster-wide, under `command_timeout_client`; `command_timeout_server` beside
+it is the namespace `timeouts` summed, so the two read as a pair and never
+overlap. See [Known limitations](#known-limitations).
 
+(writing-metrics-to-files)=
 ### Writing metrics to files
 
-The built-in {class}`~aerospike_sdk.metrics.LearnMetricsFileExporter` writes
-the line-oriented metrics log format, for existing log shippers. Construct it
-and register it like any exporter — its first `export` opens the file and
-writes the header, and the application closes it:
-
-```python
-from aerospike_sdk.metrics import LearnMetricsFileExporter
-
-exporter = LearnMetricsFileExporter("/var/log/aerospike/metrics")
-cluster.add_exporter(exporter)
-...
-exporter.close()
-```
-
-The configuration file can install it as a convenience when the application
-registered no exporter of its own:
+The built-in {class}`~aerospike_sdk.metrics.MetricsWriter` writes
+the line-oriented metrics log shared by the Aerospike clients, for existing log
+shippers and tools such as `asloglatency`. It is the default recipient: set a
+directory and the client writes there on every interval.
 
 ```yaml
 system:
@@ -366,42 +385,63 @@ system:
     metrics:
       enabled: true
       export_interval: 30s
-      exporter: learn_metrics_file
+      exporter: file
       report_dir: /var/log/aerospike/metrics
       report_size_limit: 10mb
 ```
 
-The configured install is active only when `report_dir` is set; with no
-directory it installs nothing, and so does `exporter: none`. The file's data
-lines are positional — they carry values, not field names. The one header
-line that declares the schema names its fields in snake_case (`key_busy`,
-`bytes_in`), matching every other name this SDK emits. Other clients writing
-this format spell the same fields in camelCase, so a shipper that parses the
-header by name needs its field map updated to read these files.
+With no `report_dir` nothing is written. Files are named
+`metrics-<yyyyMMddHHmmss>.log`; once one reaches `report_size_limit` the next
+line starts a new file. The limit is 0 (never rotate, the default) or at least
+1,000,000 bytes. Re-enabling with a different histogram shape also starts a new
+file, so that each file's header describes every line beneath it.
 
-This file carries the legacy field list and nothing more: cluster identity,
-per-node connections, per-namespace counters, and the latency histograms.
-[Feature usage counters](#feature-usage-counters) are **not** written to it,
-and neither are the cluster-level `exceeded_max_retries` /
-`exceeded_total_timeout` counters. The format is defined outside this SDK and
-read by tools such as `asloglatency`, so adding fields to it would make the
-file non-interoperable with the other Aerospike clients that read and write
-it. Anything outside that field list reaches a consumer through the canonical
-snapshot — {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` carries
-all of it — via a custom exporter or a `cluster.metrics()` poll.
+Every line begins with a local timestamp (`yyyy-MM-dd HH:mm:ss.SSS`). The
+first line of a file is the header declaring the schema, and each later line
+is one snapshot, positional rather than named:
+
+```text
+header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,background_count,tran_count,command_retries,nodes[]] labels[name,value] nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,namespaces[]] namespaces[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]] latency(MILLISECONDS,7,1)[type[l1,l2,l3...]]
+```
+
+- `client_type` is `python-sdk`.
+- `cpu` and `mem` are this process's CPU share and resident memory, sampled
+  when the snapshot is built. `cpu` is CPU time consumed since the previous
+  snapshot as a percentage of the wall time elapsed, so a busy process on
+  several cores can read above 100. `mem` is the resident set size in bytes:
+  current on Linux, and the process's peak on macOS, which is what the platform
+  reports without a third-party dependency.
+- `command_count` and `command_retries` are the cluster counters described in
+  [Known limitations](#known-limitations). They read 0 unless the operational
+  tier is on.
+- `blocking_count`, `deferred_count`, `background_count` and `tran_count` are
+  the `feature.api.*` and `feature.transaction` usage counters. They read 0
+  unless the usage tier is on. The other feature counters are not written to
+  the file; they reach a consumer through the canonical snapshot.
+- Nodes that left the cluster since the previous line follow the live ones in
+  the node list, with their final counters.
+- Each namespace carries all five latency types, `conn`, `write`, `read`,
+  `batch` and `query`, in that order.
+
+The file can also be written from code: construct the writer and register it
+like any exporter, under `custom` mode. Its first `export` opens the file and
+writes the header, and the application closes it:
+
+```python
+from aerospike_sdk.metrics import MetricsWriter
+
+exporter = MetricsWriter("/var/log/aerospike/metrics")
+cluster.add_exporter(exporter)
+...
+exporter.close()
+```
 
 ```{warning}
-The `latency(columns,shift)` pair in this file carries no unit. The format
-predates microsecond buckets, so a reader following the legacy convention —
-including `asloglatency` — treats those buckets as milliseconds. With
-`latency_unit: microseconds` the numbers are still correct but will be read as
-1000× larger than they are.
-
-The pair is written regardless of unit, because omitting it would leave the
-histogram shape undescribed as well as its unit. Set
-`latency_unit: microseconds` for file export only where whatever consumes the
-files knows to expect microsecond buckets; the snapshot passed to a custom
-exporter carries `latency_unit` explicitly and has no such ambiguity.
+The header names the latency unit, but tools that predate microsecond buckets
+read every histogram as milliseconds. With `latency_unit: microseconds` the
+numbers are still correct but such a tool reads them as 1000× larger than they
+are. Set it for file export only where whatever consumes the files reads the
+unit; the canonical snapshot carries `latency_unit` explicitly.
 ```
 
 ## Configuring metrics from a file
@@ -439,6 +479,11 @@ A block that never sets `enabled` leaves collection as it is, so a file that
 only tunes the histogram shape does not switch collection on by itself.
 Changing `enabled` in the file takes effect on reload, without reconnecting.
 
+While a loaded file sets `metrics.enabled`, the file owns that switch:
+`enable_metrics()` and `disable_metrics()` raise `AerospikeError` with
+`PARAMETER_ERROR` rather than make a change the next reload would undo. A
+file that leaves `enabled` unset leaves the switch to code.
+
 (known-limitations)=
 ## Known limitations
 
@@ -450,24 +495,13 @@ current behavior, not bugs in configuration:
 | --- | --- |
 | **Two latency measures** | The per-namespace `latency` histograms time each network attempt, connection acquired to response parsed, so a retried command contributes one sample per attempt and its backoff between attempts is not in them. The whole-call latency, first attempt through the last retry, is recorded separately per command type and is read through `command_histogram()` on the cluster aggregate and per node. It has no field in the canonical snapshot yet, because the cross-SDK schema does not define one. |
 | **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
-| **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call whenever metrics are on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
-| **Log file omits the per-call count** | The line format has no field for `command_count`, nor for the cluster-level `exceeded_max_retries` / `exceeded_total_timeout`. The format is defined outside this SDK, so it is not extended. All of it is present in the canonical snapshot. |
-| **Latency unit in the log file** | Older consumers of the line format read `latency(...)` as milliseconds regardless of what the unit field says. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
+| **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call while the operational tier is on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
+| **Client-side timeouts** | A command that exhausts its client-side deadline or retry budget receives no result code, so it is outside the per-namespace counters: `timeouts` in the canonical snapshot and the `timeouts` column of the log file both count timeouts the server reported. Those expiries are counted cluster-wide instead, as `command_timeout_client` in the canonical snapshot, with `command_timeout_server` beside it as the per-namespace `timeouts` summed. The client core does not yet attribute a client-side expiry to a namespace, so the two never overlap, and the log file has no column for the client-side total. |
+| **Latency unit in the log file** | Older consumers of the line format read latency as milliseconds regardless of the unit the header names. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 
-The line-oriented log format's `cpu` and `mem` columns are this process's CPU
-share and resident memory, sampled by the SDK when the snapshot is built. `cpu`
-is CPU time consumed since the previous snapshot as a percentage of the wall
-time elapsed, so a busy process on several cores can read above 100. `mem` is
-the resident set size in bytes: current on Linux, and the process's peak on
-macOS, which is what the platform reports without a third-party dependency.
-The canonical snapshot carries the same two values as `cpu_percent` and
-`memory_bytes`.
-
-What the file does carry, beyond the per-node and per-namespace segments: the
-six feature-usage counters as the `single_count` … `background_count` columns,
-and `retry_count` for the summed per-node retries described above. Its field
-names are snake_case, as the canonical snapshot's are.
+The canonical snapshot carries the log file's `cpu` and `mem` values as
+`cpu_percent` and `memory_bytes`.
 
 ## What the latencies represent
 
