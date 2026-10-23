@@ -53,6 +53,7 @@ Shared types used by both async and sync APIs.
 | Class | Description |
 |-------|-------------|
 | [`DataSet`](dataset.md) | Namespace + set pair, key factory |
+| [`Key`](key.md) | One record's identity: namespace, set, user key, and digest |
 | [`HllConfig`](hll-config.md) | HyperLogLog bin precision (index + minhash bit counts) |
 | [`SortedMap`](sorted-map.md) | Declares a map bin key-ordered on a plain write |
 | [`RecordResult`](record-result.md) | Single result from a query or batch |
@@ -63,6 +64,7 @@ Shared types used by both async and sync APIs.
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
+| [`ResultCode`](result-code.md) | Server and client result codes carried on every error and record result |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
 | [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
@@ -111,6 +113,7 @@ sync/background
 sync/info
 sync/udf
 dataset
+key
 hll-config
 sorted-map
 record-result
@@ -122,6 +125,7 @@ system-settings
 error-strategy
 expression-trace
 exceptions
+result-code
 query-hint
 metrics
 loggers

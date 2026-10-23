@@ -58,7 +58,7 @@ class AerospikeError(Exception):
     fall back to this type for all other Aerospike-related errors.
 
     Attributes:
-        result_code: The :class:`~aerospike_native.exceptions.ResultCode` of the
+        result_code: The :class:`~aerospike_sdk.ResultCode` of the
             failure. A server failure carries the code the server returned;
             a failure the client raised on its own carries a client code
             (``ResultCode.SERVER_NOT_AVAILABLE``, ``ResultCode.TXN_FAILED``),

@@ -43,10 +43,10 @@ class RecordResult:
     by the server.
 
     Attributes:
-        key: Target :class:`~aerospike_native.Key` for this row.
+        key: Target :class:`~aerospike_sdk.Key` for this row.
         record: :class:`~aerospike_native.Record` payload, or ``None`` if not
             returned (errors, not found, or UDF error rows).
-        result_code: The row's :class:`~aerospike_native.exceptions.ResultCode`:
+        result_code: The row's :class:`~aerospike_sdk.ResultCode`:
             the server's code, or a client code (such as ``CLIENT_ERROR``) for
             a row that failed before the server answered.
         in_doubt: ``True`` when a write may have completed despite an error.

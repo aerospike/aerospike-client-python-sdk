@@ -237,7 +237,7 @@ class Session(
         :meth:`query` when you need filters, projections, or streaming.
 
         Args:
-            key: Target :class:`~aerospike_native.Key`.
+            key: Target :class:`~aerospike_sdk.Key`.
             bins: Optional bin-name projection. ``None`` (default) reads
                 all bins.
 
@@ -418,7 +418,7 @@ class Session(
         generation checks, durable delete, or filter expressions.
 
         Args:
-            key: Target :class:`~aerospike_native.Key`.
+            key: Target :class:`~aerospike_sdk.Key`.
             bins: Mapping of bin name to value to write. An empty mapping
                 is permitted.
 
@@ -620,7 +620,7 @@ class Session(
         batch UDF; results preserve per-key order where applicable.
 
         Args:
-            *keys: One or more :class:`~aerospike_native.Key` targets in the same
+            *keys: One or more :class:`~aerospike_sdk.Key` targets in the same
                 namespace and set.
 
         Returns:

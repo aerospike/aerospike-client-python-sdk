@@ -367,7 +367,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         the record must not already exist.
 
         Args:
-            arg1: A single :class:`~aerospike_native.Key`, a list of keys, or a
+            arg1: A single :class:`~aerospike_sdk.Key`, a list of keys, or a
                 :class:`~aerospike_sdk.dataset.DataSet` for a tabular write
                 (rows follow via ``bins(...)``).
             *keys: Additional keys when ``arg1`` is a key.
@@ -661,7 +661,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         This session's behavior is applied to the underlying query builder; use
         :meth:`session_for` to run a query under a different one. Supported
         shapes: a :class:`~aerospike_sdk.dataset.DataSet` (set-wide query), a
-        single :class:`~aerospike_native.Key`, or multiple keys (varargs or a
+        single :class:`~aerospike_sdk.Key`, or multiple keys (varargs or a
         list). Multi-key queries are split into per-node sub-batches, and a node
         whose sub-batch holds a single key is sent a regular single-record
         command automatically — size-1 batches need no special-casing by the

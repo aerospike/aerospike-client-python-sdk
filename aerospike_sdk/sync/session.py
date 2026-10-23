@@ -149,7 +149,7 @@ class Session(
         namespace mode (from the in-memory partition map).
 
         Args:
-            key: Target :class:`~aerospike_native.Key`.
+            key: Target :class:`~aerospike_sdk.Key`.
             bins: Optional bin-name projection. ``None`` (default) reads
                 all bins.
 

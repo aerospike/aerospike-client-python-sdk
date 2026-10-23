@@ -2302,7 +2302,7 @@ class _QueryBuilderBase:
         ``function(package, name)`` next.
 
         Args:
-            *keys: One or more :class:`~aerospike_native.Key` targets for the
+            *keys: One or more :class:`~aerospike_sdk.Key` targets for the
                 UDF segment.
 
         Returns:
