@@ -22,6 +22,9 @@ The primary API. All operations are `async`/`await`.
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
+| [`RegisterTask`](register-task.md) | Handle returned by UDF registration; wait for cluster-wide completion |
+| [`UdfRemoveTask`](udf-remove-task.md) | Handle returned by UDF removal; wait for cluster-wide completion |
+| [`TaskStatus`](task-status.md) | State reported by a task's `query_status` |
 | [`InfoCommands`](info.md) | Aerospike info protocol commands |
 | [`TransactionalSession`](transactional-session.md) | Multi-record transactions |
 | [`TxnStatus`](txn-status.md) | Outcome of a transaction commit or abort |
@@ -96,6 +99,9 @@ string-builder
 index-builder
 background
 udf
+register-task
+udf-remove-task
+task-status
 info
 transactional-session
 txn-status

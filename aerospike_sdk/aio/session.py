@@ -917,7 +917,7 @@ class Session(
             policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask`; await
+            A :class:`~aerospike_sdk.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
@@ -953,7 +953,7 @@ class Session(
             policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask`; await
+            A :class:`~aerospike_sdk.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
@@ -994,7 +994,7 @@ class Session(
             policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask`; await
+            A :class:`~aerospike_sdk.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
@@ -1028,7 +1028,7 @@ class Session(
             policy: Optional :class:`~aerospike_native.AdminPolicy`; keyword-only.
 
         Returns:
-            A :class:`~aerospike_native.UdfRemoveTask`; await
+            A :class:`~aerospike_sdk.UdfRemoveTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:

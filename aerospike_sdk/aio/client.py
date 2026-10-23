@@ -442,7 +442,7 @@ class Client(RoutingCapabilitiesMixin):
                 argument); use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask`; await
+            A :class:`~aerospike_sdk.RegisterTask`; await
             ``wait_till_complete(...)`` until propagation finishes.
 
         Raises:
@@ -478,7 +478,7 @@ class Client(RoutingCapabilitiesMixin):
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask` for completion polling.
+            A :class:`~aerospike_sdk.RegisterTask` for completion polling.
 
         Raises:
             RuntimeError: If not connected.
@@ -519,7 +519,7 @@ class Client(RoutingCapabilitiesMixin):
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_native.RegisterTask` for completion polling.
+            A :class:`~aerospike_sdk.RegisterTask` for completion polling.
 
         Raises:
             RuntimeError: If not connected.
@@ -552,7 +552,7 @@ class Client(RoutingCapabilitiesMixin):
             policy: Optional admin policy; use keyword ``policy=``.
 
         Returns:
-            A :class:`~aerospike_native.UdfRemoveTask`; await completion like register.
+            A :class:`~aerospike_sdk.UdfRemoveTask`; await completion like register.
 
         Raises:
             RuntimeError: If not connected.
