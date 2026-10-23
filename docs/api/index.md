@@ -68,6 +68,7 @@ Shared types used by both async and sync APIs.
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`ResultCode`](result-code.md) | Server and client result codes carried on every error and record result |
+| [`ErrorDetailVerbosity`](error-detail-verbosity.md) | How much server error detail to request: subcode, message, expression trace |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
 | [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
@@ -129,6 +130,7 @@ behavior
 cluster-definition
 system-settings
 error-strategy
+error-detail-verbosity
 expression-trace
 exceptions
 result-code
