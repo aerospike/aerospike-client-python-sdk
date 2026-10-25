@@ -152,6 +152,8 @@ client-side latency and errors the same way the server groups its own. The
 3. `not-set`.
 
 It is never an empty string, so a consumer never needs a missing-value case.
+The canonical document also carries `conn_type`, either `sync` or `async`, so
+one application using both client surfaces produces distinct metric series.
 
 The server's own user-agent record uses the same field, but only the first two
 of those steps agree with it: it carries an identifier you set, otherwise
@@ -304,17 +306,37 @@ Implement `MetricsExporter` (plain `def export`) for the sync client and
 `AsyncMetricsExporter` (`async def export`) for the async one. Exporters are
 called in registration order with the same snapshot, which is an owned copy —
 keeping it past the call is safe. One exporter raising never silences the
-others: the error is logged and the rest still run. An exporter that fails
-three exports in a row is suspended, then retried every tenth interval until
-it succeeds, at which point its normal cadence resumes.
+others: the error is logged and the rest still run. By default, an exporter
+that fails three exports in a row is suspended and retried after 60 seconds.
+Configure those values with `metrics.max_consecutive_failures` and
+`metrics.suspend_retry_interval`. The retry delay is wall-clock time, not a
+number of export intervals. A successful retry restores normal delivery.
+
+Each exporter call is bounded by `metrics.export_timeout` (10 seconds by
+default). A timed-out exporter is counted as failed and delivery continues to
+the exporters registered after it. The same exporter is not invoked again
+while its timed-out call is still unwinding; Python cannot forcibly terminate
+arbitrary application code. An async timeout does not cancel the exporter,
+because cancellation cannot stop blocking work already running through
+`asyncio.to_thread()`.
+
+Async exporters run on the application's event loop by default, preserving
+the loop affinity expected by existing asyncio resources. Set
+`metrics.async_exporter_isolation: true` to run exporter coroutines on a
+dedicated daemon thread and event loop instead. This opt-in protects
+application tasks from a custom exporter that blocks without yielding, but an
+exporter must not use asyncio objects bound to the application loop while the
+switch is enabled.
 
 Disabling metrics and closing the cluster each push one last snapshot, so the
 activity since the previous interval is not lost. It is taken before
-collection stops. The sync client's `disable_metrics()` returns once every
-exporter has received it. The async client's `disable_metrics()` is a plain
-method that returns straight away, while the closing snapshot is delivered in
-the background; `await cluster.close()` waits for that delivery, and
-re-enabling holds the next export until it finishes, so an exporter never
+collection stops. Sync shutdown interrupts the SDK metrics thread's wait for a
+blocked custom exporter before attempting the final delivery. Python cannot
+terminate arbitrary application code, so that exporter's daemon invocation
+may remain until the call returns. The async client's `disable_metrics()` is a
+plain method that returns straight away, while the closing snapshot is
+delivered in the background; `await cluster.close()` waits for that delivery,
+and re-enabling holds the next export until it finishes, so an exporter never
 sees two exports at once. Changing the policy with `enable_metrics()` while
 metrics are on restarts the push without a closing snapshot.
 
@@ -385,6 +407,10 @@ system:
     metrics:
       enabled: true
       export_interval: 30s
+      export_timeout: 10s
+      max_consecutive_failures: 3
+      suspend_retry_interval: 60s
+      async_exporter_isolation: false
       exporter: file
       report_dir: /var/log/aerospike/metrics
       report_size_limit: 10mb

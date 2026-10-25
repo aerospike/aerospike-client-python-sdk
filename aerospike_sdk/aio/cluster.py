@@ -93,6 +93,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     """
 
     _node_cls = Node
+    _metrics_conn_type = "async"
 
     def __init__(self, sdk_client: Client) -> None:
         """
@@ -114,6 +115,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         self._export_timer: Any = None
         # The latest closing push still being delivered, if any.
         self._final_export: Optional[asyncio.Task] = None
+        # Lazily created only for metrics.async_exporter_isolation.
+        self._async_metrics_export_worker: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
 
     @classmethod
@@ -523,5 +526,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
             timer, self._export_timer = self._export_timer, None
             await timer.stop(final=True)
         _close_built_in(self._detach_built_in())
+        if self._async_metrics_export_worker is not None:
+            await self._async_metrics_export_worker.close()
+            self._async_metrics_export_worker = None
         await self._sdk_client.close()
 

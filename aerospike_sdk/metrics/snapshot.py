@@ -28,6 +28,7 @@ import os
 import resource
 import sys
 import time
+from types import MappingProxyType
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from aerospike_native import (
@@ -46,6 +47,30 @@ from aerospike_sdk.metrics.policy import (
 )
 
 __all__ = ["DerivedHistogram", "MetricsSnapshot"]
+
+
+@dataclass(frozen=True)
+class _SnapshotPolicy:
+    operational_enabled: bool
+    latency_columns: int
+    latency_shift: int
+
+    @classmethod
+    def capture(cls, policy: Any) -> Optional["_SnapshotPolicy"]:
+        if policy is None:
+            return None
+        return cls(
+            operational_enabled=bool(policy.operational_enabled),
+            latency_columns=int(policy.latency_columns),
+            latency_shift=int(policy.latency_shift),
+        )
+
+
+@dataclass(frozen=True)
+class _NodeIdentity:
+    name: str
+    host: tuple
+
 
 @dataclass(frozen=True)
 class DerivedHistogram:
@@ -163,7 +188,7 @@ class MetricsSnapshot:
 
     __slots__ = (
         "_pnc", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
-        "_metrics_enabled", "_usage_enabled",
+        "_metrics_enabled", "_usage_enabled", "_conn_type", "_timestamp",
     )
 
     def __init__(
@@ -178,6 +203,7 @@ class MetricsSnapshot:
         process: Optional[Tuple[float, int]] = None,
         metrics_enabled: bool = False,
         usage_enabled: bool = False,
+        conn_type: str = "",
     ) -> None:
         """Wrap a raw PNC snapshot.
 
@@ -196,26 +222,43 @@ class MetricsSnapshot:
             metrics_enabled: Whether collection was on when the snapshot was
                 taken.
             usage_enabled: Whether the usage counters were being recorded.
+            conn_type: Client connection mode, ``"sync"`` or ``"async"``.
         """
-        self._pnc = pnc_metrics
-        self._policy = policy
-        self._nodes = nodes
-        self._usage = usage or {}
-        self._command_count = command_count
-        self._departed: tuple = ()
-        self._app_id = app_id
-        self._process = process
-        self._metrics_enabled = metrics_enabled
-        self._usage_enabled = usage_enabled
+        identities = None if nodes is None else tuple(
+            _NodeIdentity(
+                name=str(getattr(node, "name", "")),
+                host=tuple(getattr(node, "host")),
+            )
+            for node in nodes
+            if getattr(node, "host", None) is not None
+        )
+        object.__setattr__(self, "_pnc", pnc_metrics)
+        object.__setattr__(self, "_policy", _SnapshotPolicy.capture(policy))
+        object.__setattr__(self, "_nodes", identities)
+        object.__setattr__(self, "_usage", MappingProxyType(dict(usage or {})))
+        object.__setattr__(self, "_command_count", command_count)
+        object.__setattr__(self, "_departed", ())
+        object.__setattr__(self, "_app_id", app_id)
+        object.__setattr__(self, "_process", None if process is None else tuple(process))
+        object.__setattr__(self, "_metrics_enabled", bool(metrics_enabled))
+        object.__setattr__(self, "_usage_enabled", bool(usage_enabled))
+        object.__setattr__(self, "_conn_type", str(conn_type))
+        object.__setattr__(self, "_timestamp", datetime.now(timezone.utc))
 
-    def _mark_departed(self, tracker: Any) -> None:
-        """Record which hosts left the cluster, for ``nodes_departed``.
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
+
+    def _with_departed(self, tracker: Any) -> "MetricsSnapshot":
+        """Return a snapshot carrying this cycle's ``nodes_departed``.
 
         Called by the export timer, which owns the departure state: the
         underlying client retains every host it ever measured, so departure is
         judged by joining the snapshot's hosts against the live node list, and
-        the tracker remembers what was already reported. A snapshot pulled
-        outside the export cycle carries an empty ``nodes_departed``.
+        the tracker remembers what was already reported. This snapshot is not
+        mutated; a plain on-demand snapshot keeps an empty ``nodes_departed``.
         """
         raw = self._pnc.to_dict()
         snapshot_hosts = [
@@ -224,15 +267,21 @@ class MetricsSnapshot:
         ]
         live_hosts = [
             f"{host[0]}:{host[1]}"
-            for node in (self._nodes or [])
-            if (host := getattr(node, "host", None)) is not None
+            for node in (self._nodes or ())
+            if (host := node.host)
         ]
-        self._departed = tuple(tracker.departed(snapshot_hosts, live_hosts))
+        departed = tuple(tracker.departed(snapshot_hosts, live_hosts))
+        clone = object.__new__(type(self))
+        for slot in self.__slots__:
+            object.__setattr__(
+                clone, slot, departed if slot == "_departed" else getattr(self, slot)
+            )
+        return clone
 
     @property
     def nodes(self) -> Dict[str, NodeMetricsSnapshot]:
         """Per-node snapshots keyed by host address."""
-        return self._pnc.nodes
+        return dict(self._pnc.nodes)
 
     @property
     def cluster_aggregated(self) -> NodeMetricsSnapshot:
@@ -412,10 +461,9 @@ class MetricsSnapshot:
         labels = _split_labels(aggregated.get("labels") or [])
 
         nodes_by_host = {}
-        for node in self._nodes or []:
-            host = getattr(node, "host", None)
-            if host is not None:
-                nodes_by_host[f"{host[0]}:{host[1]}"] = node
+        for node in self._nodes or ():
+            host = node.host
+            nodes_by_host[f"{host[0]}:{host[1]}"] = node
 
         nodes: List[Dict[str, Any]] = []
         departed: List[Dict[str, Any]] = []
@@ -443,9 +491,10 @@ class MetricsSnapshot:
         columns = policy.latency_columns if policy is not None else _DEFAULT_LATENCY_COLUMNS
         shift = policy.latency_shift if policy is not None else _DEFAULT_LATENCY_SHIFT
         document: Dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": self._timestamp.isoformat(),
             "client_type": CLIENT_TYPE,
             "client_version": _client_version(),
+            "conn_type": self._conn_type,
             "cluster_name": labels.reserved.get("cluster", ""),
             "app_id": labels.reserved.get("app_id") or self._app_id or _APP_ID_UNSET,
             "labels": labels.user,
@@ -511,7 +560,7 @@ class MetricsSnapshot:
             | set(node_raw.get("detailed_metrics") or {})
         )
         return {
-            "name": getattr(node, "name", "") if node is not None else "",
+            "name": node.name if node is not None else "",
             # Identity comes from the snapshot's own host key: the live node's
             # `address` carries its port too, and a departed node has no live
             # counterpart to ask, so the key is the one form both share.

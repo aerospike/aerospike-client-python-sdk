@@ -833,6 +833,8 @@ class ClusterBase(Generic[_S, _TS, _N]):
     transaction is opened from a cluster, or on what membership it reports.
     """
 
+    _metrics_conn_type = ""
+
     # Narrowed to ``Client`` / ``SyncClient`` by each leaf's ``__init__``;
     # loose here so the shared factories can delegate without the type-checker
     # flagging the per-tree client's methods. The base only ever delegates to
@@ -1082,6 +1084,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
             process=self._process_sampler.sample(),
             metrics_enabled=pnc.metrics_enabled(),
             usage_enabled=client._usage_on,
+            conn_type=self._metrics_conn_type,
         )
 
     def _check_metrics_switch_is_free(self, method: str) -> None:

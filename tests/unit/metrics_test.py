@@ -258,14 +258,47 @@ class TestCanonicalSnapshot:
         return MetricsSnapshot(_FakePncSnapshot(_RAW), policy=policy, nodes=nodes)
 
     def test_top_level_fields(self):
-        doc = self._snapshot(policy=MetricsPolicy(latency_columns=9, latency_shift=3)).to_canonical_dict()
+        doc = MetricsSnapshot(
+            _FakePncSnapshot(_RAW),
+            policy=MetricsPolicy(latency_columns=9, latency_shift=3),
+            conn_type="async",
+        ).to_canonical_dict()
         assert doc["client_type"] == "python-sdk"
+        assert doc["conn_type"] == "async"
         assert doc["latency_unit"] == "microseconds"
         assert doc["latency_columns"] == 9
         assert doc["latency_shift"] == 3
         assert doc["cluster_name"] == "c1"
         assert doc["app_id"] == "billing"
         assert doc["timestamp"].endswith("+00:00")
+
+    def test_snapshot_is_immutable_and_copies_python_owned_inputs(self):
+        policy = MetricsPolicy(latency_columns=9)
+        node = _FakeNode("original", "127.0.0.1:3010", ("127.0.0.1", 3010))
+        usage = {"feature.shape.point": 1}
+        snapshot = MetricsSnapshot(
+            _FakePncSnapshot(_RAW), policy=policy, nodes=[node], usage=usage
+        )
+
+        policy.latency_columns = 3
+        node.name = "changed"
+        usage["feature.shape.point"] = 99
+
+        doc = snapshot.to_canonical_dict()
+        assert doc["latency_columns"] == 9
+        assert doc["nodes"][0]["name"] == "original"
+        assert snapshot.usage == {"feature.shape.point": 1}
+        with pytest.raises(AttributeError, match="immutable"):
+            snapshot._departed = ("127.0.0.1:3010",)
+        with pytest.raises(AttributeError, match="immutable"):
+            del snapshot._departed
+
+        returned_nodes = snapshot.nodes
+        returned_nodes["changed"] = object()
+        assert "changed" not in snapshot.nodes
+
+        first_timestamp = snapshot.to_canonical_dict()["timestamp"]
+        assert snapshot.to_canonical_dict()["timestamp"] == first_timestamp
 
     def test_tier_flags_follow_what_was_collecting(self):
         on = MetricsSnapshot(
@@ -467,8 +500,9 @@ class TestCanonicalSnapshot:
 
     def test_a_departed_node_moves_to_nodes_departed(self):
         # An empty live-node list: the one measured host has left the cluster.
-        snapshot = self._snapshot(nodes=[])
-        snapshot._mark_departed(_NodeCloseTracker())
+        original = self._snapshot(nodes=[])
+        snapshot = original._with_departed(_NodeCloseTracker())
+        assert original.to_canonical_dict()["nodes_departed"] == []
         doc = snapshot.to_canonical_dict()
         assert doc["nodes"] == []
         assert [n["address"] for n in doc["nodes_departed"]] == ["127.0.0.1"]
@@ -477,10 +511,8 @@ class TestCanonicalSnapshot:
         """The tracker reports each host once; afterwards it is neither live nor departed."""
 
         tracker = _NodeCloseTracker()
-        first = self._snapshot(nodes=[])
-        first._mark_departed(tracker)
-        second = self._snapshot(nodes=[])
-        second._mark_departed(tracker)
+        self._snapshot(nodes=[])._with_departed(tracker)
+        second = self._snapshot(nodes=[])._with_departed(tracker)
         doc = second.to_canonical_dict()
         assert doc["nodes"] == [] and doc["nodes_departed"] == []
 

@@ -23,12 +23,12 @@ opening and closing whatever it writes to belongs to the exporter and the
 application that constructed it.
 
 There are two exporter protocols because there are two clients. The async
-client awaits :class:`AsyncMetricsExporter` on its loop; the sync client calls
-:class:`MetricsExporter` directly. Exporting is IO -- a file write, an HTTP
-post -- and an export interval is long enough that running it on the async
-client's event loop would stall every in-flight operation behind it. Writing
-an async exporter for the async client keeps that IO off the critical path
-without the SDK moving user code onto a thread behind their back.
+client awaits :class:`AsyncMetricsExporter`; by default it preserves the
+application event loop, while the opt-in ``async_exporter_isolation`` setting
+uses a dedicated thread/event loop. The sync client calls
+:class:`MetricsExporter` directly through its bounded runner. Exporting is IO
+-- a file write, an HTTP post -- so async exporters should remain cooperative
+even when isolation is off.
 
 Which exporters receive the push is chosen by the ``metrics.exporter``
 setting (:class:`MetricsExporterType`): ``file``, the default, sends it to
@@ -37,9 +37,10 @@ the built-in log writer only; ``custom`` to the exporters registered with
 application that registers its own exporter also selects ``custom``.
 
 An exporter that keeps failing is suspended rather than allowed to fail every
-interval forever: after three consecutive failures it is skipped, then retried
-every tenth interval, and a success puts it back on the normal cadence. Other
-exporters and collection itself are unaffected throughout.
+interval forever. The failure threshold and wall-clock retry interval are
+configurable; defaults are three consecutive failures and 60 seconds. A
+success puts the exporter back on the normal cadence. Other exporters and
+collection itself are unaffected throughout.
 
 Disabling metrics or closing the cluster pushes one last snapshot, so the
 window since the previous export is not lost. Restarting the timer on a
@@ -49,6 +50,7 @@ policy change does not.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import CancelledError as ConcurrentCancelledError
 from datetime import datetime
 from enum import Enum
 import inspect
@@ -75,11 +77,13 @@ log = logging.getLogger(SdkLoggers.BEHAVIOR)
 
 # How often a snapshot is pushed when the configuration does not say.
 DEFAULT_EXPORT_INTERVAL_SECONDS = 30.0
+# Maximum time one exporter may delay the exporters registered after it.
+DEFAULT_EXPORT_TIMEOUT_SECONDS = 10.0
 
 # An exporter failing this many exports in a row is suspended...
-SUSPEND_AFTER_CONSECUTIVE_FAILURES = 3
-# ...and retried once every this many intervals until it succeeds again.
-SUSPENDED_RETRY_EVERY_INTERVALS = 10
+DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
+# ...and retried after this wall-clock delay until it succeeds again.
+DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS = 60.0
 
 
 
@@ -126,9 +130,10 @@ MIN_REPORT_SIZE_LIMIT = 1_000_000
 
 __all__ = [
     "DEFAULT_EXPORT_INTERVAL_SECONDS",
+    "DEFAULT_MAX_CONSECUTIVE_FAILURES",
+    "DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS",
+    "DEFAULT_EXPORT_TIMEOUT_SECONDS",
     "MIN_REPORT_SIZE_LIMIT",
-    "SUSPEND_AFTER_CONSECUTIVE_FAILURES",
-    "SUSPENDED_RETRY_EVERY_INTERVALS",
     "AsyncMetricsExportTimer",
     "AsyncMetricsExporter",
     "MetricsExporter",
@@ -461,22 +466,194 @@ class _NodeCloseTracker:
 class _ExporterHealth:
     """Suspension state for one registered exporter."""
 
-    __slots__ = ("failures", "suspended", "skipped")
+    __slots__ = ("failures", "suspended_at")
 
     def __init__(self) -> None:
         self.failures = 0
-        self.suspended = False
-        self.skipped = 0
+        self.suspended_at: Optional[float] = None
 
-    def should_attempt(self) -> bool:
-        """Whether this cycle calls the exporter, advancing the retry countdown."""
-        if not self.suspended:
+    @property
+    def suspended(self) -> bool:
+        return self.suspended_at is not None
+
+    def should_attempt(self, now: float, retry_interval: float) -> bool:
+        """Whether this cycle calls the exporter after its wall-clock delay."""
+        if self.suspended_at is None:
             return True
-        self.skipped += 1
-        if self.skipped >= SUSPENDED_RETRY_EVERY_INTERVALS:
-            self.skipped = 0
-            return True
-        return False
+        return now - self.suspended_at >= retry_interval
+
+
+class _ExportCancelled(Exception):
+    """The client is stopping and no longer waits for this invocation."""
+
+
+class _SyncExporterRunner:
+    """Run one sync exporter at a time on daemon threads with a bounded wait."""
+
+    def __init__(self) -> None:
+        self._active: Optional[Tuple[threading.Event, List[BaseException]]] = None
+
+    @property
+    def busy(self) -> bool:
+        return self._active is not None and not self._active[0].is_set()
+
+    def invoke(
+        self,
+        exporter: Any,
+        snapshot: Any,
+        timeout: float,
+        cancel: Optional[threading.Event] = None,
+    ) -> None:
+        if cancel is not None and cancel.is_set():
+            raise _ExportCancelled
+        active = self._active
+        if active is not None:
+            done, _ = active
+            if not done.is_set():
+                raise TimeoutError("previous export is still running")
+            self._active = None
+
+        done = threading.Event()
+        errors: List[BaseException] = []
+        self._active = (done, errors)
+
+        def call() -> None:
+            try:
+                exporter.export(snapshot)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=call,
+            name=f"aerospike-metrics-{type(exporter).__name__}",
+            daemon=True,
+        ).start()
+        deadline = time.monotonic() + timeout
+        while not done.is_set():
+            if cancel is not None and cancel.is_set():
+                raise _ExportCancelled
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"export exceeded {timeout:g}s")
+            done.wait(min(remaining, 0.05) if cancel is not None else remaining)
+        self._active = None
+        if errors:
+            raise errors[0]
+
+
+def _consume_async_result(task: Any) -> None:
+    """Retrieve a detached task/future result so it is not reported later."""
+    try:
+        task.exception()
+    except (asyncio.CancelledError, ConcurrentCancelledError):
+        pass
+
+
+class _AsyncExporterWorker:
+    """Dedicated daemon event loop for opt-in async exporter isolation."""
+
+    def __init__(self) -> None:
+        self._ready = threading.Event()
+        self._closed = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="aerospike-metrics-async-export",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait()
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.close()
+
+    def submit(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+        if self._closed or self._loop is None:
+            coroutine.close()
+            raise RuntimeError("async metrics exporter worker is closed")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+
+    async def close(self) -> None:
+        """Stop the worker without closing application-owned exporters."""
+        if self._closed:
+            return
+        self._closed = True
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        await asyncio.to_thread(self._thread.join, 1.0)
+        if self._thread.is_alive():
+            log.warning(
+                "Async metrics exporter worker did not stop; custom exporter "
+                "code is still blocking its event loop"
+            )
+
+
+class _AsyncExporterRunner:
+    """Bound one async exporter without overlapping a timed-out invocation."""
+
+    def __init__(self) -> None:
+        self._active: Optional[Any] = None
+
+    @property
+    def busy(self) -> bool:
+        return self._active is not None and not self._active.done()
+
+    async def invoke(
+        self,
+        exporter: Any,
+        snapshot: Any,
+        timeout: float,
+        worker: Optional[_AsyncExporterWorker] = None,
+    ) -> None:
+        active = self._active
+        if active is not None:
+            if not active.done():
+                raise TimeoutError("previous export is still running")
+            _consume_async_result(active)
+            self._active = None
+
+        submitted = (
+            asyncio.create_task(exporter.export(snapshot))
+            if worker is None
+            else worker.submit(exporter.export(snapshot))
+        )
+        self._active = submitted
+        waiting = (
+            submitted
+            if worker is None
+            else asyncio.wrap_future(submitted)
+        )
+        try:
+            done, _ = await asyncio.wait({waiting}, timeout=timeout)
+        except asyncio.CancelledError:
+            submitted.add_done_callback(_consume_async_result)
+            if waiting is not submitted:
+                waiting.add_done_callback(_consume_async_result)
+            raise
+        if not done:
+            submitted.add_done_callback(_consume_async_result)
+            if waiting is not submitted:
+                waiting.add_done_callback(_consume_async_result)
+            raise TimeoutError(f"export exceeded {timeout:g}s")
+        self._active = None
+        submitted.result()
 
 
 class _MetricsExportTimer:
@@ -494,17 +671,40 @@ class _MetricsExportTimer:
         self.settings = settings
         self.tracker = _NodeCloseTracker()
         self._health: Dict[int, _ExporterHealth] = {}
+        self.current_exporter_ids: set = set()
+        configured_timeout = getattr(settings, "export_timeout", None)
+        self.export_timeout = (
+            configured_timeout.total_seconds()
+            if configured_timeout is not None
+            else DEFAULT_EXPORT_TIMEOUT_SECONDS
+        )
+        configured_failures = getattr(settings, "max_consecutive_failures", None)
+        self.max_consecutive_failures = (
+            configured_failures
+            if configured_failures is not None
+            else DEFAULT_MAX_CONSECUTIVE_FAILURES
+        )
+        configured_retry = getattr(settings, "suspend_retry_interval", None)
+        self.suspend_retry_interval = (
+            configured_retry.total_seconds()
+            if configured_retry is not None
+            else DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS
+        )
 
     def exporters_to_run(self) -> List[Any]:
         """The exporters this cycle calls, honoring the mode and suspensions."""
         current = self.cluster._export_targets()
         ids = {id(e) for e in current}
+        self.current_exporter_ids = ids
         # Health for a removed exporter would pin its id forever, and a new
         # exporter can land on a recycled id; prune to the live list.
         self._health = {k: v for k, v in self._health.items() if k in ids}
+        now = time.monotonic()
         return [
             exporter for exporter in current
-            if self._health.setdefault(id(exporter), _ExporterHealth()).should_attempt()
+            if self._health.setdefault(id(exporter), _ExporterHealth()).should_attempt(
+                now, self.suspend_retry_interval
+            )
         ]
 
     def take(self) -> Optional[Tuple[Any, List[Any]]]:
@@ -514,8 +714,7 @@ class _MetricsExportTimer:
             # Taking a snapshot drains and aggregates per-node state in the
             # client core; skip that work when nothing would consume it.
             return None
-        snapshot = self.cluster.metrics_snapshot()
-        snapshot._mark_departed(self.tracker)
+        snapshot = self.cluster.metrics_snapshot()._with_departed(self.tracker)
         return snapshot, runnable
 
     def take_final(self) -> Optional[Tuple[Any, List[Any]]]:
@@ -539,8 +738,7 @@ class _MetricsExportTimer:
                 type(exporter).__name__,
             )
         health.failures = 0
-        health.suspended = False
-        health.skipped = 0
+        health.suspended_at = None
 
     def record_failure(self, exporter: Any) -> None:
         """Log the failure; suspend after enough of them in a row.
@@ -550,19 +748,19 @@ class _MetricsExportTimer:
         health = self._health.setdefault(id(exporter), _ExporterHealth())
         health.failures += 1
         if health.suspended:
+            health.suspended_at = time.monotonic()
             log.warning(
                 "Metrics exporter %r failed its retry; staying suspended",
                 type(exporter).__name__, exc_info=True,
             )
             return
-        if health.failures >= SUSPEND_AFTER_CONSECUTIVE_FAILURES:
-            health.suspended = True
-            health.skipped = 0
+        if health.failures >= self.max_consecutive_failures:
+            health.suspended_at = time.monotonic()
             log.warning(
                 "Metrics exporter %r failed %d consecutive exports; suspending it "
-                "and retrying every %d intervals",
+                "and retrying after %g seconds",
                 type(exporter).__name__, health.failures,
-                SUSPENDED_RETRY_EVERY_INTERVALS, exc_info=True,
+                self.suspend_retry_interval, exc_info=True,
             )
         else:
             log.warning(
@@ -572,10 +770,11 @@ class _MetricsExportTimer:
 
 
 class AsyncMetricsExportTimer:
-    """Pushes snapshots to the cluster's exporters on its event loop.
+    """Pushes snapshots to async exporters on the configured event loop.
 
-    Runs as an ``asyncio.Task``. Snapshotting and exporting are both cold-path
-    work; nothing here touches a request.
+    Scheduling and snapshotting run as an application-loop ``asyncio.Task``.
+    Exporter coroutines run there by default, or on a dedicated daemon
+    thread/event loop when ``metrics.async_exporter_isolation`` is enabled.
 
     ``after`` is a final push still in flight from the timer this one
     replaces; the first export waits for it, so an exporter never sees two
@@ -593,6 +792,18 @@ class AsyncMetricsExportTimer:
         self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
         self._task: Optional[asyncio.Task] = None
         self._after = after
+        runners = getattr(cluster, "_async_metrics_export_runners", None)
+        if runners is None:
+            runners = {}
+            setattr(cluster, "_async_metrics_export_runners", runners)
+        self._runners: Dict[int, _AsyncExporterRunner] = runners
+        self._worker: Optional[_AsyncExporterWorker] = None
+        if bool(getattr(settings, "async_exporter_isolation", False)):
+            worker = getattr(cluster, "_async_metrics_export_worker", None)
+            if worker is None:
+                worker = _AsyncExporterWorker()
+                setattr(cluster, "_async_metrics_export_worker", worker)
+            self._worker = worker
 
     def start(self) -> None:
         """Start the export task; requires a running event loop."""
@@ -617,9 +828,15 @@ class AsyncMetricsExportTimer:
 
     async def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
         state = self._state
+        for key, runner in tuple(self._runners.items()):
+            if key not in state.current_exporter_ids and not runner.busy:
+                self._runners.pop(key, None)
         for exporter in runnable:
             try:
-                await exporter.export(snapshot)
+                runner = self._runners.setdefault(id(exporter), _AsyncExporterRunner())
+                await runner.invoke(
+                    exporter, snapshot, state.export_timeout, self._worker,
+                )
             except Exception:
                 state.record_failure(exporter)
             else:
@@ -676,6 +893,11 @@ class SyncMetricsExportTimer:
         self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
         self._stop: Optional[threading.Event] = None
         self._thread: Optional[Any] = None
+        runners = getattr(cluster, "_sync_metrics_export_runners", None)
+        if runners is None:
+            runners = {}
+            setattr(cluster, "_sync_metrics_export_runners", runners)
+        self._runners: Dict[int, _SyncExporterRunner] = runners
 
     def start(self) -> None:
         """Start the daemon export thread."""
@@ -692,39 +914,51 @@ class SyncMetricsExportTimer:
         assert stop is not None  # set by start() before the thread begins
         while not stop.wait(state.interval):
             try:
-                self._export_once()
+                self._export_once(cancel=stop)
             except Exception:
                 log.warning("Metrics export failed; will retry next interval", exc_info=True)
 
-    def _export_once(self) -> None:
+    def _export_once(self, cancel: Optional[threading.Event] = None) -> None:
         batch = self._state.take()
         if batch is not None:
-            self._deliver(*batch)
+            self._deliver(*batch, cancel=cancel)
 
-    def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
+    def _deliver(
+        self,
+        snapshot: Any,
+        runnable: List[Any],
+        *,
+        cancel: Optional[threading.Event] = None,
+    ) -> None:
         state = self._state
+        for key, runner in tuple(self._runners.items()):
+            if key not in state.current_exporter_ids and not runner.busy:
+                self._runners.pop(key, None)
         for exporter in runnable:
             try:
-                exporter.export(snapshot)
+                runner = self._runners.setdefault(id(exporter), _SyncExporterRunner())
+                runner.invoke(exporter, snapshot, state.export_timeout, cancel)
+            except _ExportCancelled:
+                break
             except Exception:
                 state.record_failure(exporter)
             else:
                 state.record_success(exporter)
 
     def stop(self, *, final: bool = False) -> None:
-        """Signal the export thread to exit and join it briefly.
+        """Signal the export thread to exit and wait for the SDK thread.
 
-        With ``final``, push one closing snapshot once the thread has exited.
+        A stop interrupts the SDK's wait for an active custom exporter. Python
+        cannot terminate that exporter's user-code thread, which remains a
+        daemon until the call returns. With ``final``, push one closing
+        snapshot after the metrics thread has exited.
         """
         if self._thread is None or self._stop is None:
             return
         self._stop.set()
-        self._thread.join(timeout=2.0)
-        # A thread still inside an export is pushing nearly the same window;
-        # a closing push alongside it would hand exporters two at once.
-        exited = not self._thread.is_alive()
+        self._thread.join()
         self._thread = None
-        if final and exited:
+        if final:
             batch = self._state.take_final()
             if batch is not None:
                 self._deliver(*batch)

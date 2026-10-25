@@ -139,6 +139,41 @@ class TestSystemSettingsImmutability:
             setattr(ss, "max_connections_per_node", 200)
 
 
+class TestMetricsSettingsValidation:
+    @pytest.mark.parametrize(
+        "field",
+        ["export_interval", "export_timeout"],
+    )
+    @pytest.mark.parametrize(
+        "duration",
+        [timedelta(0), timedelta(microseconds=-1), timedelta(seconds=-30)],
+    )
+    def test_export_durations_must_be_positive(self, field, duration):
+        with pytest.raises(ValueError, match=rf"{field} must be positive"):
+            MetricsSettings(**{field: duration})
+
+    def test_positive_and_unset_export_durations_are_allowed(self):
+        assert MetricsSettings().export_interval is None
+        assert MetricsSettings().export_timeout is None
+        duration = timedelta(microseconds=1)
+        settings = MetricsSettings(export_interval=duration, export_timeout=duration)
+        assert settings.export_interval == duration
+        assert settings.export_timeout == duration
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_max_consecutive_failures_must_be_positive(self, value):
+        with pytest.raises(ValueError, match="max_consecutive_failures must be positive"):
+            MetricsSettings(max_consecutive_failures=value)
+
+    def test_suspend_retry_interval_must_not_be_negative(self):
+        with pytest.raises(ValueError, match="suspend_retry_interval must not be negative"):
+            MetricsSettings(suspend_retry_interval=timedelta(microseconds=-1))
+
+    def test_zero_suspend_retry_interval_is_allowed(self):
+        settings = MetricsSettings(suspend_retry_interval=timedelta(0))
+        assert settings.suspend_retry_interval == timedelta(0)
+
+
 class TestClusterDefinitionWithSystemSettings:
     """Verify SystemSettings integrates with both async and sync
     ClusterDefinition builders, correctly populating the ClientPolicy

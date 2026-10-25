@@ -155,7 +155,11 @@ _METRICS_HANDLED_ELSEWHERE = frozenset({"labels", "extended"})
 _OPERATIONAL_HANDLED_ELSEWHERE = frozenset({"sampler"})
 _METRICS_KEYS: _KeyMap = {
     "enabled": ("enabled", bool),
-    "export_interval": ("export_interval", "duration"),
+    "export_interval": ("export_interval", "positive_duration"),
+    "export_timeout": ("export_timeout", "positive_duration"),
+    "max_consecutive_failures": ("max_consecutive_failures", "positive_int"),
+    "suspend_retry_interval": ("suspend_retry_interval", "duration"),
+    "async_exporter_isolation": ("async_exporter_isolation", bool),
     "exporter": ("exporter", "exporter"),
     "report_dir": ("report_dir", str),
     "report_size_limit": ("report_size_limit", "report_size"),
@@ -340,6 +344,15 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
     """Convert one raw YAML value, raising ValueError on a type mismatch."""
     if converter == "duration":
         return parse_duration(raw)
+    if converter == "positive_duration":
+        duration = parse_duration(raw)
+        if duration.total_seconds() <= 0:
+            raise ValueError(f"{disk_key} must be positive, got {raw!r}")
+        return duration
+    if converter == "positive_int":
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+            raise ValueError(f"{disk_key} must be a positive integer, got {raw!r}")
+        return raw
     if converter == "size":
         return parse_size(raw)
     if converter == "report_size":

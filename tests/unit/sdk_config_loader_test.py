@@ -561,6 +561,9 @@ system:
   DEFAULT:
     metrics:
       enabled: true
+      max_consecutive_failures: 5
+      suspend_retry_interval: 45s
+      async_exporter_isolation: true
       labels:
         owner: platform-team
       extended:
@@ -577,6 +580,9 @@ system:
     def test_full_block(self):
         m = parse_sdk_config(self.FULL)["DEFAULT"].metrics
         assert m.enabled is True
+        assert m.max_consecutive_failures == 5
+        assert m.suspend_retry_interval == timedelta(seconds=45)
+        assert m.async_exporter_isolation is True
         assert m.operational_enabled is True
         assert m.latency_unit == "microseconds"
         assert m.latency_columns == 18
@@ -657,6 +663,37 @@ system:
             m = parse_sdk_config(text)["DEFAULT"].metrics
         assert m.exporter is None
         assert "metrics.exporter" in caplog.text
+
+    @pytest.mark.parametrize("field", ["export_interval", "export_timeout"])
+    def test_a_nonpositive_export_duration_is_dropped(self, caplog, field):
+        text = (
+            "system:\n  DEFAULT:\n    metrics:\n"
+            f"      enabled: true\n      {field}: 0s\n"
+        )
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.enabled is True
+        assert getattr(m, field) is None
+        assert f"{field} must be positive" in caplog.text
+
+    def test_a_nonpositive_failure_limit_is_dropped(self, caplog):
+        text = (
+            "system:\n  DEFAULT:\n    metrics:\n"
+            "      enabled: true\n      max_consecutive_failures: 0\n"
+        )
+        with caplog.at_level(logging.WARNING):
+            m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.enabled is True
+        assert m.max_consecutive_failures is None
+        assert "max_consecutive_failures must be a positive integer" in caplog.text
+
+    def test_zero_suspend_retry_interval_is_allowed(self):
+        text = (
+            "system:\n  DEFAULT:\n    metrics:\n"
+            "      suspend_retry_interval: 0s\n"
+        )
+        m = parse_sdk_config(text)["DEFAULT"].metrics
+        assert m.suspend_retry_interval == timedelta(0)
 
     def test_a_report_size_limit_under_the_minimum_is_dropped(self, caplog):
         text = "system:\n  DEFAULT:\n    metrics:\n      report_size_limit: 64kb\n"
