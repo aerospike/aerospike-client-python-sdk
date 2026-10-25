@@ -54,6 +54,14 @@ system:
       # written.
       # report_size_limit is 0 (no rotation) or at least 1000000 bytes.
       export_interval: 30s
+      # One custom exporter may consume at most this long per callback.
+      export_timeout: 10s
+      # Suspend repeated failures, then retry by wall-clock delay.
+      max_consecutive_failures: 3
+      suspend_retry_interval: 60s
+      # Async clients only. true moves exporter coroutines to a dedicated
+      # daemon event loop; leave false for application-loop-bound resources.
+      async_exporter_isolation: false
       exporter: file
       report_dir: ""
       report_size_limit: 10mb

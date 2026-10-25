@@ -364,13 +364,28 @@ called, and with `exporter: custom` no file is written. Since the default is
 in the configuration file or in code on the cluster definition:
 
 ```python
+from datetime import timedelta
+
 from aerospike_sdk.metrics import MetricsExporterType
 from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 
 definition = ClusterDefinition(host).with_system_settings(
-    SystemSettings(metrics=MetricsSettings(exporter=MetricsExporterType.CUSTOM))
+    SystemSettings(
+        metrics=MetricsSettings(
+            exporter=MetricsExporterType.CUSTOM,
+            export_timeout=timedelta(seconds=10),
+            max_consecutive_failures=3,
+            suspend_retry_interval=timedelta(seconds=60),
+            # Async clients only: keep custom exporter work off the app loop.
+            async_exporter_isolation=True,
+        )
+    )
 )
 ```
+
+Leave `async_exporter_isolation` unset or `False` when an async exporter uses
+an `asyncio` client, lock, queue, or other object created on the application's
+event loop.
 
 {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` is the payload an
 exporter should serialize: a stable `snake_case` document independent of how
