@@ -64,6 +64,13 @@ class _StubSnapshot:
     def _with_departed(self, tracker):
         return self
 
+    @property
+    def _departed_hosts(self):
+        return tuple(
+            f"{node['node_address']}:{node['node_port']}"
+            for node in self._doc.get("nodes_departed", ())
+        )
+
 
 class _StubCluster:
     """What the export timer reads: this interval's targets and a snapshot."""
@@ -91,19 +98,27 @@ _DOC = {
     "latency_unit": "milliseconds",
     "latency_columns": 2,
     "latency_shift": 1,
-    "cluster": {"command_count": 57, "command_retries": 3},
+    "command_count": 57,
+    "command_retries": 3,
+    "cpu_percent": 0.0,
+    "memory_bytes": 0,
+    "recover_queue_size": 0,
+    "invalid_node_count": 0,
     "nodes": [
         {
-            "name": "BB9",
-            "address": "10.0.0.1",
-            "port": 3000,
+            "node_name": "BB9",
+            "node_address": "10.0.0.1",
+            "node_port": 3000,
             "connections": {"opened": 4, "closed": 1, "in_use": 1, "in_pool": 2},
             "namespaces": [
                 {
-                    "name": "test",
-                    "errors": 2, "timeouts": 1, "key_busy": 0,
+                    "namespace": "test",
+                    "errors": 2, "server_timeouts": 1, "key_busy": 0,
                     "bytes_in": 10, "bytes_out": 20,
-                    "latency": {"read": [1, 2], "write": [3, 0], "conn": [5, 0]},
+                    "latencies": [
+                        {"type": "read", "bucket_counts": [1, 2]},
+                        {"type": "write", "bucket_counts": [3, 0]},
+                    ],
                 }
             ],
         }
@@ -258,17 +273,47 @@ class TestNodeCloseTracker:
 
     def test_reports_a_host_missing_from_the_cluster(self):
         tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == ["b:2"]
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == ["b:2"]
 
-    def test_fires_once_per_host(self):
+    def test_remains_pending_until_drain(self):
         tracker = _NodeCloseTracker()
-        tracker.departed(["a:1", "b:2"], ["a:1"])
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == []
+        tracker.peek(["a:1", "b:2"], ["a:1"])
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == ["b:2"]
+        tracker.drain(["b:2"])
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == []
 
     def test_a_host_still_in_the_cluster_never_fires(self):
         """The snapshot keeps every host it ever saw, so only the live list shrinks."""
         tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1"], ["a:1"]) == []
+        assert tracker.peek(["a:1"], ["a:1"]) == []
+
+    def test_rejoin_then_depart_reports_a_new_final_sample(self):
+        tracker = _NodeCloseTracker()
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        tracker.drain(["a:1"])
+        assert tracker.peek(["a:1"], ["a:1"]) == []
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+
+    def test_failed_delivery_retains_departure_until_success(self):
+        exporter = _RecordingExporter("flaky", raises=True)
+        departed = {
+            "node_name": "gone",
+            "node_address": "a",
+            "node_port": 1,
+            "connections": {},
+            "namespaces": [],
+        }
+        timer = SyncMetricsExportTimer(
+            _StubCluster([exporter], dict(_DOC, nodes_departed=[departed])),
+            3600.0,
+        )
+        tracker = timer._state.tracker
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        timer._export_once()
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        exporter.raises = False
+        timer._export_once()
+        assert tracker.peek(["a:1"], []) == []
 
 
 class TestMetricsWriter:
@@ -307,23 +352,20 @@ class TestMetricsWriter:
     def test_cluster_line_is_positional_in_header_order(self, tmp_path):
         doc = dict(
             _DOC,
-            cluster={
-                "command_count": 57, "command_retries": 3,
-                "cpu_percent": 12.5, "memory_bytes": 1048576,
-                "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1},
-            },
+            command_count=57, command_retries=3,
+            cpu_percent=12.5, memory_bytes=1048576,
+            recover_queue_size=2, invalid_node_count=1,
             usage={
-                "feature.api.blocking": 40, "feature.api.deferred": 7,
-                "feature.api.background": 2, "feature.transaction": 5,
-                "feature.shape.point": 900,
+                "blocking": 40, "deferred": 7, "background": 2,
+                "shape_point": 900,
             },
         )
         line = self._lines(tmp_path, doc)[1].split(" ", 2)[2]
         assert line == (
             "cluster[c1,python-sdk,9.9.9,billing,[[owner,platform]],12.5,1048576,2,1,"
-            "57,40,7,2,5,3,"
+            "57,40,7,2,0,3,"
             "[[BB9,10.0.0.1,3000,1,2,4,1,"
-            "[test,2,1,0,10,20,[conn[5,0],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
+            "[test,2,1,0,10,20,[conn[0,0],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
         )
 
     def test_usage_columns_read_zero_when_usage_is_off(self, tmp_path):
@@ -332,7 +374,7 @@ class TestMetricsWriter:
 
     def test_only_the_api_and_transaction_counters_reach_the_file(self, tmp_path):
         """The other feature counters stay in the structured snapshot."""
-        text = "\n".join(self._lines(tmp_path, dict(_DOC, usage={"feature.shape.point": 900})))
+        text = "\n".join(self._lines(tmp_path, dict(_DOC, usage={"shape_point": 900})))
         assert "900" not in text
         assert "feature." not in text
 
@@ -342,7 +384,7 @@ class TestMetricsWriter:
 
     def test_departed_nodes_follow_the_live_ones_in_the_node_list(self, tmp_path):
         departed = {
-            "name": "BB8", "address": "10.0.0.9", "port": 3000,
+            "node_name": "BB8", "node_address": "10.0.0.9", "node_port": 3000,
             "connections": {"opened": 9, "closed": 9, "in_use": 0, "in_pool": 0},
             "namespaces": [],
         }

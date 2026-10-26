@@ -188,7 +188,7 @@ class MetricsSnapshot:
 
     __slots__ = (
         "_pnc", "_policy", "_nodes", "_usage", "_command_count", "_departed", "_app_id", "_process",
-        "_metrics_enabled", "_usage_enabled", "_conn_type", "_timestamp",
+        "_metrics_enabled", "_usage_enabled", "_timestamp",
     )
 
     def __init__(
@@ -203,7 +203,6 @@ class MetricsSnapshot:
         process: Optional[Tuple[float, int]] = None,
         metrics_enabled: bool = False,
         usage_enabled: bool = False,
-        conn_type: str = "",
     ) -> None:
         """Wrap a raw PNC snapshot.
 
@@ -222,7 +221,6 @@ class MetricsSnapshot:
             metrics_enabled: Whether collection was on when the snapshot was
                 taken.
             usage_enabled: Whether the usage counters were being recorded.
-            conn_type: Client connection mode, ``"sync"`` or ``"async"``.
         """
         identities = None if nodes is None else tuple(
             _NodeIdentity(
@@ -242,7 +240,6 @@ class MetricsSnapshot:
         object.__setattr__(self, "_process", None if process is None else tuple(process))
         object.__setattr__(self, "_metrics_enabled", bool(metrics_enabled))
         object.__setattr__(self, "_usage_enabled", bool(usage_enabled))
-        object.__setattr__(self, "_conn_type", str(conn_type))
         object.__setattr__(self, "_timestamp", datetime.now(timezone.utc))
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -252,13 +249,10 @@ class MetricsSnapshot:
         raise AttributeError(f"{type(self).__name__} is immutable")
 
     def _with_departed(self, tracker: Any) -> "MetricsSnapshot":
-        """Return a snapshot carrying this cycle's ``nodes_departed``.
+        """Return a snapshot carrying all pending ``nodes_departed``.
 
-        Called by the export timer, which owns the departure state: the
-        underlying client retains every host it ever measured, so departure is
-        judged by joining the snapshot's hosts against the live node list, and
-        the tracker remembers what was already reported. This snapshot is not
-        mutated; a plain on-demand snapshot keeps an empty ``nodes_departed``.
+        The cluster-owned tracker retains departures until a successful
+        export drains them. This snapshot is not mutated.
         """
         raw = self._pnc.to_dict()
         snapshot_hosts = [
@@ -270,13 +264,17 @@ class MetricsSnapshot:
             for node in (self._nodes or ())
             if (host := node.host)
         ]
-        departed = tuple(tracker.departed(snapshot_hosts, live_hosts))
+        departed = tuple(tracker.peek(snapshot_hosts, live_hosts))
         clone = object.__new__(type(self))
         for slot in self.__slots__:
             object.__setattr__(
                 clone, slot, departed if slot == "_departed" else getattr(self, slot)
             )
         return clone
+
+    @property
+    def _departed_hosts(self) -> Tuple[str, ...]:
+        return tuple(self._departed)
 
     @property
     def nodes(self) -> Dict[str, NodeMetricsSnapshot]:
@@ -417,39 +415,30 @@ class MetricsSnapshot:
         exporter can serialize directly, independent of how the underlying
         client happens to name its fields.
 
-        The cluster section carries the pool occupancy split, recover-queue
-        depth and invalid-node count the underlying client reports, this
-        process's CPU share and resident memory when the cluster sampled them,
-        and each node its circuit-breaker ``error_rate`` and the
-        ``pool_exhausted`` count among its connection counters. The cluster
-        ``command_retries`` is the per-node retry counters summed;
-        ``command_count`` is present when this SDK counted calls — see
-        :attr:`command_count` for its scope.
+        Cluster totals are top-level. Whole-call read/write/batch/query
+        histograms are in ``cluster_latencies``. Each node has a four-field
+        connection-pool block, connection-acquisition latency, existing-node
+        open/TLS/auth failures, and namespace RPC metrics.
 
         Each namespace's ``errors`` is the remainder: failures not already
-        counted under ``timeouts``, ``key_busy``, ``record_too_big`` or
+        counted under ``server_timeouts``, ``key_busy``, ``record_too_big`` or
         ``device_overload``, so summing the five never counts a failure twice.
-        ``timeouts`` counts server-reported timeouts; a command that expired on
-        the client side has no result code and is counted once, cluster-wide,
-        under ``command_timeout_client``, while ``command_timeout_server`` is
-        the namespace ``timeouts`` summed.
+        Native fields that are unavailable are omitted rather than fabricated
+        as zero.
 
         ``app_id`` is always populated, so a consumer can group by application
         without a missing-field case: the identity the application set on the
         cluster definition, else the authenticated user, else ``"not-set"``.
 
-        ``nodes`` lists the nodes still in the cluster. A node that left since
-        the previous export appears once under ``nodes_departed`` -- same
-        shape, final counters -- so an exporter can flush its series without a
-        callback. Departure is tracked by the export timer; a snapshot pulled
-        directly through ``metrics_snapshot()`` always carries an empty
-        ``nodes_departed``.
+        ``nodes`` lists current nodes. Pending final samples stay in
+        ``nodes_departed`` until a successful export drains them; on-demand
+        snapshots peek without consuming them.
 
         Returns:
             The structured snapshot: ``timestamp``, ``client_type``,
             ``client_version``, ``cluster_name``, ``app_id``, ``labels``, the
-            three tier flags, the histogram shape, ``cluster``, ``nodes`` as a
-            list, and ``nodes_departed``.
+            three tier flags, histogram shape, top-level totals, latency
+            blocks, usage, ``nodes``, and ``nodes_departed``.
 
         Example::
 
@@ -490,11 +479,31 @@ class MetricsSnapshot:
         policy = self._policy
         columns = policy.latency_columns if policy is not None else _DEFAULT_LATENCY_COLUMNS
         shift = policy.latency_shift if policy is not None else _DEFAULT_LATENCY_SHIFT
+        cluster_latencies = (
+            [
+                _latency_view(latency_type.value, self.latency(latency_type))
+                for latency_type in (
+                    LatencyType.READ,
+                    LatencyType.WRITE,
+                    LatencyType.BATCH,
+                    LatencyType.QUERY,
+                )
+            ]
+            if self.cluster_aggregated is not None
+            else []
+        )
+        open_connections = raw.get("open_connections")
+        if open_connections is None:
+            open_connections = sum(
+                int(value.get("open_connections", 0) or 0)
+                for key, value in raw.items()
+                if isinstance(value, Mapping) and ":" in key
+            )
+        cpu_percent, memory_bytes = self._process or (0.0, 0)
         document: Dict[str, Any] = {
             "timestamp": self._timestamp.isoformat(),
             "client_type": CLIENT_TYPE,
             "client_version": _client_version(),
-            "conn_type": self._conn_type,
             "cluster_name": labels.reserved.get("cluster", ""),
             "app_id": labels.reserved.get("app_id") or self._app_id or _APP_ID_UNSET,
             "labels": labels.user,
@@ -502,51 +511,21 @@ class MetricsSnapshot:
             "operational_metrics_enabled": self.operational_metrics_enabled,
             "usage_metrics_enabled": self.usage_metrics_enabled,
             "latency_unit": _canonical_unit(aggregated.get("latency_unit")),
-            "cluster": {
-                # Cluster rollups summed across nodes by the aggregate, which
-                # retains departed hosts, so the totals survive node churn.
-                # The gauges come from the snapshot's own cluster totals.
-                "connections": {
-                    "opened": aggregated.get("connections_successful", 0),
-                    "closed": aggregated.get("closed_connections", 0),
-                    "in_use": int(raw.get("connections_in_use", 0) or 0),
-                    "in_pool": int(raw.get("connections_in_pool", 0) or 0),
-                },
-                "nodes": {
-                    "active": self.total_nodes,
-                    "invalid": int(raw.get("nodes_invalid", 0) or 0),
-                },
-                "recover_queue": {"size": int(raw.get("recover_queue_size", 0) or 0)},
-                # Both cluster counters are client-side timeouts (the retry
-                # budget and the deadline are the two ways a client gives up),
-                # so their sum is the client-reported total; the server-
-                # reported total is the TIMEOUT answers across namespaces.
-                # Derived from the same counts the nodes carry, never counted
-                # a second time here.
-                "command_timeout_client": (
-                    self._pnc.exceeded_max_retries + self._pnc.exceeded_total_timeout
-                ),
-                "command_timeout_server": sum(
-                    ns["timeouts"] for node in nodes for ns in node["namespaces"]
-                ),
-                **({"cpu_percent": self._process[0], "memory_bytes": self._process[1]}
-                   if self._process is not None else {}),
-                # The per-node retry counters summed (the canonical schema's
-                # name for the cluster retry total).
-                "command_retries": aggregated.get("transaction_retry_count", 0),
-                # Counted by this SDK, not the underlying client: one per user
-                # API call made through this API while the operational tier is
-                # on, never reduced by the sampler.
-                **({"command_count": self._command_count}
-                   if self._command_count is not None else {}),
-            },
+            "latency_columns": columns,
+            "latency_shift": shift,
+            "total_nodes": self.total_nodes,
+            "recover_queue_size": int(raw.get("recover_queue_size", 0) or 0),
+            "invalid_node_count": int(raw.get("nodes_invalid", 0) or 0),
+            "open_connections": int(open_connections or 0),
+            "command_count": self.command_count,
+            "command_retries": int(aggregated.get("transaction_retry_count", 0) or 0),
+            "cpu_percent": cpu_percent,
+            "memory_bytes": memory_bytes,
+            "cluster_latencies": cluster_latencies,
             "nodes": nodes,
             "nodes_departed": departed,
+            "usage": _usage_view(self._usage),
         }
-        if self._usage:
-            document["usage"] = dict(self._usage)
-        document["latency_columns"] = columns
-        document["latency_shift"] = shift
         return document
 
     @staticmethod
@@ -559,37 +538,38 @@ class MetricsSnapshot:
             set(node_raw.get("detailed_resultcode_counts") or {})
             | set(node_raw.get("detailed_metrics") or {})
         )
+        labels = _split_labels(node_raw.get("labels") or [])
+        detailed = node_raw.get("detailed_metrics") or {}
         return {
-            "name": node.name if node is not None else "",
+            "node_name": node.name if node is not None else labels.reserved.get("node", ""),
             # Identity comes from the snapshot's own host key: the live node's
             # `address` carries its port too, and a departed node has no live
             # counterpart to ask, so the key is the one form both share.
-            "address": address,
-            "port": int(port) if port.isdigit() else None,
-            # The circuit-breaker window count, zeroed by the client every
-            # error-rate window.
-            "error_rate": int(node_raw.get("error_rate", 0) or 0),
-            # `open_failure` stays the undifferentiated rollup; the TLS and
-            # auth counters beside it name two of its causes rather than
-            # partitioning it, so they are reported alongside, not subtracted.
+            "node_address": address,
+            "node_port": int(port) if port.isdigit() else None,
             "connections": {
                 "opened": node_raw.get("connections_successful", 0),
                 "closed": node_raw.get("closed_connections", 0),
                 "in_use": node_raw.get("connections_in_use", 0),
                 "in_pool": node_raw.get("connections_in_pool", 0),
-                "open_failure": node_raw.get("connections_failed", 0),
-                "tls_handshake_failure": node_raw.get("connections_error_tls", 0),
-                "auth_failure": node_raw.get("connections_error_auth", 0),
-                "closed_idle": node_raw.get("connections_idle_dropped", 0),
-                "closed_error": node_raw.get("connections_closed_error", 0),
-                "closed_node_removed": node_raw.get("connections_closed_node_removed", 0),
-                # A poll against a pool at capacity with no idle socket.
-                "pool_exhausted": node_raw.get("connections_pool_empty", 0),
             },
+            "conn_latency": _latency_view(
+                LatencyType.CONN.value,
+                _merge_raw_histograms(
+                    entry.get("connection_aq")
+                    for commands in detailed.values()
+                    if isinstance(commands, Mapping)
+                    for entry in commands.values()
+                    if isinstance(entry, Mapping)
+                ),
+            ),
+            "connection_open_failure": node_raw.get("connections_failed", 0),
+            "connection_tls_handshake_failure": node_raw.get("connections_error_tls", 0),
+            "connection_auth_failure": node_raw.get("connections_error_auth", 0),
             "namespaces": [
                 _namespace_view(
                     node_raw.get("detailed_resultcode_counts") or {},
-                    node_raw.get("detailed_metrics") or {},
+                    detailed,
                     namespace,
                 )
                 for namespace in namespaces
@@ -689,6 +669,75 @@ def _histogram_sum(entry: Any) -> int:
     return 0
 
 
+def _merge_raw_histograms(histograms: Any) -> Dict[str, Any]:
+    """Merge serialized histograms, rejecting incompatible bucket shapes."""
+    buckets: List[int] = []
+    count = 0
+    minimum = 0
+    maximum = 0
+    total = 0.0
+    for histogram in histograms:
+        if not isinstance(histogram, Mapping):
+            continue
+        candidate = list(histogram.get("buckets") or [])
+        if buckets and len(candidate) != len(buckets):
+            continue
+        histogram_count = int(histogram.get("count", 0) or 0)
+        if not buckets:
+            buckets = candidate
+        else:
+            for index, value in enumerate(candidate):
+                buckets[index] += int(value or 0)
+        histogram_min = int(histogram.get("min", 0) or 0)
+        minimum = histogram_min if count == 0 else min(minimum, histogram_min)
+        maximum = max(maximum, int(histogram.get("max", 0) or 0))
+        count += histogram_count
+        total += float(histogram.get("sum", 0) or 0)
+    return {
+        "buckets": buckets,
+        "count": count,
+        "min": minimum,
+        "max": maximum,
+        "sum": total,
+    }
+
+
+def _latency_view(latency_type: str, histogram: Any) -> Dict[str, Any]:
+    """Convert either a native/derived or serialized histogram to the contract."""
+    if isinstance(histogram, Mapping):
+        get = histogram.get
+    else:
+        def get(name: str, default: Any = 0) -> Any:
+            return getattr(histogram, name, default)
+    return {
+        "type": latency_type,
+        "bucket_counts": list(get("buckets", ()) or ()),
+        "min": int(get("min", 0) or 0),
+        "max": int(get("max", 0) or 0),
+        "sum": float(get("sum", 0) or 0),
+        "count": int(get("count", 0) or 0),
+    }
+
+
+_USAGE_FIELDS = {
+    "blocking": "feature.api.blocking",
+    "deferred": "feature.api.deferred",
+    "background": "feature.api.background",
+    "shape_point": "feature.shape.point",
+    "shape_batch": "feature.shape.batch",
+    "shape_query": "feature.shape.query",
+    "object_mapping_read": "feature.object_mapping.read",
+    "object_mapping_write": "feature.object_mapping.write",
+    "filter_ael": "feature.filter.ael",
+    "filter_exp": "feature.filter.exp",
+}
+
+
+def _usage_view(usage: Mapping[str, int]) -> Dict[str, int]:
+    """Expose only the identifiers approved by the revised usage contract."""
+    return {field: int(usage.get(counter, 0) or 0) for field, counter in _USAGE_FIELDS.items()}
+
+
 def _namespace_view(
     result_codes: Mapping[str, Any], detailed: Mapping[str, Any], namespace: str
 ) -> Dict[str, Any]:
@@ -699,9 +748,8 @@ def _namespace_view(
     namespace -> command -> value.
     """
     # `errors` is the remainder after the named causes, so no failure is
-    # counted in two places. The counts are server answers only: a
-    # client-side deadline never reaches a result code here and is counted
-    # under the cluster's `command_timeout_client` instead.
+    # counted in two places. The counts are server answers only: the native
+    # layer cannot yet attribute a client-side deadline to a namespace.
     errors = timeouts = key_busy = record_too_big = device_overload = 0
     for counts in (result_codes.get(namespace) or {}).values():
         if not isinstance(counts, Mapping):
@@ -722,38 +770,41 @@ def _namespace_view(
                 errors += value
 
     bytes_in = bytes_out = 0
-    latency: Dict[str, List[int]] = {}
+    latency: Dict[str, List[Mapping[str, Any]]] = {}
     for command, entry in (detailed.get(namespace) or {}).items():
         if not isinstance(entry, Mapping):
             continue
         bytes_in += _histogram_sum(entry.get("bytes_received"))
         bytes_out += _histogram_sum(entry.get("bytes_sent"))
-        group = _COMMAND_LATENCY_GROUP.get(command) or str(command).lower()
+        group = _COMMAND_LATENCY_GROUP.get(command)
         histogram = entry.get("latency")
-        if isinstance(histogram, Mapping):
-            buckets = list(histogram.get("buckets") or [])
-            existing = latency.get(group)
-            latency[group] = (
-                buckets if existing is None
-                else [a + b for a, b in zip(existing, buckets)]
-            )
-        acquisition = entry.get("connection_aq")
-        if isinstance(acquisition, Mapping):
-            buckets = list(acquisition.get("buckets") or [])
-            existing = latency.get(LatencyType.CONN.value)
-            latency[LatencyType.CONN.value] = (
-                buckets if existing is None
-                else [a + b for a, b in zip(existing, buckets)]
-            )
+        if (
+            group in {
+                LatencyType.READ.value,
+                LatencyType.WRITE.value,
+                LatencyType.BATCH.value,
+                LatencyType.QUERY.value,
+            }
+            and isinstance(histogram, Mapping)
+        ):
+            latency.setdefault(group, []).append(histogram)
 
     return {
-        "name": namespace,
+        "namespace": namespace,
         "errors": errors,
-        "timeouts": timeouts,
+        "server_timeouts": timeouts,
         "key_busy": key_busy,
         "record_too_big": record_too_big,
         "device_overload": device_overload,
         "bytes_in": bytes_in,
         "bytes_out": bytes_out,
-        "latency": latency,
+        "latencies": [
+            _latency_view(group, _merge_raw_histograms(latency.get(group, ())))
+            for group in (
+                LatencyType.READ.value,
+                LatencyType.WRITE.value,
+                LatencyType.BATCH.value,
+                LatencyType.QUERY.value,
+            )
+        ],
     }

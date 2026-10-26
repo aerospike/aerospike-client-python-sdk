@@ -261,10 +261,9 @@ class TestCanonicalSnapshot:
         doc = MetricsSnapshot(
             _FakePncSnapshot(_RAW),
             policy=MetricsPolicy(latency_columns=9, latency_shift=3),
-            conn_type="async",
         ).to_canonical_dict()
         assert doc["client_type"] == "python-sdk"
-        assert doc["conn_type"] == "async"
+        assert "conn_type" not in doc
         assert doc["latency_unit"] == "microseconds"
         assert doc["latency_columns"] == 9
         assert doc["latency_shift"] == 3
@@ -286,7 +285,7 @@ class TestCanonicalSnapshot:
 
         doc = snapshot.to_canonical_dict()
         assert doc["latency_columns"] == 9
-        assert doc["nodes"][0]["name"] == "original"
+        assert doc["nodes"][0]["node_name"] == "original"
         assert snapshot.usage == {"feature.shape.point": 1}
         with pytest.raises(AttributeError, match="immutable"):
             snapshot._departed = ("127.0.0.1:3010",)
@@ -355,25 +354,65 @@ class TestCanonicalSnapshot:
         assert doc["latency_columns"] == MetricsPolicy().latency_columns
         assert doc["latency_shift"] == MetricsPolicy().latency_shift
 
+    def test_canonical_usage_exposes_only_promoted_short_names(self):
+        snapshot = MetricsSnapshot(
+            _FakePncSnapshot(_RAW),
+            usage={
+                "feature.api.blocking": 4,
+                "feature.shape.point": 3,
+                "feature.filter.exp": 2,
+                "feature.transaction": 9,
+            },
+        )
+        usage = snapshot.to_canonical_dict()["usage"]
+        assert usage["blocking"] == 4
+        assert usage["shape_point"] == 3
+        assert usage["filter_exp"] == 2
+        assert "feature.transaction" not in usage
+        assert set(usage) == {
+            "blocking", "deferred", "background",
+            "shape_point", "shape_batch", "shape_query",
+            "object_mapping_read", "object_mapping_write",
+            "filter_ael", "filter_exp",
+        }
+
+    def test_cluster_latencies_are_full_whole_call_summaries(self):
+        class Aggregate:
+            latency_unit = LatencyUnit.MICROSECONDS
+            transaction_retry_count = 0
+
+            @staticmethod
+            def command_histogram(command):
+                return _FakeHistogram([1, 2], count=3, min=2, max=8, sum=12.0)
+
+        pnc = _FakePncSnapshot(_RAW)
+        pnc.cluster_aggregated = Aggregate()
+        latencies = MetricsSnapshot(pnc).to_canonical_dict()["cluster_latencies"]
+        assert [latency["type"] for latency in latencies] == [
+            "read", "write", "batch", "query",
+        ]
+        assert all(
+            set(latency) == {"type", "bucket_counts", "min", "max", "sum", "count"}
+            for latency in latencies
+        )
+        assert all(latency["count"] > 0 for latency in latencies)
+
     def test_node_identity_joins_the_live_node(self):
         node = _FakeNode("BB9", "10.0.0.1", ("127.0.0.1", 3010))
         doc = self._snapshot(nodes=[node]).to_canonical_dict()
         entry = doc["nodes"][0]
-        assert entry["name"] == "BB9"
-        assert entry["port"] == 3010
+        assert entry["node_name"] == "BB9"
+        assert entry["node_port"] == 3010
 
     def test_node_without_a_live_match_still_reports(self):
         entry = self._snapshot().to_canonical_dict()["nodes"][0]
-        assert entry["address"] == "127.0.0.1"
-        assert entry["port"] == 3010
+        assert entry["node_address"] == "127.0.0.1"
+        assert entry["node_port"] == 3010
 
-    def test_connections_report_the_full_set(self):
+    def test_connections_report_only_the_v1_pool_set(self):
         conns = self._snapshot().to_canonical_dict()["nodes"][0]["connections"]
         assert conns == {
             "opened": 7, "closed": 2, "in_use": 0, "in_pool": 0,
-            "open_failure": 0, "tls_handshake_failure": 0, "auth_failure": 0,
-            "closed_idle": 0, "closed_error": 0, "closed_node_removed": 0,
-            "pool_exhausted": 0,
         }
 
     def test_connection_failure_causes_are_reported_beside_the_rollup(self):
@@ -383,12 +422,10 @@ class TestCanonicalSnapshot:
             **{"connections_failed": 5, "connections_error_tls": 3,
                "connections_error_auth": 1},
         )}
-        conns = MetricsSnapshot(
-            _FakePncSnapshot(raw)
-        ).to_canonical_dict()["nodes"][0]["connections"]
-        assert conns["open_failure"] == 5
-        assert conns["tls_handshake_failure"] == 3
-        assert conns["auth_failure"] == 1
+        node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
+        assert node["connection_open_failure"] == 5
+        assert node["connection_tls_handshake_failure"] == 3
+        assert node["connection_auth_failure"] == 1
 
     def test_pool_occupancy_split_is_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(
@@ -403,48 +440,47 @@ class TestCanonicalSnapshot:
     def test_connection_open_failures_are_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], **{"connections_failed": 4})}
         snapshot = MetricsSnapshot(_FakePncSnapshot(raw))
-        conns = snapshot.to_canonical_dict()["nodes"][0]["connections"]
-        assert conns["open_failure"] == 4
+        node = snapshot.to_canonical_dict()["nodes"][0]
+        assert node["connection_open_failure"] == 4
 
     def test_cluster_gauges_core_now_reports_are_mapped(self):
         """Pool occupancy, recover depth and invalid-node count reach the cluster section."""
         raw = dict(_RAW, connections_in_use=2, connections_in_pool=6,
                    recover_queue_size=1, nodes_invalid=3)
-        cluster = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["cluster"]
-        assert cluster["connections"]["in_use"] == 2
-        assert cluster["connections"]["in_pool"] == 6
-        assert cluster["recover_queue"] == {"size": 1}
-        assert cluster["nodes"] == {"active": 1, "invalid": 3}
+        doc = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()
+        assert doc["recover_queue_size"] == 1
+        assert doc["total_nodes"] == 1
+        assert doc["invalid_node_count"] == 3
 
     def test_pool_exhaustion_is_mapped(self):
         """A poll against a full pool with no idle socket counts as pool_exhausted."""
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], connections_pool_empty=3)}
-        conns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
-        assert conns["pool_exhausted"] == 3
+        node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
+        assert "pool_exhausted" not in node["connections"]
 
     def test_command_timeouts_are_split_by_who_reported_them(self):
-        """Client-side expiries are the two core counters summed; server timeouts are the TIMEOUT answers."""
+        """Only server TIMEOUT answers can currently be attributed to a namespace."""
         # The fake reports exceeded_max_retries=1 and exceeded_total_timeout=2;
         # the namespace fixture carries one server TIMEOUT answer.
-        cluster = self._snapshot().to_canonical_dict()["cluster"]
-        assert cluster["command_timeout_client"] == 3
-        assert cluster["command_timeout_server"] == 1
+        doc = self._snapshot().to_canonical_dict()
+        assert "command_timeout_client" not in doc
+        assert doc["nodes"][0]["namespaces"][0]["server_timeouts"] == 1
 
     def test_node_error_rate_is_mapped(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(_RAW["127.0.0.1:3010"], error_rate=4)}
         node = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]
-        assert node["error_rate"] == 4
+        assert "error_rate" not in node
 
     def test_process_samples_reach_the_cluster_section(self):
-        cluster = MetricsSnapshot(
+        doc = MetricsSnapshot(
             _FakePncSnapshot(_RAW), process=(12.5, 1048576)
-        ).to_canonical_dict()["cluster"]
-        assert cluster["cpu_percent"] == 12.5
-        assert cluster["memory_bytes"] == 1048576
+        ).to_canonical_dict()
+        assert doc["cpu_percent"] == 12.5
+        assert doc["memory_bytes"] == 1048576
 
     def test_process_samples_are_omitted_when_not_taken(self):
-        cluster = self._snapshot().to_canonical_dict()["cluster"]
-        assert "cpu_percent" not in cluster and "memory_bytes" not in cluster
+        doc = self._snapshot().to_canonical_dict()
+        assert doc["cpu_percent"] == 0.0 and doc["memory_bytes"] == 0
 
     def test_namespace_splits_the_named_error_causes(self):
         """Record-too-big and device-overload are broken out beside key_busy."""
@@ -455,19 +491,19 @@ class TestCanonicalSnapshot:
         ns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["namespaces"][0]
         assert ns["record_too_big"] == 5
         assert ns["device_overload"] == 3
-        assert ns["key_busy"] == 2 and ns["timeouts"] == 1
+        assert ns["key_busy"] == 2 and ns["server_timeouts"] == 1
         # Every failure here has a named cause, so none is left for `errors`.
         assert ns["errors"] == 0
 
     def test_command_count_reaches_the_cluster_section(self):
         snapshot = MetricsSnapshot(_FakePncSnapshot(_RAW), command_count=42)
         doc = snapshot.to_canonical_dict()
-        assert doc["cluster"]["command_count"] == 42
+        assert doc["command_count"] == 42
         assert snapshot.command_count == 42
 
-    def test_command_count_is_omitted_when_nobody_counted(self):
+    def test_command_count_is_zero_when_nobody_counted(self):
         doc = self._snapshot().to_canonical_dict()
-        assert "command_count" not in doc["cluster"]
+        assert doc["command_count"] == 0
 
     def test_retry_count_sums_the_per_node_counters(self):
         raw = dict(_RAW)
@@ -475,23 +511,23 @@ class TestCanonicalSnapshot:
             _RAW["cluster_aggregated_metrics"], **{"transaction_retry_count": 9}
         )
         doc = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()
-        assert doc["cluster"]["command_retries"] == 9
+        assert doc["command_retries"] == 9
 
     def test_retry_count_defaults_to_zero(self):
         doc = self._snapshot().to_canonical_dict()
-        assert doc["cluster"]["command_retries"] == 0
+        assert doc["command_retries"] == 0
         assert self._snapshot().command_retries == 0
 
-    def test_close_reasons_are_reported(self):
+    def test_deferred_close_reasons_are_not_reported(self):
         raw = {**_RAW, "127.0.0.1:3010": dict(
             _RAW["127.0.0.1:3010"],
             **{"connections_idle_dropped": 5, "connections_closed_error": 2,
                "connections_closed_node_removed": 1},
         )}
-        conns = MetricsSnapshot(_FakePncSnapshot(raw)).to_canonical_dict()["nodes"][0]["connections"]
-        assert conns["closed_idle"] == 5
-        assert conns["closed_error"] == 2
-        assert conns["closed_node_removed"] == 1
+        conns = MetricsSnapshot(
+            _FakePncSnapshot(raw)
+        ).to_canonical_dict()["nodes"][0]["connections"]
+        assert set(conns) == {"in_use", "in_pool", "opened", "closed"}
 
     def test_nodes_departed_is_empty_on_a_plain_pull(self):
         """Departure is tracked by the export timer, not by pulls."""
@@ -505,31 +541,41 @@ class TestCanonicalSnapshot:
         assert original.to_canonical_dict()["nodes_departed"] == []
         doc = snapshot.to_canonical_dict()
         assert doc["nodes"] == []
-        assert [n["address"] for n in doc["nodes_departed"]] == ["127.0.0.1"]
+        assert [n["node_address"] for n in doc["nodes_departed"]] == ["127.0.0.1"]
 
-    def test_an_already_reported_departure_is_listed_nowhere(self):
-        """The tracker reports each host once; afterwards it is neither live nor departed."""
+    def test_departure_remains_pending_until_drained(self):
+        """On-demand peeks do not consume the final node sample."""
 
         tracker = _NodeCloseTracker()
         self._snapshot(nodes=[])._with_departed(tracker)
         second = self._snapshot(nodes=[])._with_departed(tracker)
         doc = second.to_canonical_dict()
-        assert doc["nodes"] == [] and doc["nodes_departed"] == []
+        assert doc["nodes"] == []
+        assert len(doc["nodes_departed"]) == 1
+        tracker.drain(second._departed_hosts)
+        third = self._snapshot(nodes=[])._with_departed(tracker).to_canonical_dict()
+        assert third["nodes_departed"] == []
 
     def test_namespace_counters(self):
         ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]
-        assert ns["name"] == "test"
+        assert ns["namespace"] == "test"
         assert ns["errors"] == 3        # the unnamed causes only
-        assert ns["timeouts"] == 1
+        assert ns["server_timeouts"] == 1
+        assert "client_timeouts" not in ns
         assert ns["key_busy"] == 2
         assert ns["bytes_in"] == 120
         assert ns["bytes_out"] == 80
 
     def test_latency_grouped_by_command_family(self):
         ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]
-        assert ns["latency"]["read"] == [0, 4]      # Get
-        assert ns["latency"]["write"] == [2, 0]     # Put
-        assert ns["latency"]["conn"] == [5, 1]      # connection acquisition
+        latency = {item["type"]: item for item in ns["latencies"]}
+        assert latency["read"]["bucket_counts"] == [0, 4]
+        assert latency["read"]["count"] == 4
+        assert latency["write"]["bucket_counts"] == [2, 0]
+        assert "conn" not in latency
+        assert self._snapshot().to_canonical_dict()["nodes"][0]["conn_latency"][
+            "bucket_counts"
+        ] == [5, 1]
 
 
 class TestProcessSampler:

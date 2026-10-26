@@ -61,13 +61,8 @@ _SHAPE_SAFE = MetricsPolicy(
     latency_columns=24,
 )
 
-# The per-node connections block of the canonical snapshot: the gauges plus
-# every reason a connection was opened, refused, or closed.
-_NODE_CONNECTION_KEYS = {
-    "opened", "closed", "in_use", "in_pool",
-    "open_failure", "tls_handshake_failure", "auth_failure",
-    "closed_idle", "closed_error", "closed_node_removed", "pool_exhausted",
-}
+# The v1 per-node pool series intentionally has only these four fields.
+_NODE_CONNECTION_KEYS = {"opened", "closed", "in_use", "in_pool"}
 
 
 async def _do_some_ops(cluster, count):
@@ -103,8 +98,8 @@ class TestMetricsSnapshot:
 
         snapshot = metrics_cluster.metrics_snapshot()
         assert snapshot.total_nodes >= 1
-        conns = snapshot.to_canonical_dict()["cluster"]["connections"]
-        assert conns["in_use"] + conns["in_pool"] >= 1
+        nodes = snapshot.to_canonical_dict()["nodes"]
+        assert sum(n["connections"]["in_use"] + n["connections"]["in_pool"] for n in nodes) >= 1
         assert len(snapshot.nodes) == snapshot.total_nodes
 
         agg = snapshot.cluster_aggregated
@@ -223,8 +218,10 @@ class TestMetricsSnapshot:
             assert agg.command_histogram(CommandType.GET).count == 0
             assert agg.detailed_metric(general_namespace(), CommandType.GET) is None
             # The always-on tier is not gated with it.
-            conns = snapshot.to_canonical_dict()["cluster"]["connections"]
-            assert conns["in_use"] + conns["in_pool"] >= 1
+            nodes = snapshot.to_canonical_dict()["nodes"]
+            assert sum(
+                n["connections"]["in_use"] + n["connections"]["in_pool"] for n in nodes
+            ) >= 1
             assert snapshot.total_nodes >= 1
             # The per-call count is operational, so it stays at zero too.
             assert snapshot.command_count == 0
@@ -243,7 +240,12 @@ class TestMetricsSnapshot:
             session = cluster.create_session()
             key = DataSet.of(general_namespace(), "sdk_metrics_udf").id("k")
             await session.upsert(key).put({"n": 1}).execute()
-            await session.execute_udf(key).function("record_example", "readBin").passing("n").execute()
+            await (
+                session.execute_udf(key)
+                .function("record_example", "readBin")
+                .passing("n")
+                .execute()
+            )
             snapshot = cluster.metrics_snapshot()
             counts = snapshot.usage
             assert counts.get("feature.udf.record", 0) == 1, counts
@@ -330,7 +332,7 @@ class TestMetricsSnapshot:
             ns
             for node in document["nodes"]
             for ns in node["namespaces"]
-            if ns["name"] == general_namespace()
+            if ns["namespace"] == general_namespace()
         ]
         assert namespaces, "the namespace produced no canonical entry"
         bytes_in = sum(ns["bytes_in"] for ns in namespaces)
@@ -342,7 +344,7 @@ class TestMetricsExport:
     """Snapshots reaching an exporter, against a live cluster."""
 
     async def test_exporters_receive_pushed_snapshots(self, metrics_cluster):
-        """The timer pushes to every registered exporter without anyone calling metrics_snapshot()."""
+        """The timer pushes to every exporter without an application pull."""
         first, second = [], []
 
         class Recording:
@@ -445,34 +447,34 @@ class TestMetricsExport:
             pytest.skip(f"cluster has {len(nodes)} node(s); needs 2+")
 
         # Identity is distinct per node, and the dict key cannot collide.
-        names = [n["name"] for n in nodes]
-        hosts = [f"{n['address']}:{n['port']}" for n in nodes]
+        names = [n["node_name"] for n in nodes]
+        hosts = [f"{n['node_address']}:{n['node_port']}" for n in nodes]
         assert len(set(names)) == len(names), f"duplicate node names: {names}"
         assert len(set(hosts)) == len(hosts), f"duplicate hosts: {hosts}"
 
         # Every node reports its own namespace block and its own connections.
         for node in nodes:
-            assert node["namespaces"], f"node {node['name']} has no namespace block"
+            assert node["namespaces"], f"node {node['node_name']} has no namespace block"
             assert set(node["connections"]) == _NODE_CONNECTION_KEYS
 
         # Work is spread, not attributed to one node: at least two nodes
         # recorded read latency. A view that aggregated would put it all on one.
         with_reads = [
-            n["name"]
+            n["node_name"]
             for n in nodes
             for ns in n["namespaces"]
-            if sum((ns.get("latency") or {}).get("read") or []) > 0
+            if sum(
+                item["count"]
+                for item in ns.get("latencies") or []
+                if item["type"] == "read"
+            ) > 0
         ]
         assert len(set(with_reads)) >= 2, (
             f"read latency recorded on {set(with_reads)} of {len(nodes)} nodes; "
             "per-node attribution looks collapsed"
         )
 
-        # Cluster totals agree with the per-node rows they summarize.
-        assert document["cluster"]["nodes"]["active"] == len(nodes)
-        cluster_conns = document["cluster"]["connections"]
-        assert cluster_conns["opened"] == sum(n["connections"]["opened"] for n in nodes)
-        assert cluster_conns["closed"] == sum(n["connections"]["closed"] for n in nodes)
+        assert document["total_nodes"] == len(nodes)
         metrics_cluster.disable_metrics()
 
     async def test_node_departure_reaches_nodes_departed(self, metrics_cluster):
@@ -493,7 +495,7 @@ class TestMetricsExport:
 
         snapshot = metrics_cluster.metrics_snapshot()
         hosts = [
-            f"{n['address']}:{n['port']}"
+            f"{n['node_address']}:{n['node_port']}"
             for n in snapshot.to_canonical_dict().get("nodes", [])
         ]
         assert hosts, "snapshot reported no nodes; cannot test departure"
@@ -518,13 +520,17 @@ class TestMetricsExport:
 
             def metrics_snapshot(self):
                 real = self._real.metrics_snapshot()
-                return MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                snapshot = MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                return snapshot._with_departed(self._metrics_departure_tracker)
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 
         await timer._export_once()
         assert len(received) == 1
-        departed = [f"{n['address']}:{n['port']}" for n in received[0]["nodes_departed"]]
+        departed = [
+            f"{n['node_address']}:{n['node_port']}"
+            for n in received[0]["nodes_departed"]
+        ]
         assert sorted(departed) == sorted(hosts)
         # A departed node is no longer claimed as a member.
         assert received[0]["nodes"] == []
@@ -606,10 +612,10 @@ class TestCommandCount:
         assert after - base == 5
 
         doc = metrics_cluster.metrics_snapshot().to_canonical_dict()
-        assert doc["cluster"]["command_count"] == after
+        assert doc["command_count"] == after
         # Derived from the per-node counters the client core keeps.
-        assert doc["cluster"]["command_retries"] >= 0
-        assert "closed_idle" in doc["nodes"][0]["connections"]
+        assert doc["command_retries"] >= 0
+        assert set(doc["nodes"][0]["connections"]) == _NODE_CONNECTION_KEYS
         metrics_cluster.disable_metrics()
 
     async def test_disabled_metrics_freeze_the_count(self, metrics_cluster):

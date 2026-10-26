@@ -219,10 +219,10 @@ class AsyncMetricsExporter(Protocol):
 # Cluster-line usage columns, in format order, keyed by the usage counter each
 # one reports.
 _USAGE_FILE_COLUMNS = (
-    "feature.api.blocking",
-    "feature.api.deferred",
-    "feature.api.background",
-    "feature.transaction",
+    "blocking",
+    "deferred",
+    "background",
+    "transaction",
 )
 
 # Latency segment order on every namespace, as the format writes it.
@@ -255,10 +255,10 @@ class MetricsWriter:
     node with its namespaces. A node that left the cluster since the previous
     export is written once more in that list, with its final counters.
 
-    The four usage columns (``blocking_count``, ``deferred_count``,
-    ``background_count``, ``tran_count``) carry the canonical snapshot's
-    ``feature.api.*`` and ``feature.transaction`` counters, and read 0 unless
-    usage counters are enabled. ``command_count`` and ``command_retries``
+    The first three legacy usage columns carry the canonical snapshot's
+    blocking, deferred and background counters; the legacy transaction column
+    is zero because that identifier is not part of the v1 usage contract.
+    ``command_count`` and ``command_retries``
     read 0 unless operational metrics are enabled. A namespace's ``errors``
     excludes the failures counted under ``timeouts`` and ``key_busy``, and
     ``timeouts`` counts server-reported timeouts.
@@ -383,7 +383,6 @@ class MetricsWriter:
         labels = ",".join(f"[{k},{v}]" for k, v in (doc.get("labels") or {}).items())
         usage = doc.get("usage") or {}
         counts = ",".join(str(int(usage.get(key, 0) or 0)) for key in _USAGE_FILE_COLUMNS)
-        cluster = doc.get("cluster") or {}
         columns = int(doc.get("latency_columns") or 0)
         nodes = ",".join(
             self._node_segment(node, columns)
@@ -393,33 +392,40 @@ class MetricsWriter:
             f"{_line_time(_parse_timestamp(doc.get('timestamp')))} cluster["
             f"{doc.get('cluster_name', '')},{doc.get('client_type', '')},"
             f"{doc.get('client_version', '')},{doc.get('app_id', '')},[{labels}],"
-            f"{float(cluster.get('cpu_percent', 0.0) or 0.0)},"
-            f"{int(cluster.get('memory_bytes', 0) or 0)},"
-            f"{int((cluster.get('recover_queue') or {}).get('size', 0) or 0)},"
-            f"{int((cluster.get('nodes') or {}).get('invalid', 0) or 0)},"
-            f"{int(cluster.get('command_count', 0) or 0)},{counts},"
-            f"{int(cluster.get('command_retries', 0) or 0)},[{nodes}]"
+            f"{float(doc.get('cpu_percent', 0.0) or 0.0)},"
+            f"{int(doc.get('memory_bytes', 0) or 0)},"
+            f"{int(doc.get('recover_queue_size', 0) or 0)},"
+            f"{int(doc.get('invalid_node_count', 0) or 0)},"
+            f"{int(doc.get('command_count', 0) or 0)},{counts},"
+            f"{int(doc.get('command_retries', 0) or 0)},[{nodes}]"
         )
 
     @staticmethod
     def _node_segment(node: Dict[str, Any], columns: int) -> str:
         conns = node.get("connections") or {}
         parts = [
-            f"[{node.get('name', '')},{node.get('address', '')},{node.get('port', '')},"
+            f"[{node.get('node_name', '')},{node.get('node_address', '')},"
+            f"{node.get('node_port', '')},"
             f"{conns.get('in_use', 0)},{conns.get('in_pool', 0)},"
             f"{conns.get('opened', 0)},{conns.get('closed', 0)},["
         ]
         for i, namespace in enumerate(node.get("namespaces") or []):
             if i:
                 parts.append(",[")
-            latency = namespace.get("latency") or {}
+            latency = {
+                item.get("type"): item.get("bucket_counts")
+                for item in namespace.get("latencies") or []
+            }
             types = ",".join(
-                f"{kind.value}[{','.join(str(b) for b in (latency.get(kind.value) or [0] * columns))}]"
+                "{}[{}]".format(
+                    kind.value,
+                    ",".join(str(b) for b in (latency.get(kind.value) or [0] * columns)),
+                )
                 for kind in _LATENCY_ORDER
             )
             parts.append(
-                f"{namespace.get('name', '')},{namespace.get('errors', 0)},"
-                f"{namespace.get('timeouts', 0)},{namespace.get('key_busy', 0)},"
+                f"{namespace.get('namespace', '')},{namespace.get('errors', 0)},"
+                f"{namespace.get('server_timeouts', 0)},{namespace.get('key_busy', 0)},"
                 f"{namespace.get('bytes_in', 0)},{namespace.get('bytes_out', 0)},"
                 f"[{types}]]"
             )
@@ -443,24 +449,33 @@ def _line_time(moment: datetime) -> str:
 
 
 class _NodeCloseTracker:
-    """Decides which hosts have left the cluster since the last snapshot.
+    """Track departed hosts for on-demand peek and successful-export drain.
 
-    Not a diff of consecutive snapshots: the underlying client accumulates
-    per-host metrics and never drops a host from the map once seen, so
-    comparing successive snapshots reports a departure exactly never. The live
-    node list is the only thing that shrinks, so membership is judged by
-    joining against it. Each host is reported once.
+    The native snapshot retains every node it has seen. A newly absent host is
+    pending until a successful export drains it. ``_absent`` prevents a
+    drained host from being re-added until it rejoins and departs again.
     """
 
     def __init__(self) -> None:
-        self._closed: set = set()
+        self._absent: set[str] = set()
+        self._pending: set[str] = set()
+        self._lock = threading.Lock()
 
-    def departed(self, snapshot_hosts: Sequence[str], live_hosts: Sequence[str]) -> List[str]:
-        """Hosts present in the snapshot, absent from the cluster, not yet reported."""
+    def peek(self, snapshot_hosts: Sequence[str], live_hosts: Sequence[str]) -> List[str]:
+        """Observe membership and return pending departures without consuming them."""
+        snapshot = set(snapshot_hosts)
         live = set(live_hosts)
-        gone = [h for h in snapshot_hosts if h not in live and h not in self._closed]
-        self._closed.update(gone)
-        return gone
+        absent = snapshot - live
+        with self._lock:
+            self._pending.update(absent - self._absent)
+            self._pending.difference_update(live)
+            self._absent = absent
+            return sorted(self._pending)
+
+    def drain(self, hosts: Sequence[str]) -> None:
+        """Consume hosts included in a successfully delivered export."""
+        with self._lock:
+            self._pending.difference_update(hosts)
 
 
 class _ExporterHealth:
@@ -669,7 +684,11 @@ class _MetricsExportTimer:
         self.cluster = cluster
         self.interval = interval_seconds
         self.settings = settings
-        self.tracker = _NodeCloseTracker()
+        tracker = getattr(cluster, "_metrics_departure_tracker", None)
+        if tracker is None:
+            tracker = _NodeCloseTracker()
+            setattr(cluster, "_metrics_departure_tracker", tracker)
+        self.tracker = tracker
         self._health: Dict[int, _ExporterHealth] = {}
         self.current_exporter_ids: set = set()
         configured_timeout = getattr(settings, "export_timeout", None)
@@ -714,7 +733,7 @@ class _MetricsExportTimer:
             # Taking a snapshot drains and aggregates per-node state in the
             # client core; skip that work when nothing would consume it.
             return None
-        snapshot = self.cluster.metrics_snapshot()._with_departed(self.tracker)
+        snapshot = self.cluster.metrics_snapshot()
         return snapshot, runnable
 
     def take_final(self) -> Optional[Tuple[Any, List[Any]]]:
@@ -828,6 +847,7 @@ class AsyncMetricsExportTimer:
 
     async def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
         state = self._state
+        succeeded = True
         for key, runner in tuple(self._runners.items()):
             if key not in state.current_exporter_ids and not runner.busy:
                 self._runners.pop(key, None)
@@ -838,9 +858,12 @@ class AsyncMetricsExportTimer:
                     exporter, snapshot, state.export_timeout, self._worker,
                 )
             except Exception:
+                succeeded = False
                 state.record_failure(exporter)
             else:
                 state.record_success(exporter)
+        if succeeded:
+            state.tracker.drain(getattr(snapshot, "_departed_hosts", ()))
 
     async def _deliver_after(
         self, task: Optional[asyncio.Task], snapshot: Any, runnable: List[Any],
@@ -873,7 +896,7 @@ class AsyncMetricsExportTimer:
         return None if batch is None else self._deliver_after(task, *batch)
 
     async def stop(self, *, final: bool = False) -> None:
-        """Cancel the export task and wait for it; with ``final``, then push one closing snapshot."""
+        """Cancel and await the export task; optionally push one closing snapshot."""
         task = self._cancel()
         if task is not None:
             try:
@@ -931,6 +954,7 @@ class SyncMetricsExportTimer:
         cancel: Optional[threading.Event] = None,
     ) -> None:
         state = self._state
+        succeeded = True
         for key, runner in tuple(self._runners.items()):
             if key not in state.current_exporter_ids and not runner.busy:
                 self._runners.pop(key, None)
@@ -939,11 +963,15 @@ class SyncMetricsExportTimer:
                 runner = self._runners.setdefault(id(exporter), _SyncExporterRunner())
                 runner.invoke(exporter, snapshot, state.export_timeout, cancel)
             except _ExportCancelled:
+                succeeded = False
                 break
             except Exception:
+                succeeded = False
                 state.record_failure(exporter)
             else:
                 state.record_success(exporter)
+        if succeeded:
+            state.tracker.drain(getattr(snapshot, "_departed_hosts", ()))
 
     def stop(self, *, final: bool = False) -> None:
         """Signal the export thread to exit and wait for the SDK thread.

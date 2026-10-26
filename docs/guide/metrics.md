@@ -152,8 +152,7 @@ client-side latency and errors the same way the server groups its own. The
 3. `not-set`.
 
 It is never an empty string, so a consumer never needs a missing-value case.
-The canonical document also carries `conn_type`, either `sync` or `async`, so
-one application using both client surfaces produces distinct metric series.
+Connection mode is not part of the cross-SDK snapshot identity.
 
 The server's own user-agent record uses the same field, but only the first two
 of those steps agree with it: it carries an identifier you set, otherwise
@@ -340,11 +339,11 @@ and re-enabling holds the next export until it finishes, so an exporter never
 sees two exports at once. Changing the policy with `enable_metrics()` while
 metrics are on restarts the push without a closing snapshot.
 
-A node that has left the cluster appears once under the snapshot's
-`nodes_departed`, same shape as `nodes` with its final counters, so an
-exporter can flush that node's series. Only the export push tracks
-departures — a snapshot from `cluster.metrics_snapshot()` always carries an
-empty `nodes_departed`.
+A node that has left the cluster remains under `nodes_departed`, with the same
+shape as `nodes` and its final counters, until an export succeeds. On-demand
+`cluster.metrics_snapshot()` calls peek at the same pending departures without
+consuming them. A node that rejoins and later departs produces another final
+sample.
 
 ### Choosing who receives snapshots
 
@@ -391,22 +390,29 @@ event loop.
 exporter should serialize: a stable `snake_case` document independent of how
 the underlying client names its own fields.
 
+The revised document keeps cluster totals at the top level. `cluster_latencies`
+contains whole-call read/write/batch/query histograms; each node has the
+four-field `connections` pool block and `conn_latency`; namespace `latencies`
+contain RPC read/write/batch/query histograms. `usage` contains only the
+approved short names (`blocking`, `deferred`, `background`, shape,
+object-mapping, and AEL/EXP filter counters). Deferred connection close
+reasons, pool exhaustion, node error rate, and `conn_type` are not part of the
+v1 document.
+
 Within each namespace object, each failed command is counted under exactly
-one of `timeouts`, `key_busy`, `record_too_big`, `device_overload` or
+one of `server_timeouts`, `key_busy`, `record_too_big`, `device_overload` or
 `errors`; `errors` holds whatever has none of the four named causes. The
 total failure count is therefore their sum:
 
 ```python
 namespace = document["nodes"][0]["namespaces"][0]
-causes = ("errors", "timeouts", "key_busy", "record_too_big", "device_overload")
+causes = ("errors", "server_timeouts", "key_busy", "record_too_big", "device_overload")
 failures = sum(namespace[k] for k in causes)
 ```
 
-These are server answers. A command that runs out of client-side deadline
-never receives a result code, so it is in none of them. It is counted once,
-cluster-wide, under `command_timeout_client`; `command_timeout_server` beside
-it is the namespace `timeouts` summed, so the two read as a pair and never
-overlap. See [Known limitations](#known-limitations).
+These are server answers. The native layer cannot yet attribute a client-side
+timeout to a namespace, so `client_timeouts` is omitted rather than reported
+as a fabricated zero. See [Known limitations](#known-limitations).
 
 (writing-metrics-to-files)=
 ### Writing metrics to files
@@ -456,9 +462,10 @@ header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,me
   [Known limitations](#known-limitations). They read 0 unless the operational
   tier is on.
 - `blocking_count`, `deferred_count`, `background_count` and `tran_count` are
-  the `feature.api.*` and `feature.transaction` usage counters. They read 0
-  unless the usage tier is on. The other feature counters are not written to
-  the file; they reach a consumer through the canonical snapshot.
+  legacy positional columns. The first three receive the canonical API usage
+  counters; `tran_count` is 0 because transaction is not an approved v1 usage
+  field. Other approved usage counters reach consumers through the canonical
+  snapshot.
 - Nodes that left the cluster since the previous line follow the live ones in
   the node list, with their final counters.
 - Each namespace carries all five latency types, `conn`, `write`, `read`,
@@ -534,10 +541,10 @@ current behavior, not bugs in configuration:
 
 | Area | What to expect |
 | --- | --- |
-| **Two latency measures** | The per-namespace `latency` histograms time each network attempt, connection acquired to response parsed, so a retried command contributes one sample per attempt and its backoff between attempts is not in them. The whole-call latency, first attempt through the last retry, is recorded separately per command type and is read through `command_histogram()` on the cluster aggregate and per node. It has no field in the canonical snapshot yet, because the cross-SDK schema does not define one. |
+| **Two latency measures** | Per-namespace `latencies` time each network attempt, so a retried command contributes one sample per attempt. Top-level `cluster_latencies` time the whole call, first attempt through the last retry. Node `conn_latency` measures connection acquisition. |
 | **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
 | **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call while the operational tier is on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
-| **Client-side timeouts** | A command that exhausts its client-side deadline or retry budget receives no result code, so it is outside the per-namespace counters: `timeouts` in the canonical snapshot and the `timeouts` column of the log file both count timeouts the server reported. Those expiries are counted cluster-wide instead, as `command_timeout_client` in the canonical snapshot, with `command_timeout_server` beside it as the per-namespace `timeouts` summed. The client core does not yet attribute a client-side expiry to a namespace, so the two never overlap, and the log file has no column for the client-side total. |
+| **Native fields not yet available** | The Rust layer does not expose delay-queue timeout count, pre-node validation open/TLS/auth failures, namespace-attributed client timeouts, or an authoritative client-wide batch-partial-failure count. These keys are omitted rather than emitted as false zeroes. |
 | **Latency unit in the log file** | Older consumers of the line format read latency as milliseconds regardless of the unit the header names. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 

@@ -76,8 +76,8 @@ class TestSyncMetrics:
 
         snapshot = metrics_cluster.metrics_snapshot()
         assert snapshot.total_nodes >= 1
-        conns = snapshot.to_canonical_dict()["cluster"]["connections"]
-        assert conns["in_use"] + conns["in_pool"] >= 1
+        nodes = snapshot.to_canonical_dict()["nodes"]
+        assert sum(n["connections"]["in_use"] + n["connections"]["in_pool"] for n in nodes) >= 1
 
         agg = snapshot.cluster_aggregated
         assert agg.latency_unit == LatencyUnit.MICROSECONDS
@@ -146,7 +146,7 @@ class TestSyncMetrics:
             # One call, four keys: the count follows calls, not records.
             session.query(ds.id(0), ds.id(1), ds.id(2), ds.id(3)).execute().collect()
             assert cluster.metrics_snapshot().command_count == 5
-            assert cluster.metrics_snapshot().to_canonical_dict()["cluster"]["command_count"] == 5
+            assert cluster.metrics_snapshot().to_canonical_dict()["command_count"] == 5
 
     def test_command_count_stops_with_collection(
         self, aerospike_host, make_cluster_definition,
@@ -221,8 +221,8 @@ class TestSyncMetrics:
             for i in range(50):
                 session.upsert(ds.id(i)).put({"n": i}).execute()
             doc = cluster.metrics_snapshot().to_canonical_dict()
-            assert doc["cluster"]["memory_bytes"] > 0
-            assert doc["cluster"]["cpu_percent"] >= 0.0
+            assert doc["memory_bytes"] > 0
+            assert doc["cpu_percent"] >= 0.0
 
     def test_app_id_defaults_without_being_declared(
         self, aerospike_host, make_cluster_definition,
@@ -297,10 +297,10 @@ class TestCommandCount:
         assert after - base == 5
 
         doc = metrics_cluster.metrics_snapshot().to_canonical_dict()
-        assert doc["cluster"]["command_count"] == after
+        assert doc["command_count"] == after
         # Derived from the per-node counters the client core keeps.
-        assert doc["cluster"]["command_retries"] >= 0
-        assert "closed_idle" in doc["nodes"][0]["connections"]
+        assert doc["command_retries"] >= 0
+        assert set(doc["nodes"][0]["connections"]) == {"in_use", "in_pool", "opened", "closed"}
         metrics_cluster.disable_metrics()
 
     def test_disabled_metrics_freeze_the_count(self, metrics_cluster):

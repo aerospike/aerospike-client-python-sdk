@@ -69,7 +69,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     """
 
     _node_cls = Node
-    _metrics_conn_type = "sync"
 
     def __init__(self, sdk_client: SyncClient) -> None:
         """

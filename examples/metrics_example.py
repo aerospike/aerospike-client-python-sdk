@@ -49,10 +49,12 @@ async def part1_collect_and_read(cluster) -> None:
     await _traffic(cluster, 25)
 
     snapshot = cluster.metrics_snapshot()
-    connections = snapshot.to_canonical_dict()["cluster"]["connections"]
+    nodes = snapshot.to_canonical_dict()["nodes"]
+    in_use = sum(node["connections"]["in_use"] for node in nodes)
+    in_pool = sum(node["connections"]["in_pool"] for node in nodes)
     print(
         f"  nodes={snapshot.total_nodes} "
-        f"connections in_use={connections['in_use']} in_pool={connections['in_pool']}"
+        f"connections in_use={in_use} in_pool={in_pool}"
     )
 
     for kind in (LatencyType.READ, LatencyType.WRITE):
