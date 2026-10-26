@@ -169,9 +169,10 @@ separate them, since snapshots are not broken down by set.
 
 There are three levels of detail, and the two documented above are not the
 deepest. The canonical document is the cross-SDK shape: it merges the
-per-command histograms the client core records into the five latency groups
-and per-namespace counters. Underneath it sits everything core actually
-recorded — roughly ten times as many values.
+per-command histograms into whole-call cluster read/write/batch/query,
+node connection-acquisition, and namespace RPC read/write/batch/query views.
+Underneath it sits everything core actually recorded — roughly ten times as
+many values.
 
 Reach it through `cluster_aggregated` for the whole cluster, or through any
 entry of `nodes` for one node; both expose the same methods:
@@ -468,8 +469,9 @@ header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,me
   snapshot.
 - Nodes that left the cluster since the previous line follow the live ones in
   the node list, with their final counters.
-- Each namespace carries all five latency types, `conn`, `write`, `read`,
-  `batch` and `query`, in that order.
+- The legacy file grammar still carries five namespace latency positions.
+  Its `conn` position is zero because revised snapshots place connection
+  acquisition at node scope; write/read/batch/query retain their positions.
 
 The file can also be written from code: construct the writer and register it
 like any exporter, under `custom` mode. Its first `export` opens the file and
