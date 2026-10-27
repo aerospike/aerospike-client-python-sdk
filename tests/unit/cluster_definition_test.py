@@ -18,6 +18,7 @@
 from typing import Any
 
 import pytest
+from aerospike_native import Host as PncHost
 from aerospike_sdk import AuthMode
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
@@ -220,6 +221,82 @@ class TestClusterDefinitionChaining:
         )
         assert cd.auth_mode == AuthMode.PKI
         assert cd._tls is not None
+
+
+class TestParseHosts:
+    """Seed-string grammar: ``host[:tls_name][:port]``, IPv6 in brackets."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("db1", ("db1", 3000, None)),
+            ("db1:3001", ("db1", 3001, None)),
+            ("db1:tls1", ("db1", 3000, "tls1")),
+            ("db1:tls1:4333", ("db1", 4333, "tls1")),
+            ("db1:999:4333", ("db1", 4333, "999")),
+            ("db1:6abc.example.com", ("db1", 3000, "6abc.example.com")),
+            ("10.0.0.1:3001", ("10.0.0.1", 3001, None)),
+            ("[fd00::2]", ("fd00::2", 3000, None)),
+            ("[fd00::2]:3001", ("fd00::2", 3001, None)),
+            ("[fd00::2]:tls1:4333", ("fd00::2", 4333, "tls1")),
+        ],
+    )
+    def test_accepts(self, text, expected):
+        (host,) = Host.parse_hosts(text, 3000)
+        assert (host.name, host.port, host.tls_name) == expected
+
+    def test_multiple_entries_ignore_surrounding_whitespace(self):
+        hosts = Host.parse_hosts("db1:3001, [fd00::2]", 3000)
+        assert [(h.name, h.port) for h in hosts] == [("db1", 3001), ("fd00::2", 3000)]
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            ",",
+            "db1,",
+            ":",
+            "db1:",
+            "db1:tls1:bad",
+            "db1:tls1:4333:4333",
+            "db1:70000",
+            "fd00::2",
+            "[fd00::2",
+            "[fd00::2]3000",
+            "[]:3000",
+        ],
+    )
+    def test_rejects(self, text):
+        with pytest.raises(ValueError, match="Invalid host"):
+            Host.parse_hosts(text, 3000)
+
+
+class TestSeedHosts:
+    """Connect hands PNC hosts, not a seed string for it to re-parse."""
+
+    def test_ipv6_name_passes_through_bare(self):
+        (seed,) = ClusterDefinition("fd00::2", 3000)._build_seeds()
+        assert (seed.name, seed.port, str(seed)) == ("fd00::2", 3000, "[fd00::2]:3000")
+
+    def test_tls_config_name_fills_only_hosts_without_one(self):
+        cd = ClusterDefinition(
+            hosts=[Host("fd00::2", 4333), Host("db2", 4333, tls_name="own")]
+        ).with_tls_config(tls_name="shared")
+        assert [seed.tls_name for seed in cd._build_seeds()] == ["shared", "own"]
+
+    def test_parsed_tls_name_is_not_repeated(self):
+        cd = ClusterDefinition(
+            hosts=Host.parse_hosts("node1:tls1:4333", 3000)
+        ).with_tls_config(tls_name="tls1")
+        assert [str(seed) for seed in cd._build_seeds()] == ["node1:tls1:4333"]
+
+    def test_bracketed_name_is_rejected(self):
+        with pytest.raises(ValueError, match="bracketed"):
+            ClusterDefinition("[fd00::2]", 3000)._build_seeds()
+
+    def test_sync_connect_passes_hosts(self, captured_connect):
+        seen = captured_connect(SyncClusterDefinition("fd00::2", 3000))
+        assert seen["seeds"] == [PncHost("fd00::2", 3000)]
 
 
 class TestIpMap:

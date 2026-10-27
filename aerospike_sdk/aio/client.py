@@ -20,12 +20,14 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from aerospike_native import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
+    Host as PncHost,
     Key,
     RegisterTask,
     UDFLang,
@@ -73,7 +75,7 @@ class Client(RoutingCapabilitiesMixin):
 
     def __init__(
         self,
-        seeds: str,
+        seeds: Union[str, Sequence[PncHost]],
         policy: Optional[ClientPolicy] = None,
         *,
         max_error_rate: Optional[int] = None,
@@ -82,8 +84,8 @@ class Client(RoutingCapabilitiesMixin):
         """Store cluster seeds and policy; connection starts in :meth:`connect` or ``async with``.
 
         Args:
-            seeds: Seed address string understood by the async client (for example
-                ``"127.0.0.1:3000"`` or a comma-separated host list if supported).
+            seeds: Seed hosts as PNC hosts, or a seed string such as
+                ``"127.0.0.1:3000"`` (comma-separated, ``host[:tls_name][:port]``).
             policy: Optional :class:`~aerospike_native.ClientPolicy`; defaults to a
                 new client policy when omitted.
             max_error_rate: Per-node circuit-breaker threshold. When a node's

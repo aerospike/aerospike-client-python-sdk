@@ -67,7 +67,8 @@ class ClusterDefinition(ClusterDefinitionBase):
             A connected Cluster instance
 
         Raises:
-            ValueError: If PKI auth is configured but hosts are missing TLS names
+            ValueError: If PKI auth is configured but hosts are missing TLS
+                names, or a host name is empty or bracketed
             ConnectionError: If ``fail_if_not_connected`` is True (default) and
                 the cluster is unreachable
         """
@@ -84,7 +85,7 @@ class ClusterDefinition(ClusterDefinitionBase):
             else None
         )
         policy = self._get_policy(settings)
-        seeds = self._build_seeds_string()
+        seeds = self._build_seeds()
         cluster = Cluster._create(
             policy,
             seeds,

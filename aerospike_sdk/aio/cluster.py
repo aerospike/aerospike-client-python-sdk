@@ -22,9 +22,11 @@ import weakref
 
 import types
 import typing
-from typing import Any, Coroutine, Optional
+from collections.abc import Sequence
+from typing import Any, Coroutine, Optional, Union
 
 from aerospike_native import ClientPolicy, UDFLang
+from aerospike_native import Host as PncHost
 
 from aerospike_sdk.aio.client import Client
 from aerospike_sdk.aio.node import Node
@@ -120,7 +122,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     async def _create(
         cls,
         policy: ClientPolicy,
-        seeds: str,
+        seeds: Union[str, Sequence[PncHost]],
         sdk_settings: Optional[SystemSettings] = None,
         sdk_config_source: Optional[SdkConfigSource] = None,
     ) -> Cluster:
@@ -129,7 +131,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
 
         Args:
             policy: The ClientPolicy configuration
-            seeds: The seeds string (e.g., "localhost:3000")
+            seeds: Seed hosts, or a seed string (e.g., "localhost:3000")
             sdk_settings: Resolved SDK settings to store for runtime reads
             sdk_config_source: When set, arms config hot-reload on the client
 
@@ -180,7 +182,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         if not sdk_client.underlying_client.is_connected():
             await sdk_client.close()
             raise ConnectionError(
-                f"Connected to seeds '{sdk_client._seeds}' but cluster reports not connected",
+                f"Connected to seeds {sdk_client._seeds!r} but cluster reports not connected",
                 result_code=ResultCode.SERVER_NOT_AVAILABLE,
             )
         return cls(sdk_client)
