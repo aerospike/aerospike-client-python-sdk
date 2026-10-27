@@ -35,8 +35,8 @@ def _config(**tls):
 class TestTlsNameOnly:
 
     def test_tls_name_only_still_builds_a_config(self):
-        """A ``tls_name`` with no CA file must verify against the system trust
-        store, not silently produce a plaintext connection.
+        """A ``tls_name`` with no CA file must verify against the public roots
+        compiled into PNC, not silently produce a plaintext connection.
 
         Returning ``None`` here is the worst failure in this file: the seed
         string still gets tls-names stamped, so the caller believes TLS is on.

@@ -131,6 +131,12 @@ async with cluster_def.connect() as cluster:
     # ... use session ...
 ```
 
+With `ca_file`, only the CAs in that file are trusted, so a cluster signed by a
+private CA does not also accept certificates from public ones. Without it, the
+server is verified against public CA roots compiled into the client. These are
+fixed when the client is built and do not follow OS certificate updates; pass
+`ca_file` to control trust yourself.
+
 Mutual TLS (mTLS) with client certificate authentication:
 
 ```python

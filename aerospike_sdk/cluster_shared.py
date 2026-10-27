@@ -73,8 +73,8 @@ class _TlsSettings:
         """Build the PNC ``TlsConfig``.
 
         A config with no CA file still builds: the server is then verified
-        against the system trust store, which is what a ``tls_name``-only setup
-        needs.
+        against the public roots compiled into PNC (not the OS trust store),
+        which is what a ``tls_name``-only setup needs.
 
         Raises:
             ValueError: An unrecognized protocol or cipher-suite name, or a
@@ -671,8 +671,9 @@ class ClusterDefinitionBase:
                 It is applied to every :class:`Host` that has no ``tls_name`` of
                 its own.
             ca_file: PEM file of the certificate authorities that sign the
-                server certificates. Without one, the system trust store is
-                used.
+                server certificates. When given, only these CAs are trusted.
+                Without one, the server is verified against the public roots
+                compiled into PNC, not the OS trust store.
             client_cert_file: PEM client certificate for mutual TLS. Requires
                 ``client_key_file``.
             client_key_file: PEM private key for ``client_cert_file``.

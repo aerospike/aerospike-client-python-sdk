@@ -16,6 +16,8 @@
 """Integration tests for TLS connections through the SDK API."""
 
 import os
+import socket
+
 import pytest
 
 from aerospike_sdk import (
@@ -334,7 +336,17 @@ class TestTlsForLoginOnly:
 
     @pytest.fixture
     def host_port(self):
-        return _parse_host_port(_tls_login_host_env())
+        """Skip when nothing listens on the configured node.
+
+        Only the TCP connect is probed: a node that is up but fails the TLS
+        handshake or login must still fail the test, not skip it.
+        """
+        hostname, port = _parse_host_port(_tls_login_host_env())
+        try:
+            socket.create_connection((hostname, port), timeout=1).close()
+        except OSError as e:
+            pytest.skip(f"login-only TLS node {hostname}:{port} not reachable: {e}")
+        return hostname, port
 
     def _definition(self, cls, hostname, port, for_login_only):
         return (
