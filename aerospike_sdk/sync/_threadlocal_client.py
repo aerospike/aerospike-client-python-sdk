@@ -51,9 +51,11 @@ Documented caveats:
 from __future__ import annotations
 
 import threading
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Union
 
 from aerospike_native import ClientPolicy
+from aerospike_native import Host as PncHost
 from aerospike_native import _LocalClient as LocalClient
 
 
@@ -62,7 +64,7 @@ class _ThreadLocalLocalClient:
 
     __slots__ = ("_policy", "_seeds", "_tls", "_closed")
 
-    def __init__(self, policy: ClientPolicy, seeds: str) -> None:
+    def __init__(self, policy: ClientPolicy, seeds: Union[str, Sequence[PncHost]]) -> None:
         self._policy = policy
         self._seeds = seeds
         self._tls = threading.local()

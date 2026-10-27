@@ -32,6 +32,33 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 The `Cluster` returned by `connect()` supports the context-manager protocol,
 which automatically closes the connection on exit.
 
+## Multiple Seeds and IPv6
+
+To seed from more than one node, pass a list of `Host`. An IPv6 address is
+given bare, without brackets:
+
+```python
+from aerospike_sdk import ClusterDefinition, Host
+
+cluster_def = ClusterDefinition(hosts=[
+    Host("10.0.0.1", 3000),
+    Host("fd00::2", 3000),
+    Host("db3.example.com", 4333, tls_name="db3"),
+])
+```
+
+`Host.parse_hosts` builds the same list from a comma-separated string, such as
+one read from configuration. Each entry is `host[:tls_name][:port]`, with an
+IPv6 address in brackets, and entries without a port take the default:
+
+```python
+hosts = Host.parse_hosts("10.0.0.1,[fd00::2]:3000,db3.example.com:db3:4333", 3000)
+```
+
+With a single field after the host, an all-digit value is the port and
+anything else is the TLS name. Malformed entries, including an IPv6 address
+without brackets, raise `ValueError` rather than producing a wrong host.
+
 ## Sync usage
 
 The same surface is available without asyncio — no `async`/`await`, no event
