@@ -204,11 +204,18 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         behavior = self._behavior
         self._cached_read_policy = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
+        # The write pair backs ``put`` and the builders' plain writes, which
+        # are idempotent; a segment that queues a non-idempotent operation
+        # switches to the non-retryable pair at verb time.
         self._cached_write_policy = to_write_policy(
-            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
+            behavior.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.AP))
         self._cached_read_policy_sc = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.SC))
         self._cached_write_policy_sc = to_write_policy(
+            behavior.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.SC))
+        self._cached_write_policy_nr = to_write_policy(
+            behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.AP))
+        self._cached_write_policy_nr_sc = to_write_policy(
             behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, Mode.SC))
         self._cached_read_operate_policy = to_read_operate_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))

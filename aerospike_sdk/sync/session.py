@@ -208,7 +208,7 @@ class Session(
                 return
             policy = to_write_policy(
                 self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+                    OpKind.WRITE_RETRYABLE, OpShape.POINT))
             policy.txn = self._txn
             self._pnc_client.put_blocking(key, bins, policy=policy)
         except (PncServerError, PncAerospikeError) as e:
@@ -304,6 +304,8 @@ class Session(
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
+                cached_write_policy_nr=self._cached_write_policy_nr,
+                cached_write_policy_nr_sc=self._cached_write_policy_nr_sc,
             )
             builder._single_key = key
             return builder
@@ -324,6 +326,8 @@ class Session(
                 namespace_mode_resolver=None,
                 namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
                 sdk_client=self._client,
+                cached_write_policy_nr=self._cached_write_policy_nr,
+                cached_write_policy_nr_sc=self._cached_write_policy_nr_sc,
             )
             builder._keys = keys
             return builder
@@ -342,6 +346,8 @@ class Session(
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
+            cached_write_policy_nr=self._cached_write_policy_nr,
+            cached_write_policy_nr_sc=self._cached_write_policy_nr_sc,
         )
 
     def background_task(self) -> BackgroundTaskSession:
@@ -603,6 +609,8 @@ class Session(
             namespace_mode_resolver=None,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
+            write_policy_nr=self._cached_write_policy_nr,
+            write_policy_nr_sc=self._cached_write_policy_nr_sc,
         )
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:

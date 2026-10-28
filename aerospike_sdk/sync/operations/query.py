@@ -51,7 +51,7 @@ from aerospike_sdk.operations_shared import (
     _DataSetWriteBuilderBase,
     _RowWriteBuilderBase,
 )
-from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
+from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.error_strategy import OnError, _resolve_disposition
 from aerospike_sdk.sync.record_stream import RecordStream
@@ -345,7 +345,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
 
         handler = on_error if callable(on_error) else None
         disp = _resolve_disposition(on_error, is_single_key=False)
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for(self._specs)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
@@ -519,19 +519,22 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         """Populate ``self._qb`` with a sync :class:`QueryBuilder` (not aio)."""
         if self._qb is not None:
             return
+        write_policy, write_policy_sc = self._retryable_policy_pair()
         qb = QueryBuilder(
             client=self._client_fast,
             sdk_client=self._sdk_client_fast,
             namespace=self._key.namespace,
             set_name=self._key.set_name,
             behavior=self._behavior_fast,
-            cached_write_policy=self._write_policy,
+            cached_write_policy=write_policy,
             cached_read_policy=self._read_policy,
-            cached_write_policy_sc=self._write_policy_sc,
+            cached_write_policy_sc=write_policy_sc,
             cached_read_policy_sc=self._read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            cached_write_policy_nr=self._write_policy_nr,
+            cached_write_policy_nr_sc=self._write_policy_nr_sc,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key
@@ -539,6 +542,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         qb._durable_delete_command_default = self._dd_command_default
         qb._durable_delete = self._dd_override
         qb._record_delete_in_operations = self._record_delete_in_fast_ops
+        qb._operations_retryable = self._retryable_fast
         self._qb = qb
 
     def execute(  # type: ignore[override]

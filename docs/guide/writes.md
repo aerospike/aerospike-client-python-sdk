@@ -47,6 +47,10 @@ await (
 
 ## Increment
 
+An increment is not idempotent, so a write that carries one resolves the
+behavior's non-retryable write scope and, under `Behavior.DEFAULT`, is not
+retried. See {ref}`Retryable and non-retryable writes <retryable-writes>`.
+
 ```python
 await (
     session.update(users.id(1))

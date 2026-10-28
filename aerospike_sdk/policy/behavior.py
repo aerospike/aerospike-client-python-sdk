@@ -268,7 +268,12 @@ class Behavior:
             writes: Settings for all writes; ``writes_retryable``,
                 ``writes_non_retryable``, ``writes_point``, ``writes_batch``,
                 ``writes_query``, ``writes_ap``, and ``writes_sc`` narrow
-                that by retryability, shape, or consistency mode.
+                that by retryability, shape, or consistency mode. A write is
+                retryable when every operation it carries is idempotent:
+                puts (``set_to``, ``put``, ``remove_bin``), deletes, touches,
+                and reads. ``add``, ``append``, ``prepend``, every list, map,
+                bit, HLL, string, or expression modify, and any UDF make it
+                non-retryable; a batch is retryable only when every row is.
             system_txn_verify: Settings for transaction verify commands.
             system_txn_roll: Settings for transaction roll-forward and
                 roll-back commands.
@@ -454,14 +459,18 @@ Behavior.DEFAULT = Behavior(
         # the per-node job-submit round trip — the job itself runs server-side
         # and is monitored via the returned task, so a generous total covers
         # the fan-out while the 5 s socket cap fails fast on a node that
-        # accepts the submit but stalls on its ack. Attempts stay at 1 via
-        # WRITES_NON_RETRYABLE: the server owns the job, the client never
-        # resubmits.
+        # accepts the submit but stalls on its ack. The submit is resubmitted
+        # under the retryable budget only when the job's operations are all
+        # idempotent; WRITES_NON_RETRYABLE keeps every other job at one
+        # attempt, since a resubmitted increment would apply twice.
         Scope.WRITES_QUERY: Settings(
             total_timeout=timedelta(seconds=30),
             socket_timeout=timedelta(seconds=5),
             max_concurrent_nodes=0,
         ),
+        # One attempt for a write that would double-apply on a resend (add,
+        # append, prepend, any CDT/bit/HLL/string/expression modify, UDF);
+        # idempotent writes keep the Scope.ALL budget.
         Scope.WRITES_NON_RETRYABLE: Settings(
             max_retries=0,
         ),

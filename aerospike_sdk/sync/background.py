@@ -122,6 +122,10 @@ class BackgroundOperationBuilder:
 
     _add_op = add_operation
 
+    def _add_modify_op(self, op: Any) -> BackgroundOperationBuilder:
+        self._inner._add_modify_op(op)
+        return self
+
     def _expression_from_ael_string_for_ops(
         self, expression: Union[str, FilterExpression],
     ) -> FilterExpression:

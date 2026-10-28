@@ -208,6 +208,9 @@ class _BackgroundOperationBuilderBase:
         self._dataset = dataset
         self._op_type = op_type
         self._operations: List[Any] = []
+        # Cleared by the first non-idempotent operation; selects the
+        # behavior's retryable or non-retryable write scope for the job.
+        self._retryable = True
         self._filter_expression: Optional[FilterExpression] = None
         self._filter: Optional[Filter] = None
         self._ttl_seconds: Optional[int] = None
@@ -354,7 +357,9 @@ class _BackgroundOperationBuilderBase:
         ``ExpOperation``, ``ListOperation``, ``MapOperation``,
         ``BitOperation``, ``HllOperation`` or ``StringOperation``, including
         ones built with a nested CDT context. The server rejects read
-        operations in a background job.
+        operations in a background job. The operation's own
+        ``is_idempotent`` decides whether the job keeps the behavior's
+        retryable write scope.
 
         Example::
 
@@ -376,10 +381,17 @@ class _BackgroundOperationBuilderBase:
         See Also:
             :meth:`bin`: Build the operation with chained steps.
         """
+        if not op.is_idempotent:
+            self._retryable = False
         self._operations.append(op)
         return self
 
     _add_op = add_operation
+
+    def _add_modify_op(self, op: Any) -> BackgroundOperationBuilder:
+        self._retryable = False
+        self._operations.append(op)
+        return self
 
     def _expression_from_ael_string_for_ops(
         self, expression: Union[str, FilterExpression],
@@ -509,6 +521,7 @@ class _BackgroundOperationBuilderBase:
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
             records_per_second=self._records_per_second,
+            retryable=self._retryable,
         )
         if self._op_type is not _OpType.DELETE:
             wp.durable_delete = False
@@ -582,6 +595,7 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             durable_delete_command_default=self._durable_delete_command_default,
             durable_delete_override=self._durable_delete_override,
             records_per_second=self._records_per_second,
+            retryable=self._retryable,
         )
         if self._op_type is not _OpType.DELETE:
             wp.durable_delete = False

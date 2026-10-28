@@ -235,6 +235,7 @@ _POSITIONAL_CTOR_ORDER = {
             "txn", "namespace_mode_resolver",
             "namespace_mode_resolver_blocking", "sdk_client",
             "supports_server_compiled_ael", "supports_query_selection",
+            "cached_write_policy_nr", "cached_write_policy_nr_sc",
         ),
     ),
     _SingleKeyWriteSegmentBase: (
@@ -244,6 +245,7 @@ _POSITIONAL_CTOR_ORDER = {
             "write_policy", "read_policy", "txn",
             "namespace_mode_resolver", "namespace_mode_resolver_blocking",
             "write_policy_sc", "read_policy_sc", "sdk_client",
+            "write_policy_nr", "write_policy_nr_sc",
         ),
     ),
 }

@@ -704,11 +704,26 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
         return self
 
     def _add_op(self, op: Any) -> Self:
+        """Queue an operation the verb vouches for as idempotent."""
         self._qb._operations.append(op)
         return self
 
+    def _add_modify_op(self, op: Any) -> Self:
+        """Queue a non-idempotent operation; the segment becomes non-retryable."""
+        qb = self._qb
+        qb._operations_retryable = False
+        qb._operations.append(op)
+        return self
+
     def add_operation(self, op: Any) -> Self:
-        """Append an operation. Returns ``self`` so calls can chain."""
+        """Append a prebuilt operation. Returns ``self`` so calls can chain.
+
+        The operation's own ``is_idempotent`` decides whether the segment
+        keeps the behavior's retryable write scope: a raw ``add`` takes the
+        segment off it exactly as the ``add`` verb does.
+        """
+        if not op.is_idempotent:
+            return self._add_modify_op(op)
         self._qb._operations.append(op)
         return self
 
@@ -718,7 +733,7 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
 
     def add(self, bin_name: str, value: Any) -> Self:
         """Add a numeric *value* to a bin."""
-        return self._add_op(Operation.add(bin_name, value))
+        return self._add_modify_op(Operation.add(bin_name, value))
 
     def get(self, bin_name: str) -> Self:
         """Read a bin value back within a write operate."""
@@ -726,11 +741,11 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
 
     def append(self, bin_name: str, value: str) -> Self:
         """Append a string to a bin."""
-        return self._add_op(Operation.append(bin_name, value))
+        return self._add_modify_op(Operation.append(bin_name, value))
 
     def prepend(self, bin_name: str, value: str) -> Self:
         """Prepend a string to a bin."""
-        return self._add_op(Operation.prepend(bin_name, value))
+        return self._add_modify_op(Operation.prepend(bin_name, value))
 
     def remove_bin(self, bin_name: str) -> Self:
         """Delete a bin from the record."""
@@ -806,7 +821,7 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
             ignore_eval_failure, delete_if_null,
         )
         expr = self._expression_from_ael_string_for_ops(expression)
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+        return self._add_modify_op(ExpOperation.write(bin_name, expr, flags))
 
     def update_from(
         self,
@@ -823,7 +838,7 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
             ignore_eval_failure, delete_if_null,
         )
         expr = self._expression_from_ael_string_for_ops(expression)
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+        return self._add_modify_op(ExpOperation.write(bin_name, expr, flags))
 
     def upsert_from(
         self,
@@ -840,7 +855,7 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
             ignore_eval_failure, delete_if_null,
         )
         expr = self._expression_from_ael_string_for_ops(expression)
-        return self._add_op(ExpOperation.write(bin_name, expr, flags))
+        return self._add_modify_op(ExpOperation.write(bin_name, expr, flags))
 
     def query(
         self,
@@ -1157,6 +1172,12 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     _dd_command_default: Optional[bool] = None
     _dd_override: Optional[bool] = None
     _record_delete_in_fast_ops: bool = False
+    # Cleared by the first non-idempotent op. The fast slots then hold the
+    # non-retryable policy pair, and the retryable pair moves here so
+    # promotion can still hand the builder both.
+    _retryable_fast: bool = True
+    _write_policy_r: Optional[WritePolicy] = None
+    _write_policy_r_sc: Optional[WritePolicy] = None
 
     # Chain-level defaults promote first, then delegate -- the same shape the
     # per-op TTL verbs use (`expire_record_after*` below). A chain default only
@@ -1223,6 +1244,8 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         write_policy_sc: Optional[WritePolicy] = None,
         read_policy_sc: Optional[ReadPolicy] = None,
         sdk_client: Optional[Any] = None,
+        write_policy_nr: Optional[WritePolicy] = None,
+        write_policy_nr_sc: Optional[WritePolicy] = None,
     ) -> None:
         self._qb = None  # type: ignore[assignment]
         self._client_fast = client
@@ -1241,11 +1264,15 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._read_policy = read_policy
             self._write_policy_sc = write_policy_sc
             self._read_policy_sc = read_policy_sc
+            self._write_policy_nr = write_policy_nr
+            self._write_policy_nr_sc = write_policy_nr_sc
         else:
             self._write_policy = None
             self._read_policy = None
             self._write_policy_sc = None
             self._read_policy_sc = None
+            self._write_policy_nr = None
+            self._write_policy_nr_sc = None
         self._behavior_fast = behavior
         self._txn: Optional[Txn] = txn
         self._namespace_mode_resolver = namespace_mode_resolver
@@ -1265,6 +1292,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         self._txn = txn
         self._write_policy = None
         self._read_policy = None
+        self._write_policy_nr = None
         if self._qb is not None:
             self._qb.with_txn(txn)
         return self
@@ -1284,13 +1312,37 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
             self._ops.append(op)
         return self
 
+    def _add_modify_op(self, op: Any) -> Self:
+        if self._qb is not None:
+            return super()._add_modify_op(op)
+        if self._retryable_fast:
+            self._retryable_fast = False
+            self._write_policy_r = self._write_policy
+            self._write_policy_r_sc = self._write_policy_sc
+            self._write_policy = self._write_policy_nr
+            self._write_policy_sc = self._write_policy_nr_sc
+        self._ops.append(op)
+        return self
+
     def add_operation(self, op: Any) -> Self:
-        """Append an operation. Returns ``self`` so calls can chain."""
+        """Append a prebuilt operation. Returns ``self`` so calls can chain.
+
+        The operation's own ``is_idempotent`` decides whether the segment
+        keeps the behavior's retryable write scope.
+        """
+        if not op.is_idempotent:
+            return self._add_modify_op(op)
         if self._qb is not None:
             self._qb._operations.append(op)
         else:
             self._ops.append(op)
         return self
+
+    def _retryable_policy_pair(self) -> "tuple[Optional[WritePolicy], Optional[WritePolicy]]":
+        """The retryable (AP, SC) pair, wherever the modify swap left it."""
+        if self._retryable_fast:
+            return self._write_policy, self._write_policy_sc
+        return self._write_policy_r, self._write_policy_r_sc
 
     def replace_only(self) -> Self:
         if self._qb is not None:
@@ -1421,6 +1473,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         # its outcome (a touch on a missing key, a filtered-out upsert).
         return RecordStream._from_error(key, rc)
 
+    def _write_kind_fast(self) -> OpKind:
+        return OpKind.WRITE_RETRYABLE if self._retryable_fast else OpKind.WRITE_NON_RETRYABLE
+
     def _get_write_policy(self, mode: Mode = Mode.AP) -> WritePolicy:
         """Resolve the point-write policy for *mode*, caching per mode.
 
@@ -1438,7 +1493,7 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
         if cached is None:
             cached = self._apply_txn(to_write_policy(
                 self._behavior_fast.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode)))
+                    self._write_kind_fast(), OpShape.POINT, mode)))
             # Cache into the slot for this mode; writing an SC-resolved policy
             # into the AP slot would hand AP callers SC settings.
             if mode == Mode.SC:
