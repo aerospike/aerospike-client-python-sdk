@@ -24,12 +24,14 @@ from __future__ import annotations
 import logging
 import types
 from importlib import resources
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Sequence
+from typing import Any, Callable, Dict, Optional, Union
 
 from aerospike_native import (
     AdminPolicy,
     Client as AsyncClient,
     ClientPolicy,
+    Host as PncHost,
     RegisterTask,
     UDFLang,
     UdfRemoveTask,
@@ -79,7 +81,7 @@ class SyncClient(RoutingCapabilitiesMixin):
 
     def __init__(
         self,
-        seeds: str,
+        seeds: Union[str, Sequence[PncHost]],
         policy: Optional[ClientPolicy] = None,
         *,
         max_error_rate: Optional[int] = None,
@@ -89,7 +91,8 @@ class SyncClient(RoutingCapabilitiesMixin):
         """Initialize a SyncClient (no IO).
 
         Args:
-            seeds: Aerospike cluster seed addresses (e.g., "localhost:3000").
+            seeds: Seed hosts as PNC hosts, or a seed string (e.g.,
+                "localhost:3000").
             policy: Optional client policy. When not supplied, defaults to a
                 fresh ``ClientPolicy`` left at PNC's own defaults. Pass an
                 explicit ``ClientPolicy`` to override any client-level

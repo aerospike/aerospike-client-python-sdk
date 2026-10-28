@@ -32,6 +32,33 @@ with ClusterDefinition("localhost", 3000).connect() as cluster:
 The `Cluster` returned by `connect()` supports the context-manager protocol,
 which automatically closes the connection on exit.
 
+## Multiple Seeds and IPv6
+
+To seed from more than one node, pass a list of `Host`. An IPv6 address is
+given bare, without brackets:
+
+```python
+from aerospike_sdk import ClusterDefinition, Host
+
+cluster_def = ClusterDefinition(hosts=[
+    Host("10.0.0.1", 3000),
+    Host("fd00::2", 3000),
+    Host("db3.example.com", 4333, tls_name="db3"),
+])
+```
+
+`Host.parse_hosts` builds the same list from a comma-separated string, such as
+one read from configuration. Each entry is `host[:tls_name][:port]`, with an
+IPv6 address in brackets, and entries without a port take the default:
+
+```python
+hosts = Host.parse_hosts("10.0.0.1,[fd00::2]:3000,db3.example.com:db3:4333", 3000)
+```
+
+With a single field after the host, an all-digit value is the port and
+anything else is the TLS name. Malformed entries, including an IPv6 address
+without brackets, raise `ValueError` rather than producing a wrong host.
+
 ## Sync usage
 
 The same surface is available without asyncio — no `async`/`await`, no event
@@ -130,6 +157,12 @@ async with cluster_def.connect() as cluster:
     session = cluster.create_session()
     # ... use session ...
 ```
+
+With `ca_file`, only the CAs in that file are trusted, so a cluster signed by a
+private CA does not also accept certificates from public ones. Without it, the
+server is verified against public CA roots compiled into the client. These are
+fixed when the client is built and do not follow OS certificate updates; pass
+`ca_file` to control trust yourself.
 
 Mutual TLS (mTLS) with client certificate authentication:
 

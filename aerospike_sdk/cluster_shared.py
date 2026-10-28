@@ -32,6 +32,7 @@ from typing import Any, Generic, List, Optional, TypeVar, Union
 from typing import Self
 
 from aerospike_native import AuthMode, ClientPolicy, ResultCode, TlsConfig, Version
+from aerospike_native import Host as PncHost
 
 from aerospike_sdk import capabilities
 from aerospike_sdk.exceptions import AerospikeError, PncAerospikeError, _convert_pnc_exception
@@ -77,8 +78,8 @@ class _TlsSettings:
         """Build the PNC ``TlsConfig``.
 
         A config with no CA file still builds: the server is then verified
-        against the system trust store, which is what a ``tls_name``-only setup
-        needs.
+        against the public roots compiled into PNC (not the OS trust store),
+        which is what a ``tls_name``-only setup needs.
 
         Raises:
             ValueError: An unrecognized protocol or cipher-suite name, or a
@@ -131,8 +132,9 @@ class Host:
     Example::
 
         host = Host("192.168.1.10", 3000)
+        ipv6_host = Host("fd00::2", 3000)
         # or use the convenience parser
-        hosts = Host.parse_hosts("host1:3000,host2:3000", 3000)
+        hosts = Host.parse_hosts("host1:3000,[fd00::2]:3000", 3000)
 
     See Also:
         :meth:`of`: Construct a single host.
@@ -148,7 +150,8 @@ class Host:
         """Initialize a Host.
 
         Args:
-            name: Hostname or IP address.
+            name: Hostname or IP address. An IPv6 address is given bare,
+                e.g. ``"fd00::2"``, not ``"[fd00::2]"``.
             port: Port number.
             tls_name: Optional TLS name for certificate validation.
         """
@@ -161,7 +164,7 @@ class Host:
         """Create a Host instance.
 
         Args:
-            name: Hostname or IP address.
+            name: Hostname or IP address (an IPv6 address is given bare).
             port: Port number.
 
         Returns:
@@ -178,39 +181,80 @@ class Host:
 
     @staticmethod
     def parse_hosts(host_string: str, default_port: int) -> List[Host]:
-        """Parse a host string into a list of Host objects.
+        """Parse a comma-separated seed string into a list of Host objects.
 
-        Format: ``host1:port1,host2:port2`` or ``host1,host2`` (uses
-        ``default_port`` for segments without an explicit port).
+        Each entry is ``host[:tls_name][:port]``, where *host* is a hostname,
+        an IPv4 address, or an IPv6 address in brackets (``[fd00::2]``). With
+        two fields after the host, the first is the TLS name and the second the
+        port. With one, it is the port if it is all digits and the TLS name
+        otherwise, so a TLS name may start with a digit. Entries without a port
+        use ``default_port``; whitespace around entries is ignored.
 
         Args:
             host_string: Comma-separated seed addresses.
-            default_port: Port applied to segments that omit one.
+            default_port: Port applied to entries that omit one.
 
         Returns:
-            One :class:`Host` per comma-separated segment.
+            One :class:`Host` per entry, with brackets removed from IPv6
+            addresses.
 
         Raises:
-            ValueError: If a port segment is present but not a valid integer.
+            ValueError: If an entry is empty, has an unbracketed IPv6 address,
+                an unterminated bracket, an empty field, too many fields, or a
+                port that is not an integer from 0 to 65535.
 
         Example::
 
-            hosts = Host.parse_hosts("host1:3000,host2", 3000)
+            hosts = Host.parse_hosts("db1.example.com:db1:4333,[fd00::2]:3000,db3", 3000)
+            # Host("db1.example.com", 4333, tls_name="db1"),
+            # Host("fd00::2", 3000), Host("db3", 3000)
 
         See Also:
             :meth:`of`: Construct a single host.
         """
-        hosts = []
-        for host_part in host_string.split(","):
-            host_part = host_part.strip()
-            if ":" in host_part:
-                name, port_str = host_part.rsplit(":", 1)
-                port = int(port_str)
-            else:
-                name = host_part
-                port = default_port
-            hosts.append(Host(name, port))
-        return hosts
+        return [Host._parse_entry(entry.strip(), default_port) for entry in host_string.split(",")]
+
+    @staticmethod
+    def _parse_entry(entry: str, default_port: int) -> Host:
+        """Parse one ``host[:tls_name][:port]`` entry of :meth:`parse_hosts`."""
+        if entry.startswith("["):
+            name, bracket, rest = entry[1:].partition("]")
+            if not bracket or (rest and not rest.startswith(":")):
+                raise _invalid_host(entry)
+            fields = rest[1:].split(":") if rest else []
+        else:
+            name, *fields = entry.split(":")
+        if not name or len(fields) > 2 or not all(fields):
+            raise _invalid_host(entry)
+
+        tls_name: Optional[str] = None
+        port = default_port
+        if len(fields) == 2:
+            tls_name = fields[0]
+            port = _parse_port(fields[1], entry)
+        elif fields and _is_digits(fields[0]):
+            port = _parse_port(fields[0], entry)
+        elif fields:
+            tls_name = fields[0]
+        return Host(name, port, tls_name)
+
+
+def _invalid_host(entry: str) -> ValueError:
+    return ValueError(
+        f"Invalid host {entry!r}: expected host[:tls_name][:port], "
+        "with an IPv6 address in brackets"
+    )
+
+
+def _is_digits(text: str) -> bool:
+    # str.isdigit alone also accepts non-ASCII digits such as "²".
+    return text.isascii() and text.isdigit()
+
+
+def _parse_port(text: str, entry: str) -> int:
+    if not _is_digits(text) or int(text) > 65535:
+        raise _invalid_host(entry)
+    return int(text)
 
 
 class ClusterDefinitionBase:
@@ -218,7 +262,7 @@ class ClusterDefinitionBase:
 
     Holds everything that is pure configuration state: seed/host handling, auth,
     rack awareness, IP mapping, system settings, TLS, and the ``ClientPolicy`` /
-    seeds-string assembly used at connect time. The only runtime-bound piece
+    seed-host assembly used at connect time. The only runtime-bound piece
     stays on the leaves: ``connect()`` (async ``await`` vs blocking).
 
     Defining these builder methods once means the two trees cannot drift on the
@@ -675,8 +719,9 @@ class ClusterDefinitionBase:
                 It is applied to every :class:`Host` that has no ``tls_name`` of
                 its own.
             ca_file: PEM file of the certificate authorities that sign the
-                server certificates. Without one, the system trust store is
-                used.
+                server certificates. When given, only these CAs are trusted.
+                Without one, the server is verified against the public roots
+                compiled into PNC, not the OS trust store.
             client_cert_file: PEM client certificate for mutual TLS. Requires
                 ``client_key_file``.
             client_key_file: PEM private key for ``client_cert_file``.
@@ -793,19 +838,16 @@ class ClusterDefinitionBase:
                 new_hosts.append(host)
         return new_hosts
 
-    def _build_seeds_string(self) -> str:
-        """Build a seeds string from the hosts list.
+    def _build_seeds(self) -> List[PncHost]:
+        """Convert the hosts, TLS names applied, to the PNC hosts ``connect`` takes.
 
-        Format is ``host:port`` or ``host:tls_name:port`` when a TLS name is set.
+        Passing hosts rather than a seed string keeps each field intact: an
+        IPv6 address needs no bracketing, and nothing is parsed back.
+
+        Raises:
+            ValueError: If a host name is empty or bracketed.
         """
-        effective_hosts = self._get_effective_hosts()
-        parts = []
-        for host in effective_hosts:
-            if host.tls_name:
-                parts.append(f"{host.name}:{host.tls_name}:{host.port}")
-            else:
-                parts.append(f"{host.name}:{host.port}")
-        return ",".join(parts)
+        return [PncHost(h.name, h.port, h.tls_name) for h in self._get_effective_hosts()]
 
     def _validate(self) -> None:
         """Validate the configuration before connecting."""
